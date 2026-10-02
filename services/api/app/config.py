@@ -394,6 +394,15 @@ class Settings(BaseSettings):
             )
         return v
 
+    #: Whether a research start asks the execution_target rule where it runs (ADR-0213:
+    #: cloud first, "bulutta", fallback rows in the ledger). OFF by default (lead,
+    #: 2026-10-02): off, research picks its device exactly as it did before the rule had a
+    #: call site. It is turned on as its own owner-visible step, AFTER the `cloud-browser`
+    #: container - which is not part of the release transaction - has been rebuilt from a
+    #: commit that holds the cloud clamp and one `session_open` on it has been verified;
+    #: with an older image every unnamed research would be sent there and fail.
+    research_execution_rule_enabled: bool = False
+
     # Owner identity / API authentication (M9, ADR-0027).
     #
     # There is NO default credential. `identity_root_dir` holds the SHA-256 hash

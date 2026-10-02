@@ -85,6 +85,13 @@ class Stack:
             self.broker.online.add(device_id)
         return device_id
 
+    def rule(self, monkeypatch, *, enabled: bool | None) -> None:
+        """What the research start reads for ``research_execution_rule_enabled`` (``None``:
+        the setting's own default), on the dev stack's settings otherwise."""
+        update = {} if enabled is None else {"research_execution_rule_enabled": enabled}
+        settings = Settings().model_copy(update=update)
+        monkeypatch.setattr(research_service, "get_settings", lambda: settings)
+
     def start(self, **kw) -> research_service.StartedResearch:
         with self.factory() as db:
             return research_service.start_browser_research(db, self.broker, input=self.intent, **kw)
@@ -150,11 +157,34 @@ def stack(monkeypatch) -> Iterator[Stack]:
         return record(session, event)
 
     monkeypatch.setattr(ledger_service, "record", noting)
+    # The call site is behind a setting that is off by default; these tests are the rule ON.
+    s.rule(monkeypatch, enabled=True)
     try:
         yield s
     finally:
         s.clear()
         engine.dispose()
+
+
+def test_with_the_setting_off_postgres_holds_the_old_choice_and_no_ledger_row(
+    stack: Stack, monkeypatch
+) -> None:
+    """The default in production until the cloud worker's image is rebuilt: the machine by
+    health order, the PLANNED event main writes, and nothing in the execution ledger."""
+    monkeypatch.delenv("PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED", raising=False)
+    stack.rule(monkeypatch, enabled=None)  # nothing passed: the setting's own default
+    mail = stack.enroll("MAIL", platform="windows", online=True, seen_s_ago=1.0)
+    stack.enroll("bulut", platform="cloud", online=True, seen_s_ago=300.0)
+
+    started = stack.start()
+
+    assert started.error is None
+    run, ledger = stack.read_back(started.task_id)
+    assert run.stage == STAGE_PLANNED and run.device_id == mail
+    assert [{k: v for k, v in e.items() if k != "at"} for e in run.events_json] == [
+        {"stage": STAGE_PLANNED, "detail": f"selected MAIL-{stack.tag}", "source": "rest"}
+    ]
+    assert ledger == [] and stack.ledger_refs == []
 
 
 def test_a_research_start_is_planned_on_the_cloud_device_in_postgres(stack: Stack) -> None:

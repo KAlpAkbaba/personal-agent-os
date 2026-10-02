@@ -30,6 +30,7 @@ from app.research import browser_activities as ba
 from app.research import destination, runs_service
 from app.research import service as research_service
 from app.research import target as research_target
+from app.research.browser_gateway import CLOUD_SEARCH_ORDER
 from app.research.models import STAGE_FAILED, STAGE_PLANNED
 from tests.device_command_support import FakeDeviceCommandClient
 from tests.unit.test_research_browser_activities import ALL_TABLES
@@ -149,8 +150,16 @@ def registry(tmp_path, monkeypatch):
     for table in (*ALL_TABLES, ActivityEventRow.__table__):
         table.create(bootstrap)
     bootstrap.dispose()
-    settings = Settings(_env_file=None, database_url=url, research_browser="owner_chrome")
+    # The call site is behind a setting that is OFF by default (the release order: the cloud
+    # worker's image first). Everything below the "setting off" section runs with it ON.
+    settings = Settings(
+        _env_file=None,
+        database_url=url,
+        research_browser="owner_chrome",
+        research_execution_rule_enabled=True,
+    )
     monkeypatch.setattr(ba, "get_settings", lambda: settings)
+    monkeypatch.setattr(research_service, "get_settings", lambda: settings)
     reg = Registry(url)
     try:
         yield reg
@@ -160,6 +169,96 @@ def registry(tmp_path, monkeypatch):
 
 def _planned(run) -> dict:
     return [e for e in run.events_json if e.get("stage") == STAGE_PLANNED][-1]
+
+
+# ------------------------------------------- the setting: off is what main does today
+
+
+@pytest.fixture()
+def rule_off(registry, monkeypatch):
+    """The same registry with the setting at its DEFAULT (nothing passed for it)."""
+    monkeypatch.delenv("PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED", raising=False)
+    settings = Settings(_env_file=None, database_url=registry.url)
+    monkeypatch.setattr(research_service, "get_settings", lambda: settings)
+    return registry
+
+
+def _events(run) -> list[dict]:
+    return [{k: v for k, v in e.items() if k != "at"} for e in run.events_json]
+
+
+def test_the_setting_is_off_by_default_and_its_variable_turns_it_on(monkeypatch) -> None:
+    monkeypatch.delenv("PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED", raising=False)
+    assert Settings(_env_file=None).research_execution_rule_enabled is False
+    monkeypatch.setenv("PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED", "true")
+    assert Settings(_env_file=None).research_execution_rule_enabled is True
+
+
+def test_with_the_setting_off_the_cloud_is_not_a_target_and_nothing_is_written(rule_off) -> None:
+    rule_off.cloud()  # online, the worker's real hello
+    mail = rule_off.mail()
+
+    started = rule_off.start()
+
+    assert started.error is None
+    assert started.device == {"device_id": str(mail), "name": "MAIL"}
+    run = rule_off.run(started.task_id)
+    assert run.device_id == mail
+    # The PLANNED event main writes, key for key: no execution field.
+    assert _events(run) == [{"stage": STAGE_PLANNED, "detail": "selected MAIL", "source": "rest"}]
+    assert rule_off.ledger() == []
+
+
+def test_with_the_setting_off_the_start_makes_the_one_selection_call_main_makes(
+    rule_off, monkeypatch
+) -> None:
+    """Byte for byte the old choice: ``select_device`` over ALL the views (not the machines
+    only), with the family capability, the caller's target and the session hint, once; the
+    rule is never asked. Its answer is the run's device, whatever it is."""
+    cloud = rule_off.cloud_that_looks_like_a_machine()  # the healthiest: health order takes it
+    mail = rule_off.mail()
+    calls: list[tuple[list[uuid.UUID], dict]] = []
+    real = research_service.select_device
+
+    def recording(views, **kw):
+        calls.append(([v.id for v in views], kw))
+        return real(views, **kw)
+
+    def never(*_a, **_kw):
+        raise AssertionError("the rule was asked with the setting off")
+
+    monkeypatch.setattr(research_service, "select_device", recording)
+    monkeypatch.setattr(research_service, "choose_research_target", never)
+
+    started = rule_off.start(session_device_ids=[mail], needs_signed_in_session=True)
+
+    assert len(calls) == 1
+    ids, kw = calls[0]
+    assert set(ids) == {cloud, mail}
+    assert kw == {"capability": "browser.chrome", "target": None, "session_device_ids": [mail]}
+    assert started.device["device_id"] == str(mail)  # ADR-0208: the session's own device
+    # ...and with no hint, health order - the cloud that looks like a machine, as on main.
+    calls.clear()
+    assert rule_off.start().device == {"device_id": str(cloud), "name": "bulut-1"}
+    assert calls[0][1] == {"capability": "browser.chrome", "target": None}
+    assert rule_off.ledger() == []
+
+
+def test_with_the_setting_off_a_spoken_word_is_the_alias_it_always_was(rule_off) -> None:
+    rule_off.cloud(online=False)
+    rule_off.mail()
+
+    # "bulutta" is no forced target: it is a word handed to ``select_device`` as main does,
+    # and the refusal is the selection's own, with no execution reason and no ledger row.
+    refused = rule_off.start(named_devices=("bulutta",))
+    named = rule_off.start(named_devices=("ev",))
+
+    assert refused.device is None and refused.error
+    failed = _events(rule_off.run(refused.task_id))
+    assert failed == [{"stage": STAGE_FAILED, "detail": refused.error, "source": "rest"}]
+    assert named.device["name"] == "MAIL"
+    assert "execution_target" not in _planned(rule_off.run(named.task_id))
+    assert rule_off.ledger() == []
 
 
 # ------------------------------------------------------------- the rule picks the device
@@ -379,7 +478,7 @@ def test_a_rest_callers_own_target_device_is_not_overruled_by_the_rule(registry)
     assert "execution_target" not in _planned(registry.run(started.task_id))
 
 
-def test_a_ledger_that_cannot_be_written_does_not_stop_the_research(tmp_path) -> None:
+def test_a_ledger_that_cannot_be_written_does_not_stop_the_research(tmp_path, monkeypatch) -> None:
     """The ledger rows are the record of the decision, not the decision: a start is never
     failed because they could not be written, and the run's own PLANNED event still says
     where it went. (The same stance as the task.failed notification on this path.)"""
@@ -388,6 +487,8 @@ def test_a_ledger_that_cannot_be_written_does_not_stop_the_research(tmp_path) ->
     for table in ALL_TABLES:  # no activity_events
         table.create(bootstrap)
     bootstrap.dispose()
+    settings = Settings(_env_file=None, database_url=url, research_execution_rule_enabled=True)
+    monkeypatch.setattr(research_service, "get_settings", lambda: settings)
     reg = Registry(url)
     try:
         reg.mail()
@@ -828,3 +929,94 @@ def test_a_search_on_a_machine_still_attaches_to_the_owners_chrome(registry, mon
     ba.discover_activity(task_id, str(mail), "news:0", "ai agents", "news", NOW.isoformat())
 
     assert _profiles(factory)[0] == "owner"
+
+
+# ------------------------------------------------ the engine a search on each device asks
+
+
+def _engines(factory) -> list[str]:
+    return [c["payload"]["engine"] for c in factory.seen if c["capability"] == "browser.search"]
+
+
+def _blocked_on(*blocked: str):
+    """The cloud worker as measured in the image: the named engines end in the captcha."""
+    inner = _cloud_worker_factory()
+
+    def factory(*, capability, payload, **kwargs):
+        if capability == "browser.search" and payload["engine"] in blocked:
+            inner.seen.append({"capability": capability, "payload": payload})
+            return CommandFailed("provider_rate_limited", "captcha", retryable=True)
+        return inner(capability=capability, payload=payload, **kwargs)
+
+    factory.seen = inner.seen  # type: ignore[attr-defined]
+    return factory
+
+
+def test_a_search_on_the_cloud_device_asks_bing_first(registry, monkeypatch) -> None:
+    cloud = registry.cloud()
+    task_id = _task(registry)
+    factory = _cloud_worker_factory()
+    monkeypatch.setattr(ba, "_command_client", lambda: FakeDeviceCommandClient(factory=factory))
+
+    # The workflow's own engine ("duckduckgo", the request default) does not decide it.
+    ba.discover_activity(
+        task_id,
+        str(cloud),
+        "news:0",
+        "ai agents",
+        "news",
+        NOW.isoformat(),
+        "fallback",
+        "duckduckgo",
+    )
+
+    assert _engines(factory) == ["bing"]
+
+
+def test_a_search_on_the_cloud_device_has_somewhere_to_go_when_bing_is_blocked(
+    registry, monkeypatch
+) -> None:
+    cloud = registry.cloud()
+    task_id = _task(registry)
+    factory = _blocked_on("bing")
+    monkeypatch.setattr(ba, "_command_client", lambda: FakeDeviceCommandClient(factory=factory))
+
+    outcome = ba.discover_activity(
+        task_id, str(cloud), "news:0", "ai agents", "news", NOW.isoformat()
+    )
+
+    assert _engines(factory) == list(CLOUD_SEARCH_ORDER[:2])
+    assert outcome["status"] == "done" and outcome["candidates"] == 1
+
+
+@pytest.mark.parametrize(
+    ("browser", "provider", "expected"),
+    [
+        ("owner_chrome", None, ["google"]),  # attached: the owner's own Google (ADR-0183)
+        ("worker", None, ["duckduckgo"]),  # the setting's default, one engine, as today
+        ("worker", "google", ["google"]),  # the workflow's own engine, as today
+    ],
+)
+def test_a_search_on_a_machine_asks_the_engine_it_always_asked(
+    registry, monkeypatch, browser, provider, expected
+) -> None:
+    mail = registry.mail()
+    task_id = _task(registry)
+    worker = _cloud_worker_factory()
+
+    def factory(*, capability, payload, **kwargs):
+        if capability == "browser.session_open":  # a machine whose owner enrolled their Chrome
+            worker.seen.append({"capability": capability, "payload": payload})
+            return CommandSucceeded({"created": True})
+        return worker(capability=capability, payload=payload, **kwargs)
+
+    factory.seen = worker.seen  # type: ignore[attr-defined]
+    settings = Settings(_env_file=None, database_url=registry.url, research_browser=browser)
+    monkeypatch.setattr(ba, "get_settings", lambda: settings)
+    monkeypatch.setattr(ba, "_command_client", lambda: FakeDeviceCommandClient(factory=factory))
+
+    ba.discover_activity(
+        task_id, str(mail), "news:0", "ai agents", "news", NOW.isoformat(), "fallback", provider
+    )
+
+    assert _engines(factory) == expected

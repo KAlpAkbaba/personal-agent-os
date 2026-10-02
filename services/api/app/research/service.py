@@ -38,6 +38,7 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app.artifacts import service as artifact_service
 from app.artifacts.models import TASK_STATUS_CREATED, TASK_STATUS_FAILED_TERMINAL, Task
+from app.config import get_settings
 from app.devices import service as devices_service
 from app.devices.selection import (
     REASON_AUTO,
@@ -219,6 +220,9 @@ def start_browser_research(
     views = devices_service.list_device_views(db, broker)
     decision: Decision | None = None
     refused: str | None = None
+    # Off (the default), the device is chosen exactly as it was before the rule had a call
+    # site: turning it on waits for the cloud worker's image (``Settings``, the release order).
+    rule_enabled = get_settings().research_execution_rule_enabled
     try:
         # The session hint is passed only when there is one: with none this is the call it
         # always was (ADR-0208).
@@ -232,9 +236,10 @@ def start_browser_research(
             if named_devices
             else target_device
         )
-        if target_device and not named_devices:
-            # A REST caller's own ``target_device`` names a device by id, name or alias: it
-            # is that device, and the rule is not asked to overrule it.
+        if not rule_enabled or (target_device and not named_devices):
+            # The selection research always made (the setting off). With it on: a REST
+            # caller's own ``target_device`` names a device by id, name or alias - it is
+            # that device, and the rule is not asked to overrule it.
             result = select_device(views, capability=RESEARCH_CAPABILITY, target=target, **hint)
         else:
             # ADR-0213: WHERE the run executes is the execution_target rule's answer - cloud

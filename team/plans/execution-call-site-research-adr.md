@@ -109,15 +109,83 @@ image's own code), 2026-10-02 on the dev machine:
 - `browser.search` on duckduckgo - the gateway's default engine - ended in the provider's
   captcha page twice out of two (`provider_rate_limited`). See "Consequences / open".
 
+## Addendum 3 (2026-10-02, the lead's decision after the third inspection) - release safety
+
+No defect was found in the code; two things made the release unsafe, and the lead decided both.
+
+19. THE CALL SITE IS BEHIND A SETTING, DEFAULT OFF: `Settings.research_execution_rule_enabled`
+    (env `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED`, default `false`). Off, `start_browser_research`
+    makes the one call main makes - `select_device(views, capability="browser.chrome",
+    target=..., **hint)` over ALL views - the rule is not asked, no ledger row is written, the
+    PLANNED / FAILED events carry no `execution_*` key, "bulutta" is an ordinary alias word and
+    `needs_signed_in_session` is not read. Held by tests (SQLite and PostgreSQL), including a
+    recording `select_device` and a `choose_research_target` that raises if called. On, it is
+    everything above. `_attached` and the cloud clamp are not behind the setting: with it off no
+    run reaches the cloud device, and they change nothing for a machine.
+20. RELEASE ORDER (why 19 exists). `cloud-browser` is "NOT part of the release transaction"
+    (`docker-compose.prod.yml`, profile `cloud-browser`) and no release script rebuilds it, so a
+    blue/green release ships the api half only. Production's `pagentos-prod-cloud-browser` still
+    runs an image WITHOUT the clamp of decision 15: sent the gateway's `session_open`
+    (`channel: chrome`, `visible: true`) it fails `dependency_unavailable`. With the rule on,
+    every unnamed research would be sent there and fail. So, in this order:
+    1. release the api as usual (the setting is off: research behaves as on main);
+    2. on the host, from the released commit, rebuild and restart the `cloud-browser` service
+       of `infra/docker/docker-compose.prod.yml` (profile `cloud-browser`; `build`, then
+       `up -d`), and wait for its healthcheck and for `bulut` to be online in the registry;
+    3. verify ONE `browser.session_open` on `bulut` succeeds and reports `channel chromium`,
+       `visible false` (then `session_close`);
+    4. only THEN set `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED=true` in the api's environment and
+       restart the api. This is its own owner-visible step, not a side effect of a release;
+    5. verify: one research with nothing named has a PLANNED event with
+       `execution_target=cloud` and its `search` events name the provider that answered.
+    Back out by unsetting the variable (no schema, no data to undo).
+21. A CLOUD RUN SEARCHES IN AN ORDER, BING FIRST. Read first: the worker's `engine` is ONE name
+    of `google, duckduckgo, bing, brave`, or `auto` (= google, then duckduckgo); a named engine
+    is tried alone, and there is no order parameter (`browser_agent.search_engines.run_search`).
+    The worker is outside this area, so the order is walked in the gateway:
+    `browser_gateway.CLOUD_SEARCH_ORDER = ("bing", "auto", "brave")` - bing, then every other
+    engine the worker has, none asked twice (a test reads the worker's `ENGINES` / `AUTO_ORDER`
+    from its source). `DeviceBrowserGateway(search_order=...)` sends one `browser.search` per
+    entry until one answers with results; the next is asked when this one was refused, failed
+    or answered nothing. `browser_activities._search_order(device_id)` gives the order to a run
+    whose device row has platform `cloud` and `None` to every other device, whose search is the
+    single request, payload and idempotency key it always was (held by a test, key for key).
+22. Details of the walk, each held by a test:
+    - the session is opened once, before the walk: a browser that cannot open is not asked
+      once per engine;
+    - every request is `interstitial="fallback"`, whatever the workflow asked: the cloud window
+      is headless, so an owner handoff (`auto` reaching Google's captcha in an interactive run)
+      would only be waited out for the handoff timeout;
+    - the first request keeps the single search's idempotency key; each further engine has its
+      own (`...:<engine>`), so it is a dispatch and not a replay;
+    - a time budget: `SEARCH_ORDER_BUDGET_S = 75` (the discover activity has 90 s,
+      `browser_workflow._MEDIUM`; the workflow is not changed). No further engine is started
+      with less than 15 s left and a started one gets only what is left as its timeout;
+    - the evidence in the run's `search` event says what was tried: `requested_provider` is the
+      first of the order, `fallback` true, `attempts` leads with the engines that did not
+      answer (`{"provider": "bing", "outcome": "provider_rate_limited", ...}`);
+    - with no answer at all the last refusal is raised, as a single search's is (the activity
+      writes its `search_failed` event and the workflow lets one query fail).
+    On the cloud device the workflow's own `search_provider` does not decide the engine.
+
 ## Not changed
 
-The rule table, `select_device`, the workflow, the gateway, any schema. The production cloud
-worker is not probed.
+The rule table, `select_device`, the workflow, any schema, the worker's search code. The
+gateway's `session_open` payload is not changed (decision 15); its `search` is, for a gateway
+given an order (decision 21). The production cloud worker is not probed.
 
 ## Consequences / open
 
-- Research with nothing named now runs on the cloud worker whenever it is online, ahead of the
-  session's own machine (ADR-0208 affinity applies only once the rule says `device`).
+- With the setting ON, research with nothing named runs on the cloud worker whenever it is
+  online, ahead of the session's own machine (ADR-0208 affinity applies only once the rule says
+  `device`). With it off (the default) nothing below about the cloud applies.
+- The order is NOT run in the image by this task (the walk is proven against a scripted
+  worker; bing answering and duckduckgo / `auto` ending in the captcha are the earlier image
+  measurements, from the dev machine's address). brave in headless Chromium is not measured,
+  and neither is any engine from the Cloud Core's address. If every engine is blocked there the
+  query fails with `provider_rate_limited` and nothing falls back to a machine mid-run.
+- A worst-case walk is 75 s of the activity's 90 s; a retry of the activity (3 attempts) walks
+  again, and its first request replays bing's terminal answer (the same key, as today).
 - With two online `owner_chrome` machines, `device_for` takes the first in registry order; the
   session's own machine is not preferred there.
 - `research_browser == "owner"` (keyboard/OCR) on the cloud device is untouched: it would still
@@ -126,15 +194,8 @@ worker is not probed.
 - A REST caller's own `target_device="bulut"` still goes through `select_device(...,
   "browser.chrome")` and is refused for the real cloud worker (`capability_missing`, a FAILED run
   with no execution row). The rule is not asked on that path (decision 5); left as it is.
-- Releasing this sends every unnamed research to the cloud worker while it is online. A whole
-  research run on the production worker is not proven here (the card forbids probing it).
-- OPEN, found by the image run and outside this area: headless Chromium got DuckDuckGo's captcha
-  page on both searches tried (from the dev machine's address; whether the Cloud Core's address
-  gets the same is not measured). DuckDuckGo is the gateway's default engine and a request that
-  names one engine tries only that one, so a cloud run's discovery can end in
-  `provider_rate_limited` while the same search on bing works. Nothing falls back to a machine
-  mid-run. Decide before the release: another engine (or `auto`) for a run on the cloud device,
-  or a mid-run fallback.
+- A whole research run on the production worker is not proven here (the card forbids probing
+  it); step 5 of the release order is where it is.
 - "bulutta" still does not arrive from voice (`devices/aliases.py`, outside this area).
 - The workflow's replay-only re-select (`select_device_activity`) still uses `select_device` over
   all views; it is reached only when the planned device went offline.

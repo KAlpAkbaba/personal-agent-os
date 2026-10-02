@@ -57,6 +57,7 @@ from app.narrative.device_writer import stamp_device
 from app.research import challenge as challenge_policy
 from app.research import discovery, eligibility, runs_service, sources
 from app.research.browser_gateway import (
+    CLOUD_SEARCH_ORDER,
     DEFAULT_EXCERPT_CHARS,
     PROFILE_OWNER,
     PROFILE_RESEARCH,
@@ -180,6 +181,14 @@ def _attached(mode: str, device_id: uuid.UUID) -> bool:
     ``owner_chrome`` -> ``device`` fallback row for a fallback nobody chose - so a run on the
     cloud device asks for the research profile directly."""
     return mode == "owner_chrome" and not _runs_on_cloud(device_id)
+
+
+def _search_order(device_id: uuid.UUID) -> tuple[str, ...] | None:
+    """The engines a search on this device walks, or ``None`` for the one engine it always
+    asked. A run on the cloud device gets :data:`CLOUD_SEARCH_ORDER` (bing first: the
+    configured default ended in its captcha page in the cloud image, and one named engine
+    has no fallback in the worker); the owner's own machines keep today's engine."""
+    return CLOUD_SEARCH_ORDER if _runs_on_cloud(device_id) else None
 
 
 def _current_attempt() -> int:
@@ -547,6 +556,7 @@ def discover_activity(
                     else (search_provider or settings.research_search_provider)
                 ),
                 profile=PROFILE_OWNER if attached else PROFILE_RESEARCH,
+                search_order=None if attached else _search_order(uuid.UUID(device_id)),
             )
             try:
                 hits = gateway.search(
