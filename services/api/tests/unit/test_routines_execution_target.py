@@ -199,6 +199,29 @@ def test_the_cloud_word_is_the_cloud(stage) -> None:
     assert stage.ledger()[-1][1]["forced"] is True
 
 
+@pytest.mark.parametrize("targets", [("bulutta", "ev"), ("ev", "bulutta")])
+def test_a_machine_named_beside_the_cloud_word_is_still_refused(stage, targets) -> None:
+    """The rule is asked about ONE word. When any of the words is a machine's it is that
+    one, wherever it stands: "bulutta" said first does not carry "ev" into the cloud - on
+    the run and on the probe alike."""
+    stage.cloud()
+    stage.mail()  # alias "ev"
+
+    assert stage.port.scheduled(targets=targets).selection_for(CAPABILITY_BROWSER_NAVIGATE) is None
+    assert stage.port.scheduled(targets=targets).can_run(CAPABILITY_BROWSER_NAVIGATE) is False
+    assert stage.ledger() == []  # the probe wrote nothing
+
+    result = stage.scheduled(CAPABILITY_BROWSER_NAVIGATE, {"url": PUBLIC}, targets=targets)
+
+    assert stage.sent() == []
+    assert (result.ok, result.error_class, result.device_id) == (False, "no_capable_device", None)
+    assert "forced_target_not_allowed" in result.message
+    ledger = stage.ledger()
+    assert [t for t, _ in ledger] == ["execution.refused"]
+    assert ledger[0][1]["reason"] == "forced_target_not_allowed"
+    assert ledger[0][1]["forced"] is True
+
+
 def test_the_payloads_url_is_what_the_rule_is_asked_about(stage, monkeypatch) -> None:
     stage.cloud()
     asked: list[str | None] = []
@@ -298,6 +321,7 @@ def _probe(stage, capability: str, targets=()) -> uuid.UUID | None:
         ({}, CAPABILITY_BROWSER_NAVIGATE, ("ev",)),
         ({}, CAPABILITY_BROWSER_NAVIGATE, ("bulutta",)),
         ({"online": False}, CAPABILITY_BROWSER_NAVIGATE, ("bulutta",)),
+        ({}, CAPABILITY_BROWSER_NAVIGATE, ("bulutta", "ev")),
         ({}, CAPABILITY_APP_LAUNCH, ()),
         ({}, CAPABILITY_APP_LAUNCH, ("ev",)),
     ],

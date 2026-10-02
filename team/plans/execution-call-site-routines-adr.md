@@ -54,8 +54,22 @@ Consequences (not softened):
 - A routine `browser_action` that ACTS (`click`, `fill`, `upload`) is sent to the cloud as a read
   (the rule never sees `acting`); the cloud worker's READ+NAVIGATE session policy is what refuses
   it. A routine that used to click on a home machine no longer does.
-- A routine `browser_action` that names a `session_id` opened on a machine finds no such session
-  on the cloud worker.
+  A machine word beside the cloud word (`("bulutta", "ev")`, either order) is the machine word:
+  refused, on the run and on the probe.
+- **A `selected` ledger row is not proof the action ran.** The cloud worker requires a `session_id`
+  on every operation but `browser.worker_status` (`browser_agent/worker.py::_require_session_id`,
+  lines 1131-1149: a payload without one is `validation_error`), and every operation other than
+  `session_open` must name a session already open ON THAT WORKER (`unknown session`). The routine
+  dispatcher sends ONE operation per firing and opens no session, so a `browser_action` that
+  carries no `session_id`, or names one opened on a machine, is selected for the cloud, written
+  `execution.selected target=cloud`, and then FAILS on the worker. The row records where the rule
+  sent the operation, nothing more; whether it ran is the firing's own outcome (`DispatchOutcome`,
+  the device command's result). So the card's PROVEN_REAL criterion ("the first routine whose
+  ledger row says target=cloud") is not sufficient: PROVEN_REAL needs that row AND a succeeded
+  command result from the cloud device for the same firing. Until a routine can open a cloud
+  session (one action = one operation today), the only `browser_action` that can succeed there
+  is `session_open` itself. Before release: count production routines whose action kind is
+  `browser_action` - each one that works today through a machine's session stops working.
 - No setting guards this (the research call site has one, ADR-0248). With the cloud worker's
   image not rebuilt, every routine `browser_action` fails `no_capable_device` from the release on.
   If the lead wants the research order (image first), a setting is the lead's to add: `config.py`
