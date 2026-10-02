@@ -25,8 +25,11 @@
          (the store's in API mode, else team/models.json, else the defaults - as the cycle
          reads it), or - when that model is limited (team/limits.json, or the run's own
          answer) - one model down at once; the report says 'model düşürüldü'. A usage limit is
-         never an attempt and is NEVER waited for: the lock is held. When the run ends, every
-         process it left going is stopped before anything is read. What it changed is then
+         never an attempt and is NEVER waited for: the lock is held. The run's command is
+         created suspended, put into a job object and only then let run, so everything it ever
+         starts is in the job; a command that cannot be put into one is never let run (no run,
+         nothing counted). When the run ends, every process it left going is stopped before
+         anything is read. What it changed is then
          COMMITTED, and THIS script checks the committed diff (renames off: a file moved out
          of an area is a deletion there): docs/, .github/, team/, scripts/quality-gate.ps1,
          state/BUILD_STATE.json and the files a section names; one file outside that refuses
@@ -69,7 +72,8 @@
     Exit codes: 0 done or nothing to do; 2 the queue, the model setting or -Model breaks the
     protocol; 3 the lock is held; 4 Docker is down; 5 conflict with main; 6 the gate is red;
     7 the lead's run was refused or gave no result, or no model is open for it (the usage
-    limit: not an attempt, never counted towards 8); 8 the branch is stopped (two failed attempts); 9 main moved but the push
+    limit: not an attempt, never counted towards 8), or its command could not be put into a
+    job (never let run, not an attempt); 8 the branch is stopped (two failed attempts); 9 main moved but the push
     failed; 10 the worktree's environment could not be built; 11 a branch could not be moved
     forward; 12 an unexpected error, or the queue could not be written (the next run finishes
     it); 13 a ref moved during the lead's run.
@@ -586,10 +590,21 @@ function Invoke-BranchIntegration {
             if ($pick.Lowered) { [void]$Outcome.Lines.Add("model düşürüldü: $($pick.Intended) -> $runModel (limit)") }
             $arguments = Get-TeamRunArguments -RoleFile $leadRoleFile -Model $runModel -PrefixArguments $ClaudePrefixArguments
             $refsBefore = Get-TeamRefValues -RepoRoot $repoRoot -Names $watched
-            $leadRun = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $tree
-            # The run's whole process tree is held from its first moment: when the run ends, what it
-            # left going ("tests are running in the background") is stopped BEFORE anything is read.
-            $job = Start-TeamRunJob -Run $leadRun
+            # The run's whole process tree is held from its first moment - the command is created
+            # suspended, put into its job and only then let run: when the run ends, what it left
+            # going ("tests are running in the background") is stopped BEFORE anything is read.
+            $start = Start-TeamHeldRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $tree
+            if (-not $start.Held) {
+                # No job, no run: the command never ran one instruction. Nothing was paid for, nothing is counted.
+                [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $tip)
+                $reason = "lead koşusu başlatılmadı - süreç ağacı tutulamadı ($($start.Why)); komut hiç çalışmadı, sayılmadı, bir sonraki adım dener"
+                foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
+                $Outcome.Result = "lead koşusu yapılamadı"
+                [void]$Outcome.Lines.Add($reason)
+                return 7
+            }
+            $leadRun = $start.Run
+            $job = $start.Job
             # From here a lead run is paid for: an attempt that breaks after this is counted (the caller's catch).
             $Item.LeadRan = $true
             $finished = Wait-TeamLeadRun -Run $leadRun -Job $job -Deadline $deadline
@@ -606,7 +621,6 @@ function Invoke-BranchIntegration {
             if (@($finished.Left).Count -gt 0) {
                 [void]$Outcome.Lines.Add("lead koşusu bittiğinde arkasında $(@($finished.Left).Count) süreç bıraktı ($(($finished.Left | Sort-Object -Unique) -join ', ')); fark okunmadan önce durduruldu - yazacakları commit edilmedi")
             }
-            if ($job.Why) { [void]$script:risks.Add("${integration}: lead koşusunun süreç ağacı tutulamadı ($($job.Why)); arkasında bıraktığı süreç durdurulmadı - commit edilen fark yine de denetlendi") }
             if (@($movedRefs).Count -gt 0 -or -not $limitedNow) { break }
 
             # The usage limit: never an attempt, never waited for (the lock is held). What it closes is

@@ -454,6 +454,14 @@ Test-Case "the step never waits for a usage limit while it holds the team lock: 
     foreach ($text in @($step, $library)) { Assert-True -Condition ($text -notmatch "WaitForUsageLimit|MaxLimitWaitMinutes") -Because "there is no switch that would make it wait" }
 }
 
+Test-Case "the step has ONE way to start the lead's run, the one that holds it: it never starts a run and puts it into a job afterwards" {
+    $step = [System.IO.File]::ReadAllText($integrateScript, [System.Text.Encoding]::UTF8)
+    Assert-True -Condition ($step -match "Start-TeamHeldRun " -and $step -notmatch "Start-TeamRun\b") -Because "integrate.ps1 starts the run with Start-TeamHeldRun and never with Start-TeamRun (started first, assigned on the next line: a process started in between was in no job)"
+    Assert-True -Condition ($null -eq (Get-Command -Name "Start-TeamRunJob" -ErrorAction SilentlyContinue)) -Because "there is no function that puts an already running process into a job"
+    $library = [System.IO.File]::ReadAllText($integrateLib, [System.Text.Encoding]::UTF8)
+    Assert-True -Condition ($library.IndexOf("CREATE_SUSPENDED | ") -gt 0) -Because "the command is created suspended"
+}
+
 Test-Case "a script of the integration step that holds Turkish text says which encoding it is in" {
     $files = @($integrateScript, $integrateLib, (Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"), (Join-Path $repoRoot "scripts\tests\lib\fake-gate.ps1"))
     $withText = 0
@@ -511,6 +519,8 @@ if ($env:PAGENTOS_FAKE_LEAD_LEAVES) {
     # child of this run, so stopping the run's process tree does not reach it.
     $shell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     $line = '-NoProfile -ExecutionPolicy Bypass -File "' + $env:PAGENTOS_FAKE_LEAD_LEAVES + '"'
+    # Who this run is, for what it leaves behind (it can then tell when the run has ended).
+    [System.IO.File]::WriteAllText(($env:PAGENTOS_FAKE_LEAD_LEAVES + ".lead"), [string]$PID)
     if ($env:PAGENTOS_FAKE_LEAD_LEAVES_HOW -eq "escaped") {
         $startup = New-CimInstance -ClassName Win32_ProcessStartup -Property @{ ShowWindow = [uint16]0 } -ClientOnly
         $made = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('"' + $shell + '" ' + $line); ProcessStartupInformation = $startup }
@@ -522,6 +532,14 @@ if ($env:PAGENTOS_FAKE_LEAD_LEAVES) {
     while (-not (Test-Path -LiteralPath ($env:PAGENTOS_FAKE_LEAD_LEAVES + ".started"))) {
         if ([datetime]::UtcNow -gt $until) { throw "what the run leaves behind did not start" }
         Start-Sleep -Milliseconds 50
+    }
+    if ($env:PAGENTOS_FAKE_LEAD_RELEASES) {
+        # The step is held just before it puts this run into its job (the step's own seam): it is
+        # let go only NOW, with the process already started, and this run stays alive until the
+        # step is past the assignment.
+        [System.IO.File]::WriteAllText($env:PAGENTOS_FAKE_LEAD_RELEASES, "the process is started")
+        $until = [datetime]::UtcNow.AddSeconds(40)
+        while (-not (Test-Path -LiteralPath ($env:PAGENTOS_FAKE_LEAD_RELEASES + ".passed")) -and [datetime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 20 }
     }
 }
 # A run that never ends by itself: the step's cap is what ends it.
@@ -780,23 +798,38 @@ function New-LeftBehind {
         then writes -Target into the gate worktree. -How "child" is a process the run started
         (in its process tree); "escaped" is one the WMI service started (in nobody's tree).
         -On is the moment it writes at: "add" (before the step stages) or "commit" (after it committed).
+        -HeldBy holds the STEP just before it puts the run into its job (the step's seam,
+        PAGENTOS_TEAM_INTEGRATE_HOLD_BEFORE_JOB) until the process is started: "lead" lets the step
+        go while the run is still alive, "ended" only once the run's own process is gone.
     #>
-    param([string]$Root, [string]$Target, [string]$How = "child", [string]$On = "add")
+    param([string]$Root, [string]$Target, [string]$How = "child", [string]$On = "add", [string]$HeldBy = "")
     $tools = "$Root-tools"
     $writer = Join-Path $tools "left-behind.ps1"
     $signal = Join-Path $tools "left-behind.signal"
     $written = Join-Path $tools "left-behind.written"
     $file = Join-Path (Join-Path $Root ".claude\worktrees\gate\integrate\c1") ($Target -replace "/", "\")
-    [System.IO.File]::WriteAllText($writer, (@(
-                "Set-Content -LiteralPath '$writer.started' -Value `$PID -Encoding ASCII",
+    $hold = Join-Path $tools "job-hold"
+    $ended = @()
+    if ($HeldBy -eq "ended") {
+        $ended = @(
+            "`$lead = 0; [void][int]::TryParse(([System.IO.File]::ReadAllText('$writer.lead')).Trim(), [ref]`$lead)",
+            "`$gone = [datetime]::UtcNow.AddSeconds(60)",
+            "while ((Get-Process -Id `$lead -ErrorAction SilentlyContinue) -and [datetime]::UtcNow -lt `$gone) { Start-Sleep -Milliseconds 20 }",
+            "Set-Content -LiteralPath '$hold' -Value 'the run has ended' -Encoding ASCII")
+    }
+    [System.IO.File]::WriteAllText($writer, ((@(
+                "Set-Content -LiteralPath '$writer.started' -Value `$PID -Encoding ASCII") + $ended + @(
                 "`$until = [datetime]::UtcNow.AddSeconds(90)",
                 "while (-not (Test-Path -LiteralPath '$signal')) { if ([datetime]::UtcNow -gt `$until) { exit 0 }; Start-Sleep -Milliseconds 20 }",
                 "[void](New-Item -ItemType Directory -Force -Path '$(Split-Path -Parent $file)')",
                 "Set-Content -LiteralPath '$file' -Value 'written after the run ended' -Encoding ASCII",
-                "Set-Content -LiteralPath '$written' -Value 'done' -Encoding ASCII") -join "`r`n"), $utf8)
+                "Set-Content -LiteralPath '$written' -Value 'done' -Encoding ASCII")) -join "`r`n"), $utf8)
+    $held = @{}
+    if ($HeldBy) { $held["PAGENTOS_TEAM_INTEGRATE_HOLD_BEFORE_JOB"] = $hold }
+    if ($HeldBy -eq "lead") { $held["PAGENTOS_FAKE_LEAD_RELEASES"] = $hold }
     return [pscustomobject]@{
         Started = "$writer.started"; Written = $written; Status = (Join-Path $tools "gate-status.log")
-        Environment = @{
+        Environment = $held + @{
             PAGENTOS_FAKE_LEAD_LEAVES = $writer; PAGENTOS_FAKE_LEAD_LEAVES_HOW = $How
             PAGENTOS_FAKE_GIT_REAL = (Get-TeamGit); PAGENTOS_FAKE_GIT_SIGNAL_ON = $On
             PAGENTOS_FAKE_GIT_SIGNAL = $signal; PAGENTOS_FAKE_GIT_AWAIT = $written
@@ -1237,6 +1270,51 @@ try {
             Assert-Equal -Expected "" -Actual ([System.IO.File]::ReadAllText($left.Status).Trim()) -Because "on a clean tree"
         }
         finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+    }
+
+    # The run was started and only THEN put into its job (2026-10-02, at the merge: 1 of 78 under
+    # load - the process WROTE). A process started in between is in no job; a run that has ended by
+    # then cannot be assigned at all. The step is held at that very moment, so the window is hit
+    # in every run, not in one of 78.
+    foreach ($heldBy in @("lead", "ended")) {
+        $moment = if ($heldBy -eq "lead") { "the run still alive when the step goes on" } else { "the run already ended when the step goes on" }
+        Test-Case "the lead's run is inside its job BEFORE it can start anything: a process it starts while the step is held before the assignment is stopped with it and never writes ($moment)" {
+            $root = New-Sandbox -Work $one
+            $left = New-LeftBehind -Root $root -Target "src/a/late.txt" -How "child" -On "add" -HeldBy $heldBy
+            try {
+                $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment $left.Environment -PathPrefix (Get-GitShimFolder)
+                Assert-True -Condition (Test-Path -LiteralPath $left.Started) -Because "the run did start a process (else this case proves nothing): $($run.Output)"
+                Assert-True -Condition (-not (Test-Path -LiteralPath $left.Written)) -Because "${moment}: the process was in the run's job from its first moment and was stopped before the step read the diff - it never wrote"
+                Assert-True -Condition ($null -eq (Get-LeftBehindProcess -Left $left)) -Because "it is gone"
+                Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+                foreach ($revision in @("main", "integrate/c1")) { Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision $revision -File "src/a/late.txt")) -Because "a file the diff check never saw is not on $revision" }
+                Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the run itself kept the rule: the task goes on"
+                Assert-True -Condition ($run.Report -match "arkasında \d+ süreç bıraktı") -Because "the report says the run left something going, and that it was stopped: $($run.Report)"
+                Assert-True -Condition ($run.Report -notmatch "tutulamadı") -Because "the run was held: $($run.Report)"
+            }
+            finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    Test-Case "a run that cannot be put into a job is refused BEFORE the lead's command starts: no run, no attempt, the report says it, and the next step goes on" {
+        $root = New-Sandbox -Work $one
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $tipBefore = Get-Sha -Root $root -Revision "integrate/c1"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment @{ PAGENTOS_TEAM_INTEGRATE_JOB_FAILS = "1" }
+        Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 0 -Actual @($run.LeadCalls).Count -Because "the lead's command never ran one instruction: it logged nothing"
+        Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "no gate"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root $root -Revision "integrate/c1") -Because "and so is the integration branch"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "team\reports\c1\gate-1.json"))) -Because "nothing was paid for: no attempt is counted"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $task.state -Because "the task waits for the next step"
+        Assert-True -Condition ($task.reason -match "süreç ağacı tutulamadı" -and $task.reason -match "sayılmadı") -Because "the reason says why there was no run: $($task.reason)"
+        Assert-True -Condition ($run.Report -match "lead koşusu başlatılmadı" -and $run.Report -match "süreç ağacı tutulamadı") -Because "the report says it: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock was released"
+        $again = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md"
+        Assert-Equal -Expected 0 -Actual $again.ExitCode -Because "the next step, with a job: $($again.Output)"
+        Assert-Equal -Expected "green" -Actual (Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).result -Because "it is the FIRST attempt: the refused start took no number"
     }
 
     Test-Case "a writer the step cannot stop (no child of the run) that writes before the commit: the COMMITTED diff is what is checked, the run is refused and nothing is merged" {

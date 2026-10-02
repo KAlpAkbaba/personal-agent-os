@@ -203,6 +203,47 @@ production, the recovery supervisor or the last-known-good record (a test reads 
       What the step learns about a limit lives for that step only; the next one finds out
       again in one five-second run unless a cycle has written it to `team/limits.json`.
 
+12. **Sixth round (the lead's return at the merge, 2026-10-02): the run is inside its job BEFORE
+    it can start anything.** Rule 11 (a) said "the moment it is started"; the code started the
+    run (`Start-TeamRun`) and put it into the job on the NEXT line. Under load (the gate's unit
+    suite and six agent runs) the step was descheduled between the two lines: 1 of 78, the
+    left-behind process wrote. The lead's reading is proven, not taken on trust: with the step
+    held between the two lines (a seam, below) the old code fails in every run, two ways -
+    a process the run started in between is in no job; and a run that had already ended could
+    not be assigned at all (`Held = false`, `Why = ""`), after which nothing was stopped.
+    - **Chosen: `CreateProcess` with `CREATE_SUSPENDED`, assign, resume**
+      (`Start-TeamHeldRun`, `scripts/lib/TeamIntegrate.ps1`). The command exists and has not run
+      one instruction when `AssignProcessToJobObject` is called; there is no "in between" left
+      to be fast or slow in. **Not chosen: a launcher** the step starts, assigns and then
+      releases through an event or a file. It closes the same window but adds a second process
+      and a hand-over protocol between the step and the real command: the launcher must pass
+      the prompt on standard input and both output pipes through unchanged (the result
+      document is read from them, UTF-8, the usage-limit line included), its own exit code
+      must become the command's, and a launcher that dies leaves a release nobody answers -
+      each of them a new way to fail in the one step that puts code on main without a person.
+      The suspended start has no protocol: one kernel call more, in the same process.
+    - **What it costs.** `System.Diagnostics.Process` cannot start suspended, so the three
+      pipes and the `CreateProcess` call are made in the step's own C# (thirty lines beside the
+      job object's declarations): inherited handles, no window, the caller's environment plus
+      `CLAUDE_CODE_NO_MODEL_FALLBACK`, the same command line `Process.Start` builds. The run
+      object keeps `Start-TeamRun`'s shape, so `Wait-TeamRun` (not this task's file) reads it
+      unchanged. The prompt is written off the step's thread: a command that never reads its
+      input no longer holds the step past `-LeadMinutes`.
+    - **No job, no run.** When the command cannot be put into a job (or cannot be resumed), it
+      is ended as it was created - it never ran - and the step starts NO lead run: tasks stay
+      `merged` with "lead koşusu başlatılmadı - süreç ağacı tutulamadı (...)", exit 7, no
+      attempt record, no strike, nothing paid for; the next step tries again. The earlier
+      behaviour (run on unheld, with a line under the risks) is gone, and so is
+      `Start-TeamRunJob`: there is no function that puts a running process into a job.
+    - **The seam.** `PAGENTOS_TEAM_INTEGRATE_HOLD_BEFORE_JOB` names a file: the step waits just
+      before the assignment until the file exists (ten seconds at most) and writes
+      `<file>.passed` after it; `PAGENTOS_TEAM_INTEGRATE_JOB_FAILS` makes the assignment fail.
+      Both only ever delay or REFUSE a run - neither can make one go unheld. Unset outside the
+      suite. The two cases held there cost ten seconds each when green (the suspended command
+      cannot create the file).
+    - Rules (b) and (c) are unchanged and still hold what no job can (a WMI-started writer): the
+      three cases of round five are unedited.
+
 ## Open decisions for the lead (not built by this task)
 
 1. **The lock is held for the whole gate** (up to 150 minutes by default), as the card asks, so

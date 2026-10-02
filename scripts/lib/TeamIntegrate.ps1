@@ -52,6 +52,10 @@ $script:TeamBranchPassedStates = @("merged", "awaiting_release", "released", "aw
 # "pnpm") is not an application: CreateProcess refuses it.
 $script:TeamToolExtensions = @(".exe", ".cmd")
 $script:TeamReasonMaxLength = 900
+# The suite's two seams at the start of the lead's run (Wait-TeamRunHold, Start-TeamHeldRun).
+$script:TeamRunHoldVariable = "PAGENTOS_TEAM_INTEGRATE_HOLD_BEFORE_JOB"
+$script:TeamRunHoldMilliseconds = 10000
+$script:TeamRunJobFailsVariable = "PAGENTOS_TEAM_INTEGRATE_JOB_FAILS"
 
 # ---------------------------------------------------------------------------- names
 
@@ -358,45 +362,219 @@ function Set-TeamModelClosed {
 # every process started from the run's own, whoever its parent was by the end.
 
 function Initialize-TeamRunJobType {
-    <# kernel32's job object, declared once in a session. #>
+    <#
+        kernel32's job object and a process that is created SUSPENDED, declared once in a session.
+        System.Diagnostics.Process cannot start a process suspended, so the three pipes and the
+        CreateProcess call are made here - as Process.Start makes them (inherited handles, no
+        window, the caller's environment plus what the caller adds).
+    #>
     if ($null -ne ("PagentOS.Team.RunJob" -as [type])) { return }
-    Add-Type -Namespace PagentOS.Team -Name RunJob -MemberDefinition @"
-[DllImport("kernel32.dll", SetLastError = true)]
-public static extern IntPtr CreateJobObject(IntPtr attributes, IntPtr name);
-[DllImport("kernel32.dll", SetLastError = true)]
-public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-[DllImport("kernel32.dll", SetLastError = true)]
-public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
-[DllImport("kernel32.dll", SetLastError = true)]
-public static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, int length, IntPtr returned);
-[DllImport("kernel32.dll", SetLastError = true)]
-public static extern bool CloseHandle(IntPtr handle);
+    Add-Type -ReferencedAssemblies "System.Core" -TypeDefinition @"
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace PagentOS.Team {
+    public sealed class SuspendedRun {
+        public IntPtr ProcessHandle;
+        public IntPtr ThreadHandle;
+        public int ProcessId;
+        public Stream StdIn;
+        public Stream StdOut;
+        public Stream StdErr;
+    }
+
+    public static class RunJob {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr CreateJobObject(IntPtr attributes, IntPtr name);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, int length, IntPtr returned);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CloseHandle(IntPtr handle);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool TerminateProcess(IntPtr process, uint exitCode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern uint ResumeThread(IntPtr thread);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct STARTUPINFO {
+            public int cb;
+            public IntPtr lpReserved, lpDesktop, lpTitle;
+            public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+            public short wShowWindow, cbReserved2;
+            public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PROCESS_INFORMATION {
+            public IntPtr hProcess, hThread;
+            public int dwProcessId, dwThreadId;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
+            bool inheritHandles, uint flags, byte[] environment, string workingDirectory, ref STARTUPINFO startup, out PROCESS_INFORMATION made);
+
+        const uint CREATE_SUSPENDED = 0x00000004, CREATE_UNICODE_ENVIRONMENT = 0x00000400, CREATE_NO_WINDOW = 0x08000000;
+        const int STARTF_USESTDHANDLES = 0x00000100;
+
+        // The process exists and has run nothing: its first thread waits for Resume.
+        public static SuspendedRun StartSuspended(string commandLine, string workingDirectory, IDictionary extraEnvironment) {
+            SortedDictionary<string, string> variables = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) { variables[(string)entry.Key] = (string)entry.Value; }
+            if (extraEnvironment != null) { foreach (DictionaryEntry entry in extraEnvironment) { variables[Convert.ToString(entry.Key)] = Convert.ToString(entry.Value); } }
+            StringBuilder block = new StringBuilder();
+            foreach (KeyValuePair<string, string> variable in variables) { block.Append(variable.Key).Append('=').Append(variable.Value).Append('\0'); }
+            block.Append('\0');
+
+            AnonymousPipeServerStream input = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
+            AnonymousPipeServerStream output = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+            AnonymousPipeServerStream error = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+            STARTUPINFO startup = new STARTUPINFO();
+            startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+            startup.dwFlags = STARTF_USESTDHANDLES;
+            startup.hStdInput = input.ClientSafePipeHandle.DangerousGetHandle();
+            startup.hStdOutput = output.ClientSafePipeHandle.DangerousGetHandle();
+            startup.hStdError = error.ClientSafePipeHandle.DangerousGetHandle();
+            PROCESS_INFORMATION made;
+            bool created = CreateProcessW(null, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, Encoding.Unicode.GetBytes(block.ToString()), workingDirectory, ref startup, out made);
+            int code = Marshal.GetLastWin32Error();
+            // This side's copies of the command's ends: with them open, the pipes would never end.
+            input.DisposeLocalCopyOfClientHandle();
+            output.DisposeLocalCopyOfClientHandle();
+            error.DisposeLocalCopyOfClientHandle();
+            if (!created) {
+                input.Dispose(); output.Dispose(); error.Dispose();
+                throw new Win32Exception(code);
+            }
+            SuspendedRun run = new SuspendedRun();
+            run.ProcessHandle = made.hProcess; run.ThreadHandle = made.hThread; run.ProcessId = made.dwProcessId;
+            run.StdIn = input; run.StdOut = output; run.StdErr = error;
+            return run;
+        }
+
+        // 0, or the Win32 error (read here: PowerShell makes calls of its own before it could ask).
+        public static int Assign(IntPtr job, IntPtr process) {
+            return AssignProcessToJobObject(job, process) ? 0 : Math.Max(1, Marshal.GetLastWin32Error());
+        }
+
+        public static int Resume(IntPtr thread) {
+            return ResumeThread(thread) != 0xFFFFFFFF ? 0 : Math.Max(1, Marshal.GetLastWin32Error());
+        }
+
+        // The prompt, written off this thread: a command that never reads it must not hold the step past its cap.
+        public static Task Feed(Stream stream, byte[] bytes) {
+            return Task.Run(() => {
+                try { stream.Write(bytes, 0, bytes.Length); }
+                catch (IOException) { }
+                catch (ObjectDisposedException) { }
+                finally { try { stream.Dispose(); } catch (IOException) { } }
+            });
+        }
+    }
+}
 "@
 }
 
-function Start-TeamRunJob {
+function Wait-TeamRunHold {
     <#
     .SYNOPSIS
-        Put a run that was JUST started into a job object of its own: every process it starts
-        from here on is in the job, so the whole tree can be stopped once the run has ended.
-        Held is false when it could not be done (Why says so); the caller then has the
-        committed diff's check alone.
+        The suite's seam at the one moment that matters: just before the run is put into its
+        job. When PAGENTOS_TEAM_INTEGRATE_HOLD_BEFORE_JOB names a file, the step waits HERE until
+        that file exists (ten seconds at most), and -Passed writes "<file>.passed" once the
+        assignment is behind it. Unset - always, outside the suite - it does nothing.
     #>
-    param([Parameter(Mandatory = $true)]$Run)
+    param([switch]$Passed)
+    $file = [string][Environment]::GetEnvironmentVariable($script:TeamRunHoldVariable)
+    if (-not $file) { return }
+    if ($Passed) { [System.IO.File]::WriteAllText("$file.passed", "passed"); return }
+    $until = [datetime]::UtcNow.AddMilliseconds($script:TeamRunHoldMilliseconds)
+    while (-not (Test-Path -LiteralPath $file) -and [datetime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 20 }
+}
+
+function Start-TeamHeldRun {
+    <#
+    .SYNOPSIS
+        Start one role run INSIDE a job object of its own: the command is created suspended, put
+        into the job, and only then let run - so every process it ever starts is in the job,
+        whoever its parent is by the end, and the whole tree can be stopped once the run has ended.
+
+    .DESCRIPTION
+        Until 2026-10-02 the run was started (Start-TeamRun) and put into its job on the next line.
+        A process the run started in between was in no job, and a run that had ended by then could
+        not be assigned at all: nothing was stopped, and what was left going wrote after the diff
+        was read (1 of 78 under load, at the merge). There is no "in between" now: the command has
+        not run one instruction when it is assigned.
+
+        Held is false when the run could NOT be put into a job (Why says so). The command was then
+        never let run: it is ended as it was created, nothing was paid for, and the caller starts
+        no run. A command that cannot be created at all throws, as Start-TeamRun does.
+
+        Run has Start-TeamRun's shape (Process, StdOut, StdErr, Started): Wait-TeamRun reads it.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Prompt,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+    )
+    Initialize-TeamRunJobType
+    $api = [PagentOS.Team.RunJob]
     $none = [IntPtr]::Zero
+    $job = $api::CreateJobObject($none, $none)
+    if ($job -eq $none) { return [pscustomobject]@{ Held = $false; Why = "CreateJobObject failed"; Run = $null; Job = $null } }
+    $file = if ($FilePath.StartsWith('"')) { $FilePath } else { '"' + $FilePath + '"' }
+    $line = $file + " " + (ConvertTo-NativeArgumentLine -Arguments $Arguments)
+    $started = $null
+    # The tool can switch a session off the model it was started on by itself: see Start-TeamRun.
+    try { $started = $api::StartSuspended($line, (Resolve-Path -LiteralPath $WorkingDirectory).Path, @{ CLAUDE_CODE_NO_MODEL_FALLBACK = "1" }) }
+    catch { [void]$api::CloseHandle($job); throw }
+    $why = ""
+    $run = $null
     try {
-        Initialize-TeamRunJobType
-        $handle = [PagentOS.Team.RunJob]::CreateJobObject($none, $none)
-        if ($handle -eq $none) { return [pscustomobject]@{ Handle = $none; Held = $false; Why = "CreateJobObject failed" } }
-        if (-not [PagentOS.Team.RunJob]::AssignProcessToJobObject($handle, $Run.Process.Handle)) {
-            [void][PagentOS.Team.RunJob]::CloseHandle($handle)
-            # A run that had already ended (it answered at once) left nothing to hold.
-            $why = if ($Run.Process.HasExited) { "" } else { "AssignProcessToJobObject failed" }
-            return [pscustomobject]@{ Handle = $none; Held = $false; Why = $why }
+        Wait-TeamRunHold
+        $code = if ([Environment]::GetEnvironmentVariable($script:TeamRunJobFailsVariable)) { -1 } else { $api::Assign($job, $started.ProcessHandle) }
+        if ($code -ne 0) { $why = "AssignProcessToJobObject failed (Win32 $code)" }
+        else {
+            Wait-TeamRunHold -Passed
+            # Its own handle on the process, taken while the process cannot end: the exit code is read through it.
+            $process = [System.Diagnostics.Process]::GetProcessById($started.ProcessId)
+            [void]$process.Handle
+            $stdout = (New-Object System.IO.StreamReader($started.StdOut, [System.Text.Encoding]::UTF8)).ReadToEndAsync()
+            $stderr = (New-Object System.IO.StreamReader($started.StdErr, [System.Text.Encoding]::UTF8)).ReadToEndAsync()
+            $code = $api::Resume($started.ThreadHandle)
+            if ($code -ne 0) { $why = "ResumeThread failed (Win32 $code)" }
+            else {
+                [void]$api::Feed($started.StdIn, (New-Object System.Text.UTF8Encoding($false)).GetBytes($Prompt))
+                $run = [pscustomobject]@{ Process = $process; StdOut = $stdout; StdErr = $stderr; Started = [datetime]::UtcNow }
+            }
         }
-        return [pscustomobject]@{ Handle = $handle; Held = $true; Why = "" }
     }
-    catch { return [pscustomobject]@{ Handle = $none; Held = $false; Why = [string]$_.Exception.Message } }
+    catch { $why = [string]$_.Exception.Message }
+    finally {
+        if ($null -eq $run) {
+            # Never let run, or not known to be running inside the job: it is ended where it stands.
+            [void]$api::TerminateJobObject($job, 1)
+            [void]$api::TerminateProcess($started.ProcessHandle, 1)
+            foreach ($stream in @($started.StdIn, $started.StdOut, $started.StdErr)) { try { $stream.Dispose() } catch { } }
+            [void]$api::CloseHandle($job)
+        }
+        [void]$api::CloseHandle($started.ThreadHandle)
+        [void]$api::CloseHandle($started.ProcessHandle)
+    }
+    if ($null -eq $run) { return [pscustomobject]@{ Held = $false; Why = $(if ($why) { $why } else { "the run could not be started inside its job" }); Run = $null; Job = $null } }
+    return [pscustomobject]@{ Held = $true; Why = ""; Run = $run; Job = [pscustomobject]@{ Handle = $job; Held = $true; Why = "" } }
 }
 
 function Get-TeamRunJobProcessIds {
@@ -462,8 +640,8 @@ function Wait-TeamLeadRun {
     $remaining = [int][Math]::Max(0, [Math]::Min([double]([int]::MaxValue - 1), ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds))
     $exited = $Run.Process.WaitForExit($remaining)
     $left = @(Stop-TeamRunJob -Job $Job)
-    # Wait-TeamRun reads the pipes and the exit code; a run that is still alive here (no job could
-    # hold it) is past its deadline and is stopped by it, with the children it can still find.
+    # Wait-TeamRun reads the pipes and the exit code. The run is in the job (Start-TeamHeldRun
+    # starts no run outside one), so it has ended by now, whether by itself or with the job.
     $grace = if ($exited) { 15 } else { 0 }
     $finished = Wait-TeamRun -Run $Run -Deadline ([datetime]::UtcNow.AddSeconds($grace))
     return [pscustomobject]@{
