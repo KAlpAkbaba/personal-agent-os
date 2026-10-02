@@ -29,6 +29,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.team import models_setting
 from app.team.models import KIND_LOCK, KIND_PROPOSAL, KIND_REPORT, KIND_TASK, TeamStateRow
 
 LOCK_STALE_HOURS = 6  # TeamQueue.ps1: $script:TeamLockStaleHours
@@ -36,6 +37,8 @@ TEXT_MAX_CHARS = 20000
 LOCK_KEY = "lock"
 KIND_STATUS = "status"  # a team_state row of its own kind (String(16)): no new table
 STATUS_KEY = "status"
+KIND_MODELS = "models"  # the model setting (ADR-0214 addendum 7): one row, as the status is
+MODELS_KEY = "models"
 SCHEMA_PATH = Path(__file__).with_name("queue.schema.json")
 _REPORT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.md$")
 #: A proposal's file name under ``team/proposals/`` (``scripts/team/cycle.ps1`` posts it).
@@ -265,6 +268,16 @@ def _check_proposal(name: Any, text: Any) -> None:
         raise Invalid(problems)
 
 
+def _check_models(document: Any) -> None:
+    """What a store keeps is the whole setting, stamped: all five roles, ``fallback`` and the
+    ``updated_at`` its writer gave it (``models_setting`` holds the rules)."""
+    problems = [text for _, text in models_setting.problems(document, strict=True)]
+    if not problems and _parse(document.get("updated_at")) is None:
+        problems.append("the setting's updated_at is UTC, YYYY-MM-DDTHH:MM:SSZ")
+    if problems:
+        raise Invalid(problems)
+
+
 # ------------------------------------------------------------------ the contract
 
 
@@ -290,6 +303,8 @@ class TeamStore(Protocol):
     def read_proposal(self, name: str) -> str | None: ...
     def read_status(self) -> dict[str, Any] | None: ...
     def put_status(self, document: dict[str, Any]) -> None: ...
+    def read_models(self) -> dict[str, Any] | None: ...
+    def put_models(self, document: dict[str, Any]) -> None: ...
 
 
 def _check_put(
@@ -375,6 +390,21 @@ class FileStore:
         with _WRITE_LOCK:
             self.root.mkdir(parents=True, exist_ok=True)
             self._write(self.root / "status.json", _copy(document))
+
+    def read_models(self) -> dict[str, Any] | None:
+        """``models.json`` as it is on disk (a person may have written it): the reader fills
+        and judges it (``models_setting.effective``)."""
+        try:
+            setting = json.loads((self.root / "models.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return setting if isinstance(setting, dict) else None
+
+    def put_models(self, document: dict[str, Any]) -> None:
+        _check_models(document)
+        with _WRITE_LOCK:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._write(self.root / "models.json", _copy(document))
 
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
         _check_report(name, text)
@@ -559,6 +589,37 @@ class DbStore:
                 session.commit()
             except IntegrityError:
                 session.rollback()  # two first writes raced: the other one's heartbeat stands
+
+    def read_models(self) -> dict[str, Any] | None:
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_MODELS, MODELS_KEY))
+            return None if row is None else _copy(row.doc)
+
+    def put_models(self, document: dict[str, Any]) -> None:
+        """The owner's last choice wins: one row, replaced whole."""
+        _check_models(document)
+        doc = _copy(document)
+        version = str(doc["updated_at"])
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_MODELS, MODELS_KEY))
+            if row is None:
+                session.add(
+                    TeamStateRow(kind=KIND_MODELS, key=MODELS_KEY, doc=doc, updated_at=version)
+                )
+            else:
+                row.doc = doc
+                row.updated_at = version
+            try:
+                session.commit()
+            except IntegrityError:
+                # Two first puts raced and the other's row is there: ours replaces it.
+                session.rollback()
+                session.execute(
+                    update(TeamStateRow)
+                    .where(TeamStateRow.kind == KIND_MODELS, TeamStateRow.key == MODELS_KEY)
+                    .values(doc=doc, updated_at=version)
+                )
+                session.commit()
 
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
         _check_report(name, text)
