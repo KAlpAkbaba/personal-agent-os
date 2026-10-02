@@ -504,6 +504,15 @@ if (-not $Fast) {
     Assert-ExitCode "team-feed tests"
   }
 
+  Invoke-Step "Agent team area widening rules (PS5.1, no model)" {
+    # A fix outside a card's area: the request line of a report, the widen / wait / refuse
+    # judgement and the protected paths (scripts/lib/TeamArea.ps1) - functions only.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-area.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-area tests"
+  }
+
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
     # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
     # fake docker, apt, systemctl and curl. Nothing here touches a host.
