@@ -33,8 +33,10 @@ ikinci tur `3d1be9fc` ve üçüncü tur `91c70543` de GERİ DÖNDÜ (her seferin
 sürerken deponun cevap vermemesi döngüyü yarıda kesiyordu; düşen koşuların sınırı yoktu). Dördüncü tur: koşu sürerken
 yapılan yazma başarısız olursa döngü ÖLMEZ (satır yazar, toplu iş sonunda yeniden dener); deponun reddettiği taze
 birleştirme GERİ ALINIR (`Undo-TeamMerge`), alınamayan adıyla söylenir; bir işin düşen koşusu en çok 3; boş tur
-sınırı 3; yalnız `team/proposals` dosyası fikir metni olarak gönderilir. `team-cycle` 173, 32 mutasyon. SIRA:
-denetleyici dördüncü tura bakıyor → APPROVE ise `gate/d20261002-1` (worktree `.claude/worktrees/gate4`: 4. koltuk,
+sınırı 3; yalnız `team/proposals` dosyası fikir metni olarak gönderilir. Dördüncü tur `3ce11180` de döndü (3 dar bulgu);
+beşinci tur: ret anında bilinir (aynı yazmada başka iş hata verse de), reddedilen sonuçtan sonra döngünün kopyası eski
+haline döner (rapor "merged" demez), fikir dosyası `-TeamRoot`tan okunur. `team-cycle` 176, 35 mutasyon. SIRA:
+denetleyici beşinci tura bakıyor → APPROVE ise `gate/d20261002-1` (worktree `.claude/worktrees/gate4`: 4. koltuk,
 STT ölçüm aracı, Postgres testleri, anlatı tesisatı, sesli özetin koşu sayması, hüküm ayrıştırıcısı) üstüne
 birleştir → tam kapı → main → kural gereği yayın → lead dalı → `team/stop.flag` ile döngüyü yenile. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
 BAŞLAMAMALI (şu an koşan döngü eski kuyruğu gördüğü için başlatmıyor; döngüyü düzeltmeden önce yenileme).**

@@ -153,12 +153,35 @@ function Save-Queue {
     # A task somebody else wrote since the cycle read it (the owner in the Onay Merkezi, the
     # lead, the feeder) is theirs: the cycle's write of THAT task is dropped, the others are
     # written, and the next pass reads the store's version. It used to end the whole cycle.
-    foreach ($id in @(Save-TeamQueueApi -Store $apiStore -Queue $Document -SkipStale)) {
-        # Theirs until the store is read again: nothing is started for it on the copy we have.
-        $script:staleIds[[string]$id] = $true
-        $note = "${id}: depoda başkası değiştirdi; döngünün yazdığı bırakıldı, depodaki hali geçerli"
-        if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+    try { [void]@(Save-TeamQueueApi -Store $apiStore -Queue $Document -SkipStale) }
+    finally {
+        # In 'finally': a save that was refused one task and then FAILED on another threw before
+        # it could say which it was refused - and the refused task's merge stayed on the
+        # integration branch, neither taken back nor named. The store object keeps the refusals
+        # as they happen.
+        foreach ($id in @($apiStore.Refused.ToArray())) {
+            # Theirs until the store is read again: nothing is started for it on the copy we have.
+            $script:staleIds[[string]$id] = $true
+            $note = "${id}: depoda başkası değiştirdi; döngünün yazdığı bırakıldı, depodaki hali geçerli"
+            if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+        }
+        $apiStore.Refused.Clear()
     }
+}
+
+function Restore-TaskCopy {
+    <# The store refused what a run's result made of the task: the cycle's own copy goes back to
+       what it was BEFORE that result, so the report (and anything else that reads the copy until
+       the store can be read again) does not say "merged" of a task whose merge was taken back or
+       is somebody else's now. The put-back copy is noted as written: it is not sent. #>
+    param($Task, [string]$Before)
+    if (-not $Before) { return }
+    $was = ConvertFrom-Json -InputObject $Before
+    foreach ($name in @($Task.PSObject.Properties | ForEach-Object { $_.Name })) {
+        if ($null -eq $was.PSObject.Properties[$name]) { $Task.PSObject.Properties.Remove($name) }
+    }
+    foreach ($property in $was.PSObject.Properties) { Set-TeamProperty -InputObject $Task -Name $property.Name -Value $property.Value }
+    if ($useApi) { Set-TeamTaskWritten -Store $apiStore -Task $Task }
 }
 
 function Test-TaskMovedInStore {
@@ -969,8 +992,8 @@ try {
             $idlePasses++
             if ($idlePasses -ge 3) {
                 # Nothing is runnable in such a pass, so ending here loses no work - and it is said.
-                $refused = if (@($staleIds.Keys).Count -gt 0) { " (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + ")" } else { "" }
-                Add-CycleNote -List "risks" -Text ("depo aynı yazmayı üst üste reddetti" + $refused + "; üç tur yalnız durum taşındı, döngü bu işleri bırakıp bitti")
+                $why = if (@($staleIds.Keys).Count -gt 0) { "depo aynı yazmayı üst üste reddetti (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + ")" } else { "üst üste üç turda yalnız durum taşındı, hiçbir koşu başlamadı" }
+                Add-CycleNote -List "risks" -Text ($why + "; döngünün iş turu burada bitti")
                 break
             }
             if (Test-CapReached) { $capped = $true; break }
@@ -1038,6 +1061,8 @@ try {
             # Did THIS iteration make a new merge commit (the only one that may be taken back)?
             $freshMerge = $false
             $done = Complete-RoleRun -Started $startedRun
+            # The task as it is before this run's result touches it (see Restore-TaskCopy).
+            $beforeResult = ConvertTo-Json -InputObject $task -Depth 12 -Compress
             if (Test-TaskMovedInStore -Task $task) {
                 # Their word stands for the RUN too, not only for the row: no merge, no state, no
                 # report entry (the report is in its file). What the run said about a MODEL's
@@ -1180,13 +1205,18 @@ try {
                 if ($freshMerge) { $undone = Undo-TeamMerge -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) }
                 Add-RefusedMergeNote -Task $task -Undone $undone
             }
-            elseif (-not $writtenNow -and [string]$task.state -eq "merged") { [void]$unwrittenMerges.Add($task) }
+            elseif (-not $writtenNow -and [string]$task.state -eq "merged") { [void]$unwrittenMerges.Add([pscustomobject]@{ Task = $task; Before = $beforeResult }) }
+            # Refused: the copy says again what it said before this result.
+            if ($staleIds.ContainsKey([string]$task.id)) { Restore-TaskCopy -Task $task -Before $beforeResult }
         }
         Save-Queue -Document $queue
         # A merge whose write had to wait for the batch's end and was refused THERE: other merges
         # may stand on it by now, so nothing is reset - it is named, for the lead.
         foreach ($late in $unwrittenMerges) {
-            if ($staleIds.ContainsKey([string]$late.id)) { Add-RefusedMergeNote -Task $late -Undone $false }
+            if ($staleIds.ContainsKey([string]$late.Task.id) -and [string]$late.Task.state -eq "merged") {
+                Add-RefusedMergeNote -Task $late.Task -Undone $false
+                Restore-TaskCopy -Task $late.Task -Before $late.Before
+            }
         }
         if ($limitSeen -and -not (Wait-UsageLimit -ResetsAt $limitHit)) { $capped = $true }
     }

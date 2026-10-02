@@ -1099,7 +1099,14 @@ function New-TeamApiStore {
     if (-not (Test-Path -LiteralPath $TokenFile)) { throw "the queue token file does not exist: $TokenFile" }
     $token = [System.IO.File]::ReadAllText($TokenFile, [System.Text.Encoding]::UTF8).Trim()
     if (-not $token) { throw "the queue token file is empty: $TokenFile" }
-    return [pscustomobject]@{ Base = $Url.TrimEnd("/"); Token = $token; Baseline = @{} }
+    return [pscustomobject]@{
+        Base     = $Url.TrimEnd("/")
+        Token    = $token
+        Baseline = @{}
+        # The ids Save-TeamQueueApi -SkipStale was refused (409), AS THEY HAPPEN: a caller that
+        # catches a later task's error in the same save still learns of them.
+        Refused  = New-Object System.Collections.ArrayList
+    }
 }
 
 function Invoke-TeamApi {
@@ -1163,6 +1170,7 @@ function Save-TeamQueueApi {
         catch {
             if ($SkipStale -and ([string]$_.Exception.Message) -match '^HTTP 409 ') {
                 [void]$stale.Add($id)
+                [void]$Store.Refused.Add($id)
                 # Noted as "nothing new to write", so the same refused write is not sent again by
                 # every later save of the pass; the version stays the stale one, so a further
                 # change of ours to this task is refused as well, until the queue is read again.
@@ -1174,6 +1182,16 @@ function Save-TeamQueueApi {
         $Store.Baseline[$id] = [pscustomobject]@{ Updated = [string]$task.updated_at; Json = $json }
     }
     if ($SkipStale) { return @($stale.ToArray()) }
+}
+
+function Set-TeamTaskWritten {
+    <# Notes a task's present content as "nothing new to write" WITHOUT touching its version:
+       for a copy the caller put back after the store refused its write. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Task)
+    $id = [string]$Task.id
+    $known = $Store.Baseline[$id]
+    $version = if ($null -ne $known) { $known.Updated } else { $null }
+    $Store.Baseline[$id] = [pscustomobject]@{ Updated = $version; Json = (ConvertTo-Json -InputObject $Task -Depth 12 -Compress) }
 }
 
 function Get-TeamLockApi {

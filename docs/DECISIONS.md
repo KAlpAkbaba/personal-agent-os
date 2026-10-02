@@ -18996,3 +18996,31 @@ proposed idea as for a waiting one). Thirty-two mutations, each restored from a 
     one could turn any test with two runs in a batch red. `scripts/tests/lib/fake-claude.ps1` now opens the log for
     append with a retry (a writer waits for the other, it does not die), held by a test that keeps the log open while a
     fake writes (the mutation that lets it die again is RED). Suite: 173 tests.
+
+**Addendum 11 after the inspector's fourth return, of `3ce11180` (2026-10-02).** Three narrow findings, the first
+against decision 15's own guarantee.
+
+20. **A refusal is known the moment it happens, not at the end of the save.** `Save-TeamQueueApi -SkipStale` returned the
+    refused ids when it finished; a save that was refused one task and then FAILED on another threw first, and
+    `Save-QueueNow` swallowed the throw - so the stopped task's merge stayed on the integration branch, neither taken
+    back nor named. The store object now keeps the refusals as they happen (`Refused`), and the cycle reads them in a
+    `finally`.
+21. **After a refused write the cycle's own copy goes back to what it was before that result** (`Restore-TaskCopy`).
+    The merge was taken back, and the copy still said `merged`: when the store could not be read again (a broken card
+    elsewhere), the report listed the task as merged and sent the lead to gate a branch that did not hold the work. The
+    put-back copy is noted as written, so it is not sent.
+22. The idle bound's line says what happened: "depo aynı yazmayı üst üste reddetti (…)" only when something was
+    refused; otherwise that three passes in a row only moved a state.
+
+**Known and left, said so.** (a) "Three dropped runs" is per CYCLE: a store that refuses for ever costs three runs in
+every cycle, with its line in every report - a mark in the store is impossible by construction (the store refuses the
+cycle's writes), and a local file would bound it across cycles; not built. (b) A store that is away from a batch's
+start to its end still ends the cycle at the batch's last, strict write: exit 1, the lock released, no report file
+(its lines are lost), and the next cycle repeats one run - as before this addendum. (c) This PC's proposal file
+replaces the store's text in every cycle; one PC runs cycles.
+
+**Evidence, fifth form.** Thirty-one tests for this addendum (three new: a refusal and a failure in one save; the report
+after a merge that was taken back when the store cannot be read again; an idea's file from a `-TeamRoot` elsewhere).
+Thirty-five mutations plus the fake's, each restored from a backup copy with sha256 equal. The inspector's own
+experiment on the harness race: two fakes started together on one log, forty rounds - 29 died with the old fake, none
+with the new.

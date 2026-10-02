@@ -2315,6 +2315,68 @@ try {
         Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti[^\r\n]*birleştirme GERİ ALINDI") -Because "the report says both: $($run.Report)"
     }
 
+    Test-Case "a refused 'merged' is not forgotten when the same save then fails on another task: the merge is still named" {
+        # The inspector of 3ce11180, PROBE-S: the store refused task-one's 'merged' and, in the same
+        # save, answered an error to task-two's write. The refusal was known only at the END of that
+        # save; the error threw first. The stopped task's merge stayed on the integration branch,
+        # neither taken back nor named, and the report sent the lead to gate that branch.
+        $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $faults = [pscustomobject]@{
+            task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 }
+            task_put           = [pscustomobject]@{ id = "task-two"; status = 503; state = "merged"; times = 1 }
+        }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
+            -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-Equal -Expected 1 -Actual @($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 409" }).Count -Because "task-one's 'merged' was refused"
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-two 503" }).Count -ge 1) -Because "and task-two's write failed in the same save: $($requests -join '; ')"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "task-two was written when the store answered"
+        Assert-True -Condition ($run.Report -match "task-one: depoda başkası değiştirdi") -Because "the refusal is said: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti") -Because "and the merge is named: $($run.Report)"
+    }
+
+    Test-Case "after a refused write the cycle's own copy says what the store let it say: the report does not list a merge that was taken back" {
+        # The inspector of 3ce11180, PROBE-U: the merge was taken back and the store could not be
+        # read again (another card broke the queue); the report listed the task as merged and
+        # sent the lead to gate a branch that did not hold the work.
+        $stopped = New-Task -Id "task-one" -State "stopped"
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $broken = New-Task -Id "task-three" -Area @("src/third")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition ($run.Report -match "birleştirme GERİ ALINDI") -Because "the merge was taken back: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "kuyruk yeniden okunamadı") -Because "and the store could not be read again"
+        Assert-True -Condition ($run.Report -notmatch "task-one[^\r\n]*\[merged\]") -Because "the task is not listed as merged: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "üzerinde tam kapı ve main'e birleştirme") -Because "and the lead is not sent to gate a branch that holds nothing of it"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 409" }).Count -Because "the refused write is not sent again"
+    }
+
+    Test-Case "an idea's file is read from the proposals folder of -TeamRoot, wherever that is" {
+        $root = New-Sandbox -Tasks @()
+        $elsewhere = Join-Path $root "other-team"
+        foreach ($folder in @((Join-Path $root "team\proposals"), (Join-Path $elsewhere "proposals"))) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+        Set-Content -LiteralPath (Join-Path $root "team\proposals\waiting.md") -Value "the repository's own folder" -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $elsewhere "proposals\waiting.md") -Value "the folder of -TeamRoot" -Encoding UTF8
+        $idea = New-Task -Id "idea-one" -State "awaiting_owner" -Area @()
+        $idea.roadmap_row = ""
+        $idea | Add-Member -NotePropertyName proposal -NotePropertyValue "team/proposals/waiting.md"
+        $api = Start-FakeApi -Tasks @($idea)
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -ExtraArguments ("-TeamRoot '" + $elsewhere + "'") -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $posted = (Get-FakeApiState -Api $api).proposals.PSObject.Properties["waiting.md"]
+        Assert-True -Condition ($null -ne $posted) -Because "the idea's text was posted"
+        Assert-True -Condition ([string]$posted.Value -match "the folder of -TeamRoot") -Because "from the folder the cycle was told is the team's: $($posted.Value)"
+    }
+
     Test-Case "a store that is away at the moment a run starts does not end the cycle either: the run goes on and its result is written" {
         $outage = [pscustomobject]@{ task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 } }
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Faults $outage
