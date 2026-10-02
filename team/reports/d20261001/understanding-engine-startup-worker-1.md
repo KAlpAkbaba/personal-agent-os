@@ -1,0 +1,1 @@
+Implementation, ADR and mutation proofs are done; the Owner Utterance Suite is running in the background (about eleven minutes). I'll run the remaining understanding tests and commit once it finishes.
