@@ -15,36 +15,34 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `f91ad1e32414a6ce2f1db511e084ea8959fee280` (2026-10-02 11:30 UTC, api-blue), LKG `e5c4d1f3`, pin = RELEASE,
-reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`2a61b80e`; 14 693 birim,
-2 162 web). QUALIFICATION Stage 43. Lead dalı = main + yayın kaydı.**
-**YAYINDA (bugün iki yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler,
-hüküm kapanış cümlesinden okunur, tarayıcı kurtarması profil kilidini bekler. `f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK
-(günlük: `understanding_engine_configured`, 1427 örnek, 859 ms; kapatma: `understanding_semantic_enabled` - compose satırı YOK),
-düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ayar arkasında KAPALI, Chrome cihaz-içi tanıma ayar arkasında
-KAPALI, yayın kilidi bekler, iki ses testi.**
-**KAPIDA (lead, 2026-10-02 14:30): ÜÇÜNCÜ ENTEGRASYON, dal `gate/d20261002-3` @ `d71a0bac` (worktree `.claude/worktrees/gate6`),
-ana kopya o commit'te DETACHED = ikinci entegrasyon + SAHİBİN 13:38'DE ONAYLADIĞI İKİ COMPOSE DEĞİŞİKLİĞİ: (1)
-`temporal-init-reaper` (`init: true`, ADR-0252); (2) `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED` satırı (ADR-0248 ek 1; ayar
-KAPALI kalır). SIRA: kapı yeşilse main `--no-ff` → it → yayın (compose değişikliği ONAYLI) → pin → doğrula → SONRA host'ta
-Temporal adımı: önce salt-okuma `docker info --format '{{.InitBinary}}'`, sonra yayınlanan ağaçtan `compose up -d --no-deps
---wait temporal` (Temporal ~10 sn kapanır; sahip biliyor ve onayladı), doğrula (`HostConfig.Init` true, zombi yok, sağlık ok),
-yeni host snapshot → işleri `released` → Stage 44 → ana kopyayı `team/nightly/lead`'e al.**
-**DÖNGÜ: 14:05'te YENİ KODLA başladı (yeniden okuma + besleyici düzeltmesi). Fable'ın haftalık limiti 2026-10-05 16:00 UTC'ye
-kadar DOLU; koşular Opus 5.5'te. Sahip bugün dört fikri onayladı (ikisi sayfadan, ikisi sohbetten): alan dışı geri verme,
-yanlış anlaşılanlar defteri, koruyucu testler iş dalında, ölçüm kaydı - dördü de bölündü ve ROADMAP "Approved ideas"
-tablosunda (lead yazdı). `misheard-ledger-store` "alan dışı dosya" ile durmuştu (dal `integrate/d20261002` üstündeydi;
-çalışanın suçu değil): lead dalı `team/nightly/lead` üstüne taşıdı (`b9415e90`, 11 dosya), alana iki sağlık testi eklendi,
-iş `returned` (tek eksik: 24 saatlik süpürme döngüsü + sağlık anahtarı). `measure-recordings-api` aynı `main.py`'yi
-istediği için sıraya geri alındı (`approved`); alan boşalınca döngü kendisi başlatır. Altı takip kartı (stt_engine,
-paket sorusu düğmesi, webtask tavanı, bulut arama ölçümü, katman 2 ile yeniden ölçüm, besleyici kilidi) hazırlanıyor.**
-**SAHİBİ BEKLEYEN (hepsi deneme/karar, acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 42.1 (Ofis'te 4 koltuk - sekmeyi F5 ile
-yenile); 43.1 ("Bugün nasılsın" de: denetim satırında katman `semantic`); 43.2 (bir düzeltme öğret: "ona X deme, Y de");
-STT ölçümü için yirmi cümle (ölçüm kaydı fikri bunu sayfaya getiriyor).**
-**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez. (2) kapı ~80 dk ve tek sıra; bugün beş kırmızı kapı
-(her biri gerçek kusur) ~6 saat götürdü - "koruyucu testler iş dalında" fikri bunu hedefliyor. (3) döngü, tek uzun koşu
-bitene kadar boş koltukları doldurmaz (`cycle-seat-pool` artık çalıştırılabilir). (4) `LocalEmbedder` önbelleği kilitsiz
-(kart kuyrukta; katman 2 artık üretimde, önem kazandı). (5) tarayıcı görev zinciri üretimde ulaşılamaz (PR-D).**
+**ÜRETİM: main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (2026-10-02 13:02 UTC, api-green), LKG `f91ad1e3`, pin = RELEASE,
+reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`d71a0bac`; 14 699 birim,
+2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+**YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
+`f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
+Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:
+araştırma kuralının anahtarı api'ye iletiliyor ve KAPALI (`printenv` -> `false`); temporal kabı Docker init altında
+(ADR-0252). TEMPORAL HOST ADIMI YAPILDI 13:03:44-13:03:51 UTC (7 sn): `HostConfig.Init` true, host'ta 0 zombi, sağlık ok.
+Host snapshot 13:05 UTC'de yenilendi.**
+**DÖNGÜ: `d20261002`, 14:05'te başladı (pid 36220), 6/6; 15:51'de ikinci tur. Fable'ın haftalık limiti 2026-10-05 16:00
+UTC'ye kadar DOLU; koşular Opus 5.5'te. DENETİMDE: `model-policy-api`, `cycle-auto-integrate`, `cycle-seat-pool`,
+`web-voice-session-storm-flake`, `local-embedder-lru-lock`. `area-widen-rules` MERGED (integrate/d20261002). SIRADAKİ
+ENTEGRASYON (dördüncü): `integrate/d20261002`'de birleşenler + lead dalındaki kayıtlar; `cycle-seat-pool` onaylanırsa
+ÖNCELİKLİ (sahip: "sürekli tur bekliyoruz?") - yayından sonra döngü `team/stop.flag` ile yeni koda alınır.**
+**BUGÜN KUYRUĞA EKLENEN (lead): `misheard-ledger-store` yeniden açıldı (dal `b9415e90`, lead dalı üstünde; alan +2 sağlık
+testi; tek eksik 24 saatlik süpürme döngüsü); `measure-recordings-api` aynı `main.py` yüzünden `approved`'a geri alındı.
+Yedi yeni kart: `stt-engine-on-turn-audit`, `pack-question-button`, `webtask-write-ceiling-retention`,
+`cloud-search-engines-probe`, `stt-corpus-layer2-remeasure`, `feeder-own-lock` (cycle-seat-pool'u bekler),
+`office-stable-seats` (sahibin gözlemi: biri bitince çalışanlar koltuk değiştiriyor GİBİ görünüyor, sırada bekleyen iş
+uyarı işaretiyle çiziliyor; cycle-seat-pool'u bekler). Dört onaylı fikir ROADMAP "Approved ideas" tablosunda.**
+**SAHİBİ BEKLEYEN (hepsi deneme/karar, acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 43.1 ("Bugün nasılsın" de: denetim
+satırında katman `semantic`); 43.2 (bir düzeltme öğret: "ona X deme, Y de"); STT ölçümü için yirmi cümle (ölçüm kaydı
+fikri bunu sayfaya getiriyor). 42.1 GÖRÜLDÜ: sahip 2026-10-02'de Ofis'te "Çalışan 4" ve "Çalışan 5"i ekran görüntüsüyle
+gösterdi (yenilemeden önce eski sayfa kodu "worker" yazıyordu).**
+**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez (`feeder-own-lock`). (2) kapı ~90 dk ve tek sıra
+("koruyucu testler iş dalında" bunu hedefliyor). (3) döngü, turdaki en uzun koşu bitene kadar boş koltukları doldurmaz
+(`cycle-seat-pool` denetimde). (4) `LocalEmbedder` önbelleği kilitsiz (düzeltmesi denetimde). (5) tarayıcı görev zinciri
+üretimde ulaşılamaz (PR-D). (6) Ofis koltukları koşu bitince yeniden numaralanıyor (`office-stable-seats`).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,

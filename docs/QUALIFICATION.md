@@ -1258,3 +1258,22 @@ nothing was released from it.
 | 43.6 | Two voice tests of the web shell await their events instead of the wall clock | `PROVEN_AUTOMATED` | ADR-0251; `voice/session-storm` still fails under three suites at once and is carded |
 | 43.7 | Correlation ids do not leak between tests | `PROVEN_AUTOMATED` | `tests/conftest.py` (autouse); the pair `test_execution_call_site_research.py` + `test_logging_middleware.py` is RED without it |
 | 43.8 | A release of gated roadmap work without a question, verified | `PROVEN_REAL` | 2026-10-02 11:30 UTC: `RELEASE OK: f91ad1e3… is running as api-blue`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-blue is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over, pre-migration backup `f67703a3…` |
+
+## Stage 44 — d20261002, third integration: the temporal container runs under Docker's init, the research rule's switch is forwarded OFF (ADR-0252, ADR-0248 addendum 1)
+
+Released 2026-10-02 13:02 UTC as main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (api-green; previous
+`f91ad1e3…` kept as last known good; schema unchanged, `0064_memory_vocabulary_class`). Full gate 38/38 on
+`d71a0bac` (the merge commit's tree is identical): 14 699 unit, 153 integration, 2 162 web, team-cycle 184,
+team-feed 65. Both changes are COMPOSE changes, the exception of ADR-0214 addendum 9: the owner approved each
+of them by name on 2026-10-02 before the gate ran. The release changed the compose file the recovery timer
+had pinned (`RECOVERY BUNDLE STALE` on the release's stderr, as designed); the pin was re-run with the full
+sha one minute later.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 44.1 | The release, verified | `PROVEN_REAL` | 13:02 UTC: `RELEASE OK: f60e02e4… is running as api-green`, 3/3 device sessions handed over after 1 s, health `ok` through the edge and over the tailnet; `APPROVED_SHA` = RELEASE = `f60e02e4…`, LKG `f91ad1e3…`; 13:03:19 `RECONCILE OK: api-green is canonical … markers, upstreams and containers agree` |
+| 44.2 | The api is handed the research rule's switch, and it is OFF | `PROVEN_REAL` | `docker exec pagentos-prod-api-green printenv PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED` -> `false` (the host's `.env` does not set it; the compose default is the code's default); `tests/unit/test_compose_forwards_research_rule.py`. Turning it on stays the owner's decision, after the engines are measured from the Cloud Core (card `cloud-search-engines-probe`) |
+| 44.3 | The temporal container runs under Docker's init and nothing defunct is left | `PROVEN_REAL` | Before (11:39 UTC): `HostConfig.Init` nil, one defunct `auto-setup.sh` whose parent was `temporal-server`; the host has `/usr/libexec/docker/docker-init`. The step ADR-0252 names, on the released tree and under the operation lock, after a dry run that named only this container: `compose up -d --no-deps --wait temporal`, 13:03:44 -> 13:03:51 UTC (7 s, exit 0). After: `HostConfig.Init` true, `docker top`: `docker-init` with `temporal-server` as its one child, `ps` on the host: 0 defunct processes; `tests/unit/test_compose_init.py` |
+| 44.4 | The api and its embedded worker came back by themselves | `PROVEN_REAL` | health `ok`, `temporal` ok and `temporal_worker` ok at 13:03:59; the api's own log shows ONE `degraded` health sample inside the seven seconds and `ok` on both sides of it; no container other than temporal was recreated (`docker ps`: every other container's uptime unchanged) |
+| 44.5 | The fake hosts are built from the host as it is now | `PROVEN_AUTOMATED` | `scripts/tests/fixtures/host-snapshot.json` collected 2026-10-02 13:05:42 UTC (serving colour green, 1126 columns); `cloud-release-bluegreen.tests.ps1` 112, `host-snapshot.tests.ps1` 95, `maintenance-reboot.tests.ps1` 35, `test_host_snapshot_schema.py` green on it |
+| 44.6 | `docker stop` of the temporal container behaves as before under tini | `NOT_RUN` | ADR-0252 says so: tini forwards SIGTERM (documented), the stop time was not measured on the host; the next maintenance window measures it |
