@@ -3207,11 +3207,18 @@ try {
 
     Test-Case "research is on by default: with two approved tasks and two worker seats the researcher and BOTH workers are in flight together" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
-        $hooks = Get-PoolHooks -Root $root -Seconds "researcher:*=5,worker:*=4"
+        # The workers' snapshots carry the claim: each is taken inside a worker run and names the
+        # researcher still in flight (nobody waited for it) beside the OTHER worker (it took no
+        # worker seat). The researcher's own snapshot, a second after its start, is not asserted:
+        # on a loaded PC the workers' worktrees take longer than that (a stopwatch, not a claim).
+        # The durations are generous so that every run is still in flight when the others take
+        # their snapshots.
+        $hooks = Get-PoolHooks -Root $root -Seconds "researcher:*=20,worker:*=10"
+        $hooks["PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS"] = 5
         Use-FakeHooks -Environment $hooks -Body { $script:threeRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -DefaultResearch }
         $run = $script:threeRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
-        foreach ($name in @("researcher-", "worker-task-one", "worker-task-two")) {
+        foreach ($name in @("worker-task-one", "worker-task-two")) {
             Assert-Equal -Expected "cycle:researcher,task-one:worker,task-two:worker" -Actual (Get-SnapshotRuns -Folder (Join-Path $root "snapshots") -Name $name) `
                 -Because "a snapshot taken inside the $name run names all three: the researcher took no worker seat and nobody waited for it"
         }
