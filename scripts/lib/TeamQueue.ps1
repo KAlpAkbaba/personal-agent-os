@@ -366,6 +366,111 @@ function Test-TeamAreasOverlap {
     return ($one -eq $two -or $one.StartsWith($two + "/") -or $two.StartsWith($one + "/"))
 }
 
+# ------------------------------------------------------------------ the pool's seats
+
+function Select-TeamSeatFill {
+    <#
+    .SYNOPSIS
+        Which of the runs that could start now get a seat (cycle-seat-pool).
+
+    .DESCRIPTION
+        Seats are per role: -Seats maps a role to how many of its runs may be in flight (a
+        role it does not name has one). -Candidates are the runs that could start, in the
+        order they are served (queue order), each with Task and Role; -InFlight are the runs
+        in flight, each with Task and Role. A candidate is passed over - it waits for the
+        next refill - when
+
+          * its task already has a run in flight or chosen (one run a task);
+          * every seat of ITS role is taken, by runs in flight and by candidates chosen
+            before it. A role never takes another role's seat: three inspections do not
+            keep a worker seat empty;
+          * it works on files (a worker, an inspector) and its task's area overlaps the
+            area of ANOTHER task whose worker or inspector is in flight or was chosen
+            before it. Section 4: two concurrent tasks never share an area
+            (Test-TeamAreasOverlap, the one rule). A run in flight is the cycle's own copy
+            of its task - the queue's rules cannot see it once the store says otherwise.
+
+        A candidate that is passed over does not hold back the ones behind it.
+    #>
+    param([object[]]$Candidates = @(), [object[]]$InFlight = @(), [Parameter(Mandatory = $true)][hashtable]$Seats)
+    $onFiles = @("worker", "inspector")
+    $taken = @{}
+    $busy = @{}
+    $held = New-Object System.Collections.ArrayList
+    foreach ($run in @($InFlight)) {
+        $role = [string]$run.Role
+        $taken[$role] = 1 + [int]$taken[$role]
+        if ($null -eq $run.Task) { continue }
+        $busy[[string]$run.Task.id] = $true
+        if ($onFiles -contains $role) { [void]$held.Add($run.Task) }
+    }
+    $chosen = New-Object System.Collections.ArrayList
+    foreach ($candidate in @($Candidates)) {
+        $role = [string]$candidate.Role
+        $task = $candidate.Task
+        $id = if ($null -ne $task) { [string]$task.id } else { "" }
+        if ($id -and $busy.ContainsKey($id)) { continue }
+        $limit = if ($Seats.ContainsKey($role)) { [int]$Seats[$role] } else { 1 }
+        if ([int]$taken[$role] -ge $limit) { continue }
+        if ($null -ne $task -and $onFiles -contains $role) {
+            $shared = $false
+            foreach ($other in $held) {
+                if ([string]$other.id -eq $id) { continue }
+                foreach ($theirs in @(Get-TeamProperty -InputObject $other -Name "area" -Default @())) {
+                    foreach ($area in @(Get-TeamProperty -InputObject $task -Name "area" -Default @())) {
+                        if (Test-TeamAreasOverlap -First ([string]$area) -Second ([string]$theirs)) { $shared = $true }
+                    }
+                }
+            }
+            if ($shared) { continue }
+            [void]$held.Add($task)
+        }
+        $taken[$role] = 1 + [int]$taken[$role]
+        if ($id) { $busy[$id] = $true }
+        [void]$chosen.Add($candidate)
+    }
+    return @($chosen.ToArray())
+}
+
+function Read-TeamCycleSettings {
+    <#
+    .SYNOPSIS
+        The seats a running cycle works with: its parameters, or what `team/cycle-settings.json`
+        says when that file is there.
+
+    .DESCRIPTION
+        A cycle process is bound to the arguments it started with and does not end while there
+        is work (2026-10-01: a setting changed at 16:45 took effect at 19:35). The file is read
+        at every refill: { "max_parallel": 3, "max_inspectors": 2, "max_integrators": 1 } -
+        each optional, each a whole number from 1 to 16; another key is not this function's.
+        A file that cannot be read, or a value that is not such a number, changes NOTHING - the
+        parameters stand, not half of the file - and the problem is returned as a sentence.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path, [int]$Workers, [int]$Inspectors, [int]$Integrators)
+    $named = [ordered]@{ max_parallel = $Workers; max_inspectors = $Inspectors; max_integrators = $Integrators }
+    $problems = New-Object System.Collections.ArrayList
+    if (Test-Path -LiteralPath $Path) {
+        $document = $null
+        try { $document = Read-TeamJson -Path $Path } catch { [void]$problems.Add("team/cycle-settings.json okunamadı: " + (([string]$_.Exception.Message) -replace '\s+', ' ')) }
+        if (@($problems).Count -eq 0 -and $document -isnot [System.Management.Automation.PSCustomObject]) {
+            [void]$problems.Add("team/cycle-settings.json bir ayar nesnesi değil")
+        }
+        if (@($problems).Count -eq 0) {
+            foreach ($name in @($named.Keys)) {
+                if ($null -eq $document.PSObject.Properties[$name]) { continue }
+                $value = $document.$name
+                if (($value -is [int] -or $value -is [long]) -and $value -ge 1 -and $value -le 16) { $named[$name] = [int]$value }
+                else { [void]$problems.Add("team/cycle-settings.json: '$name' 1 ile 16 arasında bir tam sayı olmalı ('$value' değil)") }
+            }
+        }
+    }
+    if (@($problems).Count -gt 0) { $named = [ordered]@{ max_parallel = $Workers; max_inspectors = $Inspectors; max_integrators = $Integrators } }
+    return [pscustomobject]@{
+        Workers = [int]$named["max_parallel"]; Inspectors = [int]$named["max_inspectors"]; Integrators = [int]$named["max_integrators"]
+        Problems = @($problems.ToArray())
+    }
+}
+
 function Read-TeamSplitFile {
     <#
     .SYNOPSIS

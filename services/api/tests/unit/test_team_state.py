@@ -400,12 +400,7 @@ def test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server
     # Called by the client BEFORE the server serves it, each with why that is safe. The entry
     # is removed by the task that adds the route - the second assertion makes that a failure
     # to forget.
-    called_ahead = {
-        ("GET", "/v1/team/queue/models"): "model-policy-cycle landed before model-policy-api; "
-        "a 404 is 'no such route yet': the cycle falls back to team/models.json and then the "
-        "defaults (team-cycle.tests.ps1: 'a Cloud Core without the models route (404) does "
-        "not stop the cycle')",
-    }
+    called_ahead: dict[tuple[str, str], str] = {}
     assert used - set(called_ahead) <= served, (
         f"the client calls what the server does not serve: {used - set(called_ahead) - served}"
     )
@@ -417,6 +412,8 @@ def test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server
     # a route nobody reads does not get in here.
     read_by_others = {
         ("GET", "/v1/team/queue/status"): "the read-back of what the cycle PUTs (office-01)",
+        ("PUT", "/v1/team/queue/models"): "the Ofis page writes the owner's choice "
+        "(model-policy-office-ui); the cycle only reads the setting",
     }
     unread = served - used - set(read_by_others)
     assert not unread, f"a served route the client never calls: {unread}"
