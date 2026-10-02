@@ -20384,3 +20384,568 @@ release-order step 4 of ADR-0248 possible and changes nothing by itself: unset o
 the code's own (`tests/unit/test_compose_forwards_research_rule.py`, RED before the line). The rule is still OFF in
 production, and turning it on is still its own owner-visible step after the cloud-browser image is rebuilt and the
 search engines are measured from the Cloud Core's address.
+
+## ADR-0253 — A fix outside a card's area: the request line, and the widen / wait / refuse judgement (the rules; wired into nothing yet) (2026-10-02)
+
+The owner approved the idea on 2026-10-02 (`team/proposals/2026-10-02-alan-disi-geri-verme.md`); this is its first
+card, `area-widen-rules`: the rules as pure functions in `scripts/lib/TeamArea.ps1`, a suite of their own
+(`scripts/tests/team-area.tests.ps1`, a step of the gate and a line of the CI file), and no caller. The role lines
+are `area-widen-role-lines`; the call from the cycle is a later card.
+
+**Context.**
+
+A card whose fix is outside its file area cannot be finished by its worker: the inspector
+returns it, the second return stops it, and it waits for the lead to open it by hand. In
+d20261001 two cards (`narrative-failures-only-model`, `execution-call-site-research`) spent
+25,86 USD that way and reached nothing; three cards of `cycle-2026-10-01` sat stopped for
+seven and a half hours beside idle seats. The written rule in `lead.md` did not prevent it
+twice, so the cycle needs a rule it can execute.
+
+**Decision.**
+
+`scripts/lib/TeamArea.ps1` (PS 5.1, dot-sources `TeamQueue.ps1`) holds the rules as pure
+functions: no process, no file read, no store write. The cycle does not call them yet.
+
+1. **The contract line** (the same text in card `area-widen-role-lines`). The request is ONE
+   line of a role's report, alone on its line: the inspector writes
+   `alan_disi: [path, path]` above its RETURN verdict, the worker writes
+   `ALAN_ISTEGI: [path, path]`. The key is case-sensitive and each role's key is read only
+   from that role's report. The list is bracketed, comma-separated, repository-relative,
+   forward slashes. Backticks, asterisks and spaces around the line, the key or a path are
+   ignored (quotes around a path too - models write JSON lists). The LAST key line wins; an
+   empty list or a key line without brackets there is "no request", even after an earlier
+   valid line (a role can withdraw). **The key starts the line and the closing bracket ends
+   it: no bullet (`-`, `+`), quote mark (`>`) or numbering (`1.`, `1)`) before the key, and
+   nothing - not even a full stop - after the bracket**; such a line is prose and "no
+   request", as it is for `Get-TeamVerdict`. (An asterisk bullet is read through, because
+   asterisks around the line are ignored for bold; the role files must not rely on it.)
+
+   `Get-TeamAreaRequest` returns `Asked`, `Files` (normalised: forward slashes, no leading
+   `./`, one trailing slash dropped, each once, order kept) and `Bad`. **A path is taken
+   only as it is plainly written, the way git names it.** An entry is `Bad` - kept as it
+   was written, never in `Files`, and `refuse` in `Resolve-TeamAreaRequest` - when:
+   - it is absolute, carries a drive letter, or starts at a home (`~`);
+   - it holds one of `: [ ] ;` or a wildcard (`*`, `?`): a `file.py:412`, a URL,
+     `[a], [b]`, `[[a]]`, `a; b`;
+   - a segment is empty (`docs//HANDOFF.md`, `.claude//agents`), is `.` or `..`
+     (`docs/./HANDOFF.md`, `docs/.`), or ends in a dot or a space (`docs/HANDOFF.md.`,
+     `docs /x`: Windows drops both, so it is the same file).
+
+   Why refused and not repaired: the protected check and the conflict check compare text
+   (`Get-TeamAreaKey` collapses nothing), so each of these spellings answered `widen` for a
+   protected or a held file (inspector, d20261002: ten protected spellings and three of a
+   held `intents.py`, `intents.py:412` among them). Collapsing segments here would leave
+   `cycle.ps1`'s own comparison reading the un-collapsed text; refusing leaves one spelling
+   of every path everywhere. A request of bad entries only is still `Asked`. **A request
+   with ANY `Bad` entry is refused whole**: the wiring resolves `Files + Bad` together,
+   never `Files` alone (a named case pins it).
+
+2. **The order of judgement** (`Resolve-TeamAreaRequest`), first hit decides:
+   1. a path that is not a plainly written path inside the repository (the `Bad` rules
+      above) -> `refuse`;
+   2. nothing asked that is outside the area -> `refuse` (nothing to widen);
+   3. ANY asked path protected -> `refuse` - any ASKED path, also one that is already
+      inside the area (a card holding a protected file by the lead's hand does not get the
+      cycle's widening on a request that names it);
+   4. `area_widenings >= 2` (`$script:TeamAreaMaxWidenings`) -> `refuse`, to the lead;
+   5. the area would exceed `$script:TeamMaxAreaEntries` (25, TeamQueue's own) -> `refuse`;
+   6. ANY path to add overlaps (`Test-TeamAreasOverlap`: same file, file inside directory,
+      directory holding file) the area of ANOTHER task that is `approved`, `assigned`,
+      `in_progress`, `inspecting` or `returned` (`$script:TeamStatesInWork`) -> `wait`,
+      `DependsOn` = those ids, the area unchanged;
+   7. otherwise `widen`, `Add` = the asked files not already inside the area.
+
+   Step 1 and one branch of step 6 are additions to the card's order, both towards refusal:
+   a holder that itself waits (directly or through others) for this task would make
+   `depends_on` a loop that holds both for ever, so that request is `refuse`, to the lead.
+
+3. **A refusal and a wait are of the whole request.** One protected path beside ten free
+   ones widens nothing; one held file beside free ones widens nothing either. A partial
+   widening would send the worker back for a round that cannot finish (the missing file is
+   why the request was made) and would spend one of the two widenings on it.
+
+4. **The cap is two widenings per task**, a named constant. A third request means the card
+   was cut wrong, which is the lead's to fix, not the cycle's to keep patching; the record
+   in `area_history` ({at, by, why, files[, waits_for]}) is what the lead reads.
+
+5. **`Add-TeamAreaWidening` is idempotent**: it adds only what is still missing (files
+   outside the area, ids not in `depends_on`, never the task's own id) and writes the count
+   and the record only when something was added. `Test-TeamAreaReturnCounts` is `$false`
+   for `widen` and `wait` (the card's fault, not one of the worker's two rights), `$true`
+   for `refuse` and for anything that is not a resolution.
+
+6. **Protected, never widened into** - ONE constant, `$script:TeamAreaProtected`; each entry
+   is a path (itself, anything under it, any directory holding it) or a pattern, and names
+   its source. The suite fails when an entry has no case.
+
+   | Entry | Source |
+   |---|---|
+   | `docs/HANDOFF.md`, `docs/DECISIONS.md`, `state/BUILD_STATE.json`, `docs/THIRD_PARTY_COMPONENTS.md`, `team/queue.json`, `team/lock.json` | `TeamQueue.ps1` `$script:TeamSharedFiles`, taken at load (not copied); TEAM_PROTOCOL section 4 |
+   | `docs/ROADMAP.md`, `docs/TEAM_PROTOCOL.md` | `.claude/agents/lead.md`: not edited without the owner |
+   | `.claude/agents` | the card; TEAM_PROTOCOL section 2 (the role files) |
+   | pattern `hand[-_]?gestures` | `.claude/agents/worker.md`; `Test-TeamSplit` refuses the same |
+   | **Secrets**: patterns `.env` / `.env.*`; `*.key`, `*.pem`, `*.pfx`; `*.tfstate*`, `*.tfvars`, `*.tfplan`, `tfplan.binary`; paths `secrets`, `services/api/var` | `.gitignore` ("# Secrets", the OpenTofu block, the owner identity root) |
+   | `scripts/lib/SecretStore.ps1`, `scripts/secret-store.ps1`, `scripts/cloud/install-env-secret.sh`, `scripts/cloud/set-cloud-secret.ps1` | PROJECT_CONSTITUTION section 6 "secret root" |
+   | **Last-known-good**: pattern `last[-_]?known[-_]?good`; `scripts/cloud/release-cloud-core-bluegreen.sh` (writes `RELEASE` / `LAST_KNOWN_GOOD` on the host); `services/recovery-supervisor` (`workspace.py`: `last_known_good.txt`) | PROJECT_CONSTITUTION section 6; DEVELOPMENT_POLICY section 11 |
+   | **Recovery roots**: `services/recovery-supervisor`; `services/api/app/identity/root.py`; `infra/docker/docker-compose.prod.yml`, `infra/docker/edge`, `scripts/cloud/release-cloud-core-bluegreen.sh` (the three files `install-recovery-supervisor.sh` copies into `/opt/pagentos-recovery`); `infra/systemd`; `scripts/cloud/install-recovery-supervisor.sh`, `uninstall-recovery-supervisor.sh`; `scripts/cloud/backup-cloud-core.sh`, `restore-cloud-core.sh` | PROJECT_CONSTITUTION section 6; `services/api/app/evolution/sandbox.py` `PROTECTED_TREES` and `risk.py` |
+
+   The last-known-good metadata and the recovery root themselves live on the host
+   (`/opt/pagentos/LAST_KNOWN_GOOD`, `/opt/pagentos-recovery`), not in the repository; what
+   is protected here is the code that writes them. `.env.example` is refused with the other
+   `.env.*` files: it is a lead's card, not a widening.
+
+7. **The queue's schema is not changed here.** `area_widenings` and `area_history` exist only
+   on the objects these functions return; they reach `team/queue.schema.json`, the Cloud
+   Core's validation and the store with the wiring card, which also owns the TEAM_PROTOCOL
+   text.
+
+**Consequences.**
+
+- The wiring card calls: `Get-TeamAreaRequest` on the report, `Resolve-TeamAreaRequest
+  -Files (Files + Bad)` when `Asked`, `Add-TeamAreaWidening`, and
+  `Test-TeamAreaReturnCounts` before it counts a return. A `wait` keeps the request only in
+  `area_history`: once the holder is on main the wiring must resolve those files again (the
+  area was not changed).
+- `Add-TeamAreaWidening` writes the resolution it is given and judges nothing: a hand-made
+  or stale `widen` would be written. The wiring resolves and adds in ONE step, on the queue
+  it has just read, and never keeps a resolution across a re-read.
+- The protected list is the card's list. These widen today and are the lead's decision, not
+  this card's: `CLAUDE.md`, `PROJECT_CONSTITUTION.md`, `docs/DEVELOPMENT_POLICY.md`,
+  `.claude/hooks`, `.claude/settings.json`, `scripts/team/cycle.ps1`, `scripts/lib/Team*.ps1`,
+  `scripts/quality-gate.ps1`, `services/api/alembic`, `.github`. A pattern entry does not
+  refuse a directory that holds a match (`apps` widens; the only tracked match is
+  `.env.example`).
+- `depends_on` is met only by `awaiting_release` / `released` / `done`
+  (`Get-TeamUnmetDependencies`). A waiting card whose holder is `stopped` waits until the
+  lead acts; that is today's rule for every dependency and is not changed here.
+- Not in the list: the update-signature verification of constitution section 6 - no single
+  path in the tree could be named for it with confidence; the lead may add an entry (and
+  its case) when it is named.
+
+**Evidence.**
+
+PROVEN_AUTOMATED: `scripts/tests/team-area.tests.ps1` under Windows PowerShell 5.1, its own
+step in `scripts/quality-gate.ps1`; red before `TeamArea.ps1` existed, and the spelling
+cases red before the `Bad` rules; six mutations (protected check, conflict check, cap,
+protected judged on the added files only, the segment rule, the `: [ ] ;` rule) each red,
+restored by sha256 from a backup copy.
+PROVEN_REAL belongs to the wiring card's first real cycle.
+
+**Protected by the lead (at merge, integration d20261002, fourth).** The inspector's second pass asked about 110
+paths and found that these answered `widen`: `scripts/lib/TeamArea.ps1` (the protected list itself),
+`scripts/lib/TeamQueue.ps1`, `scripts/team/cycle.ps1`, `scripts/quality-gate.ps1`, `.claude/hooks/session-start.ps1`,
+`.claude/settings.json`, `CLAUDE.md`, `PROJECT_CONSTITUTION.md`, `.gitignore`, `.git/hooks/pre-commit`,
+`scripts/cloud/release-cloud-core.ps1`. The ruling, in the list and in the suite (RED first: 10 failed before the
+entries, 117 passed after):
+- PROTECTED, nine entries: the list itself; `.claude/hooks`; `.claude/settings*.json`; every `CLAUDE.md`;
+  `PROJECT_CONSTITUTION.md`; `docs/DEVELOPMENT_POLICY.md`; anything under `.git`; every `.gitignore`;
+  `scripts/cloud/release-cloud-core.ps1`. They govern the agents themselves, are the owner's own directives, or send
+  a tree to production: a report's request line must not reach them.
+- NOT protected, each held by a case that says so: `scripts/quality-gate.ps1`, `.github/workflows/ci.yml`,
+  `scripts/team/cycle.ps1`, `scripts/lib/TeamQueue.ps1`. They are shared code that cards are given every day. A
+  holder in work makes the request wait; the inspector reads the diff; and a new suite needs its gate line and its CI
+  line - on this very merge the pre-check was RED because the new suite was in the gate and not in the CI file
+  (`test_ci_runs_every_powershell_suite`), a fix outside the card's area. Refusing those paths would stop exactly the
+  cards this idea exists for. The same holds for the two other paths the worker's list left to the lead,
+  `services/api/alembic` and `.github`: ordinary, not protected - a migration is already the release's own exception
+  (addendum 9), whoever's area it came from.
+- Left for the wiring card, in its acceptance: one case that pins the self-skip of the conflict loop (the inspector's
+  surviving mutation); one for a leading-asterisk request (`*.py` is read as the file `.py` today and spends a
+  widening); and the note that a holder in `merged` does not conflict, so a card can be widened into a file whose
+  change is on the integration branch and not yet on main.
+
+### ADR-0214 addendum 14 (2026-10-02): the model policy on the Cloud Core - the setting in the team store, the status' model and limits, the seat's model in the Ofis
+
+Task `model-policy-api`, the Cloud Core's third of the contract in addendum 7. The contract
+itself is unchanged; `model-policy-cycle` (the cycle's third) is already on main and calls
+`GET /v1/team/queue/models`.
+
+**What the Cloud Core does now.**
+* *The setting* is one document in the team store: FileStore `team/models.json`, DbStore one
+  `team_state` row `kind='models'`, `key='models'` (no new table, no migration; `updated_at`
+  is the document's own stamp, 20 characters in a VARCHAR(32)). `TeamStore.read_models()` /
+  `put_models(document)`.
+* *`GET /v1/team/queue/models`* answers the setting in force - exactly the three keys `roles`,
+  `fallback`, `updated_at`, because the cycle refuses a setting with any other key. Nothing
+  stored: the defaults (lead and inspector `claude-fable-5-1`, the rest `claude-opus-5-5`,
+  fallback on). A read writes nothing.
+* *`PUT /v1/team/queue/models`* replaces it. 422 with the code of the first problem, and
+  nothing written, for: `unknown_key`, `unknown_role`, `unknown_model`, `missing_role`,
+  `invalid` (not an object, no `roles`, no boolean `fallback`), `inspector_weaker_than_worker`.
+  The codes are the ones `Read-TeamModelSetting` (TeamQueue.ps1) uses. `updated_at` is stamped
+  by the server; one a client sends back is accepted as a key and not kept.
+* *The live status* takes `runs[].model` and `limits` (`fable` / `all`: `state` ok|limited,
+  `resets_at`, `used_pct`; `fallback`; `lowered`, at most 20). Anything else is still 422
+  (`extra='forbid'`, strict types: `used_pct: "ninety"` is refused). Both are optional: a
+  cycle older than the policy is accepted.
+* *`GET /v1/team/office`*: every seat has `model` (its role's configured model; the owner seat
+  null) and `running_model` only while a live run of that seat is on another model; a run
+  entry has `model` when the status named one; `cycle.limits` is the status' limits (ok / null
+  percentages when no status gave any); `models` is the setting document.
+
+**Decisions made here, each reversible.**
+1. *The rules are one pure module (`models_setting.py`) and the store checks too.* The route
+   validates to answer with a code; `put_models` validates again, so no other caller (a
+   script, a later route) can store a setting that breaks the rule. A test reads
+   `TeamQueue.ps1` and holds its chain, its roles, its defaults and its codes to this module's.
+2. *What a store holds is read leniently, and a broken one is the defaults.* `team/models.json`
+   in the tree was written by hand before the route existed and has `roles` only: what is
+   missing is filled (fallback on). A stored document that breaks the contract (a hand edit:
+   an unknown model, an inspector below the worker) is answered as the defaults - a model id
+   that is not one of the three never leaves the server, since the cycle puts it on a command
+   line. The file-mode cycle reads the same file itself and stops with the reason, so the
+   hand edit is not silently lost. Through PUT this cannot happen.
+3. *The status is stored as it was sent* (`exclude_unset`): what an old cycle left out is not
+   written back as `null`, so the read-back equals the PUT for both shapes.
+4. *A model id in the STATUS is a bounded string, not one of the three ids.* The status says
+   what the cycle saw - the tool may have run another model (model-policy-cycle decision 6) -
+   and a refused heartbeat costs the whole Ofis page its model and limit display for the rest
+   of the cycle (the cycle then writes the old form). The SETTING is held to the three ids.
+5. *A run entry has `model` only when the status named one.* Null would read as "known to be
+   nothing"; an old cycle's run simply has no model, and such a run never produces a
+   `running_model`. (It also leaves the run shape `office-worker-seats` pinned unchanged for
+   an old-shape status.)
+6. *A limit whose `resets_at` has passed is shown as `ok` with a null percentage.* The limits
+   are passed through even when the status is no longer live (as `usage_limit` is); without
+   this, the last "limited" of a cycle that ended would stand on the page for ever. It is the
+   cycle's own rule ("null again once the window's own reset has passed"), applied by the
+   reader with its own clock. A limit with no reset is shown as it was written. Goes one step
+   past the card's "passed through"; four lines, one test.
+7. *What a file holds in another shape never reaches the page as it is*: `cycle.limits` is
+   rebuilt key by key (a `used_pct` that is not a number is null; `lowered` is the newest 20).
+   The route already refuses such a status; `team/status.json` can be written by anything.
+8. *`cycle.limits.fallback`* is the status' when it has one (what the running cycle is
+   actually using), else the setting's.
+
+**Evidence.** PROVEN_AUTOMATED: `tests/unit/test_team_models_setting.py` (106 cases, FileStore
+and DbStore-on-SQLite) and `tests/integration/test_team_models_postgres.py` (3 cases on the
+dev stack's PostgreSQL 16.15: put / read / replace through the store and through the routes,
+a status with 20 `lowered` entries, every row within the column widths read from the model).
+NOT proven: PROVEN_REAL waits for `model-policy-office-ui` (the owner changes a model on the
+page and the next run uses it).
+
+**Rollback.** Additive: no migration, no changed key in an existing answer. Reverting the
+commit leaves a `kind='models'` row nobody reads and sends the cycle back to the old status
+form by itself (422 -> legacy, model-policy-cycle decision 5).
+
+**For the lead at merge.**
+* `services/api/tests/unit/test_team_state.py` (not in this task's area) goes RED on this
+  branch, by its own design: `test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server_has`
+  says "the server serves it now - remove the entry". Two edits, proven on a scratch copy
+  (1 passed): replace the `called_ahead = { ... }` block with
+  `called_ahead: dict[tuple[str, str], str] = {}`, and add to `read_by_others`:
+  `("PUT", "/v1/team/queue/models"): "the Ofis page writes the owner's choice "
+  "(model-policy-office-ui); the cycle only reads the setting",`
+* `app/voice/realtime_sessions/tools_team.py` calls `office_view` without `models=`: it gets
+  the defaults, and uses none of the new keys today. If the spoken summary ever names a
+  model, pass `models_setting.effective(store.read_models(), ...)` as `routes.py` does.
+* `docs/TEAM_PROTOCOL.md` / the API reference: two new routes, three new keys in the office
+  answer. `team/models.json` needs no change (decision 2).
+* Release order: this before `model-policy-office-ui`. No compose change, no migration.
+* The dev database was at `0064_memory_vocabulary_class` (the gate branch's) while this tree
+  ends at 0063, so the integration suite's `alembic upgrade head` fixture cannot run from this
+  branch; the PostgreSQL file was run with `--noconftest` and the suite's advisory lock held
+  by a scratch plugin. On the integration branch (which has 0064) it runs as any other file.
+
+**At merge (the lead, integration d20261002, fourth).** The two edits of `tests/unit/test_team_state.py` are made
+(`called_ahead` is empty; `PUT /v1/team/queue/models` is read by the Ofis page). The inspector ran what the worker had
+left NOT_RUN: the package's own fixtures on the dev stack's PostgreSQL (6 passed), 25 rounds of six concurrent first
+writes (no error, no torn row), and the real application under uvicorn on PostgreSQL written to by the cycle's own
+client functions (seven status shapes, eight refused PUTs with the cycle's own codes). Its findings are carded, not
+closed here: `team-status-bounds` (no test holds the 64-character bound of a status model id; the status document's
+`updated_at` is unbounded text in a VARCHAR(32) - 46 characters are a 500 on PostgreSQL and a 200 on SQLite, the shape
+of addendum 4; `used_pct: 1e999` is a 500 instead of a 422; `used_pct` has no range), and one line added to
+`model-policy-office-ui`: a dead cycle's limits stay in the answer, so the page shows them "as of" the status'
+`updated_at` and never as the present.
+
+### ADR-0214 addendum 15 (2026-10-03): the cycle is a pool, not batches - a seat is filled when it is free, the seats are per role, the store and the settings are read at every refill
+
+Task `cycle-seat-pool`. Implements the owner's rule of 2026-10-01 (addendum 8: no agent idles
+while there is work) inside one cycle; keeps addendum 11 whole and makes its re-read finer.
+
+**What happened.** `scripts/team/cycle.ps1` started up to `-MaxParallel` runs and then waited for
+ALL of them before it looked at the queue again. A seat whose run ended after five minutes stayed
+empty until the slowest run of its batch ended (cycle adr0224-02: three workers of 3310 / 3295 /
+3275 seconds - the two short ones waited for the long one), a finished worker's inspection waited
+for the whole batch, and the researcher ran alone before any task. On 2026-10-01 22:15 the owner
+saw three inspections hold the cycle's three slots while every WORKER seat was empty and eight
+tasks were assigned. A setting changed at 16:45 took effect at 19:35: a cycle process is bound to
+the arguments it started with, and a cycle that has work does not end.
+
+**Decision.**
+1. **A pool.** The runs in flight are polled (`-PollMilliseconds`, 250), never waited for one by
+   one (`Test-TeamRunOver`; `Wait-TeamRun` only collects a run that is over). A run that ends is
+   completed at once - its report, the task's state, the merge of an approved inspection, the
+   write (`Complete-PoolRun`) - and then the free seats are filled from the queue as it is NOW,
+   in its order (`Start-PoolRuns`). The pool replaces the batch loop; `Invoke-RoleRun` and the
+   blocking `Wait-UsageLimit` are gone.
+2. **Seats are per role.** `-MaxParallel` is the number of WORKER seats; beside them
+   `-MaxInspectors` (2) inspections and `-MaxIntegrators` (1) integrators; the researcher and
+   one lead split run beside those. A role never takes another role's seat
+   (`Select-TeamSeatFill`, a function of the candidates, the runs in flight and the seat
+   counts). The next role of a task follows its state exactly as before, so a finished worker's
+   inspection starts while other workers are still running.
+3. **Two runs never share an area.** The queue's own rules still hold (`Test-TeamQueue`,
+   `Get-TeamAreaHolders`: an approved task is not moved into work beside the holder of its
+   files). They judge the copy they look at; a run in flight is the cycle's OWN copy of its
+   task. So the seat fill has the rule too: a worker or an inspector whose task's area overlaps
+   the area of another task whose worker or inspector is in flight waits until that run ends
+   (`Test-TeamAreasOverlap`, the one rule). An integrator's study holds no files (it writes a
+   plan), and is neither held back nor a holder. Merges into the integration branch are made
+   by the one thread that completes runs, one after the other.
+4. **Every refill reads the store again** (addendum 11's `Sync-Queue`, now whenever a run ends
+   and at least every `-RefillSeconds`, 120, while nothing ends). The task of a run in flight
+   stays the cycle's copy, with the version that copy was read at: a re-read never replaces
+   it. Its result is written when the run ends; if the store's copy changed meanwhile that
+   write is the stale one and is dropped (`Test-TaskMovedInStore`, as before). A task the
+   store took out stays in the cycle's copy until its run ends. Beside runs in flight the
+   write before the read is the soft one (`Save-QueueNow`), and the queue is not read again
+   over what could not be written; with nothing in flight it is the strict one, as before.
+5. **The settings of a running cycle.** `team/cycle-settings.json`
+   (`{ "max_parallel", "max_inspectors", "max_integrators" }`, each optional, 1..16) is read at
+   every refill when it is there (`Read-TeamCycleSettings`); a file that is no setting changes
+   nothing - the parameters stand, not half of the file - and is one line in the report. A
+   count lowered below what is in flight starts nothing and stops nothing. After `-MaxHours`
+   (4; 0 = never) the cycle starts nothing new and ends when its runs do: the scheduler's next
+   start runs the current script.
+6. **The usage limit does not block.** A run that comes back limited is started again at once
+   one model down, as before. When no model is left, the wait is a time the pool starts
+   nothing until (`Set-LimitWait`); the runs in flight go on and are completed as they end.
+   Without `-WaitForUsageLimit`, or when nobody said when, the stop line - once, however many
+   runs met the limit - and nothing new starts.
+7. **What the batch loop guaranteed still holds**, by the tests that held it: `-MaxRunsPerTask`,
+   two failed runs stop a task, the stop flag starts nothing new and lets the runs in flight
+   finish, the dependency rule, the conditional writes (a stale write is that one task's), a
+   refused fresh merge taken back, the heartbeat (now from the pool's loop), the report's run
+   list. The cycle ends when nothing is in flight and nothing can be started.
+
+**Decisions made on the way, each reversible.**
+* *The periodic refill.* "Whenever a run ends" does not see a card that arrives beside ONE long
+  run with every other seat free. The pool also refills every `-RefillSeconds`; 120 s is one
+  GET of the queue every two minutes while a cycle lives (the queue is ~0.6 MB today).
+* *A cap is checked at every refill that has something to start*, not once per batch: with
+  `-MaxUsd`, fewer runs start after the money is spent, never more.
+* *A cycle that dies with runs in flight kills them* (the `finally`): a run must not write to a
+  worktree after the lock is released. The task is taken up again by the next cycle.
+* *The seat counts are this PC's file*, also in API mode ("file store" in the card). A setting
+  in the team store would need a route; not built.
+
+* *A start that fails is a change, never the end* (added after the inspector's return,
+  2026-10-02). The first pool read "nothing started, nothing in flight, no state moved" as
+  "nothing can be started" - but a start that fails (a worktree that cannot be made) stops its
+  task, and with one worker seat the cycle ended with two assigned tasks never run; the batch
+  loop went on to them. A refill now counts its failed starts (`Failed`): the seat is still
+  free, so the next refill is due at once - beside runs in flight too, not at the next run's
+  end or `-RefillSeconds` later - and it is not an idle pass. It ends: each failed start stops
+  its task. A researcher or a lead split that cannot be started (no role file, a model that is
+  none) is caught as well: it used to throw out of the refill, which ended the cycle and let
+  the `finally` kill every run in flight. Now it is that run's one try of the cycle and a line
+  in the report (`araştırmacı: koşu başlatılamadı` under the stops, without the marker of a
+  finished research run; `bölme koşusu: <id>: koşu başlatılamadı` under the risks, the
+  proposal where it was), and the next cycle tries again.
+
+**What changed in the tests that were there.** Three assert the old meaning of `-MaxParallel 1`
+("one run of any role at a time") and now state the new one; four that replay a store outage in
+the shape of a batch pin that shape with `-PollMilliseconds` (both runs end in one poll). Each
+is named in the worker's report; no assertion about the store's rules was loosened.
+
+**Evidence.** `scripts/tests/team-cycle.tests.ps1`, PROVEN_AUTOMATED (the fake in place of the
+model now takes per-run durations, `PAGENTOS_FAKE_CLAUDE_SECONDS`; the fake listener is unchanged).
+Nineteen new tests. RED on the batch loop, as behaviour: the third task's worker and the first
+task's inspector start while the second task's worker still runs; both worker seats in use beside
+an inspection; three workers and two inspectors in flight together and the third inspection
+starting when one ends; a changed `cycle-settings.json` honoured at the next refill; a card
+stored beside one long run started before that run ends; a task the store put into work on
+the files of a run in flight held back while one on other files starts at once; the researcher
+beside the worker. RED by the missing function or parameter only: the four unit tests of the
+seat fill and the settings, `-MaxHours`, `-RefillSeconds`, `-PollMilliseconds` (two merges in
+one poll). Green before and after, as "still holds": two approved tasks with overlapping areas
+never in flight together on any status the cycle wrote; the stop flag with a run in flight.
+Written after the pool: the limit waited out without blocking; one stop line for two limited
+runs; a cycle that dies kills its runs. Seventeen mutations, each restored from a backup copy
+with sha256 equal before and after, all RED: the area check removed from the seat fill; the
+seat count ignored; one pool of seats for every role; no re-read while runs are in flight; no
+refill unless a run ends; the settings file not read; `-MaxHours` not checked; a re-read
+replacing the task of a run in flight; a finished run waiting for every other run; caps and
+the stop flag not asked at a refill; runs started during the limit's wait; a second run for a
+task in flight; the stop line once per limited run; runs left alive when the cycle dies; the
+researcher alone again; a late merge refusal not named; no heartbeat from the pool.
+After the return, five more tests, each RED on the first pool: three assigned tasks on one worker
+seat with the first worktree blocked (the other two end merged); four failed starts in a row and
+a fifth task run; a failed start beside a run in flight leaving its seat at once; a researcher
+and a lead split that cannot be started (the cycle died with exit 1). Four more mutations, RED
+and restored the same way: failed starts not counted against the idle pass; no refill after a
+failed start; the researcher's failed start thrown again; the lead's thrown again.
+PROVEN_REAL is the Ofis page showing a worker seat refilled while another worker of the same
+cycle is still running: NOT_RUN here.
+
+**Known and left.** (a) The Ofis page's capacity is still the server's own number; it does not
+read `cycle-settings.json`. (b) `tick.ps1` / `register-nightly.ps1` pass `-MaxParallel` only
+(outside this task's area): the new seats take their defaults until the lead passes them or
+writes the settings file. (c) A lead split is judged against the queue as it is when the run
+ENDS; a task that was in work when the split was written and merged meanwhile no longer
+refuses an overlapping split - which is right, and different from the batch loop, where
+nothing else ran during a split.
+
+**At merge (the lead, integration d20261003, first).** The owner, 2026-10-02: "Sürekli tur mu bekliyoruz?" and, the
+same night, "Geceyi bekleme, kapı yeşilse hemen devreye al." This addendum is that. The inspector approved `9ed17633`
+at its second pass (208 of 208 on the final sha, under load; its first pass had found that a failed start with nothing
+else in flight ended the cycle with runnable work left - fixed, with its test). What the lead decides here:
+- *The seats.* The scheduled task passes `-MaxParallel 6` and is NOT re-registered: under the pool that is six WORKER
+  seats beside two inspections, one integrator, the researcher and the lead's split - up to eleven runs where the batch
+  loop ran six. That is the owner's own wish of 2026-10-02 ("çalışan sayımızı da arttıralım") and the machine has room
+  (20 cores, 48 GB; measured at 92 % idle beside a gate once the temp folder was cleaned). If a gate beside the pool is
+  slow again, the lead writes `team/cycle-settings.json` (it is read at every refill, no restart) and says so; the
+  durable answer is the owner's test queue (`test-slots`).
+- *Taking it into service.* A running cycle keeps the code it started with. After the release the lead writes
+  `team/stop.flag`: the old cycle starts nothing new and ends when its runs do; the scheduler's next tick starts the
+  pool. From then on `-MaxHours` (4) hands the cycle to the current script by itself.
+- *Carded, not closed here:* the five timing-shaped cases of the suite (one failed once in six runs at the heaviest
+  load: the snapshot was read ten seconds late) get a barrier hook in the fake, and the inspector's probe of
+  `-MaxRunsPerTask` under the pool is committed (`cycle-pool-test-barriers`); a cycle that dies kills every run in
+  flight (deliberate and tested - `run-liveness-visible` is what will show a cycle that died). `docs/TEAM_PROTOCOL.md`
+  does not name the per-role seats: it is the owner's document, the sentence is proposed to him, not written.
+
+### ADR-0251 addendum 1 (2026-10-03): `voice/session-storm` waited on the wall clock for the server's answer
+
+Task `web-voice-session-storm-flake`: the third voice test of the web shell that waited on a timer (ADR-0251 named it
+and carded it). The test change is merged; the product finding its author made on the way is NOT fixed here.
+
+**Context.**
+
+The web suite is a gate step (ADR-0237). The inspector of `web-voice-test-flakes` saw
+`apps/web/tests/voice/session-storm.test.ts` ("under a rate limiter, a dead session costs
+the client nothing at all") fail 2 of 60 and 7 of 60 full-suite runs under three suites at
+once, 0 of 10 alone. The card asks which it is: (a) the test waits on time for something
+that has an event, or (b) the product has a race.
+
+**Finding: (a). The test waited on a timer; what failed was the runner's limit..**
+
+Reproduced on the unchanged file, 30 full-suite runs, three vitest processes at once:
+1 red on this test, at **5011 ms** - the runner's 5 s timeout (`STACK_TRACE_ERROR` from
+`@vitest/runner` `chunk-artifact.js:1784`, the timeout's stack), not an assertion. The
+same test over those 30 runs: min 2271 ms, median 2365 ms. Alone: 2347 ms.
+
+The lines that show it (base file):
+
+- `:35-37` `settleMacrotasks` is `await new Promise(r => setTimeout(r, 0))` per round.
+- `:125-132` `run()` ends every call with `settleMacrotasks(3)`.
+- `:280-287` the test calls `run(t.scheduler, 250, 4)` fifty times, after a setup (`:93`)
+  that waits six more.
+
+That is 156 real timers (counted: `expected "setTimeout" to be called +0 times, but got
+156 times`). `setTimeout(0)` is a timer period, not a turn - 20 of them measured 295 ms
+on this machine, 14.8 ms each - so the test spends 2.3 s of its 5 s idle before any load.
+The other six tests in the file arm 13 to 31 timers each (read off the same helpers) and
+stayed under 720 ms in those runs.
+
+Nothing was waiting for time. The controller's only clock is the injected `FakeScheduler`
+(the new pin: 0 real timers over the whole incident). What the waits were FOR is the
+server's answer and the controller's reaction to it, and that is a promise chain: the
+fake's `Response`, the body read, `VoiceApiError`, `onReportFailure`. The old comment on
+`run()` said "a `Response` body is read on a macrotask"; measured on Node 24.15 it
+resolves in 3 microtask turns and needs no macrotask at all.
+
+**Not a product race.** With the timers out, no step of the file depends on real time or
+on load. The server's request log and event log of all seven original tests, recorded
+under the old waits and under the new ones, are identical request for request (paths in
+order, events with payloads, legs, credentials minted).
+
+**Decisions.**
+
+1. Every wait in the file is `answered()`: one event-loop turn (`setImmediate`), repeated
+   while a request the client put on the wire is still unanswered (`wire.open`, counted
+   beside the fake's answer so the client receives the very promise the server returned).
+   No timer anywhere; no timeout added or lengthened; the runner's 5 s stays the hang
+   guard it is.
+2. When the waits happen did not change (`run()` still gives a few microtask turns per
+   step and the full wait every twentieth step and at the end), so what the controller is
+   put through is the same.
+3. Two tests pin the cause: "the full incident arms no real timer" (`setTimeout` and
+   `setInterval` called 0 times over the incident; RED before, 156) and "a wait ends when
+   the answer has been acted on" (one request open after the flush fires; after one
+   `answered()` none open, one POST, state `closed`).
+4. No assertion of the seven original tests was changed.
+
+**Evidence (PROVEN_AUTOMATED; this machine, other workers running on it).**
+
+Command, from `apps/web`, three at once, ten rounds:
+`node node_modules/vitest/vitest.mjs run --reporter=json --outputFile=<run>.json`
+
+| measurement | BEFORE (`982dc4fb`) | AFTER |
+| --- | --- | --- |
+| 30 loaded full-suite runs: `session-storm` red | 1 (timeout at 5011 ms) | 0 |
+| the rate-limiter test, 30 loaded runs | min 2271, median 2365, max 5011 ms | min 3, median 4, max 95 ms |
+| slowest test of the file, 30 loaded runs | 5011 ms | 122 ms |
+| the file alone | 7 tests, 4.20 s | 9 tests, 42 ms |
+| full suite, 10 runs in a row | not measured | 10 of 10 green, 2106 tests |
+
+1 of 30 is a small count (the inspector's were 2 and 7 of 60); the durations are the
+stronger evidence: before, the median run of this test used 47 % of the limit; after, the
+slowest test of the file used under 3 %.
+
+Other reds in the same loaded runs, in files outside this card's area: BEFORE
+`cockpit/quiet-families` 3 (7.1-8.7 s, all in the first, cold round), `preview/core-preview`
+1 (8.7 s), `voice/latency` 1 (5019 ms; ADR-0251 cures it, not yet on this branch's base);
+AFTER `voice/store` 1 (`'closed'` vs `'listening'`; ADR-0251 again). The first two are
+timeouts too and have no card that I know of.
+
+Mutations of the subject, in a scratch copy of `app/lib` plus the cured test (the subject
+is outside the area; the real files' sha256 is unchanged before and after):
+
+- M1 `events.ts`, a 410 no longer ends the reporter (the 2026-09-09 incident): 4 RED,
+  among them the rate-limiter test (`expected 8 to be +0`: the limiter is reached) and
+  `expected 200 to be 1`.
+- M3 `controller.ts`, `reattachLoop` loses its join guard: RED, `expected 21 to be 2`.
+- M4 `controller.ts`, `reattach` loses its single flight: RED, `expected 2 to be 1`.
+- M5 `events.ts`, the reporter flushes on the real clock: 4 RED, among them both pins.
+- M2 `controller.ts`, the 410 is announced through the reporter (`viaReporter: true`):
+  NOT RED, 9 of 9. The reporter has ended itself by then; this is the "second wall" the
+  comment on `fail()` describes, and no test in this file observes it alone.
+- M6 `controller.ts`, `disconnect` flushes but does not dispose the reporter: NOT RED.
+- The cure itself, `answered()` back on `setTimeout(0)`: the pin goes RED (51 calls).
+
+**Finding for the lead: a product defect this file does not assert (NOT the flake).**
+
+It is deterministic, it is in `app/lib/voice/controller.ts` (outside the area), and
+nothing here papers over it or asserts it.
+
+After the server has answered 410, a network flap takes the controller back out of
+`closed`, and every flap costs one `POST .../attach` to the session the server declared
+gone. Probe (scratch test, removed):
+
+```
+after the 410 on /events         state=closed        requests=3
+network offline                  state=reconnecting  requests=3
+still offline, one minute later  state=reconnecting  requests=3
+network back                     state=closed        requests=4   (POST attach -> 410)
+second flap                      state=closed        requests=5   (POST attach -> 410)
+```
+
+- `controller.ts:2853-2869` (`onReportFailure`, the `gone` branch) patches `state:
+  "closed"` but does not set `closing`; neither does `:2788-2791` (`runReattachLoop`).
+- `:2739-2748` `onNetworkChange` and `:2750-2762` `onNetworkLost` guard on `closing` and
+  on `state === "reconnecting"` only, so a `closed` controller enters `reconnecting`
+  (`:2760`) and `reattachLoop` runs when the network returns.
+
+Two consequences: the owner is shown "reconnecting" for a dead session for as long as the
+network is down; and the file header's "retries against a session the server declared
+gone: 0" holds for `/events` only. In the rate-limiter test the server's log is `contract,
+sessions, attach, events, attach, attach, attach, attach`: four attaches after the 410,
+one per flap. The test counts `/events` posts and the limiter, so it is green, before and
+after this change alike. Bounded by the number of flaps, so not a storm. A card would make
+`gone` terminal for the network handlers and add the assertion (attaches after the 410:
+0) to this file.
+
+**Known limits.**
+
+- `answered()` counts a request as answered when the fake's promise settles; the body read
+  and the controller's reaction are covered by the event-loop turn, not counted. If a
+  later Node reads a body across several turns, the second pin fails rather than flakes.
+- `wire` is one counter for the file; tests in a file run one at a time and `beforeEach`
+  resets it.
+
+**At merge (the lead).** The finding above is a product defect and gets its own card, `voice-gone-is-terminal`:
+after the server's 410 the controller is `closed` but not `closing`, so a network flap takes it to `reconnecting` and
+costs one `POST .../attach` to a session the server declared gone, and the owner is shown "reconnecting" for a dead
+session. Bounded by the number of flaps; no storm.
