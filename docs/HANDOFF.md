@@ -15,32 +15,34 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `e5c4d1f3ce550eae7e5e2edb0aa696ce329b3cae` (2026-10-02 08:19 UTC, api-green), LKG `5f250e5b`, pin = RELEASE,
-reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`6f3d9f6f`; 14 509 birim, 2 104 web).
-QUALIFICATION Stage 42. Lead dalı = main + yayın kaydı.**
-**YAYINDA: 4 çalışan koltuğu + Ofis koşuyu sayar (ADR-0241), döngü kuyruğu her turda yeniden okur (ADR-0214 ek 11, bağımsız
-denetleyici 5. turda onayladı), besleyici model zincirini izler ve 20 dk'dan uzun beklemez (ek 13), hüküm kapanış
-cümlesinden okunur (ek 12), tarayıcı kurtarma başlatması profil kilidini bekler (ADR-0246), STT ölçüm aracı (ADR-0242;
-ölçülecek KAYIT YOK), Postgres testleri (ADR-0243), anlatı tesisatı (ADR-0244). Önceki yayın (`5f250e5b`): Onay Merkezi
-"Detay" + açık düğmeler, döngüde model politikası, roadmap besleyici + tick, tarayıcı görev planlayıcısı/kapısı.**
-**KAPIDA (lead, 2026-10-02 11:20): İKİNCİ ENTEGRASYON, dal `gate/d20261002-2` @ `786dec9d` (worktree `.claude/worktrees/gate5`),
-ana kopya o commit'te DETACHED: understanding-engine-startup (lead satırı `main.py`: `configure_understanding`; kapatma ayarı
-`understanding_semantic_enabled`) + understanding-corrections-memory (0064: CHECK genişletme, expand-only) +
-execution-call-site-research (ayar KAPALI) + chrome-on-device-stt (ayar KAPALI) + release-lock-waits + web-voice-test-flakes;
-ADR-0245, 0247…0251. SIRA: kapı yeşilse main `--no-ff` → it → kural gereği yayın (istisna yok: 0064 expand-only, compose
-YOK) → pin → doğrula → işleri `released` yap → Stage 43 → ana kopyayı `team/nightly/lead`'e al.**
-**SAHİBE SORULDU, YANIT BEKLİYOR (ikisi de compose değişikliği, sormadan yayınlanmaz): (1) `temporal-init-reaper`
-(`init: true`; uygulanırken Temporal ~10 sn kapanır; dalı `integrate/d20261002`'de, `gate/…-2`'de YOK); (2) bulutta-araştırma
-ayarının compose satırı (`PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED`; satır olmadan ayar üretimde açılamaz - ADR-0248).
-Onay Merkezi'nde iki fikir bekliyor: "koruyucu testler iş dalında", "ölçüm kaydı" (metinleri depoda).**
-**DÖNGÜ: 11:25'te `team/stop.flag` kondu (koşan süreç eski kodla başlamıştı); bir sonraki tick yeni kodla (yeniden okuma +
-besleyici düzeltmesi) başlar. Fable'ın haftalık limiti 2026-10-05 16:00 UTC'ye kadar DOLU: denetimler ve lead koşuları
-Opus 5.5'te ("model düşürüldü"). Lead'in bakacağı: `cycle-auto-integrate` yine DURDU (returns 2) - son denetçi raporunu oku,
-bulgularıyla yeniden aç ya da kartı böl. Kuyrukta yeni kartlar: web-voice-session-storm-flake, local-embedder-lru-lock,
-narrative-model-wiring, narrative-failures-router; sahibin onayladığı iki fikir bölündü (area-widen-*, misheard-*).**
-**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez (`cycle-seat-pool` sonrası ayrı kart). (2) kapı
-~80 dk ve tek sıra: iki kırmızı kapı bu sabah ~3 saat götürdü - araştırmacının "koruyucu testler iş dalında" fikri tam bunu
-hedefliyor. (3) `LocalEmbedder` önbelleği kilitsiz (kart kuyrukta). (4) tarayıcı görev zinciri üretimde ulaşılamaz (PR-D).**
+**ÜRETİM: main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (2026-10-02 13:02 UTC, api-green), LKG `f91ad1e3`, pin = RELEASE,
+reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`d71a0bac`; 14 699 birim,
+2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+**YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
+`f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
+Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:
+araştırma kuralının anahtarı api'ye iletiliyor ve KAPALI (`printenv` -> `false`); temporal kabı Docker init altında
+(ADR-0252). TEMPORAL HOST ADIMI YAPILDI 13:03:44-13:03:51 UTC (7 sn): `HostConfig.Init` true, host'ta 0 zombi, sağlık ok.
+Host snapshot 13:05 UTC'de yenilendi.**
+**DÖNGÜ: `d20261002`, 14:05'te başladı (pid 36220), 6/6; 15:51'de ikinci tur. Fable'ın haftalık limiti 2026-10-05 16:00
+UTC'ye kadar DOLU; koşular Opus 5.5'te. DENETİMDE: `model-policy-api`, `cycle-auto-integrate`, `cycle-seat-pool`,
+`web-voice-session-storm-flake`, `local-embedder-lru-lock`. `area-widen-rules` MERGED (integrate/d20261002). SIRADAKİ
+ENTEGRASYON (dördüncü): `integrate/d20261002`'de birleşenler + lead dalındaki kayıtlar; `cycle-seat-pool` onaylanırsa
+ÖNCELİKLİ (sahip: "sürekli tur bekliyoruz?") - yayından sonra döngü `team/stop.flag` ile yeni koda alınır.**
+**BUGÜN KUYRUĞA EKLENEN (lead): `misheard-ledger-store` yeniden açıldı (dal `b9415e90`, lead dalı üstünde; alan +2 sağlık
+testi; tek eksik 24 saatlik süpürme döngüsü); `measure-recordings-api` aynı `main.py` yüzünden `approved`'a geri alındı.
+Yedi yeni kart: `stt-engine-on-turn-audit`, `pack-question-button`, `webtask-write-ceiling-retention`,
+`cloud-search-engines-probe`, `stt-corpus-layer2-remeasure`, `feeder-own-lock` (cycle-seat-pool'u bekler),
+`office-stable-seats` (sahibin gözlemi: biri bitince çalışanlar koltuk değiştiriyor GİBİ görünüyor, sırada bekleyen iş
+uyarı işaretiyle çiziliyor; cycle-seat-pool'u bekler). Dört onaylı fikir ROADMAP "Approved ideas" tablosunda.**
+**SAHİBİ BEKLEYEN (hepsi deneme/karar, acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 43.1 ("Bugün nasılsın" de: denetim
+satırında katman `semantic`); 43.2 (bir düzeltme öğret: "ona X deme, Y de"); STT ölçümü için yirmi cümle (ölçüm kaydı
+fikri bunu sayfaya getiriyor). 42.1 GÖRÜLDÜ: sahip 2026-10-02'de Ofis'te "Çalışan 4" ve "Çalışan 5"i ekran görüntüsüyle
+gösterdi (yenilemeden önce eski sayfa kodu "worker" yazıyordu).**
+**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez (`feeder-own-lock`). (2) kapı ~90 dk ve tek sıra
+("koruyucu testler iş dalında" bunu hedefliyor). (3) döngü, turdaki en uzun koşu bitene kadar boş koltukları doldurmaz
+(`cycle-seat-pool` denetimde). (4) `LocalEmbedder` önbelleği kilitsiz (düzeltmesi denetimde). (5) tarayıcı görev zinciri
+üretimde ulaşılamaz (PR-D). (6) Ofis koltukları koşu bitince yeniden numaralanıyor (`office-stable-seats`).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,

@@ -1236,3 +1236,44 @@ on one real-Chrome test under load (ADR-0246). Each cost about eighty minutes.
 | 42.8 | After an orphan Chrome is reaped the recovery launch waits for the profile's lock | `PROVEN_AUTOMATED` | `services/browser/tests/unit/test_lifecycle_profile_lock.py` (6); the gate on `6f3d9f6f` ran the real-Chrome suite under the same load and passed - one run, not a proof |
 | 42.9 | The STT comparison instrument; the Postgres tests of the memory and routine tables; the narrative's failures-only plumbing | `PROVEN_AUTOMATED` | ADR-0242 (no recording exists: nothing measured, `READY_FOR_OWNER` twenty sentences), ADR-0243, ADR-0244 (nothing the owner says changes with it) |
 | 42.10 | A release of gated roadmap work without a question, verified | `PROVEN_REAL` | 2026-10-02 08:19 UTC: `RELEASE OK: e5c4d1f3… is running as api-green`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-green is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over; the preflight passed at its first try |
+
+## Stage 43 — d20261002, second integration: ADR-0224 layer 2 starts in production, the owner's corrections become memory, the release waits for the operation lock (ADR-0245, ADR-0247 … ADR-0251)
+
+Released 2026-10-02 11:30 UTC as main `f91ad1e32414a6ce2f1db511e084ea8959fee280` (api-blue; previous
+`e5c4d1f3…` kept as last known good; recovery pin = RELEASE; reconcile `RECONCILE OK`; schema
+`0064_memory_vocabulary_class`). Full gate 38/38 on `2a61b80e` (the merge commit's tree is identical):
+14 693 unit, 2 162 web. Released under the standing rule (ADR-0214 addendum 9): the one migration widens
+a CHECK constraint (expand-only, held by `test_migration_compatibility.py`), no compose, edge or
+environment change, health `ok`. The first gate of this integration (`786dec9d`) was RED on one
+order-dependent unit test (a task id left in the test process's context by a file merged that day);
+nothing was released from it.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 43.1 | ADR-0224 layer 2 is configured at start-up from the local embedder, off the start-up path | `PROVEN_REAL` | the released api's own log, 2026-10-02 11:29:43 UTC: `understanding_engine_configured`, provider `local`, model `local-minishlab/potion-multilingual-128M`, 1427 exemplars, build 859 ms; `tests/unit/test_understanding_startup.py`, `test_understanding_startup_wiring.py` (5). A turn whose audit row says layer `semantic` ("Bugün nasılsın" - recorded, not acted on): `READY_FOR_OWNER` |
+| 43.2 | The owner's correction is stored as vocabulary memory and used at the next match; a taught word never takes a sentence another table owns; a secret is refused and said | `PROVEN_AUTOMATED` | `tests/unit/test_understanding_corrections.py`, `tests/integration/test_understanding_vocabulary_postgres.py` (real PostgreSQL); migration 0064 applied in production (`Running upgrade 0063_team_state -> 0064_memory_vocabulary_class`). The owner's first correction by voice: `READY_FOR_OWNER` |
+| 43.3 | The research start asks the execution_target rule only behind a setting, which is OFF | `PROVEN_AUTOMATED` | `tests/unit/test_execution_call_site_research.py`, `tests/integration/test_research_execution_target.py`: with the setting off the choice is main's, on PostgreSQL. The cloud image opening the gateway's session and searching on bing: `PROVEN_PROXY` (a local build). The rule on in production: `NOT_RUN` (needs the compose line, the cloud-browser rebuild and the engines measured from the Cloud Core) |
+| 43.4 | Chrome's on-device Turkish recognition in the local mode, behind a setting that is OFF | `PROVEN_AUTOMATED` | `apps/web/tests/voice/`; the owner's measurement with it on: `READY_FOR_OWNER`, and it records nothing until the server keeps the engine's name (carded) |
+| 43.5 | A release, a preflight and a rollback wait for the operation lock; the reconcile never does | `PROVEN_AUTOMATED` | `scripts/tests/cloud-release-bluegreen.tests.ps1` on the fake host built from the real snapshot (collected 2026-10-02 06:54 UTC); real `flock` in a container: `PROVEN_PROXY`. This release's preflight passed at its first try and did not meet the reconcile: the real case is still `NOT_YET_PROVEN` |
+| 43.6 | Two voice tests of the web shell await their events instead of the wall clock | `PROVEN_AUTOMATED` | ADR-0251; `voice/session-storm` still fails under three suites at once and is carded |
+| 43.7 | Correlation ids do not leak between tests | `PROVEN_AUTOMATED` | `tests/conftest.py` (autouse); the pair `test_execution_call_site_research.py` + `test_logging_middleware.py` is RED without it |
+| 43.8 | A release of gated roadmap work without a question, verified | `PROVEN_REAL` | 2026-10-02 11:30 UTC: `RELEASE OK: f91ad1e3… is running as api-blue`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-blue is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over, pre-migration backup `f67703a3…` |
+
+## Stage 44 — d20261002, third integration: the temporal container runs under Docker's init, the research rule's switch is forwarded OFF (ADR-0252, ADR-0248 addendum 1)
+
+Released 2026-10-02 13:02 UTC as main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (api-green; previous
+`f91ad1e3…` kept as last known good; schema unchanged, `0064_memory_vocabulary_class`). Full gate 38/38 on
+`d71a0bac` (the merge commit's tree is identical): 14 699 unit, 153 integration, 2 162 web, team-cycle 184,
+team-feed 65. Both changes are COMPOSE changes, the exception of ADR-0214 addendum 9: the owner approved each
+of them by name on 2026-10-02 before the gate ran. The release changed the compose file the recovery timer
+had pinned (`RECOVERY BUNDLE STALE` on the release's stderr, as designed); the pin was re-run with the full
+sha one minute later.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 44.1 | The release, verified | `PROVEN_REAL` | 13:02 UTC: `RELEASE OK: f60e02e4… is running as api-green`, 3/3 device sessions handed over after 1 s, health `ok` through the edge and over the tailnet; `APPROVED_SHA` = RELEASE = `f60e02e4…`, LKG `f91ad1e3…`; 13:03:19 `RECONCILE OK: api-green is canonical … markers, upstreams and containers agree` |
+| 44.2 | The api is handed the research rule's switch, and it is OFF | `PROVEN_REAL` | `docker exec pagentos-prod-api-green printenv PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED` -> `false` (the host's `.env` does not set it; the compose default is the code's default); `tests/unit/test_compose_forwards_research_rule.py`. Turning it on stays the owner's decision, after the engines are measured from the Cloud Core (card `cloud-search-engines-probe`) |
+| 44.3 | The temporal container runs under Docker's init and nothing defunct is left | `PROVEN_REAL` | Before (11:39 UTC): `HostConfig.Init` nil, one defunct `auto-setup.sh` whose parent was `temporal-server`; the host has `/usr/libexec/docker/docker-init`. The step ADR-0252 names, on the released tree and under the operation lock, after a dry run that named only this container: `compose up -d --no-deps --wait temporal`, 13:03:44 -> 13:03:51 UTC (7 s, exit 0). After: `HostConfig.Init` true, `docker top`: `docker-init` with `temporal-server` as its one child, `ps` on the host: 0 defunct processes; `tests/unit/test_compose_init.py` |
+| 44.4 | The api and its embedded worker came back by themselves | `PROVEN_REAL` | health `ok`, `temporal` ok and `temporal_worker` ok at 13:03:59; the api's own log shows ONE `degraded` health sample inside the seven seconds and `ok` on both sides of it; no container other than temporal was recreated (`docker ps`: every other container's uptime unchanged) |
+| 44.5 | The fake hosts are built from the host as it is now | `PROVEN_AUTOMATED` | `scripts/tests/fixtures/host-snapshot.json` collected 2026-10-02 13:05:42 UTC (serving colour green, 1126 columns); `cloud-release-bluegreen.tests.ps1` 112, `host-snapshot.tests.ps1` 95, `maintenance-reboot.tests.ps1` 35, `test_host_snapshot_schema.py` green on it |
+| 44.6 | `docker stop` of the temporal container behaves as before under tini | `NOT_RUN` | ADR-0252 says so: tini forwards SIGTERM (documented), the stop time was not measured on the host; the next maintenance window measures it |

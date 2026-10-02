@@ -5,6 +5,7 @@ Decision table (deterministic, documented for the lead):
 | # | condition (first match wins)                        | decision                          |
 |---|-----------------------------------------------------|-----------------------------------|
 | 1 | content matches a secret pattern                    | REFUSE (SECRET_REJECTED + audit)  |
+| 1a| class `vocabulary` (ADR-0224) without the flag      | IGNORE (no row, never a candidate)|
 | 2 | caller-asserted `explicit` flag                     | DURABLE, explicit=True, conf=1.0, |
 |   |                                                     | actor=OWNER                       |
 | 3 | chatty / no-signal content (greeting, ack, filler)  | IGNORE (no row)                   |
@@ -22,6 +23,12 @@ shape as B15's req 279 — a comment that was never revisited — except that th
 described a SECURITY rule, in the decision table every reviewer of this module reads
 first. `test_the_decision_table_matches_the_code` now walks these rows.
 
+Row 1a is the `vocabulary` class (ADR-0224, "corrections become vocabulary"): a synonym
+the owner taught by correcting a reading - "ofisü = ofis (cihaz)". It is the owner's own
+word, so it has no ladder: with the flag it is row 2 (durable, OWNER), and without the
+flag it is nothing at all - a word the system inferred would be matched as if the owner
+had said it, and no amount of corroboration makes a guess the owner's word.
+
 Inferred confidence is always capped at SINGLE_OBSERVATION_MAX_CONFIDENCE for a
 single observation; promotion candidate->durable happens only through evidence
 accumulation in lifecycle.py (evidence_count >= PROMOTE_MIN_EVIDENCE AND
@@ -37,7 +44,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from app.memory.types import (
     SINGLE_OBSERVATION_MAX_CONFIDENCE,
@@ -46,6 +53,10 @@ from app.memory.types import (
     RetentionClass,
     WriteStage,
 )
+
+#: The memory class of a synonym the owner taught by a correction (ADR-0224, migration 0064).
+#: Explicit and owner-sourced only: `decide` gives it no candidate and no session stage.
+VOCABULARY: Final = MemoryClass.VOCABULARY
 
 # --------------------------------------------------------------- secrets guard
 
@@ -184,6 +195,14 @@ def decide(observation: Observation) -> WriteDecision:
             secret_pattern=secret,
         )
 
+    # ADR-0224: a synonym is the owner's own word or it is nothing. Not a candidate, not a
+    # session row: either would be matched as if the owner had said it.
+    if observation.memory_class == VOCABULARY and not observation.explicit:
+        return WriteDecision(
+            action=ACTION_IGNORE,
+            reason="vocabulary is owner-taught only; an inferred synonym is never written",
+        )
+
     # OWNER authority requires the caller-asserted `explicit` flag, set only by
     # trusted owner-facing surfaces (/remember, an owner UI). A trigger phrase
     # inside arbitrary text is NEVER sufficient by itself: once ingestion
@@ -249,6 +268,7 @@ __all__ = [
     "ACTION_REFUSE",
     "EXPLICIT_PATTERNS",
     "SECRET_PATTERNS",
+    "VOCABULARY",
     "Observation",
     "WriteDecision",
     "decide",

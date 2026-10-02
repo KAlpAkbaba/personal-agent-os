@@ -1,0 +1,1 @@
+The blue-green release suite is running to completion in the background (it was cut twice by my own time caps, 68 PASS / 0 FAIL at the cut). Everything else is done; the report follows when that run finishes.

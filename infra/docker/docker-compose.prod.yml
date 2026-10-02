@@ -68,6 +68,7 @@ services:
   temporal:
     image: temporalio/auto-setup:1.27.2
     container_name: pagentos-prod-temporal
+    init: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -147,6 +148,12 @@ services:
       PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN: ${PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN:-}
       # ADR-0222: `database` moves the team's queue and lock into PostgreSQL; unset = file.
       PAGENTOS_TEAM_STORE: ${PAGENTOS_TEAM_STORE:-file}
+      # ADR-0248 (owner approval 2026-10-02): the research start asks the execution_target
+      # rule only when this is `true`. Unset = false = research chooses its device as before.
+      # This line only makes the switch REACHABLE from /opt/pagentos/.env; turning it on is
+      # its own owner-visible step, after the cloud-browser image is rebuilt (the release
+      # order of ADR-0248) - never a side effect of a release.
+      PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED: ${PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED:-false}
       # Bootstrap runs ONCE, from the host itself, through this loopback-only guard.
       PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
       # M13/ADR-0050 §9: production runs no separate worker container, and the

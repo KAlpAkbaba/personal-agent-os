@@ -105,7 +105,9 @@ describe("Yerel mod: a final transcript becomes the relay's own calls", () => {
     const events = posts(core, "/events");
     expect(events).toHaveLength(1);
     expect(events[0].body).toEqual({
-      events: [{ kind: "utterance", t_ms: expect.any(Number), turn: 1, text: "YouTube'u aç" }],
+      // `stt_engine` (chrome-on-device-stt): which recogniser heard it. These deps have no
+      // `available()` at all, so no language pack can be in use and the cloud can be named.
+      events: [{ kind: "utterance", t_ms: expect.any(Number), turn: 1, text: "YouTube'u aç", payload: { stt_engine: "chrome-bulut" } }],
     });
     const calls = posts(core, "/tool-calls");
     expect(calls).toHaveLength(1);

@@ -236,6 +236,9 @@ class Settings(BaseSettings):
     #: allowlist (app.memory.providers.MRL_TRUNCATABLE_MODELS); anything else is refused
     #: with its reason and deterministic serves.
     memory_local_embedding_model: str = "minishlab/potion-multilingual-128M"
+    #: ADR-0224 layer 2 (ADR-0245): the semantic reading of a spoken command, from the LOCAL
+    #: embedder only. False = the rule tables and layer 1 decide alone, as before 2026-10-02.
+    understanding_semantic_enabled: bool = True
     #: Where the downloaded model files live (empty = fastembed's default cache). Production
     #: mounts one directory into both colours so a release never re-downloads the model.
     memory_local_embedding_cache_dir: str = ""
@@ -393,6 +396,15 @@ class Settings(BaseSettings):
                 f"PAGENTOS_RESEARCH_BROWSER must be one of {_RESEARCH_BROWSERS}, got {v!r}"
             )
         return v
+
+    #: Whether a research start asks the execution_target rule where it runs (ADR-0213:
+    #: cloud first, "bulutta", fallback rows in the ledger). OFF by default (lead,
+    #: 2026-10-02): off, research picks its device exactly as it did before the rule had a
+    #: call site. It is turned on as its own owner-visible step, AFTER the `cloud-browser`
+    #: container - which is not part of the release transaction - has been rebuilt from a
+    #: commit that holds the cloud clamp and one `session_open` on it has been verified;
+    #: with an older image every unnamed research would be sent there and fail.
+    research_execution_rule_enabled: bool = False
 
     # Owner identity / API authentication (M9, ADR-0027).
     #
