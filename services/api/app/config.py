@@ -236,6 +236,9 @@ class Settings(BaseSettings):
     #: allowlist (app.memory.providers.MRL_TRUNCATABLE_MODELS); anything else is refused
     #: with its reason and deterministic serves.
     memory_local_embedding_model: str = "minishlab/potion-multilingual-128M"
+    #: ADR-0224 layer 2 (ADR-0245): the semantic reading of a spoken command, from the LOCAL
+    #: embedder only. False = the rule tables and layer 1 decide alone, as before 2026-10-02.
+    understanding_semantic_enabled: bool = True
     #: Where the downloaded model files live (empty = fastembed's default cache). Production
     #: mounts one directory into both colours so a release never re-downloads the model.
     memory_local_embedding_cache_dir: str = ""

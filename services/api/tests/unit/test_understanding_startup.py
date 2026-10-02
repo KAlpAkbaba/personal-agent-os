@@ -190,7 +190,10 @@ FEW = [
     ("weather_query", "Bugün hava nasıl?"),
     ("research_cancel", "Araştırmayı iptal et."),
 ]
-RULELESS = "Dışarıda hava nasıl bugün"
+# A sentence the REAL router answers with no rule (measured: resolve_intent -> none). The first
+# constant here, "Dışarıda hava nasıl bugün", is matched by the weather table: the mechanism
+# was right and the label was wrong (inspector, 2026-10-02) - and a test below holds the label.
+RULELESS = "Bugün nasılsın"
 
 
 @dataclass

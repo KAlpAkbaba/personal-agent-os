@@ -153,6 +153,7 @@ from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.routes import router as voice_router
 from app.voice.runtime import VoiceRuntime
+from app.voice.understanding.startup import configure_understanding
 from app.weather.providers import build_weather_provider
 from app.weather.service import WeatherService
 from app.webpush.provider import HttpPushProvider
@@ -216,6 +217,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     artifacts = ArtifactRuntime(settings)
     voice = VoiceRuntime(settings)
     memory = MemoryRuntime(settings)
+    # ADR-0224 layer 2 in production (ADR-0245): the semantic engine is configured from the
+    # memory runtime's OWN embedder, and only when that is the local semantic one; the index
+    # is built on a daemon thread, so start-up does not wait for it.
+    configure_understanding(settings, memory.embedder, report=memory.embedder_report)
     selfhealing = SelfHealingRuntime(settings)
     evolution = EvolutionRuntime(settings)
     genesis = GenesisRuntime(
