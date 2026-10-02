@@ -11,19 +11,31 @@ application and device vocabularies, the small noun list below. So "istediğim" 
 ADR-0205 failure: a stem match on "iş" read every conjugation of "istemek" as "at work") and
 "unutma" stays whole (negative imperative; "unut" is the delete/remember word). Negative forms
 are never stripped: they change the meaning.
+
+Two things are built on the stripper for the rule tables (ADR-0224 addendum 4, the gap):
+
+* a FUSED token is split when, and only when, it is two words this module knows written as
+  one ("hesapmakinesini" -> hesap + makinesini; "alarmkur" -> alarm + kur). A token that is
+  itself a known word is never split, a verb is never the first half, a negative form is
+  never a half, there is at most one split per token, and a token that could be divided two
+  ways is left whole. The split is recorded like a confusion (``Normalized.applied_splits``);
+* :func:`lemma_reading` hands the router the sentence as layer 1 reads it: the polite forms
+  of a known verb written as its bare imperative, the fused tokens split, everything else
+  letter for letter. A sentence that carries a negative imperative has no such reading.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
+import re
+from collections.abc import Callable, Collection, Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import Final, NamedTuple
 
 from app.devices import aliases as _device_aliases
 from app.operator import allowlists as _allowlists
-from app.voice.intents import normalize_transcript
+from app.voice.intents import normalize_transcript, turkish_casefold
 
 VERB, NOUN, OTHER = "verb", "noun", "other"
 
@@ -44,6 +56,18 @@ class Normalized(NamedTuple):
     tokens: tuple[str, ...]
     lemmas: tuple[Lemma, ...]
     applied_confusions: tuple[tuple[str, str], ...]
+    #: fused token -> the two words it was read as: ("hesapmakinesini", "hesap makinesini").
+    applied_splits: tuple[tuple[str, str], ...] = ()
+
+
+class LemmaReading(NamedTuple):
+    """The sentence as layer 1 reads it, for the rule tables (:func:`lemma_reading`)."""
+
+    text: str
+    #: (the polite form as said, casefolded; the imperative it was read as).
+    dropped: tuple[tuple[str, str], ...]
+    #: (the fused token, casefolded; the two words).
+    splits: tuple[tuple[str, str], ...]
 
 
 # ------------------------------------------------------------------ the closed vocabularies
@@ -103,6 +127,79 @@ _VERBS: Final[dict[str, str]] = {
     "paylaş": "ır",
 }
 
+#: The verbs the router's exact-form tables hold beyond the list above, so that a polite form
+#: is read for EVERY verb table and not only for the verbs layer 1 began with. Kept apart on
+#: purpose: ``_VERBS`` also feeds layer 3's negation cap (``policy._negative_forms``), which
+#: this list must not widen. Left out, as above: stems that mutate ("et", "kaydet", "git")
+#: and verbs whose polite form is a common word ("alın", "basın", "kesin", "koyun", "sayın").
+_TABLE_VERBS: Final[dict[str, str]] = {
+    "çal": "ar",
+    "çek": "er",
+    "çiz": "er",
+    "çıkar": "ır",
+    "azalt": "ır",
+    "söndür": "ür",
+    "sustur": "ur",
+    "sus": "ar",
+    "tut": "ar",
+    "geç": "er",
+    "dön": "er",
+    "tıkla": "r",
+    "tuşla": "r",
+    "yakala": "r",
+    "kopyala": "r",
+    "taşı": "r",
+    "üret": "ir",
+    "tasarla": "r",
+    "derle": "r",
+    "paketle": "r",
+    "dinlet": "ir",
+    "onar": "ır",
+    "yarat": "ır",
+    "adlandır": "ır",
+    "betimle": "r",
+    "yetkilendir": "ir",
+    "yönlendir": "ir",
+}
+_ALL_VERBS: Final[dict[str, str]] = {**_VERBS, **_TABLE_VERBS}
+
+#: Words that take no suffix here and are known for ONE purpose: saying where a fused token
+#: divides ("birrutin" -> bir + rutin, "beniuyandır" -> beni + uyandır). Closed classes only -
+#: determiners, pronouns, the small numbers. A word those would cut in two is a noun below
+#: ("bugün" is not bu + gün, and "bugünün" is not bu + günün).
+_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "bu",
+        "şu",
+        "bunu",
+        "şunu",
+        "onu",
+        "beni",
+        "bana",
+        "seni",
+        "kendi",
+        "bir",
+        "her",
+        "tüm",
+        "bütün",
+        "yeni",
+        "son",
+        "ilk",
+        "iki",
+        "üç",
+        "dört",
+        "beş",
+        "altı",
+        "yedi",
+        "sekiz",
+        "dokuz",
+        "on",
+        "yarım",
+        "yarın",
+        "şimdi",
+    }
+)
+
 #: Nouns drawn from the Owner Utterance Suite's own vocabulary; everything else stays whole.
 _NOUNS: Final[tuple[str, ...]] = (
     "bilgisayar",
@@ -153,6 +250,12 @@ _NOUNS: Final[tuple[str, ...]] = (
     "saat",
     "paint",
     "boya",
+    "göz",
+    "hareket",
+    "teknik",
+    "gün",
+    "bugün",
+    "buçuk",
 )
 #: Stems whose vowel harmony is lexical, not the last vowel's: saati, maili, rutini.
 _FRONT: Final[frozenset[str]] = frozenset({"saat", "mail", "rutin"})
@@ -248,7 +351,7 @@ def _attach_verb(stem: str, chain: tuple[str, ...]) -> str:
     if chain == ("sana",):
         return stem + ("sene" if _low(stem) == "e" else "sana")
     if chain == ("aor",):
-        return stem + _VERBS[stem]
+        return stem + _ALL_VERBS[stem]
     if chain == ("pot", "aor"):
         return stem + y + _low(stem) + "bilir"
     raise ValueError(chain)
@@ -284,13 +387,13 @@ def _endings(
 
 
 _NOUN_STEMS: set[str] = set(_NOUNS)
-_VERB_ENDINGS = _endings(_VERBS, _attach_verb, _VERB_CHAINS)
+_VERB_ENDINGS = _endings(_ALL_VERBS, _attach_verb, _VERB_CHAINS)
 _NOUN_ENDINGS = _endings(_NOUN_STEMS, _attach_noun, _NOUN_CHAINS)
 
 
 def _is_known_stem(stem: str, kind: str) -> bool:
     """THE guard: a suffix is dropped only when what is left is a stem this module knows."""
-    return stem in (_VERBS if kind == VERB else _NOUN_STEMS)
+    return stem in (_ALL_VERBS if kind == VERB else _NOUN_STEMS)
 
 
 def _strip(token: str, kind: str) -> tuple[str, tuple[str, ...]] | None:
@@ -310,14 +413,14 @@ def _strip(token: str, kind: str) -> tuple[str, tuple[str, ...]] | None:
 # Alias-vocabulary words (application names, device aliases) join the noun stems only when no
 # known stem already explains them: "makinesi" is makine + poss3sg, not a stem of its own.
 for _word in sorted(_alias_words()):
-    if _word not in _VERBS and _strip(_word, NOUN) is None:
+    if _word not in _ALL_VERBS and _strip(_word, NOUN) is None:
         _NOUN_STEMS.add(_word)
 _NOUN_ENDINGS = _endings(_NOUN_STEMS, _attach_noun, _NOUN_CHAINS)
 
 
 def _lemma(token: str) -> Lemma:
     probe = token.replace("'", "")  # "paint'te"
-    for kind, stems in ((VERB, _VERBS), (NOUN, _NOUN_STEMS)):
+    for kind, stems in ((VERB, _ALL_VERBS), (NOUN, _NOUN_STEMS)):
         if probe in stems:
             return Lemma(token, probe, (), kind)
     for kind in (VERB, NOUN):
@@ -325,6 +428,65 @@ def _lemma(token: str) -> Lemma:
         if found:
             return Lemma(token, found[0], found[1], kind)
     return Lemma(token, token, (), OTHER)
+
+
+# ------------------------------------------------------------------ the negative forms
+
+
+def _negative_forms() -> frozenset[str]:
+    """Every "don't" of a known verb: kapatma, kapatmayın, kapatmayınız, kapatmasana, kapatmaz.
+    A known noun spelled like one ("araştırma") is the noun."""
+    forms: set[str] = set()
+    for stem in _ALL_VERBS:
+        base = stem + "m" + _low(stem)
+        polite = base + "y" + _high(base) + "n"
+        forms |= {base, polite, polite + _high(polite) + "z", base + "z"}
+        forms.add(base + ("sene" if _low(base) == "e" else "sana"))
+    return frozenset(forms - _NOUN_STEMS)
+
+
+_NEGATIVE_FORMS: Final[frozenset[str]] = _negative_forms()
+#: The bare negative imperative is also the verbal noun ("indirme klasörü", "arama geçmişi").
+_BARE_NEGATIVES: Final[frozenset[str]] = frozenset(stem + "m" + _low(stem) for stem in _ALL_VERBS)
+
+
+def is_negative(token: str) -> bool:
+    """The token is a negative form of a known verb. Never stripped, never split, never the
+    half of a split: "kapatma" is not "kapat"."""
+    return token in _NEGATIVE_FORMS
+
+
+# ------------------------------------------------------------------ the fused word
+
+#: A half shorter than this is not a word a split may rest on.
+_MIN_HALF: Final = 2
+
+
+def _known(word: str) -> str | None:
+    """The kind of a word this module knows - a stem, a stem with its suffixes, or one of
+    ``_WORDS`` - else None. A negative form is not a known word."""
+    if is_negative(word):
+        return None
+    if word in _WORDS:
+        return OTHER
+    kind = _lemma(word).kind
+    return None if kind == OTHER else kind
+
+
+def _split(token: str) -> tuple[str, str] | None:
+    """The two known words a fused token is, or None. At most one split, and only one way."""
+    if is_negative(token) or _known(token) is not None:
+        return None  # a token that is itself a known word is never split
+    found: list[tuple[str, str]] = []
+    for cut in range(_MIN_HALF, len(token) - _MIN_HALF + 1):
+        left, right = token[:cut], token[cut:]
+        if left.endswith("'") or right.startswith("'"):
+            continue
+        first = _known(left)
+        if first is None or first == VERB or _known(right) is None:
+            continue  # Turkish ends on its verb: "silver" is not sil + ver
+        found.append((left, right))
+    return found[0] if len(found) == 1 else None
 
 
 # ------------------------------------------------------------------ the STT confusion list
@@ -359,11 +521,17 @@ def normalize(text: str, *, confusions: dict[str, str] | None = None) -> Normali
     _, raw, _ = normalize_transcript(text)
     tokens: list[str] = []
     applied: list[tuple[str, str]] = []
+    splits: list[tuple[str, str]] = []
     for tok in raw:
         if tok in table:
             applied.append((tok, table[tok]))
             tok = table[tok]
-        tokens.append(tok)
+        halves = _split(tok)
+        if halves is None:
+            tokens.append(tok)
+        else:
+            splits.append((tok, " ".join(halves)))
+            tokens.extend(halves)
     lemmas: list[Lemma] = []
     i = 0
     while i < len(tokens):
@@ -374,7 +542,98 @@ def normalize(text: str, *, confusions: dict[str, str] | None = None) -> Normali
             i += 1
         lemmas.append(lem)
         i += 1
-    return Normalized(" ".join(tokens), tuple(tokens), tuple(lemmas), tuple(applied))
+    return Normalized(" ".join(tokens), tuple(tokens), tuple(lemmas), tuple(applied), tuple(splits))
+
+
+#: A word of the sentence as written: letters, with the apostrophe a suffix hangs on.
+_WORD_RE: Final[re.Pattern[str]] = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+#: A quoted title or dictated text ('Bana Bakın'): the owner's own words, never rewritten.
+_QUOTED_RE: Final[re.Pattern[str]] = re.compile(r"(?<!\w)['\"“‘«][^'\"“”‘’«»]+['\"”’»](?!\w)")
+#: The chains that ARE a request for the bare imperative; an aorist is one only before its
+#: second-person question particle ("kapatır mısın"), never alone ("kapatır": a statement).
+_IMPERATIVE_CHAINS: Final[frozenset[tuple[str, ...]]] = frozenset(
+    {("pol",), ("pol", "pl"), ("sana",)}
+)
+_QUESTION_CHAINS: Final[frozenset[tuple[str, ...]]] = frozenset({("aor",), ("pot", "aor")})
+
+
+def _says_dont(words: list[re.Match[str]], folded: list[str], text: str) -> bool:
+    """THE negative-form guard of the reading: the sentence carries a negative imperative of a
+    known verb. The bare form ("kapatma") counts where a clause ends on it - a word follows
+    the verbal noun it is spelled like ("indirme klasörünü")."""
+    for index, token in enumerate(folded):
+        if not is_negative(token):
+            continue
+        if token not in _BARE_NEGATIVES or index + 1 == len(words):
+            return True
+        if text[words[index].end() : words[index + 1].start()].strip():
+            return True  # punctuation closes the clause: "kapatma, ..."
+    return False
+
+
+def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | None:
+    """The sentence as layer 1 reads it, for the rule tables - or None when layer 1 changes
+    nothing, or must not.
+
+    Only two things are rewritten, in the owner's own text: a polite form of a known verb
+    becomes its bare imperative ("kapatın", "kapatsana", "kapatır mısınız", "kapatabilir
+    misin" -> "kapat"), and a fused token becomes its two words. A form named in ``keep`` is
+    left as said (the caller's "this is a question, not a request" list), and so is everything
+    inside quotes. A sentence that says "don't" has no reading at all (:func:`_says_dont`).
+    """
+    quoted = [m.span() for m in _QUOTED_RE.finditer(text)]
+    words = [
+        m
+        for m in _WORD_RE.finditer(text)
+        if not any(start <= m.start() < end for start, end in quoted)
+    ]
+    folded = [turkish_casefold(m.group()).replace("’", "'") for m in words]
+    if _says_dont(words, folded, text):
+        return None
+    out: list[str] = []
+    dropped: list[tuple[str, str]] = []
+    splits: list[tuple[str, str]] = []
+    cursor = 0
+    index = 0
+    while index < len(words):
+        match, token = words[index], folded[index]
+        raw = match.group()
+        parts = [(raw, token)]
+        halves = _split(token) if len(token) == len(raw) else None
+        if halves is not None:
+            cut = len(halves[0])
+            parts = [(raw[:cut], halves[0]), (raw[cut:], halves[1])]
+            splits.append((token, " ".join(halves)))
+        end = match.end()
+        written: list[str] = []
+        for position, (said, part) in enumerate(parts):
+            lemma = _lemma(part)
+            if lemma.kind != VERB or part in keep:
+                written.append(said)
+            elif lemma.suffixes in _IMPERATIVE_CHAINS:
+                written.append(lemma.stem)
+                dropped.append((part, lemma.stem))
+            elif (
+                lemma.suffixes in _QUESTION_CHAINS
+                and position == len(parts) - 1
+                and index + 1 < len(words)
+                and folded[index + 1] in _MI_PARTICLES
+                and not text[end : words[index + 1].start()].strip()
+            ):
+                written.append(lemma.stem)
+                dropped.append((f"{part} {folded[index + 1]}", lemma.stem))
+                end = words[index + 1].end()
+                index += 1
+            else:
+                written.append(said)
+        out.append(text[cursor : match.start()])
+        out.append(" ".join(written))
+        cursor = end
+        index += 1
+    if not dropped and not splits:
+        return None
+    out.append(text[cursor:])
+    return LemmaReading("".join(out), tuple(dropped), tuple(splits))
 
 
 def lemma_tokens(text: str, *, confusions: dict[str, str] | None = None) -> tuple[str, ...]:
@@ -385,4 +644,13 @@ def lemma_tokens(text: str, *, confusions: dict[str, str] | None = None) -> tupl
     )
 
 
-__all__ = ["Lemma", "Normalized", "lemma_tokens", "load_confusions", "normalize"]
+__all__ = [
+    "Lemma",
+    "LemmaReading",
+    "Normalized",
+    "is_negative",
+    "lemma_reading",
+    "lemma_tokens",
+    "load_confusions",
+    "normalize",
+]

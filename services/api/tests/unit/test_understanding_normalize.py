@@ -152,6 +152,135 @@ def test_normalisation_is_idempotent_on_stems():
     assert lemma_tokens(" ".join(once)) == once
 
 
+# ------------------------------------------------------------------ the fused word
+
+
+@pytest.mark.parametrize(
+    ("fused", "left", "right"),
+    [
+        ("hesapmakinesini", "hesap", "makinesini"),
+        ("alarmkur", "alarm", "kur"),
+        ("ekranlarıkapat", "ekranları", "kapat"),
+        ("notdefteri'ni", "not", "defteri'ni"),
+        ("maillerimebak", "maillerime", "bak"),
+        ("birrutin", "bir", "rutin"),
+        ("yedibuçukta", "yedi", "buçukta"),
+        ("ofisbilgisayarımda", "ofis", "bilgisayarımda"),
+    ],
+)
+def test_a_fused_token_is_split_into_two_known_words_and_recorded(fused, left, right):
+    n = normalize(f"{fused} aç")
+    assert n.tokens == (left, right, "aç")
+    assert n.applied_splits == ((fused, f"{left} {right}"),)
+    assert n.text == f"{left} {right} aç"
+    assert [lem.surface for lem in n.lemmas] == [left, right, "aç"]
+
+
+def test_alarmkur_lemmatises_as_alarm_kur_does():
+    assert lemma_tokens("alarmkur") == lemma_tokens("alarm kur") == ("alarm", "kur")
+    assert lemma_tokens("hesapmakinesini aç") == ("hesap", "makine", "aç")
+
+
+def test_a_sentence_without_a_fused_token_records_no_split():
+    assert normalize(TRIAL).applied_splits == ()
+    assert normalize("hesap makinesini aç").applied_splits == ()
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        "bugün",  # a word of its own, though "bu" and "gün" are both known
+        "bugünün",  # ... and so is every form of it ("Bugünün Show Ana Haber videosunu aç.")
+        "masaüstünde",
+        "bilgisayarımdan",
+        "açsana",
+        "kapatabilir",
+        "hatırlatıcı",
+    ],
+)
+def test_a_token_that_is_a_known_word_is_never_split(word):
+    n = normalize(word)
+    assert n.tokens == (word,) and n.applied_splits == ()
+
+
+def test_bugun_would_split_if_it_were_not_a_known_word():
+    """The rule above is load-bearing: both halves of "bugün" are words layer 1 knows."""
+    assert norm._known("bu") is not None and norm._known("gün") is not None
+    assert norm._known("bugün") is not None
+    assert norm._split("bugün") is None
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        "silver",  # sil + ver: a verb is never the first half
+        "arabul",
+        "zxcvalarm",  # one half unknown
+        "alarmzxcv",
+        "evo",  # a half shorter than two letters
+        "kapatma",  # a negative form is never a split
+        "ekranıkapatma",
+        "hesapmakinesinialarm",  # three words: at most one split, and both halves known
+    ],
+)
+def test_what_is_never_split(word):
+    n = normalize(word)
+    assert n.tokens == (word,) and n.applied_splits == ()
+
+
+def test_every_word_of_the_vocabulary_survives_normalisation_whole():
+    for word in (*norm._VERBS, *norm._TABLE_VERBS, *norm._NOUN_STEMS, *norm._WORDS):
+        assert normalize(word).applied_splits == (), word
+
+
+# ------------------------------------------------------------------ the negative forms
+
+
+@pytest.mark.parametrize(
+    "word", ["kapatma", "kapatmayın", "kapatmayınız", "unutma", "açmasana", "silme", "silmez"]
+)
+def test_a_negative_form_is_known_as_one_and_keeps_its_surface(word):
+    assert norm.is_negative(word)
+    (lem,) = normalize(word).lemmas
+    assert (lem.stem, lem.suffixes, lem.kind) == (word, (), "other")
+
+
+@pytest.mark.parametrize("word", ["kapat", "kapatın", "araştırma", "araştırmayı", "makine", "mama"])
+def test_what_is_not_a_negative_form(word):
+    assert not norm.is_negative(word)
+
+
+# ------------------------------------------------------------------ the reading the rules get
+
+
+def test_lemma_reading_rewrites_only_the_polite_verb_and_the_fused_word():
+    reading = norm.lemma_reading("Ofis bilgisayarımda Hesapmakinesini açar mısınız?")
+    assert reading is not None
+    assert reading.text == "Ofis bilgisayarımda Hesap makinesini aç?"
+    assert reading.dropped == (("açar mısınız", "aç"),)
+    assert reading.splits == (("hesapmakinesini", "hesap makinesini"),)
+
+
+def test_lemma_reading_is_none_when_layer_one_changes_nothing():
+    assert norm.lemma_reading("Hesap makinesini aç.") is None
+    assert norm.lemma_reading("Ekranı kapatır.") is None  # an aorist with no question: a statement
+    assert norm.lemma_reading("") is None
+
+
+def test_lemma_reading_keeps_the_forms_the_caller_names():
+    assert norm.lemma_reading("Bunu yapabilir misin?", keep=frozenset({"yapabilir"})) is None
+    assert norm.lemma_reading("Bunu yapabilir misin?") is not None
+
+
+def test_lemma_reading_of_a_sentence_that_says_dont_is_none():
+    assert norm.lemma_reading("Ekranları kapatma, sesi açın.") is None
+    assert norm.lemma_reading("Ekranları kapatmayın ama sesi açın.") is None
+    assert norm.lemma_reading("Sesi açın, ekranları kapatma") is None
+    # "indirme" before a noun is the verbal noun (the downloads folder), not "don't download".
+    reading = norm.lemma_reading("İndirme klasörünü gösterin.")
+    assert reading is not None and reading.dropped == (("gösterin", "göster"),)
+
+
 # ------------------------------------------------------------------ the protocol file
 
 
