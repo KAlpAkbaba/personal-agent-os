@@ -40,7 +40,9 @@ lead + `integrate/d20261002` @ `03981422` (office-worker-seats: 4 çalışan kol
 STT karşılaştırma aracı, ölçülecek kayıt YOK) + postgres-coverage-debt (denetleyici ONAYLADI; hüküm satırı okunamadığı
 için döngü durdurmuştu) + narrative-failures-only-model ("tesisat" olarak; sahibin cümlesi DEĞİŞMEZ). Lead bağlaması:
 `app/team/speech.py` sesli özet artık sayfanın saydığını (koşu) söyler; `Get-TeamVerdict` kapanış cümlesindeki hükmü
-okur ve `inspector.md` "son mesajın hükümle bitsin" der (ADR-0214 ek 12); ADR-0241…0244. SIRA: tam kapı (ana kopya
+okur ve `inspector.md` "son mesajın hükümle bitsin" der (ADR-0214 ek 12); ADR-0241…0244. İLK KAPI (`b35c6ddb`) TEK TESTTE KIRMIZIYDI:
+`test_every_error_class_has_turkish` - STT ölçüm aracı `ERROR_UNEXPECTED = "unexpected"` tanımlamış, Türkçe sözlükte
+(`app/errors/catalog.py`) karşılığı yoktu; eklendi, kapı yeniden koşuyor. SIRA: tam kapı (ana kopya
 detached) → yeşilse main `--no-ff` → kural gereği yayın (migration/compose YOK) → pin → doğrula → işleri `released`
 yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue`) bu entegrasyonda YOK: yayın gerektirmez,
 denetleyici onaylayınca lead dalına girer ve döngü `team/stop.flag` ile yenilenir.**

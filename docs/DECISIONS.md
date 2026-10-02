@@ -19003,6 +19003,11 @@ and his recordings leaving for it, are a separate approval. Nothing here calls S
 a fake server, and without a key the script refuses that engine. What is missing is the material - twenty recordings
 of the owner's own sentences: `READY_FOR_OWNER`.
 
+The first gate of this integration (`b35c6ddb`) was RED on one test, `test_every_error_class_has_turkish`: the comparison's
+per-file failure class `unexpected` (`ERROR_UNEXPECTED`, added in the task's last round) had no Turkish sentence in
+`app/errors/catalog.py`. The guard reads every `ERROR_*` constant of the application; neither the worker nor the inspector
+ran the full unit suite (both said so: `NOT_RUN`, "the lead's gate runs them"), and the gate did. Added at merge.
+
 ## ADR-0243 — Postgres coverage debt, first slice: how a table leaves the baseline (2026-10-02)
 
 Status: proposed by worker `postgres-coverage-debt`; the lead numbers it at merge. Extends
