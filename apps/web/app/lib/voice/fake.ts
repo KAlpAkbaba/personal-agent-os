@@ -882,11 +882,57 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
   stops = 0;
   aborts = 0;
   running = false;
+  /**
+   * Every write to the two on-device properties, in order. They are accessors and not
+   * fields so that "the default setting never touches them" is an assertion on this list
+   * (empty), not on a value that happens to still be `undefined`.
+   */
+  readonly assignments: Array<{ key: "processLocally" | "phrases"; value: unknown }> = [];
+  /** What the recogniser was configured with at each `start()` that succeeded. */
+  readonly startedWith: Array<{ processLocally: boolean | undefined; phrases: unknown }> = [];
+  /** Thrown by the next `start()` instead of starting (Chrome's `NotAllowedError` for a blocked policy). */
+  failNextStart: Error | null = null;
+  private processLocallyValue: boolean | undefined = undefined;
+  private phrasesValue: unknown = undefined;
+
+  get processLocally(): boolean | undefined {
+    return this.processLocallyValue;
+  }
+
+  set processLocally(value: boolean | undefined) {
+    this.assignments.push({ key: "processLocally", value });
+    this.processLocallyValue = value;
+  }
+
+  get phrases(): unknown {
+    return this.phrasesValue;
+  }
+
+  set phrases(value: unknown) {
+    this.assignments.push({ key: "phrases", value });
+    this.phrasesValue = value;
+  }
 
   start(): void {
     if (this.running) throw new DOMException("already started", "InvalidStateError");
+    const refused = this.failNextStart;
+    if (refused) {
+      this.failNextStart = null;
+      throw refused;
+    }
     this.running = true;
     this.starts += 1;
+    this.startedWith.push({ processLocally: this.processLocallyValue, phrases: this.phrasesValue });
+  }
+
+  /**
+   * Chrome refused the run it had just been asked for: `onerror` and NO `onend`
+   * (`language-not-supported` with `processLocally` and no pack, read in Chromium's
+   * `speech_recognition.cc`). A mode that waits for `onend` to restart stays deaf.
+   */
+  refuse(error: string): void {
+    this.running = false;
+    this.onerror?.({ error });
   }
 
   stop(): void {
@@ -927,6 +973,40 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
 
   fail(error: string): void {
     this.onerror?.({ error });
+  }
+}
+
+/** What a scripted on-device call does: resolve with a value, reject with an error, or never settle. */
+export type FakeOnDeviceScript<T> = T | Error | "hang";
+
+/**
+ * A scripted `SpeechRecognition.available()` / `.install()` (Chrome 139's static pair).
+ * It records every options object it was given, so a test can prove that nothing was
+ * installed, and that what was asked for carried `processLocally: true`.
+ */
+export class FakeOnDevice {
+  readonly availableCalls: Array<Record<string, unknown>> = [];
+  readonly installCalls: Array<Record<string, unknown>> = [];
+
+  constructor(
+    public status: FakeOnDeviceScript<string> = "available",
+    public installResult: FakeOnDeviceScript<boolean> = true,
+  ) {}
+
+  private static play<T>(script: FakeOnDeviceScript<T>): Promise<T> {
+    if (script === "hang") return new Promise<T>(() => {});
+    if (script instanceof Error) return Promise.reject(script);
+    return Promise.resolve(script);
+  }
+
+  available(options: Record<string, unknown>): Promise<string> {
+    this.availableCalls.push(options);
+    return FakeOnDevice.play(this.status);
+  }
+
+  install(options: Record<string, unknown>): Promise<boolean> {
+    this.installCalls.push(options);
+    return FakeOnDevice.play(this.installResult);
   }
 }
 
