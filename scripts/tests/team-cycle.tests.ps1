@@ -2181,9 +2181,13 @@ try {
         # stopped there. The integration branch has moved on: nothing is reset, the lead is told.
         $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
         $stopped.updated_at = "2026-09-30T09:00:00Z"
+        # A broken card arrives with the stop: the store cannot be read again afterwards, so what
+        # the report says of task-one is what the cycle's OWN copy says (the inspector's PROBE-Z).
+        $broken = New-Task -Id "task-three" -Area @("src/third")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
         $outage = [pscustomobject]@{ task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 } }
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $outage `
-            -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+            -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @()
         $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
@@ -2192,6 +2196,8 @@ try {
         Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the other task was written"
         Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti[^\r\n]*o birleştirme dalda duruyor") -Because "the lead is told there is a merge to take back: $($run.Report)"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root ".claude\worktrees\integrate\c1\src\area2\task-two.txt")) -Because "task-two's merge, made on top of it, was not thrown away"
+        Assert-True -Condition ($run.Report -match "kuyruk yeniden okunamadı") -Because "the store could not be read again: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "task-one[^\r\n]*\[merged\]") -Because "and the cycle's own copy does not call the refused task merged"
     }
 
     Test-Case "a store that refuses the same write after every read does not spin the cycle: it ends, says so, and the stop flag and the lock are honoured" {
@@ -2339,6 +2345,30 @@ try {
         Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "task-two was written when the store answered"
         Assert-True -Condition ($run.Report -match "task-one: depoda başkası değiştirdi") -Because "the refusal is said: $($run.Report)"
         Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti") -Because "and the merge is named: $($run.Report)"
+    }
+
+    Test-Case "a refused 'merged' is TAKEN BACK when the same save then fails on another task: the refusal is acted on in that iteration" {
+        # The inspector's PROBE-S, as it ran it: task-two's "an inspector took it" write fails, so
+        # task-two is still unwritten when task-one's result is saved - the store refuses task-one
+        # and THEN answers an error to task-two in that one save. The refusal must be known in
+        # that iteration (the merge is still the branch's last commit), not only at the batch's end.
+        $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $faults = [pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-two"; status = 503; state = "inspecting"; assignee = "inspector"; times = 2 } }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
+            -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $writes = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-(one 409|two 503)" } | ForEach-Object { ($_ -replace '^PUT /v1/team/queue/tasks/', '') }) -join ", "
+        Assert-Equal -Expected "task-two 503, task-one 409, task-two 503" -Actual $writes -Because "the start's failed write, then the refusal and the failure in ONE save"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "task-two finished"
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $tree "src\area\task-one.txt"))) -Because "the stopped task's merge was taken back"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $tree "src\area2\task-two.txt")) -Because "and task-two's stands"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti[^\r\n]*birleştirme GERİ ALINDI") -Because "the report says so: $($run.Report)"
     }
 
     Test-Case "after a refused write the cycle's own copy says what the store let it say: the report does not list a merge that was taken back" {

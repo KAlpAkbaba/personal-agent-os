@@ -19024,3 +19024,20 @@ after a merge that was taken back when the store cannot be read again; an idea's
 Thirty-five mutations plus the fake's, each restored from a backup copy with sha256 equal. The inspector's own
 experiment on the harness race: two fakes started together on one log, forty rounds - 29 died with the old fake, none
 with the new.
+
+**Addendum 11, approved (2026-10-02).** The independent inspector approved `dbacc280` on its FIFTH pass (four returns:
+six, five, three and three findings - every one real, two of them opened by the fix of the pass before). Its last pass
+also ran the cycle against the REAL routes (`app/team/routes.py` with the real `DbStore`, over SQLite on a local port):
+a stop written through the real PUT while an inspector runs is not merged, and the report says so (PROVEN_PROXY).
+After the approval, tests only: the two shapes it named are in the suite - the refusal acted on in the SAME iteration
+when the save then fails on another task (the merge is taken back, not only named), and the copy put back at the
+batch's end when the store cannot be read again - each held by a mutation that is RED (no `finally`; no put-back at
+the batch's end). Suite: 177.
+
+**Known and left, (d).** A lost ANSWER raises a false alarm: the store applies the cycle's "merged" and answers 503;
+the batch's last write is then refused against the cycle's own earlier write. Nothing is reset or re-run and the
+store and the branch are right - but the report says "depoda başkası değiştirdi" and "lead geri alır ya da işi
+yeniden açar" of a task nobody else touched. The lead reads the store before acting on that line.
+
+What is still `NOT_RUN`: the full gate on the integration branch, and a real cycle on the Cloud Core picking up a card
+stored while it runs - the PROVEN_REAL this addendum is for.

@@ -18,8 +18,8 @@
     that run ends). `late.remove` is a list of ids the writer takes OUT of the queue.
     A seed with `faults` breaks the store on purpose: `queue_get_after` N answers 503 to every
     GET of the queue after the N-th; `task_put` { id, status } answers that status to every PUT
-    of that task - only when the written state is `state`, if that is given, and only the
-    first `times` such PUTs, if that is given;
+    of that task - only when the written state is `state` and the written assignee is
+    `assignee`, where those are given, and only the first `times` such PUTs, if that is given;
     `task_put_when_runs` { runs, status } answers that status to EVERY task PUT while the last
     live status names exactly that many runs in flight (an outage in the middle of a batch);
     `proposal_post` { status, times } answers that status to the first `times` POSTs of a
@@ -147,7 +147,7 @@ while ($running) {
             $id = $Matches[1]
             $stored = $tasks[$id]
             $expected = $body.expected_updated_at
-            if ($null -ne $faults -and $null -ne $faults.task_put -and [string]$faults.task_put.id -eq $id -and ($null -eq $faults.task_put.state -or [string]$faults.task_put.state -eq [string]$body.task.state) -and ($null -eq $faults.task_put.times -or $taskPutFaults -lt [int]$faults.task_put.times)) {
+            if ($null -ne $faults -and $null -ne $faults.task_put -and [string]$faults.task_put.id -eq $id -and ($null -eq $faults.task_put.state -or [string]$faults.task_put.state -eq [string]$body.task.state) -and ($null -eq $faults.task_put.assignee -or [string]$faults.task_put.assignee -eq [string]$body.task.assignee) -and ($null -eq $faults.task_put.times -or $taskPutFaults -lt [int]$faults.task_put.times)) {
                 $taskPutFaults++
                 $status = Send-Json -Context $context -Status ([int]$faults.task_put.status) -Body @{ detail = "the store refused the write" }
             }
