@@ -72,6 +72,20 @@ def test_a_session_open_asking_for_a_narrower_policy_keeps_it():
     assert out["policy"]["visible"] is False
 
 
+def test_a_session_open_is_headless_chromium_whatever_the_payload_asks_for():
+    asked = {"channel": "chrome", "policy": {"visible": True}}
+    out = cloud_policy.clamp_command("browser.session_open", asked)
+    assert out["channel"] == cloud_policy.CLOUD_CHANNEL == "chromium"
+    assert out["policy"]["visible"] is False
+    assert asked == {"channel": "chrome", "policy": {"visible": True}}
+
+
+def test_a_session_open_that_says_nothing_about_the_window_is_headless_chromium_too():
+    out = cloud_policy.clamp_command("browser.session_open", {})
+    assert out["channel"] == "chromium"
+    assert out["policy"]["visible"] is False
+
+
 def test_a_session_open_naming_the_owner_profile_is_refused():
     with pytest.raises(BrowserError):
         cloud_policy.clamp_command("browser.session_open", {"profile": "owner"})
