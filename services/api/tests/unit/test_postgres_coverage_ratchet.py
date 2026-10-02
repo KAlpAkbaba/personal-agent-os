@@ -31,6 +31,8 @@ INTEGRATION = API / "tests" / "integration"
 #: through a route an integration test calls - the name check cannot see that; they leave
 #: the list when a test names them). Debt, not permission: a NEW table is never
 #: added here - it gets a Postgres test - and a table that gains one is removed from the list.
+#: Paid since: the memory side tables and routines/alarms (eight tables, 2026-10-01,
+#: ``test_memory_tables_postgres.py`` and ``test_routines_alarms_postgres.py``); 43 remain.
 UNEXERCISED_BASELINE = frozenset(
     {
         "activity_events",
@@ -44,8 +46,6 @@ UNEXERCISED_BASELINE = frozenset(
         "code_symbols",
         "creative_runs",
         "document_index",
-        "entities",
-        "entity_edges",
         "evolution_opportunities",
         "executive_runs",
         "executive_steps",
@@ -58,9 +58,6 @@ UNEXERCISED_BASELINE = frozenset(
         "location_context",
         "mail_drafts",
         "mail_index",
-        "memory_audit_events",
-        "memory_evidence",
-        "memory_versions",
         "module_provenance",
         "native_builds",
         "news_playback_contexts",
@@ -75,14 +72,11 @@ UNEXERCISED_BASELINE = frozenset(
         "research_focus",
         "research_owner_state",
         "research_reports",
-        "routine_firings",
-        "routines",
         "scenes",
         "selfdev_defects",
         "speaker_verdicts",
         "voice_macros",
         "voice_profiles",
-        "wake_alarms",
         "weather_query_evidence",
     }
 )
