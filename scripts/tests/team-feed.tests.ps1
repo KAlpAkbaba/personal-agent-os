@@ -399,6 +399,9 @@ $fakeApis = New-Object System.Collections.ArrayList
 #   stray         a file, repository-relative, the run has no business writing
 #   raise_stop    with limited_first: that first call also writes team/stop.flag
 #   limited_first the FIRST call answers with the subscription's usage-limit error
+#   limited_models model ids: a call on one of them answers as the real tool does when THAT
+#                 model's limit is met - the rejected rate_limit_event and "out of usage credits"
+#   limit_reset_seconds  when those limits lift, seconds from now (default: 200 s ago / 3 days)
 #   silent        the run prints something that is not the result document
 #   fail_after    the run does everything above (the feed file is on disk), THEN fails
 #   hang_after    the run does everything above, then never ends: the feeder's deadline kills it
@@ -429,9 +432,24 @@ $entry = [pscustomobject]@{ role = [System.IO.Path]::GetFileNameWithoutExtension
 $lockFile = Join-Path $here "team\lock.json"
 if (Test-Path -LiteralPath $lockFile) { Copy-Item -LiteralPath $lockFile -Destination "$log.lock.json" -Force }
 
+if (@(Get-Plan "limited_models") -contains $model -and $model) {
+    $away = 259200
+    if ($null -ne (Get-Plan "limit_reset_seconds")) { $away = [int](Get-Plan "limit_reset_seconds") }
+    $resets = [DateTimeOffset]::UtcNow.AddSeconds($away).ToUnixTimeSeconds()
+    $types = @{ "claude-fable-5-1" = "seven_day_overage_included"; "claude-opus-5-5" = "seven_day_opus"; "claude-sonnet-5-5" = "seven_day_sonnet" }
+    $info = [ordered]@{ status = "rejected"; resetsAt = $resets; rateLimitType = [string]$types[$model]; isUsingOverage = $false }
+    $lines = @(
+        (([ordered]@{ type = "system"; subtype = "init"; model = $model; session_id = "s" }) | ConvertTo-Json -Compress),
+        (([ordered]@{ type = "rate_limit_event"; rate_limit_info = $info; uuid = "u"; session_id = "s" }) | ConvertTo-Json -Compress -Depth 6),
+        (([ordered]@{ type = "result"; subtype = "success"; is_error = $true; result = "You're out of usage credits. Switch to another model to continue."; total_cost_usd = 0 }) | ConvertTo-Json -Compress)
+    )
+    [Console]::Out.Write(($lines -join "`n") + "`n")
+    exit 1
+}
 if ((Get-Plan "limited_first") -and $earlier -eq 0) {
     if (Get-Plan "raise_stop") { [System.IO.File]::WriteAllText((Join-Path $here "team\stop.flag"), "stop", $utf8) }
     $epoch = [DateTimeOffset]::UtcNow.AddSeconds(-200).ToUnixTimeSeconds()
+    if ($null -ne (Get-Plan "limit_reset_seconds")) { $epoch = [DateTimeOffset]::UtcNow.AddSeconds([int](Get-Plan "limit_reset_seconds")).ToUnixTimeSeconds() }
     $document = [pscustomobject]@{ type = "result"; subtype = "success"; is_error = $true; result = "Claude AI usage limit reached|$epoch"; total_cost_usd = 0 }
     [Console]::Out.Write(($document | ConvertTo-Json -Compress))
     exit 1
@@ -880,6 +898,52 @@ try {
         Assert-Equal -Expected 2 -Actual @($run.Calls).Count -Because "the limited run, then the one that worked"
         Assert-True -Condition ($null -ne (Get-TaskById -Queue $run.Queue -Id "card-b")) -Because $run.Report
         Assert-True -Condition ($run.Report -match "Max kullanım limiti") -Because "the report says the limit was met: $($run.Report)"
+    }
+
+    $leadOnFable = [pscustomobject]@{ roles = [pscustomobject]@{ lead = "claude-fable-5-1" } }
+
+    Test-Case "the usage limit: a lead model the cycle already knows is limited is not tried - the feeder starts one model down, and says so" {
+        # 2026-10-02: Fable's week was used up (until Monday). The feeder asked for Fable all the
+        # same, was refused, and WAITED for the reset - three days, holding the team's lock, so
+        # no cycle could start. The cycle had lowered its own runs hours before.
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one")) -Models $leadOnFable
+        $until = [datetime]::UtcNow.AddDays(3).ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+        Write-TeamJson -Path (Join-Path $box.Root "team\limits.json") -Document ([ordered]@{ models = [ordered]@{ "claude-fable-5-1" = [ordered]@{ until = $until; type = "seven_day_overage_included" } } })
+        $run = Invoke-Feed -Sandbox $box -Plan @{ limited_models = @("claude-fable-5-1"); feed_text = (Get-FeedText -Cards $twoCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected "claude-opus-5-5" -Actual (@($run.Calls | ForEach-Object { $_.model }) -join ",") -Because "one run, on the next model down: Fable was not asked"
+        Assert-True -Condition ($null -ne (Get-TaskById -Queue $run.Queue -Id "card-b")) -Because $run.Report
+        Assert-True -Condition ($run.Report -match "model düşürüldü: claude-fable-5-1 -> claude-opus-5-5") -Because "the report says the model was lowered: $($run.Report)"
+    }
+
+    Test-Case "the usage limit: a model limit met in the run is not waited for - the same feed is asked again at once, one model down" {
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one")) -Models $leadOnFable
+        $run = Invoke-Feed -Sandbox $box -Plan @{ limited_models = @("claude-fable-5-1"); feed_text = (Get-FeedText -Cards $twoCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected "claude-fable-5-1,claude-opus-5-5" -Actual (@($run.Calls | ForEach-Object { $_.model }) -join ",") -Because "the limited run, then the next model down"
+        Assert-True -Condition ($null -ne (Get-TaskById -Queue $run.Queue -Id "card-b")) -Because $run.Report
+        Assert-True -Condition ($run.Report -notmatch "beklendi") -Because "three days are not waited for: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released"
+    }
+
+    Test-Case "the usage limit: every model limited for days - the feeder does not wait, queues nothing, says so and lets the lock go" {
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one")) -Models $leadOnFable
+        $run = Invoke-Feed -Sandbox $box -Plan @{ limited_models = @("claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"); feed_text = (Get-FeedText -Cards $twoCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected "claude-fable-5-1,claude-opus-5-5,claude-sonnet-5-5" -Actual (@($run.Calls | ForEach-Object { $_.model }) -join ",") -Because "each model once, strongest first"
+        Assert-Equal -Expected "task-one" -Actual (Get-QueueIds -Queue $run.Queue) -Because "nothing was queued"
+        Assert-True -Condition ($run.Report -match "beklenmedi") -Because "the report says it did not wait: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released: the cycle can run"
+    }
+
+    Test-Case "the usage limit: a limit that lifts in days is never waited for, whatever the model - only one that lifts within -MaxLimitWaitMinutes" {
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Feed -Sandbox $box -Plan @{ limited_first = $true; limit_reset_seconds = 259200; feed_text = (Get-FeedText -Cards $twoCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "no second run: the reset is three days away"
+        Assert-Equal -Expected "task-one" -Actual (Get-QueueIds -Queue $run.Queue) -Because "nothing was queued"
+        Assert-True -Condition ($run.Report -match "beklenmedi") -Because $run.Report
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "released"
     }
 
     Test-Case "the usage limit: without -WaitForUsageLimit the feeder stops, queues nothing, and says so" {

@@ -417,10 +417,6 @@ def test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server
     # a route nobody reads does not get in here.
     read_by_others = {
         ("GET", "/v1/team/queue/status"): "the read-back of what the cycle PUTs (office-01)",
-        # REMOVE THIS ENTRY in researcher-every-cycle: its cycle.ps1 posts each proposal
-        # here, and from then on the client's own call is what holds the route.
-        ("POST", "/v1/team/queue/proposals"): "the proposal text the Onay Merkezi shows; "
-        "served before its caller lands (proposals-on-cloud-core)",
     }
     unread = served - used - set(read_by_others)
     assert not unread, f"a served route the client never calls: {unread}"

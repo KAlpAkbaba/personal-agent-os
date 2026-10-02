@@ -29,11 +29,17 @@ ADR-0214 ek 11: döngü kuyruğu HER TURDA yeniden okur. Kusur: kuyruk yalnız d
 bitmediği için sonradan depoya yazılan hiçbir şey (kart, karar, besleyici kartı) görülmüyordu - sahibin "4. çalışan
 koltuğu" kartı 4 saat boş koltukların yanında bekledi. İlk commit `3d52902e` denetleyiciden GERİ DÖNDÜ (6 bulgu: reddedilen
 yazmanın işi yine koşuyordu; depoda durdurulan iş yine birleştiriliyordu; iki alan kuralı ayrıydı; üç iddia testsizdi);
-ikinci tur yazıldı (reddedilen iş koşmaz, koşu bitince depoya sorulur ve değişmişse sonuç uygulanmaz, tek alan kuralı,
-"tüm depo" alan değildir, araştırmacının fikir metni depoya yazılır), mutasyonlar koşuyor. SIRA: mutasyonlar RED →
-tam `team-cycle` + `team-feed` + strictmode + syntax + `test_team_state` → commit → denetleyiciye yeniden → APPROVE ise
-lead dalına merge → `team/stop.flag` ile döngüyü yenile (yeni kod ancak yeni süreçte çalışır) → dördüncü entegrasyonda
-main'e. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
+ikinci tur `3d1be9fc` ve üçüncü tur `91c70543` de GERİ DÖNDÜ (her seferinde gerçek bulgu: sonsuz dönen tur; koşu
+sürerken deponun cevap vermemesi döngüyü yarıda kesiyordu; düşen koşuların sınırı yoktu). Dördüncü tur: koşu sürerken
+yapılan yazma başarısız olursa döngü ÖLMEZ (satır yazar, toplu iş sonunda yeniden dener); deponun reddettiği taze
+birleştirme GERİ ALINIR (`Undo-TeamMerge`), alınamayan adıyla söylenir; bir işin düşen koşusu en çok 3; boş tur
+sınırı 3; yalnız `team/proposals` dosyası fikir metni olarak gönderilir. Dördüncü tur `3ce11180` de döndü (3 dar bulgu);
+beşinci tur: ret anında bilinir (aynı yazmada başka iş hata verse de), reddedilen sonuçtan sonra döngünün kopyası eski
+haline döner (rapor "merged" demez), fikir dosyası `-TeamRoot`tan okunur. **BAĞIMSIZ DENETLEYİCİ BEŞİNCİ TURDA `dbacc280`'i
+ONAYLADI** (gerçek rotalarla da koşturdu); istediği iki test eklendi, `team-cycle` 177, 35+2 mutasyon RED. SIRA:
+ONAYLI → `gate/d20261002-1` (worktree `.claude/worktrees/gate4`: 4. koltuk,
+STT ölçüm aracı, Postgres testleri, anlatı tesisatı, sesli özetin koşu sayması, hüküm ayrıştırıcısı) üstüne
+birleştir → tam kapı → main → kural gereği yayın → lead dalı → `team/stop.flag` ile döngüyü yenile. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
 BAŞLAMAMALI (şu an koşan döngü eski kuyruğu gördüğü için başlatmıyor; döngüyü düzeltmeden önce yenileme).**
 **DÖRDÜNCÜ ENTEGRASYON KAPIDA (lead, 2026-10-02 05:50): dal `gate/d20261002-1` (worktree `.claude/worktrees/gate4`) =
 lead + `integrate/d20261002` @ `03981422` (office-worker-seats: 4 çalışan koltuğu, sayı koşuyu sayar; stt-engines-measure:
@@ -42,10 +48,14 @@ için döngü durdurmuştu) + narrative-failures-only-model ("tesisat" olarak; s
 `app/team/speech.py` sesli özet artık sayfanın saydığını (koşu) söyler; `Get-TeamVerdict` kapanış cümlesindeki hükmü
 okur ve `inspector.md` "son mesajın hükümle bitsin" der (ADR-0214 ek 12); ADR-0241…0244. İLK KAPI (`b35c6ddb`) TEK TESTTE KIRMIZIYDI:
 `test_every_error_class_has_turkish` - STT ölçüm aracı `ERROR_UNEXPECTED = "unexpected"` tanımlamış, Türkçe sözlükte
-(`app/errors/catalog.py`) karşılığı yoktu; eklendi, kapı yeniden koşuyor. SIRA: tam kapı (ana kopya
+(`app/errors/catalog.py`) karşılığı yoktu; eklendi. İKİNCİ KAPI (`614dedb4`) da TEK TESTTE KIRMIZIYDI: tarayıcı ajanında yük altında çıkan gerçek bir
+yarış (öksüz Chrome öldürülünce profil kilidi bir an daha tutuluyor; ADR-0246: kurtarma başlatması kilidi bekler).
+AYRICA 09:30'da BESLEYİCİ Fable limitini ÜÇ GÜN beklemeye geçip kilidi tuttu, döngü başlayamadı (sahip "0/6" gördü):
+süreç elle durduruldu, `feed.ps1` artık model zincirini izler ve 20 dk'dan uzun beklemez (ADR-0214 ek 13). SIRA: tam kapı (ana kopya
 detached) → yeşilse main `--no-ff` → kural gereği yayın (migration/compose YOK) → pin → doğrula → işleri `released`
-yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue`) bu entegrasyonda YOK: yayın gerektirmez,
-denetleyici onaylayınca lead dalına girer ve döngü `team/stop.flag` ile yenilenir.**
+yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue` @ `4093a958`, denetleyici ONAYLI) ÜÇÜNCÜ KAPI için bu dala
+birleştirildi: main'e girince `cycle-rereads-queue` -> released, `cycle-seat-pool` zinciri açılır; döngü yeni kodu
+bir sonraki başlangıcında alır (ana kopyadaki betikler).**
 **DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
 execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)
 denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı. `narrative-failures-only-model` DURDU ve lead'de:

@@ -301,6 +301,55 @@ def wait_for_profile_clear(
         sleep(poll_s)
 
 
+#: Chromium's single-instance lock on Windows: a file in the user-data-dir that the browser
+#: process holds open, with no sharing, for as long as it lives.
+PROFILE_LOCK_NAME = "lockfile"
+
+
+def profile_lock_is_free(lock_path: Path) -> bool:
+    """Whether nobody holds the profile's single-instance lock file.
+
+    Free = the file is not there, or it can be opened. Held = opening it is refused (the
+    holder opened it with no sharing; a file that is being deleted answers the same). The
+    probe opens for reading only and never creates the file.
+    """
+    try:
+        with open(lock_path, "rb"):
+            return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
+def wait_for_profile_lock_free(
+    profile_dir: Path | str,
+    *,
+    timeout_s: float = DEFAULT_WAIT_TIMEOUT_S,
+    poll_s: float = _WAIT_POLL_S,
+    is_free: Callable[[Path], bool] = profile_lock_is_free,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Wait (bounded) until the profile's single-instance lock is free.
+
+    A kill is not an exit, and an exit is not a released file: after the reaped browser's
+    MAIN process is gone, its dying children can hold ``lockfile`` a moment longer. The
+    recovery launch that follows a reap is deliberately never retried, so it must not start
+    into that moment (2026-10-02: it did, on a loaded machine, and failed with "Failed to
+    create a ProcessSingleton for your profile directory"). Checks before sleeping: a free
+    lock costs nothing. Returns whether the lock is free.
+    """
+    lock_path = Path(profile_dir) / PROFILE_LOCK_NAME
+    deadline = now() + timeout_s
+    while True:
+        if is_free(lock_path):
+            return True
+        if now() >= deadline:
+            return False
+        sleep(poll_s)
+
+
 def reap_orphan_chrome(
     profile_dir: Path | str,
     *,
@@ -308,16 +357,20 @@ def reap_orphan_chrome(
     scan: Callable[[], str] = _run_powershell_scan,
     kill: Callable[[int], None] = terminate_pid,
     wait: Callable[..., list[int]] = wait_for_pids_exit,
+    wait_lock: Callable[..., bool] = wait_for_profile_lock_free,
     timeout_s: float = DEFAULT_WAIT_TIMEOUT_S,
 ) -> list[int]:
     """Find and terminate every main ``chrome.exe`` process on ``profile_dir``
-    other than ``owned_pid``, waiting (bounded) for exit.
+    other than ``owned_pid``, waiting (bounded) for exit - and then for the
+    profile's single-instance lock to be free, so the launch that follows
+    does not meet the dying processes' handle.
 
     Returns the pids that were successfully reaped (exited within
     ``timeout_s``) -- the caller logs this as ``browser.orphan_reaped``. Never
     touches a process whose command line does not carry
     ``--user-data-dir=<profile_dir>`` exactly (see
-    :func:`parse_chrome_pid_scan`).
+    :func:`parse_chrome_pid_scan`). A launch that reaps nothing waits for
+    nothing.
     """
     pids = [pid for pid in find_profile_chrome_pids(profile_dir, scan=scan) if pid != owned_pid]
     if not pids:
@@ -325,22 +378,27 @@ def reap_orphan_chrome(
     for pid in pids:
         kill(pid)
     still_alive = set(wait(pids, timeout_s=timeout_s))
+    if not wait_lock(profile_dir, timeout_s=timeout_s):
+        logger.warning("browser.profile_lock_still_held", profile_dir=str(profile_dir))
     return [pid for pid in pids if pid not in still_alive]
 
 
 __all__ = [
     "DEFAULT_WAIT_TIMEOUT_S",
     "POWERSHELL_EXE",
+    "PROFILE_LOCK_NAME",
     "TASKKILL_EXE",
     "check_tab_budget",
     "check_tab_count_within_budget",
     "find_profile_chrome_pids",
     "is_locked_profile_error",
     "parse_chrome_pid_scan",
+    "profile_lock_is_free",
     "reap_orphan_chrome",
     "terminate_pid",
     "wait_for_pids_exit",
     "wait_for_profile_clear",
+    "wait_for_profile_lock_free",
 ]
 
 
