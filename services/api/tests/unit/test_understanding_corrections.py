@@ -366,14 +366,18 @@ def test_a_no_after_a_read_back_reissues_the_turn(db, tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
-    "sentence",
+    ("sentence", "reason"),
     [
-        "Hemen bilgisayarımda hesap makinesini aç.",
-        "Şimdi bilgisayarımda hesap makinesini aç.",
-        "Lütfen şirket bilgisayarında hesap makinesini aç.",
+        # an adverb is the name of nothing, before its likeness is even asked
+        ("Hemen bilgisayarımda hesap makinesini aç.", "not_a_name"),
+        ("Şimdi bilgisayarımda hesap makinesini aç.", "not_a_name"),
+        # a word no list holds: only its unlikeness to "ev" refuses it
+        ("Lütfen şirket bilgisayarında hesap makinesini aç.", "not_similar"),
+        ("Kırmızı bilgisayarımda hesap makinesini aç.", "not_similar"),
+        ("Küçük bilgisayarımda hesap makinesini aç.", "not_similar"),
     ],
 )
-def test_the_word_before_the_computer_word_is_only_a_guess(db, tmp_path, sentence) -> None:
+def test_the_word_before_the_computer_word_is_only_a_guess(db, tmp_path, sentence, reason) -> None:
     """The heard word is taken by POSITION. "Hemen bilgisayarımda ... aç" answered with "ev"
     must not teach "hemen = ev": the next "hemen hesap makinesini aç" would launch at home.
     A guessed word is learned only when it resembles the alias the owner answered with."""
@@ -383,7 +387,7 @@ def test_the_word_before_the_computer_word_is_only_a_guess(db, tmp_path, sentenc
         _kept(sentence, intent, decision), "ev bilgisayarında", now=NOW
     )
     assert correction is not None and correction.device == "ev"  # the answer still answers
-    assert correction.reason == "not_similar" and not correction.learnable
+    assert correction.reason == reason and not correction.learnable
     assert not corrections.learn(
         db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path
     ).written
@@ -568,6 +572,104 @@ def test_a_verb_is_no_name_for_an_application_and_a_heard_word_has_a_length(db, 
     assert resolve_intent("Kapıyı açsana.").intent is Intent.NONE
 
 
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Bunu bana deme, evde de.",  # "don't tell ME that, say it at home"
+        "Öyle deme, evde de.",
+        "Kimseye deme, evde de.",
+        "Onu şirket deme, iş de.",  # "onu" is the thing SAID, not the thing named
+        "Şirket deme, iş de.",
+    ],
+)
+def test_the_pair_form_needs_its_address_word(db, sentence) -> None:
+    """Red before: the address word was optional, so "Bunu bana deme, evde de" was read as
+    "bana = ev (cihaz)". "Ona/buna/şuna X deme, Y de" is the form; without the word that says
+    WHAT is being named, "... deme, ... de" is ordinary speech."""
+    assert corrections.correction_turn(None, sentence, now=NOW) is None
+    kept = _kept(MISHEARD, *_read(db, MISHEARD))
+    assert corrections.correction_turn(kept, sentence, now=NOW) is None
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Ona ev deme, hemen de.",  # the module's own example of what is never taught
+        "Ona ev deme, şimdi de.",
+        "Ona ev deme, bana de.",
+        "Ona ev deme, kimseye de.",
+        "Ona ofis deme, lütfen de.",
+        "Ona ofis deme, öyle de.",
+        "Buna hesap makinesi deme, hemen de.",
+        "Şuna not defteri deme, lütfen de.",
+    ],
+)
+def test_a_pronoun_an_adverb_or_a_politeness_word_names_nothing(db, tmp_path, sentence) -> None:
+    """Red before: "ona ev deme, hemen de" stored "hemen = ev (cihaz)". A word every other
+    sentence carries is the name of no machine and no application."""
+    correction = corrections.correction_turn(None, sentence, now=NOW)
+    assert correction is not None
+    assert correction.reason == "not_a_name" and not correction.learnable
+    assert not corrections.learn(
+        db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path
+    ).written
+    assert _vocabulary_rows(db) == [] and list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Ona aptal deme, evde de.",  # "say it AT HOME": a place, not a name
+        "Ona aptal deme, ofis bilgisayarında de.",
+        "Ona aptal deme, ofisteki de.",
+        "Ona aptal deme, Chrome'da de.",
+        "Ona evde deme, aptal de.",
+    ],
+)
+def test_the_pair_form_states_a_name_bare(db, sentence) -> None:
+    """Red before: "ona aptal deme, evde de" stored "aptal = ev (cihaz)". The side the system
+    knows is a NAME - "ev", "ofis bilgisayarı", "Not Defteri" - never a word in a case."""
+    assert corrections.correction_turn(None, sentence, now=NOW) is None
+
+
+def test_the_pair_form_still_reads_a_bare_machine_name(db) -> None:
+    for sentence in ("Ona şirket deme, iş bilgisayarı de.", "Buna şirket deme, iş de."):
+        correction = corrections.correction_turn(None, sentence, now=NOW)
+        assert correction is not None and correction.learnable, sentence
+        assert (correction.kind, correction.heard, correction.meant) == ("device", "şirket", "iş")
+
+
+def test_a_taught_machine_word_binds_only_where_the_sentence_names_a_machine(db, tmp_path) -> None:
+    """Red before: a device synonym bound wherever its word stood, so a row "bana = ev" sent
+    "Bana hesap makinesini aç" home at HIGH. The grammar binds its own aliases by case
+    ("ofis bilgisayarında", "ofiste") and leaves a lone "ev" alone; a taught word is read the
+    same way - whatever the vocabulary rows hold."""
+    plain = "Bana hesap makinesini aç."
+    _, before = _read(db, plain)
+    for heard, meant in (("bana", "ev"), ("ofüs", "ofis")):
+        assert corrections.learn(
+            db,
+            EMBEDDER,
+            corrections.Correction(kind="device", heard=heard, meant=meant),
+            session_id="s",
+            proposals_dir=tmp_path,
+        ).written
+    assert len(corrections.vocabulary(db)) == 2
+    for sentence in (plain, "Ofüs hesap makinesini aç.", "Ofüsü hesap makinesini aç."):
+        _, after = _read(db, sentence)
+        assert after.device is None and after.layer != corrections.LAYER_VOCABULARY, sentence
+        assert (after.band, after.confidence) == (before.band, before.confidence), sentence
+    for sentence in (
+        MISHEARD,
+        "Ofüs bilgisayarımda hesap makinesini aç.",
+        "Ofüste hesap makinesini aç.",
+        "Ofüsteki bilgisayarda hesap makinesini aç.",
+    ):
+        _, bound = _read(db, sentence)
+        assert bound.band == "high" and bound.device.alias == "ofis", sentence
+        assert bound.layer == corrections.LAYER_VOCABULARY, sentence
+
+
 def test_not_that_one_names_the_application_and_reissues_the_turn(db) -> None:
     heard = "Ofisü bilgisayarında hesap makinesini açın."
     intent, decision = _read(db, heard)
@@ -728,3 +830,92 @@ def test_relay_a_no_after_the_read_back_reissues_the_turn_and_guesses_no_word(
     with world.factory() as session:
         record = session.get(RealtimeSessionRow, uuid.UUID(sid)).context_json["last_utterance"]
     assert record["device_targets"] == [] and record["understanding"]["layer"] != "vocabulary"
+
+
+def _relay_world(monkeypatch, tmp_path):
+    from app.memory.runtime import MemoryRuntime
+    from app.voice.understanding import combine
+    from tests.unit.test_operator_open_application_fallback import _both_online
+
+    monkeypatch.setattr(combine, "_default_engine", None)
+    (tmp_path / "proposals").mkdir()
+    monkeypatch.setenv(corrections.PROPOSALS_DIR_ENV, str(tmp_path / "proposals"))
+    world = _both_online(monkeypatch, tmp_path)
+    engine = world.factory.kw["bind"]
+    for table in MEMORY_TABLES:
+        table.create(engine, checkfirst=True)
+    runtime = world.client.app.state.voice_realtime
+    runtime.register_live(
+        memory_runtime=MemoryRuntime(runtime.settings, engine=engine, embedder=EMBEDDER)
+    )
+    return world
+
+
+def test_relay_ordinary_speech_teaches_nothing_and_the_next_command_stays_put(
+    monkeypatch, tmp_path
+) -> None:
+    """Red before: in an office session "Bunu bana deme, evde de." was stored as "bana = ev
+    (cihaz)" - durable, every session, nothing spoken - and the next "Bana hesap makinesini
+    aç." was HIGH 1.0 on the home PC."""
+    from app.voice.realtime_sessions.models import RealtimeSessionRow
+    from tests.unit.test_operator_open_application_fallback import _bound_session, _say, _tool
+
+    world = _relay_world(monkeypatch, tmp_path)
+    sid = _bound_session(world, "GMKADIRAKBABA")  # the office PC
+    for sentence in (
+        "Bunu bana deme, evde de.",
+        "Öyle deme, evde de.",
+        "Kimseye deme, evde de.",
+        "Şirket deme, iş de.",  # no address word: held by the form alone, no list knows it
+        "Ona ev deme, hemen de.",
+        "Ona aptal deme, evde de.",
+    ):
+        said = _say(world.client, sid, sentence)["resolved_intents"][0]
+        assert said["intent"] == "none", sentence
+        with world.factory() as session:
+            assert [row.text for row in _vocabulary_rows(session)] == [], sentence
+    assert list((tmp_path / "proposals").iterdir()) == []
+
+    for sentence in ("Bana hesap makinesini aç.", "Hemen hesap makinesini aç."):
+        world.commands.calls.clear()
+        plain = _say(world.client, sid, sentence)["resolved_intents"][0]
+        assert plain["intent"] == "app_open", sentence
+        with world.factory() as session:
+            record = session.get(RealtimeSessionRow, uuid.UUID(sid)).context_json["last_utterance"]
+        assert record["device_targets"] == [], sentence
+        assert record["understanding"]["layer"] != "vocabulary", sentence
+        call = _tool(world.client, sid, "operator.app_open", {"application": "Hesap Makinesi"})
+        assert call["status"] == "succeeded", call
+        assert {c["device_id"] for c in world.commands.calls} == {world.ids["GMKADIRAKBABA"]}
+
+
+def test_relay_a_sentence_the_rule_tables_route_is_never_read_as_a_correction(
+    monkeypatch, tmp_path
+) -> None:
+    """Rule first, at the relay: "Ona dur deme, ev de." is the stop family's sentence and
+    "Ona devam et deme, ev de." the resume family's. The corrections module would read each
+    as a pair - its own lists know the operator's verbs, not every word of every rule table -
+    so the relay's guard is what keeps "dur = ev (cihaz)" out of the memory. Mutation: the
+    guard removed -> a row is written here."""
+    from tests.unit.test_operator_open_application_fallback import _bound_session, _say
+
+    world = _relay_world(monkeypatch, tmp_path)
+    sid = _bound_session(world, "GMKADIRAKBABA")
+    for sentence, routed in (
+        ("Ona dur deme, ev de.", "stop"),
+        ("Ona devam et deme, ev de.", "resume"),
+    ):
+        # The module alone WOULD learn it: without that, this test proves nothing.
+        alone = corrections.correction_turn(None, sentence, now=NOW)
+        assert alone is not None and alone.learnable, sentence
+        said = _say(world.client, sid, sentence)["resolved_intents"][0]
+        assert said["intent"] == routed, sentence
+        with world.factory() as session:
+            assert [row.text for row in _vocabulary_rows(session)] == [], sentence
+    assert list((tmp_path / "proposals").iterdir()) == []
+    # ... and the same form the tables leave unrouted IS a lesson, through the same relay.
+    assert _say(world.client, sid, "Ona şirket deme, iş de.")["resolved_intents"][0]["intent"] == (
+        "none"
+    )
+    with world.factory() as session:
+        assert [row.text for row in _vocabulary_rows(session)] == ["şirket = iş (cihaz)"]

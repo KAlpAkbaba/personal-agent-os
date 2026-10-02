@@ -4,8 +4,10 @@ synonym and the next match uses it - the second time is right without a release.
 * A correction turn follows a MEDIUM read-back or a LOW question (``correctable`` is what the
   relay keeps of that turn: the intent, the slots and the ONE word the device slot was read
   from - never the sentence): "hayır, ofis bilgisayarında", "onu değil, Not Defteri". The pair
-  form "ona X deme, Y de" states both sides and needs no turn before it. The rule tables read
-  the sentence FIRST; only a sentence they left unrouted is looked at here.
+  form "ona X deme, Y de" states both sides and needs no turn before it: it opens with its
+  address word (ona/buna/şuna) and the side the system knows is a bare NAME ("ev", "ofis
+  bilgisayarı") - "bunu bana deme, evde de" is ordinary speech. The rule tables read the
+  sentence FIRST; only a sentence they left unrouted is looked at here.
 * The pair (heard -> meant) goes through the memory write policy as an explicit ``vocabulary``
   observation ("ofüs = ofis (cihaz)", source the session). The class has no candidate stage.
 * ``vocabulary`` reads the rows back behind a version check (ids and versions, one small
@@ -24,11 +26,13 @@ What is never learned: a word the system already reads as something else ("ofis"
 come to mean the home PC because the owner changed their mind), one of the router's own words
 (the computer word, a verb of the rule tables, and - as a machine - a word of an application's
 name: "ona ofis deme, hesap de" teaches nothing), a pointing word ("diğer",
-"yandaki"), and - when the heard word had to be GUESSED from its place in the sentence - a
+"yandaki"), a pronoun, an adverb or a politeness word ("ona ev deme, hemen de"), and -
+when the heard word had to be GUESSED from its place in the sentence - a
 word that does not resemble the alias the owner answered with ("hemen bilgisayarımda ... aç"
 answered "ev" must not teach "hemen = ev"). The pair form states both sides, so nothing is
 guessed there. A wrong synonym would be a wrong-device launch at HIGH, the very thing the
-ADR forbids.
+ADR forbids - so a taught machine word also binds only where the sentence names a machine
+(``_machine_named``): no list of words has to be complete for "bana ... aç" to stay put.
 """
 
 from __future__ import annotations
@@ -93,18 +97,50 @@ _MIN_HEARD_CHARS: Final = 3
 _MAX_WORD_CHARS: Final = 32
 _MIN_STEM_CHARS: Final = 3
 #: Words that point at a machine without naming it; so does any "...ki" ("yandaki").
+_POINTING_WORDS: Final = (
+    "diğer öbür öteki başka bu şu o onun bunun şunun benim senin bizim sizin kendi bir "
+    "her hangi aynı yeni eski ve ile de da ya hayır yok değil evet tamam"
+)
+#: Words every other sentence carries, so a synonym made of one would fire on ordinary
+#: speech: the pronouns in their cases ("bana", "kimseye"), the adverbs of time, manner and
+#: degree ("hemen", "öyle") and the politeness words ("lütfen"). Closed lists; what they
+#: miss is held by ``_machine_named`` - a taught machine word binds only by case.
+_PRONOUNS: Final = (
+    "ben beni bana bende benden benimle sen seni sana sende senden seninle "
+    "onu ona onda ondan onunla biz bizi bize bizde bizden siz sizi size sizde sizden "
+    "onlar onları onlara onlarda onlardan onların bunu buna bunda bundan şunu şuna şunda "
+    "şundan bunlar bunları bunlara şunlar şunları şunlara kim kimi kime kimde kimden kimin "
+    "kimse kimseyi kimseye kimsede kimseden kimsenin herkes herkesi herkese herkeste "
+    "herkesten herkesin hepsi hepsini hepsine hepimiz hepiniz biri birini birine birisi "
+    "birisini birisine hiçbiri hiçbirini hiçbirine kendim kendin kendisi kendini kendine "
+    "kendimi kendime ne neyi neye nerede nereye nereden burada buraya buradan burası "
+    "şurada şuraya şuradan şurası orada oraya oradan orası"
+)
+_ADVERBS: Final = (
+    "hemen şimdi şimdilik sonra önce demin deminden birazdan biraz yine gene tekrar "
+    "artık hâlâ hala henüz daha çok az hep hiç bazen asla belki sadece yalnız yalnızca "
+    "bile zaten bugün yarın dün akşam sabah gece öğlen çabuk çabucak hızlı hızlıca "
+    "yavaş yavaşça acele sessiz sessizce yüksek alçak böyle öyle şöyle iyi kötü güzel "
+    "güzelce doğru yanlış gibi kadar için ama fakat çünkü yani aslında galiba herhalde "
+    "mutlaka kesinlikle tabii tabi elbette peki olur olmaz var"
+)
+_POLITENESS: Final = (
+    "lütfen rica ederim teşekkür teşekkürler sağol sağolun merhaba selam günaydın "
+    "efendim pardon affedersin affedersiniz kusura bakma bakmayın özür dilerim"
+)
 _NOT_A_NAME: Final[frozenset[str]] = frozenset(
     fuzzy.fold(word)
-    for word in (
-        "diğer öbür öteki başka bu şu o onun bunun şunun benim senin bizim sizin kendi bir "
-        "her hangi aynı yeni eski ve ile de da ya hayır yok değil evet tamam"
-    ).split()
+    for words in (_POINTING_WORDS, _PRONOUNS, _ADVERBS, _POLITENESS)
+    for word in words.split()
 )
 #: What a correction sentence opens with: the refusal and the thing refused.
 _NO_WORDS: Final[frozenset[str]] = frozenset({"hayır", "hayir", "yok", "yo", "değil", "degil"})
 _THAT_WORDS: Final[frozenset[str]] = frozenset({"onu", "o", "bunu", "bu", "şunu", "sunu", "öyle"})
+#: "Ona/buna/şuna X deme, Y de". The address word is what makes it a sentence ABOUT a name:
+#: without it "(bunu) bana deme, evde de" is ordinary speech, and "onu/bunu" is the thing
+#: SAID, never the thing named.
 _PAIR: Final = re.compile(
-    r"^(?:(?:ona|buna|şuna|suna|onu|bunu)\s+)?(?P<said>.+?)\s+deme(?:yin|yiniz)?\s+"
+    r"^(?:ona|buna|şuna|suna)\s+(?P<said>.+?)\s+deme(?:yin|yiniz)?\s+"
     r"(?P<meant>.+?)\s+de(?:yin|yiniz)?$"
 )
 #: The case endings a taught word may carry in a sentence ("hesaplayıcıyı aç", "ofüste aç").
@@ -117,7 +153,18 @@ _CASE_ENDINGS: Final[frozenset[str]] = frozenset(
         "da de ta te nda nde daki deki taki teki ndaki ndeki dan den tan ten ndan nden"
     ).split()
 )
+#: The endings that say WHERE: the only ones (with the computer word after it) that bind a
+#: taught machine word in a sentence - the device grammar reads its own aliases the same way
+#: ("ofiste", "ofisteki", "ofis bilgisayarında"; a lone "ev" is left alone, ADR-0212).
+_PLACE_ENDINGS: Final[frozenset[str]] = frozenset(
+    "da de ta te nda nde daki deki taki teki ndaki ndeki dan den tan ten ndan nden".split()
+)
 _COMPUTER_STEM: Final = "bilgisayar"
+#: A machine NAMED, bare: the alias words and the computer word in the nominative.
+_BARE_MACHINE_WORDS: Final[frozenset[str]] = frozenset(
+    fuzzy.fold(word)
+    for word in (*device_aliases.CANONICAL_ALIASES, "dizüstü", "bilgisayar", "bilgisayarı")
+)
 _OFFICE_WORD: Final = re.compile(r"^ofis\w+$")
 
 
@@ -270,6 +317,28 @@ def _find(synonyms: Iterable[Synonym], tokens: Sequence[str], kind: str | None) 
     return None
 
 
+def _machine_named(synonyms: Iterable[Synonym], tokens: Sequence[str]) -> Synonym | None:
+    """The device synonym the sentence BINDS to a machine: its word(s) followed by the
+    computer word ("ofüs bilgisayarında") or carrying a place ending ("ofüste", "ofüsteki").
+    A taught word standing anywhere else is a word of the sentence, whatever the rows hold:
+    "bana hesap makinesini aç" names no machine even with a row "bana = ev"."""
+    wanted = [s for s in synonyms if s.kind == KIND_DEVICE]
+    for synonym in sorted(wanted, key=lambda s: -len(s.heard)):
+        words = synonym.heard.split()
+        for start in range(len(tokens) - len(words) + 1):
+            end = start + len(words)
+            if _span(tokens[start:end], synonym.heard) is None:
+                continue
+            if end < len(tokens) and _bare(tokens[end]).startswith(_COMPUTER_STEM):
+                return synonym
+            stem, _, suffix = tokens[end - 1].partition("'")
+            taught = fuzzy.fold(words[-1])
+            ending = fuzzy.fold(suffix) if suffix else fuzzy.fold(stem)[len(taught) :]
+            if ending in _PLACE_ENDINGS:
+                return synonym
+    return None
+
+
 def app_for(tokens: Sequence[str]) -> str | None:
     """The application a word the owner taught names in this sentence, or None. Asked by the
     rule table (``intents._app_open_match``) after the allow-list's own names found none."""
@@ -302,11 +371,12 @@ def read_turn(
 ) -> Decision:
     """``policy.read_turn`` with the owner's vocabulary in it (the arguments are its own).
 
-    A device word the owner taught, said as taught, is the owner's own closed form: it binds
-    at 1.0 - before the confusion list, which is only a release artefact's opinion - unless
-    the sentence already names a machine in a form the rule parser reads. Any other form
-    goes to the layers with the vocabulary in the entity index. The evidence names the
-    synonym that was used."""
+    A device word the owner taught, said as taught WHERE a machine is named (before the
+    computer word, or with a place ending), is the owner's own closed form: it binds at 1.0 -
+    before the confusion list, which is only a release artefact's opinion - unless the
+    sentence already names a machine in a form the rule parser reads. Any other form goes to
+    the layers with the vocabulary in the entity index. The evidence names the synonym that
+    was used."""
     synonyms = active() if vocabulary is None else tuple(vocabulary)
     tokens = normalize_transcript(text)[1]
     taught: Synonym | None = None
@@ -316,7 +386,7 @@ def read_turn(
         and not bound_devices
         and not answered_device
     ):
-        taught = _find(synonyms, tokens, KIND_DEVICE)
+        taught = _machine_named(synonyms, tokens)
     decision = policy.read_turn(
         text,
         rule=rule,
@@ -521,11 +591,22 @@ def _unlike(heard: str | None, alias: str) -> str | None:
     return None if near >= GUESSED_WORD_MIN else REASON_NOT_SIMILAR
 
 
+def _stated(words: Sequence[str], synonyms: Iterable[Synonym]) -> tuple[str, str] | None:
+    """``_entity`` for a side of the pair form, which states a NAME: bare. "Evde de" and
+    "Chrome'da de" say where to say it, and name nothing."""
+    if any("'" in word for word in words):
+        return None
+    known = _entity(words, synonyms)
+    if known is None or known[0] != KIND_DEVICE:
+        return known
+    return known if all(fuzzy.fold(w) in _BARE_MACHINE_WORDS for w in words) else None
+
+
 def _pair_correction(
     said: Sequence[str], meant: Sequence[str], synonyms: Sequence[Synonym], aliases: Iterable[str]
 ) -> Correction | None:
     """ "Ona X deme, Y de": the side the system knows is the entity, the other the new word."""
-    known_said, known_meant = _entity(said, synonyms), _entity(meant, synonyms)
+    known_said, known_meant = _stated(said, synonyms), _stated(meant, synonyms)
     if known_said is None and known_meant is None:
         return None  # two words that name nothing here: not a correction this module reads
     if known_said is not None and known_meant is not None:

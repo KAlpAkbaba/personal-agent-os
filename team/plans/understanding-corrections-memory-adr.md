@@ -72,6 +72,29 @@ listed area and were added because the return names them: `alembic/versions/2026
     (0.75) and "evü" -> "ev" (0.67) are learned, "hemen"/"şirket" -> "ev" and "ofisü" -> "ev"
     are not (the turn is still re-issued). The pair form states both sides - nothing is guessed -
     and may teach an unlike word ("ona şirket deme, iş de").
+  - **The pair form is a sentence about a name, and ordinary speech is not** (third pass; the
+    inspector's finding: in an office session "Bunu bana deme, evde de." was stored as
+    `bana = ev (cihaz)` and the next "Bana hesap makinesini aç." ran on the home PC at HIGH).
+    Four rules, each with its own RED mutation:
+    1. **The address word is required**: `ona` / `buna` / `şuna`. "Onu/bunu … deme" is the thing
+       SAID, not the thing named; "Şirket deme, iş de." without it is not a correction.
+    2. **The known side is a bare name**: "ev", "iş bilgisayarı", "Not Defteri". A word in a case
+       ("evde de", "ofisteki de", "Chrome'da de") says WHERE to say it and names nothing, so
+       "Ona aptal deme, evde de." is not a correction.
+    3. **A pronoun, an adverb or a politeness word is `not_a_name`**, for either kind (closed
+       lists `_PRONOUNS`, `_ADVERBS`, `_POLITENESS` beside the pointing words): "Ona ev deme,
+       hemen de." teaches nothing. The lists are a first refusal, not the guarantee.
+    4. **A taught machine word binds only where the sentence names a machine**
+       (`_machine_named`): followed by the computer word ("ofüs bilgisayarında") or carrying a
+       place ending ("ofüste", "ofüsteki", "ofüsten"). This is how the device grammar reads its
+       own aliases (ADR-0205/0212: a lone "ev" is left alone). So whatever a vocabulary row
+       holds - a word no list knew, a row written by `memory.remember` - "Bana hesap makinesini
+       aç" names no machine. Cost: "ofüs hesap makinesini aç" (bare) no longer binds; the
+       grammar never bound a bare alias either.
+  - **Rule first is the relay's guard, and it is tested there.** "Ona dur deme, ev de." (STOP)
+    and "Ona devam et deme, ev de." (RESUME) are sentences the module alone would learn - its
+    lists know the operator's verbs, not every word of every rule table - and the relay never
+    hands them to it.
   - `learn(...)`: `memory_service.record_observation` with the explicit observation (the existing
     write policy, dedup and audit; it commits on the session it is given, as `_extract_memories`
     does), then the proposal. Never raises; a refusal is a reason (`secret_rejected`, …).
@@ -101,9 +124,15 @@ learning from a HIGH turn. The owner can always teach a word with the pair form.
   reading can be made from words the allow-list does not know (layer-2 slots, `understanding-stt-corpus`).
 - The pair form teaches silently: it re-issues no turn, and the relay has no receipt speech for
   "öğrendim" (a `say` frame or a tool is outside this area). The audit row says it was written.
-  The refusals above close the three shapes the inspector found; an ORDINARY unknown word is
+  The refusals above close the shapes the inspector found; an ORDINARY unknown word is
   still learned from one sentence ("ona ofis deme, müzik de"), which is what the pair form is
   for - a spoken receipt ("müzik artık ofis demek") is the missing guard and its own task.
+  Since the third pass such a row binds only in "müzik bilgisayarında" / "müzikte", never in
+  "müzik aç". An APPLICATION word has no such positional rule (the rule table asks `app_for`
+  for any open sentence the allow-list could not read): there the lists and the router-word
+  refusals are the whole guard.
+- Layer 2's entity index still receives every device synonym as a surface form (a NEAR form is
+  read back at MEDIUM, never run at HIGH); the positional rule is on the HIGH path only.
 - The near-form MEDIUM number (0.67 for "ofüss") is the lexical `DeterministicEmbedder`'s; with
   `LocalEmbedder` it is NOT_RUN.
 - On the Cloud Core image there is no checkout: without `PAGENTOS_TEAM_PROPOSALS_DIR` the memory
