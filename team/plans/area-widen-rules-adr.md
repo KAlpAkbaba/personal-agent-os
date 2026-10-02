@@ -26,14 +26,39 @@ functions: no process, no file read, no store write. The cycle does not call the
    forward slashes. Backticks, asterisks and spaces around the line, the key or a path are
    ignored (quotes around a path too - models write JSON lists). The LAST key line wins; an
    empty list or a key line without brackets there is "no request", even after an earlier
-   valid line (a role can withdraw). `Get-TeamAreaRequest` returns `Asked`, `Files`
-   (normalised, each once, order kept) and `Bad` (absolute, drive letter, `..`, a wildcard,
-   or `.`: never in `Files`). A request of bad entries only is still `Asked`, and is refused.
+   valid line (a role can withdraw). **The key starts the line and the closing bracket ends
+   it: no bullet (`-`, `+`), quote mark (`>`) or numbering (`1.`, `1)`) before the key, and
+   nothing - not even a full stop - after the bracket**; such a line is prose and "no
+   request", as it is for `Get-TeamVerdict`. (An asterisk bullet is read through, because
+   asterisks around the line are ignored for bold; the role files must not rely on it.)
+
+   `Get-TeamAreaRequest` returns `Asked`, `Files` (normalised: forward slashes, no leading
+   `./`, one trailing slash dropped, each once, order kept) and `Bad`. **A path is taken
+   only as it is plainly written, the way git names it.** An entry is `Bad` - kept as it
+   was written, never in `Files`, and `refuse` in `Resolve-TeamAreaRequest` - when:
+   - it is absolute, carries a drive letter, or starts at a home (`~`);
+   - it holds one of `: [ ] ;` or a wildcard (`*`, `?`): a `file.py:412`, a URL,
+     `[a], [b]`, `[[a]]`, `a; b`;
+   - a segment is empty (`docs//HANDOFF.md`, `.claude//agents`), is `.` or `..`
+     (`docs/./HANDOFF.md`, `docs/.`), or ends in a dot or a space (`docs/HANDOFF.md.`,
+     `docs /x`: Windows drops both, so it is the same file).
+
+   Why refused and not repaired: the protected check and the conflict check compare text
+   (`Get-TeamAreaKey` collapses nothing), so each of these spellings answered `widen` for a
+   protected or a held file (inspector, d20261002: ten protected spellings and three of a
+   held `intents.py`, `intents.py:412` among them). Collapsing segments here would leave
+   `cycle.ps1`'s own comparison reading the un-collapsed text; refusing leaves one spelling
+   of every path everywhere. A request of bad entries only is still `Asked`. **A request
+   with ANY `Bad` entry is refused whole**: the wiring resolves `Files + Bad` together,
+   never `Files` alone (a named case pins it).
 
 2. **The order of judgement** (`Resolve-TeamAreaRequest`), first hit decides:
-   1. a path that is not inside the repository -> `refuse`;
+   1. a path that is not a plainly written path inside the repository (the `Bad` rules
+      above) -> `refuse`;
    2. nothing asked that is outside the area -> `refuse` (nothing to widen);
-   3. ANY asked path protected -> `refuse`;
+   3. ANY asked path protected -> `refuse` - any ASKED path, also one that is already
+      inside the area (a card holding a protected file by the lead's hand does not get the
+      cycle's widening on a request that names it);
    4. `area_widenings >= 2` (`$script:TeamAreaMaxWidenings`) -> `refuse`, to the lead;
    5. the area would exceed `$script:TeamMaxAreaEntries` (25, TeamQueue's own) -> `refuse`;
    6. ANY path to add overlaps (`Test-TeamAreasOverlap`: same file, file inside directory,
@@ -88,10 +113,20 @@ functions: no process, no file read, no store write. The cycle does not call the
 
 ## Consequences
 
-- The wiring card calls: `Get-TeamAreaRequest` on the report, `Resolve-TeamAreaRequest`
-  when `Asked`, `Add-TeamAreaWidening`, and `Test-TeamAreaReturnCounts` before it counts a
-  return. A `wait` keeps the request only in `area_history`: once the holder is on main the
-  wiring must resolve those files again (the area was not changed).
+- The wiring card calls: `Get-TeamAreaRequest` on the report, `Resolve-TeamAreaRequest
+  -Files (Files + Bad)` when `Asked`, `Add-TeamAreaWidening`, and
+  `Test-TeamAreaReturnCounts` before it counts a return. A `wait` keeps the request only in
+  `area_history`: once the holder is on main the wiring must resolve those files again (the
+  area was not changed).
+- `Add-TeamAreaWidening` writes the resolution it is given and judges nothing: a hand-made
+  or stale `widen` would be written. The wiring resolves and adds in ONE step, on the queue
+  it has just read, and never keeps a resolution across a re-read.
+- The protected list is the card's list. These widen today and are the lead's decision, not
+  this card's: `CLAUDE.md`, `PROJECT_CONSTITUTION.md`, `docs/DEVELOPMENT_POLICY.md`,
+  `.claude/hooks`, `.claude/settings.json`, `scripts/team/cycle.ps1`, `scripts/lib/Team*.ps1`,
+  `scripts/quality-gate.ps1`, `services/api/alembic`, `.github`. A pattern entry does not
+  refuse a directory that holds a match (`apps` widens; the only tracked match is
+  `.env.example`).
 - `depends_on` is met only by `awaiting_release` / `released` / `done`
   (`Get-TeamUnmetDependencies`). A waiting card whose holder is `stopped` waits until the
   lead acts; that is today's rule for every dependency and is not changed here.
@@ -102,6 +137,8 @@ functions: no process, no file read, no store write. The cycle does not call the
 ## Evidence
 
 PROVEN_AUTOMATED: `scripts/tests/team-area.tests.ps1` under Windows PowerShell 5.1, its own
-step in `scripts/quality-gate.ps1`; red before `TeamArea.ps1` existed; three mutations
-(protected check, conflict check, cap) each red, restored by sha256 from a backup copy.
+step in `scripts/quality-gate.ps1`; red before `TeamArea.ps1` existed, and the spelling
+cases red before the `Bad` rules; six mutations (protected check, conflict check, cap,
+protected judged on the added files only, the segment rule, the `: [ ] ;` rule) each red,
+restored by sha256 from a backup copy.
 PROVEN_REAL belongs to the wiring card's first real cycle.

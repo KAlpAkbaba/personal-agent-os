@@ -101,16 +101,31 @@ function ConvertTo-TeamAreaPath {
 
     .DESCRIPTION
         Backticks, asterisks, quotes and spaces around it are dropped, back slashes become
-        forward slashes, a leading ./ and a trailing slash go. It is NOT a path inside the
-        repository when it is absolute, carries a drive letter, a '..' segment or a
-        wildcard, or names the repository itself ('.').
+        forward slashes, a leading ./ and ONE trailing slash go. It is NOT a path inside the
+        repository - and Path is then the entry as it was written - when:
+
+          * it is absolute, carries a drive letter, or starts at a home ('~');
+          * it holds one of  : [ ] ;  or a wildcard (a file:line, a URL, a list in a list);
+          * a segment is empty ('a//b'), is '.' or '..', or ends in a dot or a space.
+
+        The last rule is what keeps the protected check and the conflict check honest: both
+        compare text, and 'docs//HANDOFF.md', 'docs/./HANDOFF.md' and 'docs/HANDOFF.md.'
+        (Windows drops a trailing dot or space) are docs/HANDOFF.md in other letters. Such a
+        spelling is not repaired, it is refused: the role writes the path as git names it.
     #>
     param([AllowEmptyString()][string]$Text)
-    $path = ([string]$Text).Trim().Trim('`', '*', '"', "'", ' ') -replace '\\', '/'
+    $written = ([string]$Text).Trim().Trim('`', '*', '"', "'", ' ') -replace '\\', '/'
+    $path = $written
     $absolute = ($path.StartsWith("/") -or $path -match '^[A-Za-z]:')
     while ($path.StartsWith("./")) { $path = $path.Substring(2) }
-    if (-not $absolute) { $path = $path.TrimEnd("/") }
-    $inside = (-not $absolute -and $path -ne "" -and $path -ne "." -and @($path -split '/') -notcontains ".." -and $path -notmatch '[*?]')
+    if (-not $absolute -and $path.EndsWith("/")) { $path = $path.Substring(0, $path.Length - 1) }
+    $inside = (-not $absolute -and $path -ne "" -and $path -notmatch '[*?:;\[\]]')
+    if ($inside) {
+        foreach ($segment in @($path -split '/')) {
+            if ($segment -eq "" -or $segment -eq "~" -or $segment -match '[. ]$') { $inside = $false }
+        }
+    }
+    if (-not $inside) { $path = $written }
     return [pscustomobject]@{ Path = $path; Inside = [bool]$inside }
 }
 
@@ -127,9 +142,14 @@ function Get-TeamAreaRequest {
         The LAST such line wins - an empty list or a line without brackets there is "no
         request", whatever an earlier line said.
 
+        A bullet, a quote mark or a number before the key ('- alan_disi: ...') and anything
+        after the closing bracket make the line prose, as for Get-TeamVerdict.
+
         Returns Asked, Files (forward slashes, no leading ./, each once, order kept) and Bad
-        (entries that are not paths inside the repository; they are never in Files). A
-        request of bad entries only is still Asked: Resolve-TeamAreaRequest refuses it.
+        (entries that are not plainly written paths inside the repository - see
+        ConvertTo-TeamAreaPath; they are never in Files). A request of bad entries only is
+        still Asked. A request with ANY Bad entry is refused whole: the caller resolves
+        Files and Bad together (Resolve-TeamAreaRequest -Files (Files + Bad)), never Files alone.
     #>
     param(
         [AllowEmptyString()][string]$Report,
@@ -215,7 +235,8 @@ function Resolve-TeamAreaRequest {
         already inside the area), DependsOn (the ids to wait for) and Why (a sentence for
         the report). Judged in this order; a refusal is of the WHOLE request, never a part:
 
-          1. a path that is not inside the repository              -> refuse
+          1. a path that is not a plainly written path inside the
+             repository (ConvertTo-TeamAreaPath)                   -> refuse
           2. nothing asked that is outside the area                -> refuse (nothing to widen)
           3. ANY asked path is protected ($script:TeamAreaProtected) -> refuse
           4. the task was already widened $script:TeamAreaMaxWidenings times -> refuse, to the lead
@@ -242,7 +263,7 @@ function Resolve-TeamAreaRequest {
     foreach ($file in @($Files)) {
         $path = ConvertTo-TeamAreaPath -Text $file
         if (-not $path.Inside) {
-            return (New-TeamAreaResolution -Decision "refuse" -Why "İstenen '$file' depo içinde bir yol değil; alan genişletilmedi.")
+            return (New-TeamAreaResolution -Decision "refuse" -Why "İstenen '$file' depo içinde düz yazılmış bir yol değil (mutlak yol, '..', boş ya da '.' parça, sonu nokta ya da boşluk, ya da : [ ] ; içeriyor); alan genişletilmedi.")
         }
         $name = Get-TeamAreaKey -Area $path.Path
         if ($seen.ContainsKey($name)) { continue }

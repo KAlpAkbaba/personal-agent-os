@@ -11,6 +11,8 @@
     The groups, by the prefix of a case's name:
 
       parse       the request line of an inspector's and of a worker's report;
+      spelling    a path written in other letters (empty or '.' segment, trailing dot,
+                  file:line, junk) is Bad and refused, never widened into;
       widen       nobody holds the files: the area grows, and the return is not a right;
       wait        a task in work holds one: the card waits behind it, the area unchanged;
       protected   a path nobody widens into: every entry of the constant, one case each,
@@ -92,6 +94,20 @@ function Get-TaskShape {
                 area_widenings = [int](Get-TeamProperty -InputObject $Task -Name "area_widenings" -Default 0)
                 area_history   = @(Get-TeamProperty -InputObject $Task -Name "area_history" -Default @())
             }))
+}
+
+function Assert-Refused {
+    <# The path alone, on a task nobody is in the way of: refused, and the task untouched. #>
+    param([string]$Path, [string]$Because)
+    $task = New-Task -Id "card-one" -Area @("src/a.py")
+    $queue = New-Queue -Tasks @($task)
+    $before = Get-TaskShape -Task $task
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files @($Path)
+    Assert-Equal -Expected "refuse" -Actual $resolution.Decision -Because "$Because ('$Path'): $($resolution.Why)"
+    Assert-Equal -Expected 0 -Actual @($resolution.Add).Count -Because "$Because ('$Path'): nothing to add"
+    Assert-Equal -Expected $true -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "$Because ('$Path'): the return counts"
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "x" -Now $now)
+    Assert-Equal -Expected $before -Actual (Get-TaskShape -Task $task) -Because "$Because ('$Path'): the task is unchanged"
 }
 
 $intents = "services/api/app/voice/intents.py"
@@ -194,6 +210,113 @@ Test-Case "parse: an inspector's alan_disi is not read for the worker, and a wro
     $threw = $false
     try { [void](Get-TeamAreaRequest -Report $both -Role "lead") } catch { $threw = $true }
     Assert-True -Condition $threw -Because "only an inspector or a worker asks"
+}
+
+Test-Case "parse: a bullet, a quote mark or a number before the key is no request" {
+    foreach ($line in @("- alan_disi: [$intents]", "> alan_disi: [$intents]", "1. alan_disi: [$intents]", "1) alan_disi: [$intents]", "+ alan_disi: [$intents]", "alan_disi: [$intents].")) {
+        $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @($line)) -Role "inspector"
+        Assert-True -Condition (-not $asked.Asked) -Because "'$line' is not the request line: the key starts it and the bracket ends it"
+        Assert-Equal -Expected 0 -Actual @($asked.Files).Count -Because "'$line' gives no file"
+    }
+    # The one bullet that is read through: asterisks around the line are ignored for bold.
+    $star = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("* alan_disi: [$intents]")) -Role "inspector"
+    Assert-List -Expected @($intents) -Actual $star.Files -Because "an asterisk is dropped like the asterisks of bold"
+}
+
+# ---------------------------------------------------------------------------- spelling
+#
+# A path is taken only as it is plainly written. A spelling that names the same file in
+# other letters (an empty or '.' segment, a segment ending in a dot or a space - Windows
+# drops both - or a file:line) would pass the protected check and the conflict check, which
+# compare text: it is Bad, never in Files, and refused whole.
+
+function Assert-BadSpelling {
+    param([string]$Path, [string]$Because)
+    $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [$Path]")) -Role "inspector"
+    Assert-True -Condition $asked.Asked -Because "$Because ('$Path'): it was asked"
+    Assert-Equal -Expected 0 -Actual @($asked.Files).Count -Because "$Because ('$Path'): never in Files, got $(@($asked.Files) -join ' | ')"
+    Assert-List -Expected @($Path) -Actual $asked.Bad -Because "$Because ('$Path'): in Bad, as it was written"
+    Assert-Refused -Path $Path -Because $Because
+    $task = New-Task -Id "card-one" -Area @("src/a.py")
+    $mixed = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @("src/b.py", $Path)
+    Assert-Equal -Expected "refuse" -Actual $mixed.Decision -Because "$Because ('$Path' beside a free path): $($mixed.Why)"
+    Assert-Equal -Expected 0 -Actual @($mixed.Add).Count -Because "$Because ('$Path' beside a free path): nothing partial"
+}
+
+foreach ($spelling in @("docs//HANDOFF.md", "docs/./HANDOFF.md", "docs/HANDOFF.md.", "docs/.", ".claude//agents")) {
+    Test-Case "spelling: the protected path written '$spelling' is Bad and refused" {
+        Assert-BadSpelling -Path $spelling -Because "a protected path in another spelling"
+    }
+}
+
+Test-Case "spelling: the other spellings of protected paths are Bad and refused" {
+    foreach ($path in @("team/./queue.json", "state/./BUILD_STATE.json", ".claude/./agents/inspector.md", "services//recovery-supervisor/x.py",
+            "scripts/cloud/./backup-cloud-core.sh", "docs /HANDOFF.md", "docs./HANDOFF.md", "docs/HANDOFF.md/.", "docs//", ".//docs/HANDOFF.md", "docs/ROADMAP.md:12")) {
+        Assert-BadSpelling -Path $path -Because "a protected path in another spelling"
+    }
+}
+
+foreach ($spelling in @("services/api/app//voice/intents.py", "services/api/app/./voice/intents.py", "services/api/app/voice/intents.py:412")) {
+    Test-Case "spelling: the held file written '$spelling' does not give widen" {
+        $task = New-Task -Id "card-one" -Area @("services/api/app/narrative")
+        $holder = New-Task -Id "voice-card" -State "in_progress" -Area @($intents)
+        $queue = New-Queue -Tasks @($task, $holder)
+        $plain = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files @($intents)
+        Assert-Equal -Expected "wait" -Actual $plain.Decision -Because "the plain spelling waits: $($plain.Why)"
+        $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files @($spelling)
+        Assert-Equal -Expected "refuse" -Actual $resolution.Decision -Because "'$spelling' is the held file in other letters: $($resolution.Why)"
+        Assert-Equal -Expected 0 -Actual @($resolution.Add).Count -Because "'$spelling': nothing to add"
+        Assert-Equal -Expected $true -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "'$spelling': an ordinary return"
+        $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [$spelling]")) -Role "inspector"
+        Assert-Equal -Expected 0 -Actual @($asked.Files).Count -Because "'$spelling' is never in Files"
+        Assert-List -Expected @($spelling) -Actual $asked.Bad -Because "'$spelling' is in Bad"
+    }
+}
+
+Test-Case "spelling: junk entries are Bad, never Files" {
+    $junk = [ordered]@{
+        "alan_disi: [src/a.py], [src/b.py]" = @("src/a.py]", "[src/b.py")
+        "alan_disi: [[src/a.py]]"           = @("[src/a.py]")
+        "alan_disi: [src/a.py; src/b.py]"   = @("src/a.py; src/b.py")
+        "alan_disi: [https://example.com/x.py]" = @("https://example.com/x.py")
+        "alan_disi: [~/x.py, ~]"            = @("~/x.py", "~")
+        "alan_disi: [src/a.py:10-20]"       = @("src/a.py:10-20")
+    }
+    foreach ($line in $junk.Keys) {
+        $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @($line)) -Role "inspector"
+        Assert-Equal -Expected 0 -Actual @($asked.Files).Count -Because "'$line' gives no file, got $(@($asked.Files) -join ' | ')"
+        Assert-List -Expected $junk[$line] -Actual $asked.Bad -Because "'$line': the entries are Bad"
+        $task = New-Task -Id "card-one" -Area @("src/area")
+        foreach ($bad in @($asked.Bad)) {
+            $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @("lib/free.py", $bad)
+            Assert-Equal -Expected "refuse" -Actual $resolution.Decision -Because "'$bad' beside a free path: $($resolution.Why)"
+        }
+    }
+}
+
+Test-Case "spelling: a plain path with dots, spaces and a trailing slash inside its names is still a path" {
+    $task = New-Task -Id "card-one" -Area @("src/a.py")
+    $plain = @(".github/workflows/ci.yml", "apps/web/src/my file.ts", "docs/v1.0/notes.md", "src/pkg/", "a/.b/c..d/e", "src/~backup.py")
+    $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [$($plain -join ', ')]")) -Role "inspector"
+    $want = @(".github/workflows/ci.yml", "apps/web/src/my file.ts", "docs/v1.0/notes.md", "src/pkg", "a/.b/c..d/e", "src/~backup.py")
+    Assert-List -Expected $want -Actual $asked.Files -Because "none of these is another spelling of anything"
+    Assert-Equal -Expected 0 -Actual @($asked.Bad).Count -Because "nothing dropped: $(@($asked.Bad) -join ' | ')"
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files $asked.Files
+    Assert-Equal -Expected "widen" -Actual $resolution.Decision -Because $resolution.Why
+    Assert-List -Expected $want -Actual $resolution.Add -Because "all of them"
+}
+
+Test-Case "spelling: a request with one Bad entry is refused whole when Files and Bad are resolved together" {
+    $task = New-Task -Id "card-one" -Area @("services/api/app/narrative")
+    $holder = New-Task -Id "voice-card" -State "in_progress" -Area @($intents)
+    $queue = New-Queue -Tasks @($task, $holder)
+    $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [${intents}:412, $gateway]")) -Role "inspector"
+    Assert-List -Expected @($gateway) -Actual $asked.Files -Because "the free path"
+    Assert-List -Expected @("${intents}:412") -Actual $asked.Bad -Because "the file:line"
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files (@($asked.Files) + @($asked.Bad))
+    Assert-Equal -Expected "refuse" -Actual $resolution.Decision -Because "nothing partial: $($resolution.Why)"
+    Assert-Equal -Expected 0 -Actual @($resolution.Add).Count -Because "not even the free file"
+    Assert-True -Condition ($resolution.Why -match [regex]::Escape("${intents}:412")) -Because "the sentence names the entry: $($resolution.Why)"
 }
 
 # ------------------------------------------------------------------------------- widen
@@ -379,20 +502,6 @@ $protectedSamples = @{
     "scripts/cloud/restore-cloud-core.sh"          = "scripts/cloud/restore-cloud-core.sh"
 }
 
-function Assert-Refused {
-    <# The path, alone and beside a free one, on a task nobody is in the way of. #>
-    param([string]$Path, [string]$Because)
-    $task = New-Task -Id "card-one" -Area @("src/a.py")
-    $queue = New-Queue -Tasks @($task)
-    $before = Get-TaskShape -Task $task
-    $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files @($Path)
-    Assert-Equal -Expected "refuse" -Actual $resolution.Decision -Because "$Because ('$Path'): $($resolution.Why)"
-    Assert-Equal -Expected 0 -Actual @($resolution.Add).Count -Because "$Because ('$Path'): nothing to add"
-    Assert-Equal -Expected $true -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "$Because ('$Path'): the return counts"
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "x" -Now $now)
-    Assert-Equal -Expected $before -Actual (Get-TaskShape -Task $task) -Because "$Because ('$Path'): the task is unchanged"
-}
-
 $protectedEntries = @(Get-TeamAreaProtected)
 Test-Case "protected: the constant is one list, each entry with a name, a kind and a source" {
     Assert-True -Condition (@($protectedEntries).Count -ge 20) -Because "the list is there: $(@($protectedEntries).Count) entries"
@@ -446,6 +555,23 @@ Test-Case "protected: one protected path beside one free path - nothing is widen
     Assert-True -Condition ($resolution.Why -match [regex]::Escape("docs/ROADMAP.md")) -Because "the sentence names the path: $($resolution.Why)"
     [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "x" -Now $now)
     Assert-Equal -Expected $before -Actual (Get-TaskShape -Task $task) -Because "nothing partial"
+}
+
+Test-Case "protected: a protected path already inside the area beside a free path - refuse" {
+    # ANY asked path, not only the ones that would be added: a card that holds a protected
+    # file by the lead's hand does not get the cycle's widening on a request that names it.
+    foreach ($area in @(@("src/a.py", "docs/ROADMAP.md"), @("src/a.py", "docs"), @("src/a.py", ".claude/agents"))) {
+        $protected = if ($area[1] -eq ".claude/agents") { ".claude/agents/worker.md" } else { "docs/ROADMAP.md" }
+        $task = New-Task -Id "card-one" -Area $area
+        $before = Get-TaskShape -Task $task
+        $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @($protected, "src/b.py")
+        Assert-Equal -Expected "refuse" -Actual $resolution.Decision -Because "'$protected' is inside the area [$($area -join ', ')] and protected: $($resolution.Why)"
+        Assert-Equal -Expected 0 -Actual @($resolution.Add).Count -Because "the free file is not added"
+        Assert-True -Condition ($resolution.Why -match [regex]::Escape($protected)) -Because "the sentence names the path: $($resolution.Why)"
+        Assert-Equal -Expected $true -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "an ordinary return"
+        [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "x" -Now $now)
+        Assert-Equal -Expected $before -Actual (Get-TaskShape -Task $task) -Because "the task is unchanged"
+    }
 }
 
 Test-Case "protected: a protected path wins over a conflict (refuse, not wait)" {
