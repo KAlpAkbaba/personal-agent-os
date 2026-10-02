@@ -268,6 +268,9 @@ function New-TeamLeadMergeCard {
     [void]$lines.Add("changed and runs the gate. If nothing needs wiring, change nothing and say so.")
     [void]$lines.Add("The script also compares main, $Branch and the remote's main before and after your run (do not")
     [void]$lines.Add("fetch either): a ref that moved refuses the run and stops the branch until a person has looked.")
+    [void]$lines.Add("Your run ENDS with your final message. Wait for every command you started and start nothing in the background:")
+    [void]$lines.Add("when the run ends the script stops every process it left going, and what such a process would have")
+    [void]$lines.Add("written is never committed. The allow-list is held against what was COMMITTED, not against what you meant.")
     foreach ($note in @($Notes)) {
         [void]$lines.Add("")
         [void]$lines.Add("## $($note.Id) - $($note.Title)")
@@ -284,17 +287,189 @@ function New-TeamLeadMergeCard {
     return (($lines.ToArray()) -join "`n")
 }
 
-function Get-TeamRoleModel {
-    <# The model a role runs on: team/models.json {"roles": {...}}, else the fallback (ADR-0214 addendum 7). #>
-    param([Parameter(Mandatory = $true)][string]$TeamRoot, [Parameter(Mandatory = $true)][string]$Role, [string]$Fallback = "")
-    $path = Join-Path $TeamRoot "models.json"
-    if (-not (Test-Path -LiteralPath $path)) { return $Fallback }
-    $roles = Get-TeamProperty -InputObject (Read-TeamJson -Path $path) -Name "roles"
-    $name = [string](Get-TeamProperty -InputObject $roles -Name $Role -Default "")
-    if (-not $name) { return $Fallback }
-    # The value goes onto a command line.
-    if ($name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw "team/models.json: '$name' is not a model name (role $Role)" }
-    return $name
+# ---------------------------------------------------------------------------- the model policy
+#
+# The setting itself (which model the lead runs on, whether a run may be lowered) is the cycle's:
+# Read-TeamModelSetting, Get-TeamRunModel and Test-TeamModelLimited in TeamQueue.ps1. What is
+# here is what this step adds: what the cycles learnt, and what one of its own runs just said.
+
+function Read-TeamLimitedModels {
+    <#
+    .SYNOPSIS
+        What the cycles on this machine learnt about the usage limits (team/limits.json, the
+        cycle's file - read, never written here): model id -> { until }. Only a model of the
+        chain with a dated limit is taken; a file that is missing or cannot be read is no
+        knowledge - the run will say the limit again.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $limited = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $limited }
+    try {
+        $known = Get-TeamProperty -InputObject (Read-TeamJson -Path $Path) -Name "models"
+        if ($known -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($property in $known.PSObject.Properties) {
+                $until = [string](Get-TeamProperty -InputObject $property.Value -Name "until" -Default "")
+                if ((Test-TeamModelId -Model ([string]$property.Name)) -and $until) { $limited[[string]$property.Name] = [pscustomobject]@{ until = $until } }
+            }
+        }
+    }
+    catch { return @{} }
+    return $limited
+}
+
+function Set-TeamModelClosed {
+    <#
+    .SYNOPSIS
+        A run came back with the usage limit: -Limited now holds what that closes, for the rest
+        of this step. The answer is the ids that were closed.
+
+    .DESCRIPTION
+        As the cycle's Register-Limit: a session or weekly limit closes every model; a model's
+        own limit closes that model; and the model the run was ON is closed in every case
+        ("out of usage credits" does not say whose limit it is), so the same run is never
+        started twice on a model that just refused it. A reset that has passed, or was never
+        said, would hand the same model out again at once: it is kept undated - closed for as
+        long as -Limited lives, which is this step.
+    #>
+    param([Parameter(Mandatory = $true)][hashtable]$Limited, [Parameter(Mandatory = $true)]$Result, [string]$RunModel = "")
+    $ids = New-Object System.Collections.ArrayList
+    if ([string](Get-TeamProperty -InputObject $Result -Name "LimitScope" -Default "") -eq "all") {
+        foreach ($id in @(Get-TeamModelChain)) { [void]$ids.Add([string]$id) }
+    }
+    else {
+        $named = [string](Get-TeamProperty -InputObject $Result -Name "LimitedModel" -Default "")
+        if (Test-TeamModelId -Model $named) { [void]$ids.Add($named) }
+    }
+    if ((Test-TeamModelId -Model $RunModel) -and $ids -notcontains $RunModel) { [void]$ids.Add($RunModel) }
+    $until = [string](Get-TeamProperty -InputObject $Result -Name "ResetsAt" -Default "")
+    foreach ($id in $ids) {
+        $Limited[$id] = [pscustomobject]@{ until = $until }
+        if (-not (Test-TeamModelLimited -Limited $Limited -Model $id)) { $Limited[$id] = [pscustomobject]@{ until = "" } }
+    }
+    return @($ids.ToArray())
+}
+
+# ---------------------------------------------------------------------------- the run's process tree
+#
+# The first real lead run ended with "tests are running in the background; I will write the
+# report when they finish". Its own process was gone and what it had started was not: a file
+# written after the diff was judged reached main. `taskkill /T` finds children through a parent
+# that is alive; here the parent is the one thing that has ended. A Windows job object holds
+# every process started from the run's own, whoever its parent was by the end.
+
+function Initialize-TeamRunJobType {
+    <# kernel32's job object, declared once in a session. #>
+    if ($null -ne ("PagentOS.Team.RunJob" -as [type])) { return }
+    Add-Type -Namespace PagentOS.Team -Name RunJob -MemberDefinition @"
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern IntPtr CreateJobObject(IntPtr attributes, IntPtr name);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, int length, IntPtr returned);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool CloseHandle(IntPtr handle);
+"@
+}
+
+function Start-TeamRunJob {
+    <#
+    .SYNOPSIS
+        Put a run that was JUST started into a job object of its own: every process it starts
+        from here on is in the job, so the whole tree can be stopped once the run has ended.
+        Held is false when it could not be done (Why says so); the caller then has the
+        committed diff's check alone.
+    #>
+    param([Parameter(Mandatory = $true)]$Run)
+    $none = [IntPtr]::Zero
+    try {
+        Initialize-TeamRunJobType
+        $handle = [PagentOS.Team.RunJob]::CreateJobObject($none, $none)
+        if ($handle -eq $none) { return [pscustomobject]@{ Handle = $none; Held = $false; Why = "CreateJobObject failed" } }
+        if (-not [PagentOS.Team.RunJob]::AssignProcessToJobObject($handle, $Run.Process.Handle)) {
+            [void][PagentOS.Team.RunJob]::CloseHandle($handle)
+            # A run that had already ended (it answered at once) left nothing to hold.
+            $why = if ($Run.Process.HasExited) { "" } else { "AssignProcessToJobObject failed" }
+            return [pscustomobject]@{ Handle = $none; Held = $false; Why = $why }
+        }
+        return [pscustomobject]@{ Handle = $handle; Held = $true; Why = "" }
+    }
+    catch { return [pscustomobject]@{ Handle = $none; Held = $false; Why = [string]$_.Exception.Message } }
+}
+
+function Get-TeamRunJobProcessIds {
+    <# The ids of the processes that are in a job NOW. #>
+    param([Parameter(Mandatory = $true)]$Job)
+    if (-not $Job.Held) { return @() }
+    $marshal = [System.Runtime.InteropServices.Marshal]
+    $size = 8 + ([IntPtr]::Size * 2048)
+    $buffer = $marshal::AllocHGlobal($size)
+    try {
+        # JobObjectBasicProcessIdList (3): assigned, in-the-list (two DWORDs), then the ids, pointer-sized.
+        if (-not [PagentOS.Team.RunJob]::QueryInformationJobObject($Job.Handle, 3, $buffer, $size, [IntPtr]::Zero)) { return @() }
+        $listed = $marshal::ReadInt32($buffer, 4)
+        $ids = New-Object System.Collections.ArrayList
+        for ($index = 0; $index -lt $listed; $index++) {
+            [void]$ids.Add([int]($marshal::ReadIntPtr($buffer, 8 + ($index * [IntPtr]::Size)).ToInt64()))
+        }
+        return @($ids.ToArray())
+    }
+    finally { $marshal::FreeHGlobal($buffer) }
+}
+
+function Stop-TeamRunJob {
+    <#
+    .SYNOPSIS
+        Stop everything a run left going and WAIT until it is gone: nothing of the run writes
+        after this returns. The answer is the names of what was still alive (a console's own
+        conhost is not one).
+    #>
+    param([Parameter(Mandatory = $true)]$Job, [int]$WaitSeconds = 30)
+    if (-not $Job.Held) { return @() }
+    $left = New-Object System.Collections.ArrayList
+    try {
+        foreach ($id in @(Get-TeamRunJobProcessIds -Job $Job)) {
+            $process = Get-Process -Id $id -ErrorAction SilentlyContinue
+            if ($null -ne $process -and [string]$process.ProcessName -ne "conhost") { [void]$left.Add([string]$process.ProcessName) }
+        }
+        [void][PagentOS.Team.RunJob]::TerminateJobObject($Job.Handle, 1)
+        $until = [datetime]::UtcNow.AddSeconds($WaitSeconds)
+        while (@(Get-TeamRunJobProcessIds -Job $Job).Count -gt 0 -and [datetime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 50 }
+    }
+    finally {
+        [void][PagentOS.Team.RunJob]::CloseHandle($Job.Handle)
+        $Job.Held = $false
+    }
+    return @($left.ToArray())
+}
+
+function Wait-TeamLeadRun {
+    <#
+    .SYNOPSIS
+        Wait for the lead's wiring run until its deadline, then stop EVERYTHING it started -
+        whether it ended by itself or was cut at its cap - BEFORE what it printed, moved or
+        wrote is read.
+
+    .DESCRIPTION
+        The output pipes are read after the stop: a process the run left going may hold the
+        run's standard output open, and the read would then wait for it and come back empty -
+        a finished run judged "no result". Left is what a run that ENDED BY ITSELF had still
+        going (names); a run cut at its cap is TimedOut, and everything it had was going.
+    #>
+    param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)]$Job, [Parameter(Mandatory = $true)][datetime]$Deadline)
+    $remaining = [int][Math]::Max(0, [Math]::Min([double]([int]::MaxValue - 1), ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds))
+    $exited = $Run.Process.WaitForExit($remaining)
+    $left = @(Stop-TeamRunJob -Job $Job)
+    # Wait-TeamRun reads the pipes and the exit code; a run that is still alive here (no job could
+    # hold it) is past its deadline and is stopped by it, with the children it can still find.
+    $grace = if ($exited) { 15 } else { 0 }
+    $finished = Wait-TeamRun -Run $Run -Deadline ([datetime]::UtcNow.AddSeconds($grace))
+    return [pscustomobject]@{
+        ExitCode = $(if ($exited) { $finished.ExitCode } else { -1 }); StdOut = $finished.StdOut; StdErr = $finished.StdErr
+        TimedOut = (-not $exited); Seconds = $finished.Seconds; Left = $(if ($exited) { @($left) } else { @() })
+    }
 }
 
 # ---------------------------------------------------------------------------- the gate's words
@@ -824,27 +999,22 @@ function Reset-TeamGateWorktree {
     return $path
 }
 
-function Get-TeamWorktreeChanges {
+function Get-TeamCommittedFiles {
     <#
     .SYNOPSIS
-        Every file a worktree differs in from a commit: committed since, staged, unstaged, new.
+        Every file two COMMITS differ in. This is what the lead's wiring is judged by: the diff
+        of what was committed, never the working tree as it looked a moment before staging - a
+        file that appeared in between was committed unseen (cycle-auto-integrate, 2026-10-02).
 
     .DESCRIPTION
         --no-renames: with git's rename detection a file MOVED out of a task's area into docs/
         is listed by its new name only - an allowed one - and the deletion inside the area is
         never seen. Without it a move is what it is: one file gone, one file new.
     #>
-    param([Parameter(Mandatory = $true)][string]$Worktree, [Parameter(Mandatory = $true)][string]$Since)
-    $files = New-Object System.Collections.ArrayList
-    foreach ($arguments in @(@("diff", "--name-only", "--no-renames", $Since), @("diff", "--name-only", "--no-renames", $Since, "HEAD"), @("ls-files", "--others", "--exclude-standard"))) {
-        $result = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments $arguments
-        if (-not $result.Success) { throw "git $($arguments -join ' ') failed: $($result.StdErr.Trim())" }
-        foreach ($line in @($result.StdOut -split "`r?`n")) {
-            $name = $line.Trim()
-            if ($name -and $files -notcontains $name) { [void]$files.Add($name) }
-        }
-    }
-    return @($files.ToArray())
+    param([Parameter(Mandatory = $true)][string]$Worktree, [Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$To)
+    $result = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("diff", "--name-only", "--no-renames", $From, $To)
+    if (-not $result.Success) { throw "git diff --name-only $From $To failed: $($result.StdErr.Trim())" }
+    return @($result.StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
 # ---------------------------------------------------------------------------- acting: the gate

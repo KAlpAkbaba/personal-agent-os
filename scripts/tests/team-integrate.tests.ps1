@@ -166,6 +166,43 @@ Test-Case "the lead's card carries each task's section and the rule the script w
     Assert-True -Condition ($card -match "inspector's newest report\)\s+nothing named") -Because "an empty section says so"
     Assert-True -Condition ($card -match "Do not commit, push, tag, switch branch, run the gate or release") -Because "the lead's run does not release"
     Assert-True -Condition ($card -notmatch "(?m)^- split_file:") -Because "it is not a split card"
+    Assert-True -Condition ($card -match "Wait for every command you started" -and $card -match "nothing in the background") -Because "the lead is told that its run ends with its final message: what it left going is stopped and never committed"
+}
+
+Test-Case "what a usage limit closes is remembered for the rest of the step: the model that ran, the model the limit names, or every model; a reset that has passed is not trusted twice" {
+    $later = Get-TeamTimestamp -Now ([datetime]::UtcNow.AddHours(2))
+    $limited = @{}
+    $closed = @(Set-TeamModelClosed -Limited $limited -RunModel "claude-fable-5-1" -Result ([pscustomobject]@{ LimitScope = "unknown"; LimitedModel = ""; ResetsAt = "" }))
+    Assert-Equal -Expected "claude-fable-5-1" -Actual ($closed -join ",") -Because "'out of usage credits' does not say whose limit it is: the model that ran"
+    Assert-True -Condition (Test-TeamModelLimited -Limited $limited -Model "claude-fable-5-1") -Because "undated: closed for as long as this step lives"
+    Assert-True -Condition (-not (Test-TeamModelLimited -Limited $limited -Model "claude-opus-5-5")) -Because "the next model down is open"
+    $limited = @{}
+    $closed = @(Set-TeamModelClosed -Limited $limited -RunModel "claude-opus-5-5" -Result ([pscustomobject]@{ LimitScope = "model"; LimitedModel = "claude-fable-5-1"; ResetsAt = $later }))
+    Assert-Equal -Expected "claude-fable-5-1,claude-opus-5-5" -Actual (($closed | Sort-Object) -join ",") -Because "the model the limit names AND the model that just refused the run"
+    Assert-Equal -Expected $later -Actual ([string]$limited["claude-fable-5-1"].until) -Because "with its reset"
+    $limited = @{}
+    $closed = @(Set-TeamModelClosed -Limited $limited -RunModel "claude-fable-5-1" -Result ([pscustomobject]@{ LimitScope = "all"; LimitedModel = ""; ResetsAt = $later }))
+    Assert-Equal -Expected 3 -Actual @($closed).Count -Because "a session or weekly limit closes every model"
+    Assert-True -Condition ($null -eq (Get-TeamRunModel -Configured "claude-fable-5-1" -Limited $limited -Fallback $true).Model) -Because "and no run is started"
+    $limited = @{}
+    [void](Set-TeamModelClosed -Limited $limited -RunModel "claude-fable-5-1" -Result ([pscustomobject]@{ LimitScope = "unknown"; LimitedModel = ""; ResetsAt = "2026-10-01T06:00:00Z" }))
+    Assert-True -Condition (Test-TeamModelLimited -Limited $limited -Model "claude-fable-5-1") -Because "a reset already past would hand the same model out again: the model stays closed for this step"
+}
+
+Test-Case "what the cycles learnt about the limits is read from team/limits.json, and a file that cannot be read is no knowledge" {
+    $work = Join-Path $env:TEMP ("pagentos-limits-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    try {
+        [void](New-Item -ItemType Directory -Force -Path $work)
+        $path = Join-Path $work "limits.json"
+        Assert-Equal -Expected 0 -Actual @((Read-TeamLimitedModels -Path $path).Keys).Count -Because "no file, nothing known"
+        [System.IO.File]::WriteAllText($path, '{"models":{"claude-fable-5-1":{"until":"2099-01-01T00:00:00Z","type":"seven_day_overage_included"},"gpt-9":{"until":"2099-01-01T00:00:00Z"},"claude-opus-5-5":{"until":""}},"windows":{}}')
+        $known = Read-TeamLimitedModels -Path $path
+        Assert-Equal -Expected "claude-fable-5-1" -Actual (@($known.Keys) -join ",") -Because "a model of the chain with a dated limit; a name that is not a model and an undated entry are left out"
+        Assert-True -Condition (Test-TeamModelLimited -Limited $known -Model "claude-fable-5-1") -Because "and it is limited now"
+        [System.IO.File]::WriteAllText($path, "{ not json")
+        Assert-Equal -Expected 0 -Actual @((Read-TeamLimitedModels -Path $path).Keys).Count -Because "a broken file never stops the step: the run will say the limit again"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Write-Host ""
@@ -409,6 +446,14 @@ Test-Case "no code path of the integration step names a release, a tag or the la
     }
 }
 
+Test-Case "the step never waits for a usage limit while it holds the team lock: it has no sleep at all, and the library's only one is counted in milliseconds" {
+    $step = [System.IO.File]::ReadAllText($integrateScript, [System.Text.Encoding]::UTF8)
+    Assert-True -Condition ($step -notmatch "Start-Sleep") -Because "integrate.ps1 holds the lock from the Docker probe to its last line: a wait there stops every cycle (2026-10-02: the feeder waited three days)"
+    $library = [System.IO.File]::ReadAllText($integrateLib, [System.Text.Encoding]::UTF8)
+    Assert-True -Condition ($library -notmatch "Start-Sleep\s+(-Seconds\s+)?\d" -and $library -notmatch "Start-Sleep -Seconds") -Because "TeamIntegrate.ps1 sleeps only while a stopped process tree dies, in milliseconds"
+    foreach ($text in @($step, $library)) { Assert-True -Condition ($text -notmatch "WaitForUsageLimit|MaxLimitWaitMinutes") -Because "there is no switch that would make it wait" }
+}
+
 Test-Case "a script of the integration step that holds Turkish text says which encoding it is in" {
     $files = @($integrateScript, $integrateLib, (Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"), (Join-Path $repoRoot "scripts\tests\lib\fake-gate.ps1"))
     $withText = 0
@@ -453,6 +498,34 @@ if ($env:PAGENTOS_FAKE_CLAUDE_LOG) {
     Add-Content -LiteralPath $env:PAGENTOS_FAKE_CLAUDE_LOG -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
 }
 if ($env:PAGENTOS_FAKE_LEAD_CARD) { [System.IO.File]::WriteAllText($env:PAGENTOS_FAKE_LEAD_CARD, $card, $utf8) }
+# The model policy: a run started on a model the test named as limited answers the line the real
+# tool answered on 2026-10-02 (no rate_limit_event; the result starts with "duration_api_ms") and does nothing else.
+$limitedModels = @(([string]$env:PAGENTOS_FAKE_LEAD_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($model -and $limitedModels -contains $model) {
+    [Console]::Out.Write('{"duration_api_ms":0,"total_cost_usd":0,"modelUsage":{},"terminal_reason":"api_error","is_error":true,"num_turns":1,"subtype":"success","api_error_status":429,"api_error":"model_requires_usage_credits","result":"You''re out of usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.","type":"result","duration_ms":640}')
+    exit 1
+}
+if ($env:PAGENTOS_FAKE_LEAD_LEAVES) {
+    # A run that ends while something it started is still going ("tests are running in the background;
+    # I will write the report when they finish"). 'escaped' is started by the WMI service: it is no
+    # child of this run, so stopping the run's process tree does not reach it.
+    $shell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $line = '-NoProfile -ExecutionPolicy Bypass -File "' + $env:PAGENTOS_FAKE_LEAD_LEAVES + '"'
+    if ($env:PAGENTOS_FAKE_LEAD_LEAVES_HOW -eq "escaped") {
+        $startup = New-CimInstance -ClassName Win32_ProcessStartup -Property @{ ShowWindow = [uint16]0 } -ClientOnly
+        $made = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('"' + $shell + '" ' + $line); ProcessStartupInformation = $startup }
+        if ($made.ReturnValue -ne 0) { throw "the escaped process was not started (Win32_Process.Create answered $($made.ReturnValue))" }
+    }
+    else { Start-Process -FilePath $shell -ArgumentList $line -WindowStyle Hidden }
+    # The run ends only once what it leaves behind is really there.
+    $until = [datetime]::UtcNow.AddSeconds(40)
+    while (-not (Test-Path -LiteralPath ($env:PAGENTOS_FAKE_LEAD_LEAVES + ".started"))) {
+        if ([datetime]::UtcNow -gt $until) { throw "what the run leaves behind did not start" }
+        Start-Sleep -Milliseconds 50
+    }
+}
+# A run that never ends by itself: the step's cap is what ends it.
+if ($env:PAGENTOS_FAKE_LEAD_HANG -eq "1") { Start-Sleep -Seconds 120 }
 if ($env:PAGENTOS_FAKE_LEAD_LOCK -and $env:PAGENTOS_FAKE_LEAD_LOCK_COPY) { Copy-Item -LiteralPath $env:PAGENTOS_FAKE_LEAD_LOCK -Destination $env:PAGENTOS_FAKE_LEAD_LOCK_COPY -Force }
 function Invoke-LeadGit {
     # A lead that does with git what its card forbids: one command per ';', before or after it writes.
@@ -651,6 +724,117 @@ function Get-TaskById {
 }
 
 function Get-Sha { param([string]$Root, [string]$Revision) return (Invoke-SandboxGit -Root $Root -Arguments @("rev-parse", $Revision)) }
+
+# A git.exe that is put FIRST on the step's PATH and hands every call to the real one. It makes
+# one moment of the step visible to a test: just BEFORE `git add -A` runs ("add"), or just AFTER
+# `git commit` returned ("commit"), it creates the signal file and waits for the awaited one - so
+# a process that writes "after the check" writes at that moment in every run, not in 2 of 10.
+$gitShimSource = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+public static class GitShim {
+    public static int Main(string[] args) {
+        string real = Environment.GetEnvironmentVariable("PAGENTOS_FAKE_GIT_REAL");
+        string on = Environment.GetEnvironmentVariable("PAGENTOS_FAKE_GIT_SIGNAL_ON") ?? "";
+        string line = Environment.CommandLine;
+        int cut = line.StartsWith("\"") ? line.IndexOf('"', 1) + 1 : line.IndexOf(' ');
+        string tail = cut <= 0 ? "" : line.Substring(cut).TrimStart();
+        bool isAdd = args.Length > 1 && args[0] == "add" && Array.IndexOf(args, "-A") > 0;
+        bool isCommit = args.Length > 0 && args[0] == "commit";
+        if (on == "add" && isAdd) { Signal(); }
+        ProcessStartInfo psi = new ProcessStartInfo(real, tail);
+        psi.UseShellExecute = false;
+        int code;
+        using (Process process = Process.Start(psi)) { process.WaitForExit(); code = process.ExitCode; }
+        if (on == "commit" && isCommit) { Signal(); }
+        return code;
+    }
+    static void Signal() {
+        string signal = Environment.GetEnvironmentVariable("PAGENTOS_FAKE_GIT_SIGNAL");
+        string awaited = Environment.GetEnvironmentVariable("PAGENTOS_FAKE_GIT_AWAIT");
+        if (string.IsNullOrEmpty(signal) || File.Exists(signal)) { return; }
+        File.WriteAllText(signal, "now");
+        DateTime until = DateTime.UtcNow.AddMilliseconds(4000);
+        while (!string.IsNullOrEmpty(awaited) && !File.Exists(awaited) && DateTime.UtcNow < until) { Thread.Sleep(20); }
+    }
+}
+'@
+$script:gitShimFolder = ""
+
+function Get-GitShimFolder {
+    <# The folder that holds the shim, compiled once for the whole suite. #>
+    if ($script:gitShimFolder) { return $script:gitShimFolder }
+    $folder = Join-Path $env:TEMP ("pagentos-integ-shim-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+    [void](New-Item -ItemType Directory -Force -Path $folder)
+    [void]$sandboxes.Add($folder)
+    Add-Type -TypeDefinition $gitShimSource -OutputAssembly (Join-Path $folder "git.exe") -OutputType ConsoleApplication
+    $script:gitShimFolder = $folder
+    return $folder
+}
+
+function New-LeftBehind {
+    <#
+        What a lead run leaves behind when it ends: a process that waits for the shim's signal and
+        then writes -Target into the gate worktree. -How "child" is a process the run started
+        (in its process tree); "escaped" is one the WMI service started (in nobody's tree).
+        -On is the moment it writes at: "add" (before the step stages) or "commit" (after it committed).
+    #>
+    param([string]$Root, [string]$Target, [string]$How = "child", [string]$On = "add")
+    $tools = "$Root-tools"
+    $writer = Join-Path $tools "left-behind.ps1"
+    $signal = Join-Path $tools "left-behind.signal"
+    $written = Join-Path $tools "left-behind.written"
+    $file = Join-Path (Join-Path $Root ".claude\worktrees\gate\integrate\c1") ($Target -replace "/", "\")
+    [System.IO.File]::WriteAllText($writer, (@(
+                "Set-Content -LiteralPath '$writer.started' -Value `$PID -Encoding ASCII",
+                "`$until = [datetime]::UtcNow.AddSeconds(90)",
+                "while (-not (Test-Path -LiteralPath '$signal')) { if ([datetime]::UtcNow -gt `$until) { exit 0 }; Start-Sleep -Milliseconds 20 }",
+                "[void](New-Item -ItemType Directory -Force -Path '$(Split-Path -Parent $file)')",
+                "Set-Content -LiteralPath '$file' -Value 'written after the run ended' -Encoding ASCII",
+                "Set-Content -LiteralPath '$written' -Value 'done' -Encoding ASCII") -join "`r`n"), $utf8)
+    return [pscustomobject]@{
+        Started = "$writer.started"; Written = $written; Status = (Join-Path $tools "gate-status.log")
+        Environment = @{
+            PAGENTOS_FAKE_LEAD_LEAVES = $writer; PAGENTOS_FAKE_LEAD_LEAVES_HOW = $How
+            PAGENTOS_FAKE_GIT_REAL = (Get-TeamGit); PAGENTOS_FAKE_GIT_SIGNAL_ON = $On
+            PAGENTOS_FAKE_GIT_SIGNAL = $signal; PAGENTOS_FAKE_GIT_AWAIT = $written
+            PAGENTOS_FAKE_GATE_STATUS = (Join-Path $tools "gate-status.log")
+        }
+    }
+}
+
+function Get-LeftBehindProcess {
+    <# The process a run left behind, while it lives; $null once it is gone (or never started). #>
+    param($Left)
+    if (-not (Test-Path -LiteralPath $Left.Started)) { return $null }
+    $id = 0
+    if (-not [int]::TryParse(([System.IO.File]::ReadAllText($Left.Started)).Trim(), [ref]$id)) { return $null }
+    return (Get-Process -Id $id -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match "powershell" })
+}
+
+function Test-OnBranch {
+    <# Whether a revision holds a file. #>
+    param([string]$Root, [string]$Revision, [string]$File)
+    return [bool](Invoke-TeamGit -WorkingDirectory $Root -Arguments @("cat-file", "-e", "${Revision}:$File")).Success
+}
+
+function Set-SandboxModels {
+    <# team/models.json of the sandbox: the setting's FILE form, as a person writes it. #>
+    param([string]$Root, [string]$Lead, $Fallback = $null)
+    $document = [ordered]@{ roles = [ordered]@{ lead = $Lead } }
+    if ($null -ne $Fallback) { $document["fallback"] = [bool]$Fallback }
+    Write-TeamJson -Path (Join-Path $Root "team\models.json") -Document ([pscustomobject]$document)
+}
+
+function Set-SandboxLimits {
+    <# team/limits.json of the sandbox: what the cycles on this machine learnt (the cycle's file). #>
+    param([string]$Root, [string[]]$Models, [string]$Until)
+    $entries = [ordered]@{}
+    foreach ($id in @($Models)) { $entries[$id] = [ordered]@{ until = $Until; type = "seven_day_overage_included"; seen_at = (Get-TeamTimestamp) } }
+    Write-TeamJson -Path (Join-Path $Root "team\limits.json") -Document ([pscustomobject]@{ models = [pscustomobject]$entries; windows = [pscustomobject]@{} })
+}
 
 $one = @(@{ Id = "task-one"; Area = "src/a" })
 $two = @(@{ Id = "task-one"; Area = "src/a" }, @{ Id = "task-two"; Area = "src/b" })
@@ -1029,6 +1213,220 @@ try {
         Assert-True -Condition ($again.Report -match "TEAM_PROTOCOL 10") -Because $again.Report
     }
 
+    # ------------------------------------------------------------------ only what the diff check saw is committed
+    # The first real lead run ended with "tests are running in the background; I will write the
+    # report when they finish". What such a run leaves going writes AFTER the step judged the diff.
+
+    Test-Case "a process the lead's run leaves behind is stopped BEFORE its diff is read: what it was about to write inside a task's area reaches neither the branch nor main" {
+        $root = New-Sandbox -Work $one
+        $left = New-LeftBehind -Root $root -Target "src/a/late.txt" -How "child" -On "add"
+        try {
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment $left.Environment -PathPrefix (Get-GitShimFolder)
+            Assert-True -Condition (Test-Path -LiteralPath $left.Started) -Because "the run did leave a process behind (else this case proves nothing): $($run.Output)"
+            Assert-True -Condition (-not (Test-Path -LiteralPath $left.Written)) -Because "the process was stopped with the run's process tree, before the step read the diff: it never wrote"
+            Assert-True -Condition ($null -eq (Get-LeftBehindProcess -Left $left)) -Because "it is gone"
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+            foreach ($revision in @("main", "integrate/c1")) {
+                Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision $revision -File "src/a/late.txt")) -Because "a file the diff check never saw is not on $revision"
+                Assert-True -Condition (Test-OnBranch -Root $root -Revision $revision -File "src/a/task-one.txt") -Because "the task's own file is on $revision"
+            }
+            Assert-True -Condition ((Get-Content -LiteralPath (Join-Path $root "docs\DECISIONS.md") -Raw) -match "wired by the lead") -Because "what the lead wired before it ended is on main"
+            Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the run itself kept the rule: the task goes on"
+            Assert-True -Condition ($run.Report -match "arkasında \d+ süreç bıraktı") -Because "the report says the run left something going, and that it was stopped: $($run.Report)"
+            Assert-True -Condition (Test-Path -LiteralPath $left.Status) -Because "the gate ran"
+            Assert-Equal -Expected "" -Actual ([System.IO.File]::ReadAllText($left.Status).Trim()) -Because "on a clean tree"
+        }
+        finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case "a writer the step cannot stop (no child of the run) that writes before the commit: the COMMITTED diff is what is checked, the run is refused and nothing is merged" {
+        $root = New-Sandbox -Work $one
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $tipBefore = Get-Sha -Root $root -Revision "integrate/c1"
+        $left = New-LeftBehind -Root $root -Target "src/a/late.txt" -How "escaped" -On "add"
+        try {
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment $left.Environment -PathPrefix (Get-GitShimFolder)
+            Assert-True -Condition (Test-Path -LiteralPath $left.Written) -Because "the file was written after the lead's run ended and before the step committed (else this case proves nothing): $($run.Output)"
+            Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+            Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "what was committed holds a file outside the rule: no gate"
+            Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "nothing reached main"
+            Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root $root -Revision "integrate/c1") -Because "nor the integration branch"
+            $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "the task waits for the next attempt"
+            Assert-True -Condition ($task.reason -match "src/a/late\.txt" -and $task.reason -notmatch "DECISIONS") -Because "the reason names the file, and only it: $($task.reason)"
+            Assert-Equal -Expected "lead_refused" -Actual (Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).result -Because "a refused lead run: a failed attempt, counted"
+            $gateTree = Join-Path $root ".claude\worktrees\gate\integrate\c1"
+            Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $gateTree -Arguments @("status", "--porcelain")) -Because "the gate worktree holds nothing of the run"
+            Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root $gateTree -Revision "HEAD") -Because "and is back on the branch's tip"
+        }
+        finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case "a writer the step cannot stop that writes AFTER the commit: the file is not committed, the gate does not run on it, and main gets exactly what was checked" {
+        $root = New-Sandbox -Work $one
+        $left = New-LeftBehind -Root $root -Target "src/a/late.txt" -How "escaped" -On "commit"
+        try {
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment $left.Environment -PathPrefix (Get-GitShimFolder)
+            Assert-True -Condition (Test-Path -LiteralPath $left.Written) -Because "the file was written after the step's commit (else this case proves nothing): $($run.Output)"
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+            Assert-Equal -Expected 1 -Actual @($run.GateCalls).Count -Because "the gate ran once"
+            Assert-Equal -Expected "" -Actual ([System.IO.File]::ReadAllText($left.Status).Trim()) -Because "on the commit and nothing else: the tree was put back on it before the gate"
+            foreach ($revision in @("main", "integrate/c1")) { Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision $revision -File "src/a/late.txt")) -Because "the late file is not on $revision" }
+            Assert-Equal -Expected (Get-Sha -Root $root -Revision "integrate/c1") -Actual @($run.GateCalls[0] -split "\|")[1] -Because "the gate ran on the commit that was checked"
+            Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "what was checked and gated is on main"
+        }
+        finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case "a lead run that does not end is cut at its cap with everything it started: a failed attempt, nothing merged, nothing left going" {
+        $root = New-Sandbox -Work $one
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $left = New-LeftBehind -Root $root -Target "src/a/late.txt" -How "child" -On "add"
+        $environment = $left.Environment.Clone()
+        $environment["PAGENTOS_FAKE_LEAD_HANG"] = "1"
+        try {
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -Environment $environment -Caps "-GateMinutes 3 -LeadMinutes 0.4"
+            Assert-True -Condition (Test-Path -LiteralPath $left.Started) -Because "the run had started a process of its own before it hung (else this case proves less): $($run.Output)"
+            Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+            Assert-True -Condition ($null -eq (Get-LeftBehindProcess -Left $left)) -Because "what the run had started is gone with it"
+            $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+            Assert-True -Condition ($task.reason -match "süre doldu") -Because "the reason says the cap: $($task.reason)"
+            Assert-Equal -Expected "lead_failed" -Actual (Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).result -Because "a run that was paid for and gave nothing is an attempt"
+            Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "no gate"
+            Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+            Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock was released"
+        }
+        finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+    }
+
+    # ------------------------------------------------------------------ the model policy (TEAM_PROTOCOL 9a, ADR-0214 addenda 7, 10, 13)
+
+    $leadModels = { param($Run) (@($Run.LeadCalls | ForEach-Object { [string]$_.model }) -join ",") }
+
+    Test-Case "the lead's run is given the model the team's setting names for the lead: the default when nothing is stored, the file's when there is one; -Model only fills what the setting does not name" {
+        $root = New-Sandbox -Work $one
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "claude-fable-5-1" -Actual (& $leadModels $run) -Because "nothing stored: the lead runs on the strongest model, as in the cycle (Get-TeamModelDefaults)"
+        Assert-True -Condition ($run.Report -match "model claude-fable-5-1" -and $run.Report -notmatch "model düşürüldü") -Because "the report names the model; nothing was lowered: $($run.Report)"
+
+        $root = New-Sandbox -Work $one
+        Set-SandboxModels -Root $root -Lead "claude-opus-5-5"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -ExtraArguments "-Model claude-sonnet-5-5"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "claude-opus-5-5" -Actual (& $leadModels $run) -Because "team/models.json names the lead's model, and the setting wins over -Model"
+
+        $root = New-Sandbox -Work $one
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -ExtraArguments "-Model claude-sonnet-5-5"
+        Assert-Equal -Expected "claude-sonnet-5-5" -Actual (& $leadModels $run) -Because "-Model is the model of a role the setting does not name"
+
+        $root = New-Sandbox -Work $one
+        $before = Get-SandboxState -Root $root
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -ExtraArguments "-Model 'claude-3 --dangerously-skip-permissions'"
+        Assert-Equal -Expected 2 -Actual $run.ExitCode -Because "a value that is not one of the three ids never reaches a command line: $($run.Output)"
+        Assert-Equal -Expected $before -Actual (Get-SandboxState -Root $root) -Because "and nothing was done"
+        Assert-Equal -Expected 0 -Actual @($run.LeadCalls).Count -Because "no run"
+    }
+
+    Test-Case "a lead model the cycles know as limited (team/limits.json) is not started: the run goes one model down and the report says 'model düşürüldü'; a reset that has passed is no limit" {
+        $tomorrow = Get-TeamTimestamp -Now ([datetime]::UtcNow.AddDays(1))
+        $root = New-Sandbox -Work $one
+        Set-SandboxModels -Root $root -Lead "claude-fable-5-1"
+        Set-SandboxLimits -Root $root -Models @("claude-fable-5-1") -Until $tomorrow
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "claude-opus-5-5" -Actual (& $leadModels $run) -Because "ONE run, on the next open model down the chain"
+        Assert-True -Condition ($run.Report -match "model düşürüldü: claude-fable-5-1 -> claude-opus-5-5") -Because "the report says so: $($run.Report)"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "and the branch is integrated while the lead's model is closed"
+
+        $root = New-Sandbox -Work $one
+        Set-SandboxLimits -Root $root -Models @("claude-fable-5-1") -Until (Get-TeamTimestamp -Now ([datetime]::UtcNow.AddHours(-1)))
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in"
+        Assert-Equal -Expected "claude-fable-5-1" -Actual (& $leadModels $run) -Because "the reset is past: the lead's own model again"
+    }
+
+    Test-Case "with the fallback switched off, or every model limited, NO lead run is started and nothing is built or counted: the step says the limit and comes back the next time" {
+        $tomorrow = Get-TeamTimestamp -Now ([datetime]::UtcNow.AddDays(1))
+        $settings = @(
+            @{ Name = "fallback off"; Fallback = $false; Limited = @("claude-fable-5-1") },
+            @{ Name = "all limited"; Fallback = $true; Limited = @("claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5") })
+        foreach ($setting in $settings) {
+            $how = $setting.Name
+            $root = New-Sandbox -Work $one -Services
+            $mainBefore = Get-Sha -Root $root -Revision "main"
+            Set-SandboxModels -Root $root -Lead "claude-fable-5-1" -Fallback $setting.Fallback
+            Set-SandboxLimits -Root $root -Models $setting.Limited -Until $tomorrow
+            foreach ($attempt in @(1, 2, 3)) {
+                $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in"
+                Assert-Equal -Expected 7 -Actual $run.ExitCode -Because "${how}, run ${attempt}: never the TEAM_PROTOCOL 10 stop - a usage limit is not a failed attempt: $($run.Output)"
+            }
+            Assert-Equal -Expected 0 -Actual @($run.LeadCalls).Count -Because "${how}: no lead run was started on a model that is closed"
+            Assert-Equal -Expected 0 -Actual @($run.ToolCalls).Count -Because "${how}: the environment is not built for a run that cannot start"
+            Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "${how}: no gate"
+            Assert-Equal -Expected 0 -Actual @(Get-TeamGateRecords -Directory (Join-Path $root "team\reports\c1") -Branch "integrate/c1").Count -Because "${how}: nothing is recorded as an attempt"
+            Assert-True -Condition ($run.Report -match "Max kullanım limiti" -and $run.Report.Contains($tomorrow) -and $run.Report -match "sayılmadı" -and $run.Report -match "beklenmedi") -Because "${how}: the report says the limit, its reset, and that it neither counted nor waited: $($run.Report)"
+            Assert-True -Condition ($run.Report -notmatch "TEAM_PROTOCOL 10") -Because "${how}: the branch is not stopped"
+            $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "${how}: the task waits"
+            Assert-True -Condition ($task.reason -match "Max kullanım limiti") -Because "${how}: and says why: $($task.reason)"
+            Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "${how}: main is where it was"
+            Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "${how}: the lock was released"
+        }
+    }
+
+    Test-Case "the first model answers 'out of usage credits': the same wiring run is started again AT ONCE one model down, the report says 'model düşürüldü', and nothing is counted" {
+        $root = New-Sandbox -Work $one
+        Set-SandboxModels -Root $root -Lead "claude-fable-5-1"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment @{ PAGENTOS_FAKE_LEAD_LIMITED_MODELS = "claude-fable-5-1" }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "claude-fable-5-1,claude-opus-5-5" -Actual (& $leadModels $run) -Because "the lead's model first, then one down - in the same step, not half an hour later"
+        Assert-True -Condition ($run.Report -match "model düşürüldü: claude-fable-5-1 -> claude-opus-5-5") -Because "the report says the run was lowered: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "Max kullanım limiti") -Because "and why: $($run.Report)"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the wiring was done on the lower model and the gate ran"
+        Assert-True -Condition ((Get-Content -LiteralPath (Join-Path $root "docs\DECISIONS.md") -Raw) -match "wired by the lead") -Because "what the second run wired is on main"
+        $records = @(Get-TeamGateRecords -Directory (Join-Path $root "team\reports\c1") -Branch "integrate/c1")
+        Assert-Equal -Expected "green" -Actual (@($records | ForEach-Object { $_.result }) -join ",") -Because "the limited run left no failed attempt behind"
+        Assert-Equal -Expected 1 -Actual @($run.GateCalls).Count -Because "one gate"
+    }
+
+    Test-Case "every model out of usage credits, run after run: never a failed attempt, never the TEAM_PROTOCOL 10 stop, never waited for - and the branch goes on when a model opens" {
+        $root = New-Sandbox -Work $one
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $all = "claude-fable-5-1,claude-opus-5-5,claude-sonnet-5-5"
+        foreach ($attempt in @(1, 2, 3)) {
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -Environment @{ PAGENTOS_FAKE_LEAD_LIMITED_MODELS = $all }
+            Assert-Equal -Expected 7 -Actual $run.ExitCode -Because "run ${attempt}: $($run.Output)"
+            Assert-Equal -Expected (3 * $attempt) -Actual @($run.LeadCalls).Count -Because "run ${attempt}: one try per model of the chain, and no more"
+        }
+        Assert-Equal -Expected "$all,$all,$all" -Actual (& $leadModels $run) -Because "down the chain each time, never up"
+        Assert-Equal -Expected 0 -Actual @(Get-TeamGateRecords -Directory (Join-Path $root "team\reports\c1") -Branch "integrate/c1").Count -Because "a usage limit is never counted against the branch"
+        Assert-True -Condition ($run.Report -match "Max kullanım limiti" -and $run.Report -match "sayılmadı" -and $run.Report -match "beklenmedi" -and $run.Report -notmatch "TEAM_PROTOCOL 10") -Because $run.Report
+        Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "no gate without the wiring"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root (Join-Path $root ".claude\worktrees\gate\integrate\c1") -Arguments @("status", "--porcelain")) -Because "the gate worktree is clean"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock was released"
+        $open = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -Environment @{ PAGENTOS_FAKE_LEAD_LIMITED_MODELS = "claude-fable-5-1" }
+        Assert-Equal -Expected 0 -Actual $open.ExitCode -Because "a model opened: $($open.Output)"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $open.Queue -Id "task-one").state -Because "and the branch is on main"
+    }
+
+    Test-Case "a limit that says when it lifts is not waited for while the lock is held, however soon; a session limit closes every model, so nothing is lowered into it" {
+        # The repository's own fake: the real tool's `rejected` event with the limit's type and its reset.
+        $root = New-Sandbox -Work $one
+        $all = "claude-fable-5-1,claude-opus-5-5,claude-sonnet-5-5"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $all; PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS = "120" }
+        Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected $all -Actual (& $leadModels $run) -Because "each model's own limit: one try each - and no try after a wait for the reset two minutes away"
+        Assert-True -Condition ($run.Report -match "beklenmedi" -and $run.Report -match "sıfırlanma 20\d\d-") -Because "the report says the reset and that it was not waited for: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock was released"
+
+        $root = New-Sandbox -Work $one
+        $run = Invoke-Integrate -Root $root -Gate "green" -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $all; PAGENTOS_FAKE_CLAUDE_LIMIT_TYPE = "five_hour" }
+        Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "claude-fable-5-1" -Actual (& $leadModels $run) -Because "the session limit closes every model: a lower run would hit the same limit"
+        Assert-Equal -Expected 0 -Actual @(Get-TeamGateRecords -Directory (Join-Path $root "team\reports\c1") -Branch "integrate/c1").Count -Because "not counted"
+    }
+
     Test-Case "-DryRun prints what it would do and changes nothing" {
         $root = New-Sandbox -Work $two
         $before = Get-SandboxState -Root $root
@@ -1036,6 +1434,7 @@ try {
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
         Assert-Equal -Expected $before -Actual (Get-SandboxState -Root $root) -Because "no ref, worktree, queue or lock changed"
         Assert-Equal -Expected 0 -Actual (@($run.GateCalls).Count + @($run.LeadCalls).Count) -Because "nothing was started"
+        Assert-True -Condition ($run.Output -match "claude-fable-5-1") -Because "it says which model the lead's run would be started on: $($run.Output)"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "team\reports"))) -Because "not even a report was written"
         Assert-True -Condition ($run.Output -match "integrate/c1" -and $run.Output -match "task-one" -and $run.Output -match "task-two" -and $run.Output -match "DRY RUN") -Because "it says what it would do: $($run.Output)"
     }
@@ -1409,12 +1808,14 @@ try {
     Write-Host "the queue and the lock on the Cloud Core (the fake listener of the cycle's tests)"
 
     function Start-FakeApi {
-        param([object[]]$Tasks = @(), $Lock = $null)
+        param([object[]]$Tasks = @(), $Lock = $null, $Models = $null)
         $work = Join-Path $env:TEMP ("pagentos-integapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
         [void](New-Item -ItemType Directory -Force -Path $work)
         [void]$sandboxes.Add($work)
         $lockDocument = if ($null -ne $Lock) { $Lock } else { New-TeamLockReleased }
         $seed = [pscustomobject]@{ queue = (New-Queue -Tasks $Tasks); lock = $lockDocument }
+        # The model setting the store holds (ADR-0214 addendum 7); without one the listener answers the defaults.
+        if ($null -ne $Models) { $seed | Add-Member -NotePropertyName models -NotePropertyValue $Models }
         [System.IO.File]::WriteAllText((Join-Path $work "seed.json"), (ConvertTo-Json -InputObject $seed -Depth 12), $utf8)
         $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
         $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
@@ -1463,6 +1864,21 @@ try {
         Assert-True -Condition ($state.reports.PSObject.Properties["c1-integrate.md"].Value -match "yayın bekliyor") -Because "the report text is in the store"
         Assert-Equal -Expected 0 -Actual @(Get-TeamTasks -Queue $run.Queue).Count -Because "the sandbox's queue.json was not written in API mode"
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "nor was its lock.json ever held"
+    }
+
+    Test-Case "in API mode the lead's model is read where the cycle reads it: the team store's setting, before the local file" {
+        $root = New-Sandbox -Work $one
+        $tasks = @(Get-TeamTasks -Queue (Read-TeamJson -Path (Join-Path $root "team\queue.json")))
+        $stored = Get-TeamModelDefaults
+        $stored.roles.lead = "claude-sonnet-5-5"
+        $api = Start-FakeApi -Tasks $tasks -Models $stored
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document (New-Queue)
+        # The file says another model: the store's setting is the one the Ofis page writes, and it wins.
+        Set-SandboxModels -Root $root -Lead "claude-opus-5-5"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "claude-sonnet-5-5" -Actual (@($run.LeadCalls | ForEach-Object { [string]$_.model }) -join ",") -Because "the store's setting names the lead's model"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^GET /v1/team/queue/models 200" }).Count -Because "it was asked once"
     }
 
     Test-Case "a red gate whose verdict could not be written to the store (a task changed while the gate ran) is not a silent wait: the next run writes it, without a second gate" {

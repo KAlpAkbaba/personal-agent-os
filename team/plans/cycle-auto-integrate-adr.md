@@ -165,6 +165,44 @@ production, the recovery supervisor or the last-known-good record (a test reads 
       proven by its own test and by the mutation: first guard removed, the step now ends 12 with
       main untouched instead of merging.
 
+11. **Fifth round (inspector's fourth return, 2026-10-02): the first REAL lead run.**
+    - **Only what the diff check saw is committed.** The real run ended with "tests are running in
+      the background; I will write the report when they finish". The check read the tree once and
+      `git add -A` then committed whatever was there: a file written in between reached main in
+      2 of 10 runs. Three rules now, each with its own test and its own mutation:
+      (a) the run's WHOLE process tree is stopped when its main process ends (or its cap is
+      reached), before a ref, the result or a file is read. The run is put in a Windows job
+      object the moment it is started; the job is terminated and the step waits until it is
+      empty. `taskkill /T` does not do this: it finds children through a parent that is alive,
+      and here the parent is gone. The output pipes are read after the stop, so a process that
+      kept the run's stdout open no longer turns a finished run into "no result". The report
+      says how many processes the run left and their names;
+      (b) the allow-list is held against the COMMITTED diff (`git diff --name-only --no-renames
+      <before the run> <the commit>`), not against the working tree before staging: what is
+      checked is, by construction, what is gated. A writer the job does not hold (started
+      through a service, a scheduled task) that writes before the commit is refused with the
+      file's name - a `lead_refused` attempt;
+      (c) the tree is put back on the commit before the gate runs, so a file written after the
+      commit is neither committed nor gated on (the inspector's other 8 of 10).
+      The lead's card now says: wait for every command you started, start nothing in the
+      background; what is still going when the run ends is stopped and never committed.
+    - **The step follows the model policy (TEAM_PROTOCOL 9a; ADR-0214 addenda 7, 10, 13).** The
+      setting is read where the cycle reads it - `GET /v1/team/queue/models` in API mode, else
+      `team/models.json`, else the defaults, through the same `Read-TeamModelSetting` - and
+      `team/limits.json` is read (never written: it is the cycle's file). The lead's run starts
+      on the lead's model, or - when that one is limited and `fallback` is on - on the next open
+      model down (`Get-TeamRunModel`); the report says `model düşürüldü: <from> -> <to>`. With
+      no open model no run is started and the environment is not built. A run that answers with
+      the usage limit closes its model (or every model: a session or weekly limit) for the rest
+      of the step, the tree is put back, and the same wiring run is started again AT ONCE one
+      model down - one try per model of the chain, all under the one `-LeadMinutes` cap.
+      **A usage limit is never an attempt** (no record, no strike, exit 7 every time) and **the
+      step never waits for a reset**: it holds the team lock, and the next scheduled run asks
+      again (a test holds that `integrate.ps1` has no sleep at all). `-Model` is, as in the
+      cycle, the model of a role the setting does not name, and must be one of the three ids.
+      What the step learns about a limit lives for that step only; the next one finds out
+      again in one five-second run unless a cycle has written it to `team/limits.json`.
+
 ## Open decisions for the lead (not built by this task)
 
 1. **The lock is held for the whole gate** (up to 150 minutes by default), as the card asks, so
@@ -194,6 +232,31 @@ production, the recovery supervisor or the last-known-good record (a test reads 
    gate trees under it (recovered now, point 10, at the price of a new environment build).
    Move the worktree, or the step's folder, before scheduling.
 
+5. **The dev stack's database is shared by the gate and the inspectors.** `quality-gate.ps1`
+   and the inspectors' integration runs both reset the dev database `pagentos`. Today the lock
+   keeps a cycle (and so its inspectors) from starting while a gate runs on this machine; if
+   open decision 1 is answered with (b) or (c) - the lock released during the gate - the two
+   reset the database under each other (the fourth inspection lost its first probe to exactly
+   that: `relation "owner_sessions" does not exist`). It already happens across the two
+   machines only if both point at one stack, and with a lead's or an inspector's hand-run
+   outside any lock. Options: (a) keep the lock for the whole gate (decision 1a) - simple, and
+   a gate pauses the cycle for up to 150 minutes; (b) the gate gets a database of its own
+   (`pagentos_gate_<branch>`, created and migrated by the gate's environment step, the name
+   passed to the gate) - nothing shared, costs a migration per run and a gate that honours
+   the name; (c) a second lock for "whoever resets the dev database", taken by the gate and by
+   an inspector's integration run. The worker's reading: (b), and decision 1 only after it.
+6. **A run that started nothing is invisible in the Onay Merkezi.** A lock or a Docker stop
+   (exit 3, exit 4) is one line in `team/reports/integrate-skipped.log` on this machine and
+   nowhere else, on purpose (point 10: it must not replace the branch's last real report). So
+   "Docker has been down since the morning and nothing was integrated" cannot be seen from
+   the phone. Options: (a) post the newest lines as a report of their own
+   (`integrate-skipped.md`) - needs the Onay Merkezi to list it without making it "the newest
+   report"; (b) a field in the live status the cycle already PUTs (`integrate: { last_skip,
+   since, count }`) shown on the Ofis page - needs the route's schema and the page; (c) after N
+   skipped runs in a row, one `awaiting_owner` line ("Docker çalışmıyor, N denemedir") - the
+   only one that reaches the owner without being looked for, and the only one that can nag.
+   The worker's reading: (b), with (c) for Docker only.
+
 ## Consequences
 
 - A dependency reaches main, and its dependants start, without the lead's hands.
@@ -216,6 +279,15 @@ production, the recovery supervisor or the last-known-good record (a test reads 
   another branch goes green (the report and exit code 9 say it). Not closed by this task.
 - `cycle.ps1` still writes "tam kapı ve main'e birleştirme bu betikte yok; lead yapar" under
   the protocol gaps; that line is stale once the step is scheduled.
+- Still open after the fifth round: a writer no job object holds (started through a service or
+  a scheduled task) that writes WHILE THE GATE RUNS makes the gate judge a tree that is not the
+  commit; what reaches main is still exactly the commit (the tree-equality guard), but the
+  verdict is then about something else. A file name git quotes (non-ASCII) is refused by the
+  allow-list even under `docs/` - the safe direction. The step does not write
+  `team/limits.json`, so a limit it met is found again by the next step (one short run).
 - Evidence: PROVEN_AUTOMATED with fakes (sandbox repository, fake gate, fake lead, fake API,
-  fake docker/uv/pnpm). The real gate, the real lead and real `uv`/`pnpm` in a gate worktree
-  have NOT been run by this task.
+  fake docker/uv/pnpm); the process-tree stop is exercised with real Windows processes (a
+  child the run leaves behind, and one started through WMI that no job holds). The real gate
+  and a real `claude -p` lead run have NOT been run by this task (the fourth inspection ran a
+  real lead run and real `uv`/`pnpm` in a scratch clone: PROVEN_PROXY, on the code before this
+  round).

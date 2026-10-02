@@ -27,6 +27,8 @@
     so a test can see WHERE the gate ran and on WHICH commit - and that it ran at all.
     PAGENTOS_FAKE_GATE_TOUCH names a tracked file (relative) the gate appends a line to, in any
     scenario: a gate that leaves its worktree dirty.
+    PAGENTOS_FAKE_GATE_STATUS names a file that gets `git status --porcelain` of the tree as the
+    gate FOUND it (empty when it is clean): what the gate ran on beside the commit.
     A test in the suite holds the words printed here to the real gate's source.
 #>
 [CmdletBinding()]
@@ -43,6 +45,8 @@ if ($log) {
     $head = (& git.exe rev-parse HEAD 2>$null | Out-String).Trim()
     Add-Content -LiteralPath $log -Value "$here|$head|$scenario" -Encoding UTF8
 }
+$statusFile = [string]$env:PAGENTOS_FAKE_GATE_STATUS
+if ($statusFile) { [System.IO.File]::AppendAllText($statusFile, (& git.exe status --porcelain 2>$null | Out-String)) }
 # A gate that leaves a tracked file changed behind it (a formatter, a regenerated lock file).
 $touch = [string]$env:PAGENTOS_FAKE_GATE_TOUCH
 if ($touch) { Add-Content -LiteralPath (Join-Path $here ($touch -replace "/", "\")) -Value "left by the gate" -Encoding ASCII }

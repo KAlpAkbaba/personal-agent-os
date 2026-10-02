@@ -21,11 +21,17 @@
          stops with 'Docker çalışmıyor' and changes nothing;
       4. a LEAD run (a fresh `claude -p`, .claude/agents/lead.md, its tools, in that worktree)
          gets the "For the lead at merge" sections of the tasks' newest worker and inspector
-         reports and wires the shared files. THIS script checks its diff (renames off: a file
-         moved out of an area is a deletion there): docs/, .github/, team/,
-         scripts/quality-gate.ps1, state/BUILD_STATE.json and the files a section names; one
-         file outside that refuses the run and nothing is merged. What passed is committed on
-         the integration branch. The run shares the repository, so main, the integration branch
+         reports and wires the shared files. It runs on the LEAD'S MODEL of the team's setting
+         (the store's in API mode, else team/models.json, else the defaults - as the cycle
+         reads it), or - when that model is limited (team/limits.json, or the run's own
+         answer) - one model down at once; the report says 'model düşürüldü'. A usage limit is
+         never an attempt and is NEVER waited for: the lock is held. When the run ends, every
+         process it left going is stopped before anything is read. What it changed is then
+         COMMITTED, and THIS script checks the committed diff (renames off: a file moved out
+         of an area is a deletion there): docs/, .github/, team/, scripts/quality-gate.ps1,
+         state/BUILD_STATE.json and the files a section names; one file outside that refuses
+         the run and nothing is merged. What passed is the integration branch's new tip, and
+         the tree is put back on exactly that commit before the gate. The run shares the repository, so main, the integration branch
          and the remote's main are read before and after it: one that MOVED refuses the run,
          is named with both shas, and stops the branch at once (it is not put back here). When
          the wiring changed a file the environment is built from, it is built again;
@@ -60,9 +66,10 @@
     keeps what the last run that did something found. It leaves one line in
     team/reports/integrate-skipped.log (this machine only; the newest 200 are kept).
 
-    Exit codes: 0 done or nothing to do; 2 the queue breaks the protocol; 3 the lock is held;
-    4 Docker is down; 5 conflict with main; 6 the gate is red; 7 the lead's run was refused or
-    gave no result; 8 the branch is stopped (two failed attempts); 9 main moved but the push
+    Exit codes: 0 done or nothing to do; 2 the queue, the model setting or -Model breaks the
+    protocol; 3 the lock is held; 4 Docker is down; 5 conflict with main; 6 the gate is red;
+    7 the lead's run was refused or gave no result, or no model is open for it (the usage
+    limit: not an attempt, never counted towards 8); 8 the branch is stopped (two failed attempts); 9 main moved but the push
     failed; 10 the worktree's environment could not be built; 11 a branch could not be moved
     forward; 12 an unexpected error, or the queue could not be written (the next run finishes
     it); 13 a ref moved during the lead's run.
@@ -70,6 +77,9 @@
 .PARAMETER GatePath
     The gate script to run in the gate worktree. Empty (the default) is the worktree's own
     scripts\quality-gate.ps1. The tests name scripts/tests/lib/fake-gate.ps1 here.
+
+.PARAMETER Model
+    The model of a role the setting does not name (one of the three ids). The setting wins.
 
 .PARAMETER ClearGateStop
     The lead looked at a branch that two failed attempts (or a moved ref) stopped: the count
@@ -128,6 +138,11 @@ $movedSentence = "lead koşusu sırasında bir dal YER DEĞİŞTİRDİ; lead bak
 
 $capProblem = Test-TeamCapMinutes -GateMinutes $GateMinutes -LeadMinutes $LeadMinutes
 if ($capProblem) { throw $capProblem }
+# As in the cycle: a value that is not one of the three model ids never reaches a command line.
+if ($Model -and -not (Test-TeamModelId -Model $Model)) {
+    Write-Host "-Model '$Model' is not a model; nothing was done. One of: $((Get-TeamModelChain) -join ', ')"
+    exit 2
+}
 
 $useApi = [bool]$QueueUrl
 if ($useApi -and -not $QueueToken) { throw "-QueueUrl needs -QueueToken: the path of a file holding the token" }
@@ -225,6 +240,50 @@ if (@($pending).Count -eq 0) {
     exit 0
 }
 
+# ------------------------------------------------------------------ the model policy (TEAM_PROTOCOL 9a)
+# The lead's model is read where the cycle reads it (ADR-0214 addendum 7): the team store's
+# setting in API mode, else team/models.json, else the defaults - a store that cannot be read
+# never stops the step. What the cycles learnt about the limits (team/limits.json) is read and
+# never written here. A lead model that is limited starts no run: the run goes one model down
+# when the setting allows it (Get-TeamRunModel), and the report says 'model düşürüldü'. The
+# step NEVER waits for a reset - it holds the team lock - and a usage limit is never an attempt.
+$modelDocument = $null
+$modelSource = "the defaults"
+if ($useApi) {
+    try {
+        $modelDocument = Get-TeamModelsApi -Store $apiStore
+        if ($null -ne $modelDocument) { $modelSource = "GET /v1/team/queue/models" }
+    }
+    catch { [void]$risks.Add("model ayarı takım deposundan okunamadı; yerel dosya ya da varsayılanlar kullanıldı: $($_.Exception.Message)") }
+}
+$modelsPath = Join-Path $teamDir "models.json"
+if ($null -eq $modelDocument -and (Test-Path -LiteralPath $modelsPath)) {
+    $modelDocument = Read-TeamJson -Path $modelsPath
+    $modelSource = "team/models.json"
+}
+$modelRead = Read-TeamModelSetting -Document $modelDocument -DefaultModel $Model
+if (-not $modelRead.Ok) {
+    Write-Host "the model setting ($modelSource) breaks the contract; nothing was done:"
+    foreach ($problem in @($modelRead.Problems)) { Write-Host "  - $problem" }
+    exit 2
+}
+$leadConfigured = [string]$modelRead.Setting.roles.lead
+$modelFallback = [bool]$modelRead.Setting.fallback
+$limitedModels = Read-TeamLimitedModels -Path (Join-Path $teamDir "limits.json")
+
+function Select-LeadModel {
+    <# The model the lead's run starts on NOW; Model is $null when none is open (no run is started). #>
+    return (Get-TeamRunModel -Configured $leadConfigured -Limited $script:limitedModels -Fallback $modelFallback)
+}
+
+function Get-NoModelSentence {
+    <# Why no lead run can be started now, in the words the report and every task carry. #>
+    param($Pick)
+    $who = if ($modelFallback) { "lead'in kullanabileceği modellerin hepsi limitte" } else { "lead'in modeli $leadConfigured limitte ve model düşürme kapalı" }
+    $when = if ($Pick.ResetsAt) { " (en erken sıfırlanma $($Pick.ResetsAt))" } else { " (ne zaman açılacağı söylenmedi)" }
+    return "Max kullanım limiti: $who$when; sayılmadı, beklenmedi (kilit tutulurken beklenmez), bir sonraki adım dener"
+}
+
 function New-Outcome {
     param($Item)
     $outcome = [pscustomobject]@{ Branch = [string]$Item.Branch; CycleId = [string]$Item.CycleId; Result = "başlamadı"; Lines = (New-Object System.Collections.ArrayList) }
@@ -286,7 +345,11 @@ if ($DryRun) {
         elseif ($null -ne $item.Green) { Write-Host "    would finish an earlier run: the gate was green on this commit; $Base would get it without a second gate" }
         else {
             Write-Host "    would merge $Base into it in $(Get-TeamGateWorktreePath -RepoRoot $repoRoot -Branch $item.Branch)"
-            Write-Host "    would build the worktree's environment, then run the lead's wiring run there (at most $LeadMinutes min), check its diff and commit it"
+            $dryPick = Select-LeadModel
+            $onModel = if ($null -eq $dryPick.Model) { "NO model is open for the lead (usage limit): no run would be started, nothing counted" }
+            elseif ($dryPick.Lowered) { "on $($dryPick.Model) (lowered from $($dryPick.Intended): limited)" }
+            else { "on $($dryPick.Model)" }
+            Write-Host "    would build the worktree's environment, then run the lead's wiring run there (at most $LeadMinutes min) - $onModel ($modelSource) -, stop what it left going, commit and check the committed diff"
             Write-Host "    would run $(if ($GatePath) { $GatePath } else { 'scripts\quality-gate.ps1' }) (at most $GateMinutes min)"
             Write-Host "    green: $Base gets a --no-ff merge, is pushed to $Remote, the tasks become awaiting_release; red: nothing reaches $Base"
         }
@@ -477,6 +540,17 @@ function Invoke-BranchIntegration {
         $beforeLead = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
         $Item.Attempt = $number
 
+        # ---- the model of the lead's run, before anything is built for it: with no open model
+        # there is no run, and so no environment and no gate. Not an attempt: nothing is counted.
+        $pick = Select-LeadModel
+        if ($null -eq $pick.Model) {
+            $reason = "lead koşusu başlatılmadı - " + (Get-NoModelSentence -Pick $pick)
+            foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
+            $Outcome.Result = "lead koşusu yapılamadı"
+            [void]$Outcome.Lines.Add($reason)
+            return 7
+        }
+
         # ---- 3. the worktree's own environment, BEFORE the lead's run: a uv or a pnpm that cannot
         # build it must not cost a model run every half hour. Nothing is counted: nothing was paid for.
         $failure = Invoke-EnvironmentBuild -Tree $tree -Outcome $Outcome
@@ -494,24 +568,62 @@ function Invoke-BranchIntegration {
         # ---- 4. the lead's wiring run, and the check of what it changed
         $notes = @(Get-TeamLeadMergeNotes -Tasks $tasks -RepoRoot $repoRoot)
         $card = New-TeamLeadMergeCard -CycleId $Item.CycleId -Branch $integration -Notes $notes
-        $leadModel = Get-TeamRoleModel -TeamRoot $teamDir -Role "lead" -Fallback $Model
-        $arguments = Get-TeamRunArguments -RoleFile $leadRoleFile -Model $leadModel -PrefixArguments $ClaudePrefixArguments
+        # ONE cap for the whole of it, however many models are tried: the lock is held meanwhile.
         $deadline = [datetime]::UtcNow.AddMinutes($LeadMinutes)
         # The run has Bash and shares the repository: what it must not move is read before and after.
         # The worktree's diff alone does not see a commit made on main from here (main checked out nowhere).
         $watched = @("refs/heads/$Base", "refs/heads/$integration", "refs/remotes/$Remote/$Base")
-        $refsBefore = Get-TeamRefValues -RepoRoot $repoRoot -Names $watched
-        $leadRun = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $tree
-        # From here a lead run is paid for: an attempt that breaks after this is counted (the caller's catch).
-        $Item.LeadRan = $true
-        $finished = Wait-TeamRun -Run $leadRun -Deadline $deadline
-        $movedRefs = @(Compare-TeamRefValues -Before $refsBefore -After (Get-TeamRefValues -RepoRoot $repoRoot -Names $watched))
-        $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr
         if (-not (Test-Path -LiteralPath $Item.Directory)) { [void](New-Item -ItemType Directory -Force -Path $Item.Directory) }
-        [System.IO.File]::WriteAllText((Join-Path $Item.Directory "gate-$number-lead.json"), [string]$finished.StdOut, $utf8)
-        if ($result.Text) { [System.IO.File]::WriteAllText((Join-Path $Item.Directory "gate-$number-lead.md"), $result.Text.TrimEnd() + "`n", $utf8) }
-        $leadLine = ("lead koşusu: {0} sn, tahmini {1:0.00} USD{2}" -f [int]$finished.Seconds, [double]$result.CostUsd, $(if ($leadModel) { ", model $leadModel" } else { "" }))
-        [void]$Outcome.Lines.Add($leadLine)
+        $leadTry = 0
+        $limitSaid = ""
+        $finished = $null
+        $result = $null
+        $movedRefs = @()
+        while ($true) {
+            $leadTry++
+            # The model of THIS try: the lead's own, or - when that one is limited - the next open one down.
+            $runModel = [string]$pick.Model
+            if ($pick.Lowered) { [void]$Outcome.Lines.Add("model düşürüldü: $($pick.Intended) -> $runModel (limit)") }
+            $arguments = Get-TeamRunArguments -RoleFile $leadRoleFile -Model $runModel -PrefixArguments $ClaudePrefixArguments
+            $refsBefore = Get-TeamRefValues -RepoRoot $repoRoot -Names $watched
+            $leadRun = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $tree
+            # The run's whole process tree is held from its first moment: when the run ends, what it
+            # left going ("tests are running in the background") is stopped BEFORE anything is read.
+            $job = Start-TeamRunJob -Run $leadRun
+            # From here a lead run is paid for: an attempt that breaks after this is counted (the caller's catch).
+            $Item.LeadRan = $true
+            $finished = Wait-TeamLeadRun -Run $leadRun -Job $job -Deadline $deadline
+            $movedRefs = @(Compare-TeamRefValues -Before $refsBefore -After (Get-TeamRefValues -RepoRoot $repoRoot -Names $watched))
+            $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model $runModel
+            $stem = Join-Path $Item.Directory $(if ($leadTry -gt 1) { "gate-$number-lead-$leadTry" } else { "gate-$number-lead" })
+            [System.IO.File]::WriteAllText("$stem.json", [string]$finished.StdOut, $utf8)
+            if ($result.Text) { [System.IO.File]::WriteAllText("$stem.md", $result.Text.TrimEnd() + "`n", $utf8) }
+            $limitedNow = ([bool]$result.UsageLimited -and -not $result.Ok -and -not $finished.TimedOut)
+            $leadLine = ("lead koşusu: {0} sn, tahmini {1:0.00} USD, model {2}" -f [int]$finished.Seconds, [double]$result.CostUsd, $runModel)
+            if ($limitedNow) { $leadLine += " - Max kullanım limiti" + $(if ($result.ResetsAt) { " (sıfırlanma $($result.ResetsAt))" } else { "" }) + "; sayılmadı" }
+            [void]$Outcome.Lines.Add($leadLine)
+            if ($result.Ok -and [bool]$result.Substituted) { [void]$Outcome.Lines.Add("model düşürüldü (araç): $runModel -> $(if ($result.RanModel) { $result.RanModel } else { '?' })") }
+            if (@($finished.Left).Count -gt 0) {
+                [void]$Outcome.Lines.Add("lead koşusu bittiğinde arkasında $(@($finished.Left).Count) süreç bıraktı ($(($finished.Left | Sort-Object -Unique) -join ', ')); fark okunmadan önce durduruldu - yazacakları commit edilmedi")
+            }
+            if ($job.Why) { [void]$script:risks.Add("${integration}: lead koşusunun süreç ağacı tutulamadı ($($job.Why)); arkasında bıraktığı süreç durdurulmadı - commit edilen fark yine de denetlendi") }
+            if (@($movedRefs).Count -gt 0 -or -not $limitedNow) { break }
+
+            # The usage limit: never an attempt, never waited for (the lock is held). What it closes is
+            # closed for the rest of this step; the same wiring run is started again AT ONCE one model
+            # down - one try per model of the chain, under the one deadline.
+            [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $beforeLead)
+            [void](Set-TeamModelClosed -Limited $script:limitedModels -Result $result -RunModel $runModel)
+            $limitSaid = "Max kullanım limiti" + $(if ($result.ResetsAt) { " (sıfırlanma $($result.ResetsAt))" } else { "" })
+            $pick = Select-LeadModel
+            if ($null -ne $pick.Model -and $leadTry -lt @(Get-TeamModelChain).Count -and [datetime]::UtcNow -lt $deadline) { continue }
+            [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $tip)
+            $reason = "lead koşusu: " + $(if ($null -eq $pick.Model) { Get-NoModelSentence -Pick $pick } else { "$limitSaid; sayılmadı, beklenmedi, bir sonraki adım dener" })
+            foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
+            $Outcome.Result = "lead koşusu yapılamadı"
+            [void]$Outcome.Lines.Add($reason)
+            return 7
+        }
 
         if (@($movedRefs).Count -gt 0) {
             # Before anything else is judged, and whatever the run answered. This step does NOT put the
@@ -534,14 +646,6 @@ function Invoke-BranchIntegration {
 
         if (-not $result.Ok -or $finished.TimedOut) {
             [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $tip)
-            if ($result.UsageLimited) {
-                # The one stop the team has (owner, 2026-09-30): not a failed attempt, nothing is counted.
-                $reason = "lead koşusu: Max kullanım limiti" + $(if ($result.ResetsAt) { " (sıfırlanma $($result.ResetsAt))" } else { "" }) + "; sayılmadı, bir sonraki adım dener"
-                foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
-                $Outcome.Result = "lead koşusu yapılamadı"
-                [void]$Outcome.Lines.Add($reason)
-                return 7
-            }
             $why = if ($finished.TimedOut) { "süre doldu ($LeadMinutes dk)" } else { [string]$result.Why }
             $reason = "lead koşusu sonuç vermedi ($why); kapı koşmadı"
             $stopped = Add-Strike -Item $Item -Number $number -Result "lead_failed" -More @{ sha = $tip; why = $why }
@@ -553,11 +657,25 @@ function Invoke-BranchIntegration {
             return 7
         }
 
-        $changed = @(Get-TeamWorktreeChanges -Worktree $tree -Since $beforeLead)
+        # What the run changed is COMMITTED first and judged second: the allow-list is held against
+        # the diff of the commit that would be gated, never against the working tree as it looked a
+        # moment before staging. The run's process tree is already stopped (Wait-TeamLeadRun); a
+        # writer no job could hold, writing between a look at the tree and `git add`, was committed
+        # unseen and reached main (cycle-auto-integrate, the fourth inspection: 2 of 10 runs).
         $named = @($notes | ForEach-Object { @($_.Named) } | Where-Object { $_ })
-        $refused = @(Get-TeamLeadRefusedFiles -Changed $changed -NamedFiles $named)
+        $changed = @()
+        $refused = @()
         $headAfter = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
-        if (-not (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $beforeLead -Of $headAfter)) { $refused = @($refused) + "(HEAD dalın dışına taşındı)" }
+        if (-not (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $beforeLead -Of $headAfter)) { $refused = @("(HEAD dalın dışına taşındı)") }
+        else {
+            if ((Invoke-TreeGit -Tree $tree -Arguments @("status", "--porcelain")).Length -gt 0) {
+                [void](Invoke-TreeGit -Tree $tree -Arguments @("add", "-A"))
+                [void](Invoke-TreeGit -Tree $tree -Arguments @("commit", "--quiet", "-m", "integrate: the lead's merge wiring for $ids"))
+            }
+            $candidate = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
+            $changed = @(Get-TeamCommittedFiles -Worktree $tree -From $beforeLead -To $candidate)
+            $refused = @(Get-TeamLeadRefusedFiles -Changed $changed -NamedFiles $named)
+        }
         if (@($refused).Count -gt 0) {
             # The gate worktree is this step's own: what the run wrote is discarded, whole.
             [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $tip)
@@ -570,13 +688,11 @@ function Invoke-BranchIntegration {
             if ($stopped) { return 8 }
             return 7
         }
-        if ((Invoke-TreeGit -Tree $tree -Arguments @("status", "--porcelain")).Length -gt 0) {
-            [void](Invoke-TreeGit -Tree $tree -Arguments @("add", "-A"))
-            [void](Invoke-TreeGit -Tree $tree -Arguments @("commit", "--quiet", "-m", "integrate: the lead's merge wiring for $ids"))
-        }
-        if (@($changed).Count -gt 0) { [void]$Outcome.Lines.Add("lead'in bağladığı dosyalar: " + ($changed -join ", ")) }
+        if (@($changed).Count -gt 0) { [void]$Outcome.Lines.Add("lead'in bağladığı dosyalar (commit edilen fark): " + ($changed -join ", ")) }
         else { [void]$Outcome.Lines.Add("lead hiçbir dosya değiştirmedi") }
-        $candidate = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
+        # The tree is put back on the commit that was judged: what was written after it (a writer
+        # the step could not stop) is neither committed nor what the gate runs on.
+        [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $candidate)
 
         # The wiring changed a file the environment is built from: it is built again, on the commit
         # that will be gated. A build that fails NOW is the wiring's doing and a lead run was paid
