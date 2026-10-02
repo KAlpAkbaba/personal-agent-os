@@ -1,18 +1,18 @@
 {
-  "collected_at": "2026-10-02T06:54:28Z",
+  "collected_at": "2026-10-02T13:05:42Z",
   "source": "host-snapshot.sh over ssh (collect-host-snapshot.ps1)",
   "schema_version": 1,
   "host": {"kernel": "6.8.0-142-generic", "reboot_required": false},
-  "serving_colour": "blue",
-  "markers": {"release": "5f250e5bbd460c419950d9ad80286a456f2921d5", "last_known_good": "ca5cc79512de47574f81df471323615567122412", "recovery_pin": "5f250e5bbd460c419950d9ad80286a456f2921d5"},
+  "serving_colour": "green",
+  "markers": {"release": "f60e02e4c6f68bbd92aea6fbb574c9432982ad45", "last_known_good": "f91ad1e32414a6ce2f1db511e084ea8959fee280", "recovery_pin": "f60e02e4c6f68bbd92aea6fbb574c9432982ad45"},
   "containers": [
-    {"name": "pagentos-prod-api-blue", "state": "running"},
+    {"name": "pagentos-prod-temporal", "state": "running"},
+    {"name": "pagentos-prod-api-green", "state": "running"},
+    {"name": "pagentos-prod-api-blue", "state": "exited"},
     {"name": "pagentos-prod-godseye", "state": "running"},
-    {"name": "pagentos-prod-api-green", "state": "exited"},
     {"name": "pagentos-prod-cloud-browser", "state": "running"},
     {"name": "pagentos-prod-edge", "state": "running"},
     {"name": "pagentos-prod-postgres", "state": "running"},
-    {"name": "pagentos-prod-temporal", "state": "running"},
     {"name": "pagentos-prod-redis", "state": "running"},
     {"name": "pagentos-prod-minio", "state": "running"}
   ],
@@ -21,7 +21,7 @@
     {"name": "pagentos-backup.timer", "active": "active"},
     {"name": "pagentos-restore-drill.timer", "active": "active"}
   ],
-  "operation_lock": {"present": true, "samples": 60, "interval_s": 1, "held": 2, "longest_run": 2},
+  "operation_lock": {"present": true, "samples": 60, "interval_s": 1, "held": 0, "longest_run": 0},
   "columns": [
     {"table": "activity_events", "column": "event_id", "data_type": "uuid", "character_maximum_length": null},
     {"table": "activity_events", "column": "occurred_at", "data_type": "timestamp with time zone", "character_maximum_length": null},

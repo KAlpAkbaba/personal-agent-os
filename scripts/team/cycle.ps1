@@ -17,6 +17,17 @@
     a gate, done or stopped - or when a cap is reached, and it writes
     `team/reports/<cycle-id>.md` in Turkish either way.
 
+    The runs are a POOL, not batches (owner, 2026-10-01: no agent idles while there is work;
+    ADR-0214 addendum 8). The runs in flight are polled; one that ends is completed at once -
+    report, queue state, the merge of an approved inspection - and the seats that are free are
+    filled from the queue, in its order. Seats are per role: -MaxParallel workers, beside them
+    -MaxInspectors inspections and -MaxIntegrators integrators, and the researcher and one
+    lead split beside those; a role never takes another role's seat. At every refill the
+    store is read again (API mode) and `team/cycle-settings.json`, when it is there, names
+    the seats ({ "max_parallel", "max_inspectors", "max_integrators" }) - so a card stored, or
+    a setting changed, while runs are in flight takes effect when a seat is free. A task
+    whose area overlaps the area of a task in flight waits until that run ends.
+
     What it does NOT do, on purpose:
       * it does not run the quality gate and does not merge to main. Approved branches are
         merged into `integrate/<cycle-id>`; the gate on that branch and the merge to main
@@ -55,6 +66,20 @@
 .PARAMETER CycleMinutes
     The cycle's time cap in minutes; 0 is no cap.
 
+.PARAMETER MaxParallel
+    The WORKER seats. Inspections, integrators, the researcher and a lead split have seats of
+    their own (-MaxInspectors, -MaxIntegrators, one, one).
+
+.PARAMETER MaxHours
+    A cycle process runs the script and the arguments it started with, and a cycle that has
+    work does not end by itself. After this many hours (default 4; 0 is never) it starts
+    nothing new and ends when its runs do: the scheduler's next start carries on, with the
+    current script.
+
+.PARAMETER RefillSeconds
+    The seats are filled whenever a run ends, and at least this often while nothing ends - a
+    card that reaches the store beside one long run is started while it runs.
+
 .PARAMETER WaitForUsageLimit
     The one stop the team has is the subscription's usage limit (Max). When a run hits it
     the task goes back to where it was, and with this switch (the default) the cycle WAITS
@@ -74,10 +99,18 @@ param(
     [string]$CycleId = "",
     [string]$TeamRoot = "",
     [int]$MaxParallel = 2,
+    # Seats are per role (the owner at the Ofis page, 2026-10-01 22:15: three inspections held
+    # the cycle's three slots and every worker seat was empty, with eight tasks assigned).
+    [int]$MaxInspectors = 2,
+    [int]$MaxIntegrators = 1,
     [double]$MaxUsd = 0,
     [double]$RunMaxUsd = 0,
     [double]$RunMinutes = 0,
     [int]$CycleMinutes = 0,
+    [double]$MaxHours = 4,
+    [int]$RefillSeconds = 120,
+    # How often the runs in flight are looked at. Nothing blocks on one run.
+    [int]$PollMilliseconds = 250,
     # Eight, not four: a task with an integrator and ONE honest return is integrator + worker +
     # inspector + worker = four runs, and was stopped before its second inspection
     # (model-policy-cycle, 2026-10-01). Two RETURNs still stop a task; this only bounds a loop.
@@ -125,6 +158,8 @@ if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $CycleId) { $CycleId = $(if ($DailyId) { "d" + (Get-Date).ToString("yyyyMMdd") } else { "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }) }
 if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is lower-case letters, digits, '.' and '-': '$CycleId'" }
 if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
+if ($MaxInspectors -lt 1 -or $MaxIntegrators -lt 1) { throw "-MaxInspectors and -MaxIntegrators are at least 1" }
+if ($MaxHours -lt 0 -or $RefillSeconds -lt 1 -or $PollMilliseconds -lt 10) { throw "-MaxHours is 0 or more, -RefillSeconds at least 1, -PollMilliseconds at least 10" }
 # A parameter is never assigned over (provision.tests.ps1 holds every script to it).
 $runResearch = [bool]$Research -or [bool]$ResearchOnly
 # The researcher's last finished run, on this machine: the throttle of -ResearchEveryHours.
@@ -207,12 +242,12 @@ function Save-QueueNow {
     <# A write made while runs are in flight (after the starts; after each applied result). A
        store that is away at that moment must not end the cycle with runs still working - the
        tasks would stay in_progress, the lock would be released, and the next tick would start
-       workers in the same worktrees. It is a line, and the batch's last write - made when
-       nothing is in flight, and strict - writes what is pending. $false = not written now. #>
+       workers in the same worktrees. It is a line, and the next write made when nothing is
+       in flight - the strict one - writes what is pending. $false = not written now. #>
     param([string]$What)
     try { Save-Queue -Document $script:queue; return $true }
     catch {
-        $note = "${What}: sonuç depoya şimdi yazılamadı (" + ((([string]$_.Exception.Message) -replace '\s+', ' ').Trim()) + "); toplu işin sonunda yeniden denenecek"
+        $note = "${What}: sonuç depoya şimdi yazılamadı (" + ((([string]$_.Exception.Message) -replace '\s+', ' ').Trim()) + "); uçuşta koşu kalmayınca yeniden denenecek"
         if ($note.Length -gt 300) { $note = $note.Substring(0, 300) }
         if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
         return $false
@@ -232,12 +267,18 @@ function Sync-Queue {
        the lead adds a card, the feeder cuts the roadmap - while this process runs. Read once at
        the start, none of it was seen until the NEXT cycle, and a cycle that has work does not
        end (2026-10-02: the owner's fourth-seat card, stored nine minutes after the cycle began,
-       waited four hours beside idle seats). Before each pass the cycle's own changes are
-       written and the queue is read again. A store that does not answer, or a queue that
-       breaks the protocol now, changes nothing: the pass runs on the copy the cycle has, and
-       the report says so once. With files there is one writer, the lock's holder. #>
+       waited four hours beside idle seats). At every refill of the pool the cycle's own
+       changes are written and the queue is read again. A store that does not answer, or a
+       queue that breaks the protocol now, changes nothing: the refill runs on the copy the
+       cycle has, and the report says so once. With files there is one writer, the lock's holder.
+
+       With nothing in flight the write is the strict one (a store that does not take the
+       cycle's writes ends the cycle); beside runs in flight it is a line in the report, and
+       the queue is NOT read again over what could not be written. #>
     if (-not $useApi) { return }
-    Save-Queue -Document $script:queue
+    if (@($script:pool).Count -eq 0) { Save-Queue -Document $script:queue }
+    elseif (-not (Save-QueueNow -What "bekleyen yazmalar")) { return }
+    Resolve-UnwrittenMerges
     try {
         $fresh = Get-TeamQueueApi -Store $apiStore
         $why = @(Test-TeamQueue -Queue $fresh)
@@ -250,10 +291,54 @@ function Sync-Queue {
         }
         return
     }
+    # A run in flight is the cycle's: its task stays the copy the run was started from, with
+    # the version that copy was read at. Its result is written when it ends; if the store's
+    # copy changed meanwhile, that write is the stale one and is dropped (Test-TaskMovedInStore
+    # asks first). A task the store no longer has stays in the cycle's copy until its run ends.
+    $mine = [ordered]@{}
+    $versions = @{}
+    foreach ($run in $script:pool) {
+        if ($null -eq $run.Task) { continue }
+        $mine[[string]$run.Task.id] = $run.Task
+        $versions[[string]$run.Task.id] = $apiStore.Baseline[[string]$run.Task.id]
+    }
     Set-TeamQueueBaseline -Store $apiStore -Queue $fresh
+    if (@($mine.Keys).Count -gt 0) {
+        $tasks = New-Object System.Collections.ArrayList
+        $seen = @{}
+        foreach ($task in (Get-TeamTasks -Queue $fresh)) {
+            $id = [string]$task.id
+            if ($mine.Contains($id)) { [void]$tasks.Add($mine[$id]); $seen[$id] = $true } else { [void]$tasks.Add($task) }
+        }
+        foreach ($id in @($mine.Keys)) {
+            if (-not $seen.ContainsKey($id)) { [void]$tasks.Add($mine[$id]) }
+            if ($null -ne $versions[$id]) { $apiStore.Baseline[$id] = $versions[$id] } else { $apiStore.Baseline.Remove($id) }
+        }
+        Set-TeamProperty -InputObject $fresh -Name "tasks" -Value @($tasks.ToArray())
+    }
     $script:queue = $fresh
-    # Every task is the store's version again: nothing is "theirs" any more.
-    $script:staleIds.Clear()
+    # Every other task is the store's version again: nothing but a run's task is "theirs" any more.
+    foreach ($id in @($script:staleIds.Keys)) { if (-not $mine.Contains($id)) { $script:staleIds.Remove($id) } }
+}
+
+function Resolve-UnwrittenMerges {
+    <# A merge whose write had to wait (the store was away when the inspection ended) and was
+       refused when it could at last be tried: other merges may stand on it by now, so nothing
+       is reset - it is named, for the lead, and the cycle's copy says again what it said
+       before. One that was written since is no longer waited for. #>
+    foreach ($late in @($script:unwrittenMerges.ToArray())) {
+        $id = [string]$late.Task.id
+        if ($script:staleIds.ContainsKey($id)) {
+            if ([string]$late.Task.state -eq "merged") {
+                Add-RefusedMergeNote -Task $late.Task -Undone $false
+                Restore-TaskCopy -Task $late.Task -Before $late.Before
+            }
+            $script:unwrittenMerges.Remove($late)
+        }
+        elseif (-not $useApi -or ($null -ne $apiStore.Baseline[$id] -and $apiStore.Baseline[$id].Json -ceq (ConvertTo-Json -InputObject $late.Task -Depth 12 -Compress))) {
+            $script:unwrittenMerges.Remove($late)
+        }
+    }
 }
 
 $queue = if ($useApi) { Read-TeamQueueApi -Store $apiStore } else { Read-TeamJson -Path $queuePath }
@@ -283,15 +368,20 @@ $cycle = [pscustomobject]@{
 # ------------------------------------------------------------------ the live status
 # What the owner's 'Ofis' page reads (office-cycle-status): which runs are in flight NOW, the
 # estimate so far and the usage limit. File mode: team/status.json; API mode: PUT
-# /v1/team/queue/status. A status nobody refreshed for ten minutes reads as "no cycle", so a long
-# wait refreshes it every $statusTickSeconds seconds. A write that fails is a line under the risks,
-# once, and never a reason to stop the cycle.
+# /v1/team/queue/status. A status nobody refreshed for ten minutes reads as "no cycle", so the
+# pool refreshes it every $statusTickSeconds seconds while it has runs in flight or waits for the
+# limit. A write that fails is a line under the risks, once, and never a reason to stop the cycle.
 $statusPath = Join-Path $TeamRoot "status.json"
 $stopFlagPath = Join-Path $TeamRoot "stop.flag"
 $statusTickSeconds = 120
 # A test hook (the heartbeat is otherwise only visible after two minutes): a whole number of seconds.
 if ([string]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS -match '^[1-9]\d{0,3}$') { $statusTickSeconds = [int]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS }
 $liveRuns = New-Object System.Collections.ArrayList
+$statusWrittenAt = [datetime]::MinValue
+# The pool: the runs in flight (what Start-RoleRun returned). $unwrittenMerges are the merges
+# whose write the store could not take when they were made (Resolve-UnwrittenMerges).
+$pool = New-Object System.Collections.ArrayList
+$unwrittenMerges = New-Object System.Collections.ArrayList
 $usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
 $statusFailed = $false
 $stopNoted = $false
@@ -321,6 +411,9 @@ $loweredRuns = New-Object System.Collections.ArrayList
 $statusLegacy = $false
 # The usage limit ended the cycle: nothing further starts.
 $limitStop = $false
+# The usage limit is being waited out until then (UTC): the pool starts nothing, the runs in
+# flight go on. $null = no wait.
+$limitWaitUntil = $null
 
 function Add-CycleNote {
     param([string]$List, [string]$Text)
@@ -384,6 +477,7 @@ function New-CycleStatus {
 }
 
 function Write-CycleStatus {
+    $script:statusWrittenAt = [datetime]::UtcNow
     try {
         if ($useApi) {
             try { Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Legacy $script:statusLegacy) }
@@ -627,6 +721,12 @@ try {
             Add-CycleNote -List "stops" -Text "süre tavanı: $CycleMinutes dakika"
             return $true
         }
+        # Not a cap on the work: this PROCESS is bound to the script and the arguments it
+        # started with (2026-10-01: a setting changed at 16:45 took effect at 19:35).
+        if ($MaxHours -gt 0 -and ([datetime]::UtcNow - $started).TotalHours -ge $MaxHours) {
+            Add-CycleNote -List "stops" -Text "çalışma süresi doldu (-MaxHours $MaxHours saat); yeni koşu başlatılmadı - zamanlayıcının bir sonraki döngüsü güncel betik ve ayarla sürdürür"
+            return $true
+        }
         return $false
     }
 
@@ -686,8 +786,11 @@ try {
     }
 
     function Complete-RoleRun {
+        <# What a run that is over left behind: its files, its cost, its line in the report.
+           The pool calls it for a run that has ended or is past its time (Test-TeamRunOver),
+           so nothing waits here; a run past its time is killed. #>
         param($Started)
-        $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline -OnTick { Write-CycleStatus } -TickSeconds $statusTickSeconds
+        $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline
         $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model ([string]$Started.Model)
         $taskId = if ($null -ne $Started.Task) { [string]$Started.Task.id } else { "cycle" }
         $number = 1
@@ -738,40 +841,14 @@ try {
         }
     }
 
-    function Invoke-RoleRun {
-        <#
-        .SYNOPSIS
-            One run of a role that the cycle waits for by itself (the researcher, the lead's
-            split), with the model policy: started on the model its role is set to or - when
-            that one is limited and fallback is on - on the next one down; a run that comes
-            back with the usage limit is started again at once one model down, and when no
-            model is left the existing wait applies. $null when no run could be started.
-        #>
-        param($Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @())
-        $done = $null
-        # Three models and one retry after a wait: a bound, so a tool that says "limited" for
-        # ever cannot keep the cycle here.
-        for ($attempt = 0; $attempt -lt 5; $attempt++) {
-            $pick = Select-RunModel -Role $Role -Task $Task
-            if ($null -eq $pick.Model) {
-                if (-not (Wait-UsageLimit -ResetsAt ([string]$pick.ResetsAt))) { return $done }
-                continue
-            }
-            $done = Complete-RoleRun -Started (Start-RoleRun -Task $Task -Role $Role -WorkingDirectory $WorkingDirectory -Prompt $Prompt -ExcludeTools $ExcludeTools -Pick $pick)
-            if (-not $done.UsageLimited) { return $done }
-            Register-Limit -Done $done -Key ($(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }) + "/$Role")
-            $again = Select-RunModel -Role $Role -Task $Task
-            if ($null -ne $again.Model -and [string]$again.Model -ne [string]$done.Model) { continue }
-            $reset = if ($null -eq $again.Model) { [string]$again.ResetsAt } else { [string]$done.ResetsAt }
-            if (-not (Wait-UsageLimit -ResetsAt $reset)) { return $done }
-        }
-        return $done
-    }
-
-    function Wait-UsageLimit {
-        <# The subscription's limit was hit. True when the cycle may go on (it waited it
-           out); false when it must stop here and the next cycle continues. #>
+    function Set-LimitWait {
+        <# The subscription's limit was hit and no model is left to go down to. True when the
+           cycle waits it out: the pool starts nothing until the limit lifts, the runs in
+           flight go on and are completed as they end, and nothing blocks here. False when it
+           must stop - nothing new starts, and the next cycle continues. #>
         param([string]$ResetsAt)
+        # Its line is in the report already: two runs that meet the same limit stop the cycle once.
+        if ($script:limitStop) { return $false }
         if (-not $WaitForUsageLimit -or -not $ResetsAt) {
             $script:limitStop = $true
             $script:usageLimit = [pscustomobject]@{ state = "stopped"; resets_at = $(if ($ResetsAt) { $ResetsAt } else { $null }) }
@@ -782,15 +859,10 @@ try {
         }
         $until = ([datetime]::Parse($ResetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)).AddSeconds(90)
         $wait = $until - [datetime]::UtcNow
-        Add-CycleNote -List "risks" -Text ("Max kullanım limiti: {0} sıfırlanmasına kadar beklendi ({1:0} dk)" -f $ResetsAt, [Math]::Max(0, $wait.TotalMinutes))
+        $note = "Max kullanım limiti: {0} sıfırlanmasına kadar beklendi ({1:0} dk)" -f $ResetsAt, [Math]::Max(0, $wait.TotalMinutes)
+        if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+        if ($null -eq $script:limitWaitUntil -or $until -gt $script:limitWaitUntil) { $script:limitWaitUntil = $until }
         $script:usageLimit = [pscustomobject]@{ state = "waiting"; resets_at = $ResetsAt }
-        Write-CycleStatus
-        # In slices: the status is refreshed, and a stop flag ends the wait.
-        while (($until - [datetime]::UtcNow).TotalSeconds -gt 0 -and -not (Test-Path -LiteralPath $stopFlagPath)) {
-            Start-Sleep -Seconds ([int][Math]::Max(1, [Math]::Min($statusTickSeconds, ($until - [datetime]::UtcNow).TotalSeconds)))
-            Write-CycleStatus
-        }
-        $script:usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
         Write-CycleStatus
         return $true
     }
@@ -834,113 +906,127 @@ try {
         Set-TeamProperty -InputObject $Task -Name "updated_at" -Value (Get-TeamTimestamp)
     }
 
-    # ---------------------------------------------------------------- the researcher
-    if ($runResearch -and -not (Test-CapReached)) {
-        $proposals = Join-Path $TeamRoot "proposals"
-        if (-not (Test-Path -LiteralPath $proposals)) { [void](New-Item -ItemType Directory -Force -Path $proposals) }
-        $done = Invoke-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot
-        # $null: no model was open and the wait was refused - the stop line is already written.
-        if ($null -eq $done) { }
-        elseif (-not $done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($done.Outcome)" }
-        else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
-        $known =@(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
-        foreach ($file in @(Get-ChildItem -LiteralPath $proposals -Filter *.md -File | Sort-Object -Property Name)) {
-            $relative = "team/proposals/$($file.Name)"
-            if ($known -contains $relative) { continue }
-            $first = @(Get-Content -LiteralPath $file.FullName -Encoding UTF8 -TotalCount 5 | Where-Object { $_ -match '\S' })
-            $title = if (@($first).Count -gt 0) { ([string]$first[0]).TrimStart("#", " ").Trim() } else { $file.BaseName }
-            $id = ("idea-" + ($file.BaseName.ToLowerInvariant() -replace '[^a-z0-9-]', '-')).Trim("-")
-            if ($id.Length -gt 64) { $id = $id.Substring(0, 64).Trim("-") }
-            $now = Get-TeamTimestamp
-            $task = [pscustomobject]@{
-                id = $id; title = $title; roadmap_row = ""; state = "awaiting_owner"; area = @(); branch = ""
-                worktree = ""; assignee = "researcher"; reports = @(); budget = [pscustomobject]@{ max_usd = $RunMaxUsd }
-                created_at = $now; updated_at = $now; proposal = $relative
-            }
-            Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $task)
+    # ---------------------------------------------------------------- the pool
+    # Owner rule 2026-10-01 (ADR-0214 addendum 8): no agent idles while there is work. The
+    # cycle used to run in BATCHES - start up to -MaxParallel runs, wait for ALL of them, look
+    # at the queue again - so a seat whose run ended after five minutes stayed empty until the
+    # slowest run of its batch ended (cycle adr0224-02: three workers of 3310 / 3295 / 3275
+    # seconds, the two short ones waiting for the long one), a finished worker's inspection
+    # waited for the whole batch, and the researcher ran alone before any task. Now:
+    #   * the runs in flight are POLLED, never waited for one by one. One that ends is
+    #     completed at once (Complete-PoolRun: report, queue state, the merge of an approved
+    #     inspection, the write) - one after the other, so two merges never run together;
+    #   * then the seats are filled (Start-PoolRuns): the settings file and the store are
+    #     read again, what can run is computed from the queue as it is NOW, and each role's
+    #     free seats are given out in queue order (Select-TeamSeatFill). The researcher and
+    #     one lead split run beside the tasks' runs;
+    #   * the usage limit, when no model is left to go down to, is waited out without
+    #     blocking: nothing starts until it lifts, the runs in flight go on;
+    #   * the cycle ends when nothing is in flight and nothing can be started.
+    $settingsPath = Join-Path $TeamRoot "cycle-settings.json"
+    $settingsNoted = @{}
+    $seats = @{}
+    # The researcher still to be run in this cycle; the proposals whose split was asked for
+    # (one try a cycle); and how often a run the cycle makes for itself - the researcher, a
+    # split - was started (three models and a retry after a wait: a tool that says "limited"
+    # for ever cannot keep the cycle at it).
+    $researchPending = $runResearch
+    $splitTried = @{}
+    $ownTries = @{}
+    $postedIdeas = @{}
+    # A cap, the stop flag or the usage limit ended the cycle: nothing new starts.
+    $capped = $false
+    # Refills in a row that moved a state and started nothing, with nothing in flight. One or
+    # two is ordinary (a proposal moved to the owner's gate); more means the store refuses the
+    # same move after every read.
+    $idlePasses = 0
+
+    function Read-SeatSettings {
+        <# The seats of this refill: the parameters, or team/cycle-settings.json when it is
+           there. A file that is no setting changes nothing and is said once. #>
+        $read = Read-TeamCycleSettings -Path $settingsPath -Workers $MaxParallel -Inspectors $MaxInspectors -Integrators $MaxIntegrators
+        foreach ($problem in @($read.Problems)) {
+            if ($script:settingsNoted.ContainsKey([string]$problem)) { continue }
+            $script:settingsNoted[[string]$problem] = $true
+            Add-CycleNote -List "risks" -Text "$problem; döngü kendi parametreleriyle sürdü"
         }
-        Save-Queue -Document $queue
+        $script:seats = @{ worker = $read.Workers; inspector = $read.Inspectors; integrator = $read.Integrators; lead = 1; researcher = 1 }
     }
 
-    # The text of every idea that waits for the owner goes where the queue is kept (ADR-0236):
-    # the Onay Merkezi's "Detay" shows it. EVERY cycle, for every waiting idea whose file is
-    # here, whether a researcher ran or not: the route keeps or replaces, so a text the store
-    # did not take once (two ideas waited with none on 2026-10-02) is there after the next cycle.
-    if ($useApi) {
-        foreach ($idea in @(Get-TeamTasks -Queue $queue | Where-Object { @("awaiting_owner", "proposed") -contains [string]$_.state })) {
+    function Save-PoolQueue {
+        <# The cycle's own changes, written. With nothing in flight it is strict, as it always
+           was (a store that does not take the cycle's writes ends the cycle); beside runs in
+           flight a store that is away is a line in the report (Save-QueueNow). #>
+        param([string]$What)
+        if (@($script:pool).Count -eq 0) { Save-Queue -Document $script:queue } else { [void](Save-QueueNow -What $What) }
+        Resolve-UnwrittenMerges
+    }
+
+    function Send-IdeaTexts {
+        <# The text of every idea that waits for the owner goes where the queue is kept
+           (ADR-0236): the Onay Merkezi's "Detay" shows it. EVERY cycle, for every waiting idea
+           whose file is here, whether a researcher ran or not: the route keeps or replaces, so
+           a text the store did not take once (two ideas waited with none on 2026-10-02) is
+           there after the next cycle. Each file once a cycle: at its start, and what the
+           researcher wrote when its run ends. #>
+        if (-not $useApi) { return }
+        foreach ($idea in @(Get-TeamTasks -Queue $script:queue | Where-Object { @("awaiting_owner", "proposed") -contains [string]$_.state })) {
             $relative = [string](Get-TeamProperty -InputObject $idea -Name "proposal" -Default "")
             $ideaName = [System.IO.Path]::GetFileName($relative)
             # Only a file OF team/proposals (the folder of -TeamRoot), named as the store names one:
             # an idea's card must not make the cycle post a plan, a source file or a path that climbs.
             if ($relative -cne "team/proposals/$ideaName" -or $ideaName -cnotmatch '^[A-Za-z0-9._-]+\.md$') { continue }
             $ideaFile = Join-Path (Join-Path $TeamRoot "proposals") $ideaName
-            if (-not (Test-Path -LiteralPath $ideaFile)) { continue }
+            if ($script:postedIdeas.ContainsKey($ideaName) -or -not (Test-Path -LiteralPath $ideaFile)) { continue }
+            $script:postedIdeas[$ideaName] = $true
             try { Send-TeamProposalApi -Store $apiStore -Name ([System.IO.Path]::GetFileName($ideaFile)) -Text ([System.IO.File]::ReadAllText($ideaFile, [System.Text.Encoding]::UTF8)) }
             catch { Add-CycleNote -List "risks" -Text ("fikrin metni depoya yazılamadı ($([System.IO.Path]::GetFileName($ideaFile))): " + (([string]$_.Exception.Message) -replace '\s+', ' ')) }
         }
     }
 
-    # ---------------------------------------------------------------- the lead's split
-    # A proposal that serves a roadmap row is approved in advance (TEAM_PROTOCOL 3a) but has no
-    # area yet. ONE fresh lead run per proposal writes the split; THIS script judges it
-    # (Test-TeamSplit) and takes it whole or refuses it whole. A refused split leaves the
-    # proposal where it was; the next cycle asks again.
-    if (-not $ResearchOnly) {
-        foreach ($proposal in @(Get-TeamSplitCandidates -Queue $queue)) {
-            if (Test-CapReached) { break }
-            $proposalId = [string]$proposal.id
-            $splitRelative = "team/plans/$CycleId-split-$proposalId.json"
-            $splitPath = Join-Path $repoRoot ($splitRelative -replace '/', '\')
-            # A file left by an earlier run is not this run's answer.
-            if (Test-Path -LiteralPath $splitPath) { Remove-Item -LiteralPath $splitPath -Force }
-            $splitFolder = Split-Path -Parent $splitPath
-            if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
-            $card = New-TeamSplitCard -Task $proposal -Queue $queue -CycleId $CycleId -SplitFile $splitRelative
-            # The lead's run follows the setting and the chain like any role's.
-            $done = Invoke-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit")
-            if ($null -eq $done) { break }
-            if (-not $done.Ok) {
-                Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: $($done.Outcome)"
-                continue
-            }
-            $read = Read-TeamSplitFile -Path $splitPath
-            $why = @()
-            if (-not $read.Ok) { $why = @($read.Why) }
-            else { $why = @(Test-TeamSplit -Split $read.Split -Queue $queue) }
-            if (@($why).Count -eq 0) {
-                $made = @(ConvertTo-TeamSplitTasks -Split $read.Split -Proposal $proposal -MaxUsd $RunMaxUsd)
-                $trial = [pscustomobject]@{ version = 1; tasks = @(@(Get-TeamTasks -Queue $queue) + $made) }
-                $why = @(Test-TeamQueue -Queue $trial)
-                if (@($why).Count -eq 0) {
-                    Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $made)
-                    Set-TeamProperty -InputObject $proposal -Name "state" -Value "done"
-                    Set-TeamProperty -InputObject $proposal -Name "reason" -Value ("bölündü: " + ((@($made) | ForEach-Object { [string]$_.id }) -join ", "))
-                    Set-TeamProperty -InputObject $proposal -Name "updated_at" -Value (Get-TeamTimestamp)
-                    Save-Queue -Document $queue
-                    continue
+    function Add-ResearchProposals {
+        <# What is under team/proposals/ and not in the queue yet waits for the owner. #>
+        $proposals = Join-Path $TeamRoot "proposals"
+        if (Test-Path -LiteralPath $proposals) {
+            $known = @(Get-TeamTasks -Queue $script:queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
+            foreach ($file in @(Get-ChildItem -LiteralPath $proposals -Filter *.md -File | Sort-Object -Property Name)) {
+                $relative = "team/proposals/$($file.Name)"
+                if ($known -contains $relative) { continue }
+                $first = @(Get-Content -LiteralPath $file.FullName -Encoding UTF8 -TotalCount 5 | Where-Object { $_ -match '\S' })
+                $title = if (@($first).Count -gt 0) { ([string]$first[0]).TrimStart("#", " ").Trim() } else { $file.BaseName }
+                $id = ("idea-" + ($file.BaseName.ToLowerInvariant() -replace '[^a-z0-9-]', '-')).Trim("-")
+                if ($id.Length -gt 64) { $id = $id.Substring(0, 64).Trim("-") }
+                $now = Get-TeamTimestamp
+                $task = [pscustomobject]@{
+                    id = $id; title = $title; roadmap_row = ""; state = "awaiting_owner"; area = @(); branch = ""
+                    worktree = ""; assignee = "researcher"; reports = @(); budget = [pscustomobject]@{ max_usd = $RunMaxUsd }
+                    created_at = $now; updated_at = $now; proposal = $relative
                 }
+                Set-TeamProperty -InputObject $script:queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $script:queue) + $task)
             }
-            Add-CycleNote -List "risks" -Text ("bölme reddedildi: ${proposalId}: " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
         }
+        Save-PoolQueue -What "araştırmacının önerileri"
+        Send-IdeaTexts
     }
 
-    # ---------------------------------------------------------------- the tasks
-    $capped = [bool]$ResearchOnly
-    # Passes in a row that moved a state and started nothing. One or two is ordinary (a proposal
-    # moved to the owner's gate); more means the store refuses the same move after every read.
-    $idlePasses = 0
-    while (-not $capped) {
-        Sync-Queue
+    function Get-RunnableTasks {
+        <# One look at the queue as it is now: the moves a state calls for are made, and what
+           could be run is returned in queue order (Task, Role). A task with a run in flight
+           is that run's until it ends. #>
         $runnable = New-Object System.Collections.ArrayList
         $moved = $false
-        foreach ($task in (Get-TeamTasks -Queue $queue)) {
+        $flying = @{}
+        foreach ($run in $script:pool) { if ($null -ne $run.Task) { $flying[[string]$run.Task.id] = $true } }
+        foreach ($task in (Get-TeamTasks -Queue $script:queue)) {
+            $id = [string]$task.id
+            if ($flying.ContainsKey($id)) { continue }
             # Its write was refused and the store could not be read again yet: it is not ours.
             # Or three of its runs were dropped: this cycle starts nothing more for it.
-            if ($staleIds.ContainsKey([string]$task.id) -or $abandoned.ContainsKey([string]$task.id)) { continue }
+            if ($script:staleIds.ContainsKey($id) -or $script:abandoned.ContainsKey($id)) { continue }
             $next = Get-TeamNextRole -Task $task
             if ($next.Kind -ne "rest" -and $next.Kind -ne "gate") {
                 # A task whose dependencies are not on main yet waits, and says so once.
-                $unmet = @(Get-TeamUnmetDependencies -Task $task -Queue $queue)
+                $unmet = @(Get-TeamUnmetDependencies -Task $task -Queue $script:queue)
                 if (@($unmet).Count -gt 0) {
                     $waitNote = "bekliyor: $($task.id) -> $($unmet -join ', ') main'e girince"
                     if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
@@ -950,7 +1036,7 @@ try {
             if ($next.Kind -eq "move" -and [string]$next.NextState -eq "assigned") {
                 # Section 4: never into work beside a task that holds the same files. Two such
                 # tasks make a queue Test-TeamQueue refuses - and every later cycle with it.
-                $holders = @(Get-TeamAreaHolders -Task $task -Queue $queue)
+                $holders = @(Get-TeamAreaHolders -Task $task -Queue $script:queue)
                 if (@($holders).Count -gt 0) {
                     $waitNote = "bekliyor: $($task.id) -> $($holders -join ', ') aynı dosyaları bırakınca"
                     if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
@@ -961,265 +1047,474 @@ try {
                 Set-TeamProperty -InputObject $task -Name "state" -Value $next.NextState
                 Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
                 $moved = $true
-                # Looked at again in THIS pass: an 'approved' task that just became 'assigned' is
+                # Looked at again in THIS refill: an 'approved' task that just became 'assigned' is
                 # runnable now. It used to wait a whole round - behind that round's integrators -
                 # with its worker seat empty (the owner saw it on the Ofis page, 2026-10-01).
                 $next = Get-TeamNextRole -Task $task
                 if ($next.Kind -eq "move") { continue }
             }
             if ($next.Kind -ne "run") { continue }
-            $id = [string]$task.id
-            if (-not $runCount.ContainsKey($id)) { $runCount[$id] = 0 }
-            if ($runCount[$id] -ge $MaxRunsPerTask) {
+            if (-not $script:runCount.ContainsKey($id)) { $script:runCount[$id] = 0 }
+            if ($script:runCount[$id] -ge $MaxRunsPerTask) {
                 Stop-Task -Task $task -Reason "bu döngüde $MaxRunsPerTask koşu yapıldı ve iş bitmedi"
                 $moved = $true
                 continue
             }
-            [void]$runnable.Add([pscustomobject]@{ Task = $task; Next = $next })
+            [void]$runnable.Add([pscustomobject]@{ Task = $task; Role = [string]$next.Role; Pick = $null })
         }
-        if ($moved) {
-            Save-Queue -Document $queue
-            # A move the store refused: the task was written by somebody else between our read
-            # and this write (the lead stopped it, the owner decided). It is not run on our copy.
-            $ours = New-Object System.Collections.ArrayList
-            foreach ($item in $runnable) { if (-not $staleIds.ContainsKey([string]$item.Task.id)) { [void]$ours.Add($item) } }
-            $runnable = $ours
-        }
-        if (@($runnable).Count -eq 0) {
-            if (-not $moved) { break }
-            # It used to be a bare 'continue': a store that refused the same move after every read
-            # made thousands of requests a minute, past the stop flag and the caps, the lock held.
-            $idlePasses++
-            if ($idlePasses -ge 3) {
-                # Nothing is runnable in such a pass, so ending here loses no work - and it is said.
-                $why = if (@($staleIds.Keys).Count -gt 0) { "depo aynı yazmayı üst üste reddetti (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + ")" } else { "üst üste üç turda yalnız durum taşındı, hiçbir koşu başlamadı" }
-                Add-CycleNote -List "risks" -Text ($why + "; döngünün iş turu burada bitti")
-                break
-            }
-            if (Test-CapReached) { $capped = $true; break }
-            continue
-        }
-        $idlePasses = 0
-        if (Test-CapReached) { $capped = $true; break }
+        return [pscustomobject]@{ Runnable = @($runnable.ToArray()); Moved = $moved }
+    }
 
-        $startedRuns = New-Object System.Collections.ArrayList
-        # The earliest reset a task that could not be started is waiting for ("" = nobody said).
-        $blockedReset = ""
-        $blocked = 0
-        foreach ($item in $runnable) {
-            if (@($startedRuns).Count -ge $MaxParallel) { break }
-            $task = $item.Task
-            $role = [string]$item.Next.Role
-            # The model first: a task whose every allowed model is limited starts nothing -
-            # no worktree, no try spent - and the others of the queue go on.
-            $pick = Select-RunModel -Role $role -Task $task
-            if ($null -eq $pick.Model) {
-                $blocked++
-                if ($pick.ResetsAt -and (-not $blockedReset -or [string]::CompareOrdinal([string]$pick.ResetsAt, $blockedReset) -lt 0)) { $blockedReset = [string]$pick.ResetsAt }
-                if ($role -eq "inspector") { Add-InspectionWaitNote -Task $task -Pick $pick }
-                continue
-            }
-            $runCount[[string]$task.id] = $runCount[[string]$task.id] + 1
-            $where = $repoRoot
+    function Start-PoolRun {
+        <# One candidate of a refill, started in the seat it was given. $false when it could
+           not be started: a task is stopped with the reason, a run the cycle makes for itself
+           (the researcher, a lead's split) is over for this cycle and a line in the report.
+           Never an error out of the refill - that would end the cycle, and its 'finally' kills
+           every run in flight. #>
+        param($Item)
+        $task = $Item.Task
+        $role = [string]$Item.Role
+        if ($role -eq "researcher") {
+            $proposals = Join-Path $TeamRoot "proposals"
+            if (-not (Test-Path -LiteralPath $proposals)) { [void](New-Item -ItemType Directory -Force -Path $proposals) }
+            $script:ownTries["cycle/researcher"] = 1 + [int]$script:ownTries["cycle/researcher"]
             try {
-                if ($role -eq "worker" -or $role -eq "inspector") {
-                    $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
-                    if (-not $branch) {
-                        $slug = ([string]$task.id)
-                        $branch = Get-TeamBranchName -CycleId $CycleId -Role "worker" -Slug $slug
-                        Set-TeamProperty -InputObject $task -Name "branch" -Value $branch
-                    }
-                    $tree = New-TeamWorktree -RepoRoot $repoRoot -Branch $branch -Base $Base
-                    Set-TeamProperty -InputObject $task -Name "worktree" -Value (".claude/worktrees/" + $branch)
-                    $where = $tree.Path
-                }
-                if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "in_progress" }
-                Set-TeamProperty -InputObject $task -Name "assignee" -Value $role
-                [void]$startedRuns.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $where -Pick $pick))
+                [void]$script:pool.Add((Start-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot -Pick $Item.Pick))
+                return $true
             }
             catch {
-                Stop-Task -Task $task -Reason "koşu başlatılamadı: $($_.Exception.Message)"
+                # As a researcher's run that failed (Complete-Research), without the marker of a
+                # finished run: the next cycle tries again.
+                $script:researchPending = $false
+                Add-CycleNote -List "stops" -Text "araştırmacı: koşu başlatılamadı: $($_.Exception.Message)"
+                Add-ResearchProposals
+                return $false
             }
         }
-        [void](Save-QueueNow -What "koşuların başlangıcı")
-        if (@($startedRuns).Count -eq 0 -and $blocked -gt 0) {
-            # Every task that could run waits for a model: the existing wait (known reset:
-            # wait it out; unknown: stop with the line), then the queue is looked at again.
-            if (-not (Wait-UsageLimit -ResetsAt $blockedReset)) { $capped = $true }
-            continue
-        }
-
-        $limitHit = ""
-        $limitSeen = $false
-        # By index, not foreach: a run that comes back with the usage limit is started again
-        # at once one model down, and joins the end of this same list.
-        $unwrittenMerges = New-Object System.Collections.ArrayList
-        for ($runIndex = 0; $runIndex -lt @($startedRuns).Count; $runIndex++) {
-            $startedRun = $startedRuns[$runIndex]
-            $task = $startedRun.Task
-            $role = [string]$startedRun.Role
-            # Did THIS iteration make a new merge commit (the only one that may be taken back)?
-            $freshMerge = $false
-            $done = Complete-RoleRun -Started $startedRun
-            # The task as it is before this run's result touches it (see Restore-TaskCopy).
-            $beforeResult = ConvertTo-Json -InputObject $task -Depth 12 -Compress
-            if (Test-TaskMovedInStore -Task $task) {
-                # Their word stands for the RUN too, not only for the row: no merge, no state, no
-                # report entry (the report is in its file). What the run said about a MODEL's
-                # limit is still true. The next pass reads the store's version of the task.
-                if ($done.UsageLimited) { Register-Limit -Done $done -Key "$($task.id)/$role" }
-                # Not the task's try either: -MaxRunsPerTask counts the runs whose result counted.
-                $runCount[[string]$task.id] = [Math]::Max(0, $runCount[[string]$task.id] - 1)
-                $staleIds[[string]$task.id] = $true
-                Add-CycleNote -List "risks" -Text "$($task.id): koşu ($role) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı (raporu: $($done.File))"
-                # The hand-back must not become a way to run a task for ever (a store that takes
-                # the move and refuses every later write: 133 paid runs in a minute on the fake).
-                $droppedRuns[[string]$task.id] = [int]$droppedRuns[[string]$task.id] + 1
-                if ([int]$droppedRuns[[string]$task.id] -ge 3 -and -not $abandoned.ContainsKey([string]$task.id)) {
-                    $abandoned[[string]$task.id] = $true
-                    Add-CycleNote -List "risks" -Text "$($task.id): üç koşusunun sonucu uygulanamadı (depoda her seferinde başkası değiştirmiş); bu döngü bu işe bir daha koşu başlatmıyor"
-                }
-                continue
+        if ($role -eq "lead") {
+            # The lead's split. A proposal that serves a roadmap row is approved in advance
+            # (TEAM_PROTOCOL 3a) but has no area yet. ONE fresh lead run per proposal writes the
+            # split; THIS script judges it when the run ends (Complete-Split).
+            $proposalId = [string]$task.id
+            # One try a cycle, whether the run could be started or not.
+            $script:splitTried[$proposalId] = $true
+            $script:ownTries["$proposalId/lead"] = 1 + [int]$script:ownTries["$proposalId/lead"]
+            try {
+                $splitRelative = "team/plans/$CycleId-split-$proposalId.json"
+                $splitPath = Join-Path $repoRoot ($splitRelative -replace '/', '\')
+                # A file left by an earlier run is not this run's answer.
+                if (Test-Path -LiteralPath $splitPath) { Remove-Item -LiteralPath $splitPath -Force }
+                $splitFolder = Split-Path -Parent $splitPath
+                if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
+                $card = New-TeamSplitCard -Task $task -Queue $script:queue -CycleId $CycleId -SplitFile $splitRelative
+                # The lead's run follows the setting and the chain like any role's.
+                [void]$script:pool.Add((Start-RoleRun -Task $task -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit") -Pick $Item.Pick))
+                return $true
             }
-            if ($role -eq "inspector" -and $done.Ok) {
-                # The inspector's rule holds against the tool too: an inspection the tool itself
-                # ran on a weaker model than the worker's gives no verdict. The model that was
-                # asked for is treated as limited (that is why the tool left it), and the
-                # inspection is started again on a model at least as strong, or waits.
-                $floor = Get-TeamInspectionFloor -Task $task -Setting $script:modelSetting
-                $workerRank = Get-TeamModelRank -Model ([string]$floor.Model)
-                if ($workerRank -ge 0 -and (Get-TeamModelRank -Model ([string]$done.RanModel)) -gt $workerRank) {
-                    $workerSaid = if ($floor.Recorded) { "işçi $($floor.Model) ile koşmuştu" } else { "işçinin modeli kayıtlı değil, ayarlı işçi modeli $($floor.Model)" }
-                    $done.Ok = $false
-                    $done.UsageLimited = $true
-                    $done.LimitScope = "model"
-                    $done.LimitedModel = [string]$done.Model
-                    $done.ResetsAt = ""
-                    $done.Outcome = "hüküm alınmadı: araç denetimi $($done.RanModel) ile koşturdu, $workerSaid"
-                    Add-CycleNote -List "risks" -Text "$($task.id): hüküm alınmadı - araç denetimi $($done.Model) yerine $($done.RanModel) ile koşturdu; bu, işçinin modelinden ($($floor.Model)) zayıf"
-                }
-            }
-            Add-TaskReport -Task $task -Role $role -Done $done
-
-            if ($done.UsageLimited) {
-                # Not the task's failure and not a try spent (owner decision 2026-09-30).
-                Register-Limit -Done $done -Key "$($task.id)/$role"
-                $runCount[[string]$task.id] = [Math]::Max(0, $runCount[[string]$task.id] - 1)
-                # The fallback chain (ADR-0214 addendum 7): the SAME task, at once, on the next
-                # model down - when the setting allows it, a model is open, and nobody asked the
-                # cycle to stop. The inspector is never lowered below the worker's model.
-                $again = Select-RunModel -Role $role -Task $task
-                if ($null -ne $again.Model -and [string]$again.Model -ne [string]$done.Model -and -not (Test-StopRequested)) {
-                    try {
-                        [void]$startedRuns.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $startedRun.Where -Prompt $startedRun.Prompt -ExcludeTools $startedRun.ExcludeTools -Pick $again))
-                        $runCount[[string]$task.id] = $runCount[[string]$task.id] + 1
-                        Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
-                        continue
-                    }
-                    catch { Add-CycleNote -List "risks" -Text "$($task.id): bir alt modelde yeniden başlatılamadı: $($_.Exception.Message)" }
-                }
-                # No model to go down to (or fallback is off): the task goes back to where it
-                # was and is taken up again when the limit lifts.
-                if ($role -eq "inspector" -and $null -eq $again.Model) { Add-InspectionWaitNote -Task $task -Pick $again }
-                $limitSeen = $true
-                $waitFor = if ($null -eq $again.Model) { [string]$again.ResetsAt } else { [string]$done.ResetsAt }
-                if ($waitFor) { $limitHit = $waitFor }
-                if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
-                Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
-                continue
-            }
-            if (-not $done.Ok) {
-                $failures = [int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0) + 1
-                Set-TeamProperty -InputObject $task -Name "failed_runs" -Value $failures
-                if ($failures -ge 2) { Stop-Task -Task $task -Reason "iki koşu sonuç vermedi ($($done.Outcome))" }
-                elseif ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
-                continue
-            }
-            switch ($role) {
-                "integrator" {
-                    $plan = "team/plans/$($task.id)-integration.md"
-                    if (Test-Path -LiteralPath (Join-Path $repoRoot ($plan -replace '/', '\'))) {
-                        Set-TeamProperty -InputObject $task -Name "plan" -Value $plan
-                        # With its plan an approved task is the pass's to move into work - beside
-                        # nobody that holds its files (the same rule as every other approved task).
-                        if (@(Get-TeamAreaHolders -Task $task -Queue $queue).Count -eq 0) { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
-                    }
-                    else { Stop-Task -Task $task -Reason "entegratör plan dosyasını yazmadı ($plan)" }
-                }
-                "worker" {
-                    $branch = [string]$task.branch
-                    $outside = @(Get-TeamChangedFiles -RepoRoot $repoRoot -Branch $branch -Base $Base |
-                        Where-Object { -not (Test-TeamPathInsideArea -Path $_ -Area @($task.area)) })
-                    if (@($outside).Count -gt 0) {
-                        # Section 4: a worker never leaves its area. Not the inspector's to find.
-                        $script:cycle.returned = [int]$script:cycle.returned + 1
-                        $after = Get-TeamStateAfterInspection -Task $task -Verdict "RETURN"
-                        Set-TeamProperty -InputObject $task -Name "returns" -Value $after.Returns
-                        Set-TeamProperty -InputObject $task -Name "state" -Value $after.State
-                        Set-TeamProperty -InputObject $task -Name "reason" -Value ("alan dışı dosya: " + (($outside | Select-Object -First 5) -join ", "))
-                    }
-                    else {
-                        $sha = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("rev-parse", "refs/heads/$branch")
-                        if ($sha.Success) { Set-TeamProperty -InputObject $task -Name "sha" -Value $sha.StdOut.Trim() }
-                        Set-TeamProperty -InputObject $task -Name "state" -Value "inspecting"
-                    }
-                }
-                "inspector" {
-                    $verdict = Get-TeamVerdict -Report $done.Text
-                    $after = Get-TeamStateAfterInspection -Task $task -Verdict $verdict.Verdict
-                    Set-TeamProperty -InputObject $task -Name "returns" -Value $after.Returns
-                    $reason = if ($verdict.Detail) { $verdict.Detail } else { $after.Reason }
-                    if ($after.State -eq "merged") {
-                        $merge = Merge-TeamBranch -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) -Base $Base
-                        if ($merge.Merged) {
-                            $freshMerge = -not [bool]$merge.Already
-                            Set-TeamProperty -InputObject $task -Name "state" -Value "merged"
-                            Set-TeamProperty -InputObject $task -Name "integration_branch" -Value $merge.Integration
-                        }
-                        else {
-                            $script:cycle.conflicts = [int]$script:cycle.conflicts + 1
-                            $script:cycle.returned = [int]$script:cycle.returned + 1
-                            $back = Get-TeamStateAfterInspection -Task $task -Verdict "RETURN"
-                            Set-TeamProperty -InputObject $task -Name "returns" -Value $back.Returns
-                            Set-TeamProperty -InputObject $task -Name "state" -Value $back.State
-                            Set-TeamProperty -InputObject $task -Name "reason" -Value "entegrasyon dalında çakışma"
-                        }
-                    }
-                    else {
-                        if ($after.State -eq "returned") { $script:cycle.returned = [int]$script:cycle.returned + 1 }
-                        Set-TeamProperty -InputObject $task -Name "state" -Value $after.State
-                        Set-TeamProperty -InputObject $task -Name "reason" -Value $reason
-                    }
-                }
-            }
-            Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
-            # Written NOW, not when the batch's last run ends: between this task's look at the
-            # store and this write there is only what was just done (a merge: seconds), not the
-            # rest of the batch (six seats: an hour). If the store refuses it all the same, the
-            # row is theirs - and a merge that was made is said by name, for the lead to take back.
-            $writtenNow = Save-QueueNow -What ([string]$task.id)
-            if ($staleIds.ContainsKey([string]$task.id) -and [string]$task.state -eq "merged") {
-                # Refused right after the merge: it is still the branch's last commit, and it is
-                # taken back. (Not when the merge was "already there": that commit is not ours.)
-                $undone = $false
-                if ($freshMerge) { $undone = Undo-TeamMerge -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) }
-                Add-RefusedMergeNote -Task $task -Undone $undone
-            }
-            elseif (-not $writtenNow -and [string]$task.state -eq "merged") { [void]$unwrittenMerges.Add([pscustomobject]@{ Task = $task; Before = $beforeResult }) }
-            # Refused: the copy says again what it said before this result.
-            if ($staleIds.ContainsKey([string]$task.id)) { Restore-TaskCopy -Task $task -Before $beforeResult }
-        }
-        Save-Queue -Document $queue
-        # A merge whose write had to wait for the batch's end and was refused THERE: other merges
-        # may stand on it by now, so nothing is reset - it is named, for the lead.
-        foreach ($late in $unwrittenMerges) {
-            if ($staleIds.ContainsKey([string]$late.Task.id) -and [string]$late.Task.state -eq "merged") {
-                Add-RefusedMergeNote -Task $late.Task -Undone $false
-                Restore-TaskCopy -Task $late.Task -Before $late.Before
+            catch {
+                # The proposal stays where it was; the next cycle asks again.
+                Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: koşu başlatılamadı: $($_.Exception.Message)"
+                return $false
             }
         }
-        if ($limitSeen -and -not (Wait-UsageLimit -ResetsAt $limitHit)) { $capped = $true }
+        $script:runCount[[string]$task.id] = $script:runCount[[string]$task.id] + 1
+        $where = $repoRoot
+        try {
+            if ($role -eq "worker" -or $role -eq "inspector") {
+                $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
+                if (-not $branch) {
+                    $slug = ([string]$task.id)
+                    $branch = Get-TeamBranchName -CycleId $CycleId -Role "worker" -Slug $slug
+                    Set-TeamProperty -InputObject $task -Name "branch" -Value $branch
+                }
+                $tree = New-TeamWorktree -RepoRoot $repoRoot -Branch $branch -Base $Base
+                Set-TeamProperty -InputObject $task -Name "worktree" -Value (".claude/worktrees/" + $branch)
+                $where = $tree.Path
+            }
+            if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "in_progress" }
+            Set-TeamProperty -InputObject $task -Name "assignee" -Value $role
+            [void]$script:pool.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $where -Pick $Item.Pick))
+            return $true
+        }
+        catch {
+            Stop-Task -Task $task -Reason "koşu başlatılamadı: $($_.Exception.Message)"
+            return $false
+        }
     }
+
+    function Start-PoolRuns {
+        <# A refill: the seats that are free are given to what can run now. Returns what it did:
+           Started (runs), Failed (starts that failed: each is over - a stopped task, a line in
+           the report - and its seat is still free), Moved (a state was moved), Blocked
+           (candidates no model is open for) and the earliest reset those wait for ("" = nobody
+           said). #>
+        $pass = [pscustomobject]@{ Started = 0; Failed = 0; Moved = $false; Blocked = 0; BlockedReset = "" }
+        if ($script:capped) { return $pass }
+        Read-SeatSettings
+        Sync-Queue
+        $candidates = New-Object System.Collections.ArrayList
+        if ($script:researchPending -and [int]$script:ownTries["cycle/researcher"] -lt 5 -and @($script:pool | Where-Object { $_.Role -eq "researcher" }).Count -eq 0) {
+            [void]$candidates.Add([pscustomobject]@{ Task = $null; Role = "researcher"; Pick = $null })
+        }
+        # -ResearchOnly: the researcher writes its proposals, they are queued for the owner, and
+        # NO task is run or moved - not even an approved one.
+        if (-not $ResearchOnly) {
+            if (@($script:pool | Where-Object { $_.Role -eq "lead" }).Count -eq 0) {
+                foreach ($proposal in @(Get-TeamSplitCandidates -Queue $script:queue)) {
+                    # A refused split leaves the proposal where it was; the next cycle asks again.
+                    if ($script:splitTried.ContainsKey([string]$proposal.id)) { continue }
+                    [void]$candidates.Add([pscustomobject]@{ Task = $proposal; Role = "lead"; Pick = $null })
+                }
+            }
+            $look = Get-RunnableTasks
+            $pass.Moved = [bool]$look.Moved
+            if ($look.Moved) { Save-PoolQueue -What "durum taşımaları" }
+            foreach ($item in @($look.Runnable)) {
+                # A move the store refused: the task was written by somebody else between our read
+                # and this write (the lead stopped it, the owner decided). It is not run on our copy.
+                if (-not $script:staleIds.ContainsKey([string]$item.Task.id)) { [void]$candidates.Add($item) }
+            }
+        }
+        if (@($candidates).Count -eq 0) { return $pass }
+        if (Test-CapReached) { $script:capped = $true; return $pass }
+        # The limit is being waited out: nothing starts until it lifts.
+        if ($null -ne $script:limitWaitUntil) { return $pass }
+
+        # The model first: a run whose every allowed model is limited is given no seat - no
+        # worktree, no try spent - and the others of the queue go on.
+        $open = New-Object System.Collections.ArrayList
+        foreach ($item in $candidates) {
+            $pick = Select-RunModel -Role $item.Role -Task $item.Task
+            if ($null -eq $pick.Model) {
+                $pass.Blocked = $pass.Blocked + 1
+                if ($pick.ResetsAt -and (-not $pass.BlockedReset -or [string]::CompareOrdinal([string]$pick.ResetsAt, [string]$pass.BlockedReset) -lt 0)) { $pass.BlockedReset = [string]$pick.ResetsAt }
+                if ($item.Role -eq "inspector") { Add-InspectionWaitNote -Task $item.Task -Pick $pick }
+                continue
+            }
+            $item.Pick = $pick
+            [void]$open.Add($item)
+        }
+        $fill = @(Select-TeamSeatFill -Candidates @($open.ToArray()) -InFlight @($script:pool.ToArray()) -Seats $script:seats)
+        foreach ($item in $fill) {
+            if (Start-PoolRun -Item $item) { $pass.Started = $pass.Started + 1 } else { $pass.Failed = $pass.Failed + 1 }
+        }
+        if (@($fill).Count -gt 0) { [void](Save-QueueNow -What "koşuların başlangıcı") }
+        return $pass
+    }
+
+    function Resume-LimitedRun {
+        <# A run came back with the usage limit. The fallback chain (ADR-0214 addendum 7): the
+           SAME run, at once, on the next model down - when the setting allows it, a model is
+           open, and nobody asked the cycle to stop. $true when it is in flight again. #>
+        param($Started, $Again)
+        if ($null -eq $Again.Model -or [string]$Again.Model -eq [string]$Started.Model -or (Test-StopRequested)) { return $false }
+        try {
+            [void]$script:pool.Add((Start-RoleRun -Task $Started.Task -Role $Started.Role -WorkingDirectory $Started.Where -Prompt $Started.Prompt -ExcludeTools $Started.ExcludeTools -Pick $Again))
+            return $true
+        }
+        catch {
+            Add-CycleNote -List "risks" -Text "$($Started.Live.task): bir alt modelde yeniden başlatılamadı: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    function Resume-OwnRun {
+        <# The end of a run the cycle makes for itself (the researcher, a lead's split), with the
+           model policy. "over": the run's result stands. "restarted": it is in flight again, one
+           model down. "waiting": no model is left and the limit is waited out - the run is
+           started again when it lifts. At most five starts, whatever the tool says. #>
+        param($Started, $Done, [string]$Key)
+        if (-not $Done.UsageLimited) { return "over" }
+        Register-Limit -Done $Done -Key $Key
+        $again = Select-RunModel -Role $Started.Role -Task $Started.Task
+        $left = ([int]$script:ownTries[$Key] -lt 5)
+        if ($left -and (Resume-LimitedRun -Started $Started -Again $again)) {
+            $script:ownTries[$Key] = 1 + [int]$script:ownTries[$Key]
+            return "restarted"
+        }
+        $reset = if ($null -eq $again.Model) { [string]$again.ResetsAt } else { [string]$Done.ResetsAt }
+        if ((Set-LimitWait -ResetsAt $reset) -and $left) { return "waiting" }
+        return "over"
+    }
+
+    function Complete-Research {
+        param($Started, $Done)
+        if ((Resume-OwnRun -Started $Started -Done $Done -Key "cycle/researcher") -ne "over") { return }
+        $script:researchPending = $false
+        if (-not $Done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($Done.Outcome)" }
+        else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
+        Add-ResearchProposals
+    }
+
+    function Complete-Split {
+        <# The lead's split run ended: THIS script judges the file it wrote (Test-TeamSplit) and
+           takes it whole or refuses it whole. #>
+        param($Started, $Done)
+        $proposal = $Started.Task
+        $proposalId = [string]$proposal.id
+        $next = Resume-OwnRun -Started $Started -Done $Done -Key "$proposalId/lead"
+        if ($next -eq "restarted") { return }
+        if ($next -eq "waiting") { $script:splitTried.Remove($proposalId); return }
+        if (-not $Done.Ok) {
+            Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: $($Done.Outcome)"
+            return
+        }
+        $splitPath = Join-Path $repoRoot ("team\plans\$CycleId-split-$proposalId.json")
+        $read = Read-TeamSplitFile -Path $splitPath
+        $why = @()
+        if (-not $read.Ok) { $why = @($read.Why) }
+        else { $why = @(Test-TeamSplit -Split $read.Split -Queue $script:queue) }
+        if (@($why).Count -eq 0) {
+            $made = @(ConvertTo-TeamSplitTasks -Split $read.Split -Proposal $proposal -MaxUsd $RunMaxUsd)
+            $trial = [pscustomobject]@{ version = 1; tasks = @(@(Get-TeamTasks -Queue $script:queue) + $made) }
+            $why = @(Test-TeamQueue -Queue $trial)
+            if (@($why).Count -eq 0) {
+                Set-TeamProperty -InputObject $script:queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $script:queue) + $made)
+                Set-TeamProperty -InputObject $proposal -Name "state" -Value "done"
+                Set-TeamProperty -InputObject $proposal -Name "reason" -Value ("bölündü: " + ((@($made) | ForEach-Object { [string]$_.id }) -join ", "))
+                Set-TeamProperty -InputObject $proposal -Name "updated_at" -Value (Get-TeamTimestamp)
+                Save-PoolQueue -What "bölme: $proposalId"
+                return
+            }
+        }
+        Add-CycleNote -List "risks" -Text ("bölme reddedildi: ${proposalId}: " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
+    }
+
+    function Complete-TaskRun {
+        <# The end of a task's run (integrator, worker, inspector): its result moves the task. #>
+        param($Started, $Done)
+        $task = $Started.Task
+        $role = [string]$Started.Role
+        $id = [string]$task.id
+        # Did THIS run make a new merge commit (the only one that may be taken back)?
+        $freshMerge = $false
+        # The task as it is before this run's result touches it (see Restore-TaskCopy).
+        $beforeResult = ConvertTo-Json -InputObject $task -Depth 12 -Compress
+        if (Test-TaskMovedInStore -Task $task) {
+            # Their word stands for the RUN too, not only for the row: no merge, no state, no
+            # report entry (the report is in its file). What the run said about a MODEL's
+            # limit is still true. The next refill reads the store's version of the task.
+            if ($done.UsageLimited) { Register-Limit -Done $done -Key "$id/$role" }
+            # Not the task's try either: -MaxRunsPerTask counts the runs whose result counted.
+            $script:runCount[$id] = [Math]::Max(0, $script:runCount[$id] - 1)
+            $script:staleIds[$id] = $true
+            Add-CycleNote -List "risks" -Text "${id}: koşu ($role) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı (raporu: $($done.File))"
+            # The hand-back must not become a way to run a task for ever (a store that takes
+            # the move and refuses every later write: 133 paid runs in a minute on the fake).
+            $script:droppedRuns[$id] = [int]$script:droppedRuns[$id] + 1
+            if ([int]$script:droppedRuns[$id] -ge 3 -and -not $script:abandoned.ContainsKey($id)) {
+                $script:abandoned[$id] = $true
+                Add-CycleNote -List "risks" -Text "${id}: üç koşusunun sonucu uygulanamadı (depoda her seferinde başkası değiştirmiş); bu döngü bu işe bir daha koşu başlatmıyor"
+            }
+            return
+        }
+        if ($role -eq "inspector" -and $done.Ok) {
+            # The inspector's rule holds against the tool too: an inspection the tool itself
+            # ran on a weaker model than the worker's gives no verdict. The model that was
+            # asked for is treated as limited (that is why the tool left it), and the
+            # inspection is started again on a model at least as strong, or waits.
+            $floor = Get-TeamInspectionFloor -Task $task -Setting $script:modelSetting
+            $workerRank = Get-TeamModelRank -Model ([string]$floor.Model)
+            if ($workerRank -ge 0 -and (Get-TeamModelRank -Model ([string]$done.RanModel)) -gt $workerRank) {
+                $workerSaid = if ($floor.Recorded) { "işçi $($floor.Model) ile koşmuştu" } else { "işçinin modeli kayıtlı değil, ayarlı işçi modeli $($floor.Model)" }
+                $done.Ok = $false
+                $done.UsageLimited = $true
+                $done.LimitScope = "model"
+                $done.LimitedModel = [string]$done.Model
+                $done.ResetsAt = ""
+                $done.Outcome = "hüküm alınmadı: araç denetimi $($done.RanModel) ile koşturdu, $workerSaid"
+                Add-CycleNote -List "risks" -Text "${id}: hüküm alınmadı - araç denetimi $($done.Model) yerine $($done.RanModel) ile koşturdu; bu, işçinin modelinden ($($floor.Model)) zayıf"
+            }
+        }
+        Add-TaskReport -Task $task -Role $role -Done $done
+
+        if ($done.UsageLimited) {
+            # Not the task's failure and not a try spent (owner decision 2026-09-30).
+            Register-Limit -Done $done -Key "$id/$role"
+            $script:runCount[$id] = [Math]::Max(0, $script:runCount[$id] - 1)
+            # The inspector is never lowered below the worker's model.
+            $again = Select-RunModel -Role $role -Task $task
+            if (Resume-LimitedRun -Started $Started -Again $again) {
+                $script:runCount[$id] = $script:runCount[$id] + 1
+                Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+                return
+            }
+            # No model to go down to (or fallback is off): the task goes back to where it
+            # was and is taken up again when the limit lifts - or the cycle stops for it.
+            if ($role -eq "inspector" -and $null -eq $again.Model) { Add-InspectionWaitNote -Task $task -Pick $again }
+            $waitFor = if ($null -eq $again.Model) { [string]$again.ResetsAt } else { [string]$done.ResetsAt }
+            [void](Set-LimitWait -ResetsAt $waitFor)
+            if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
+            Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+            return
+        }
+        if (-not $done.Ok) {
+            $failures = [int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0) + 1
+            Set-TeamProperty -InputObject $task -Name "failed_runs" -Value $failures
+            if ($failures -ge 2) { Stop-Task -Task $task -Reason "iki koşu sonuç vermedi ($($done.Outcome))" }
+            elseif ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
+            return
+        }
+        switch ($role) {
+            "integrator" {
+                $plan = "team/plans/$id-integration.md"
+                if (Test-Path -LiteralPath (Join-Path $repoRoot ($plan -replace '/', '\'))) {
+                    Set-TeamProperty -InputObject $task -Name "plan" -Value $plan
+                    # With its plan an approved task is the refill's to move into work - beside
+                    # nobody that holds its files (the same rule as every other approved task).
+                    if (@(Get-TeamAreaHolders -Task $task -Queue $script:queue).Count -eq 0) { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
+                }
+                else { Stop-Task -Task $task -Reason "entegratör plan dosyasını yazmadı ($plan)" }
+            }
+            "worker" {
+                $branch = [string]$task.branch
+                $outside = @(Get-TeamChangedFiles -RepoRoot $repoRoot -Branch $branch -Base $Base |
+                    Where-Object { -not (Test-TeamPathInsideArea -Path $_ -Area @($task.area)) })
+                if (@($outside).Count -gt 0) {
+                    # Section 4: a worker never leaves its area. Not the inspector's to find.
+                    $script:cycle.returned = [int]$script:cycle.returned + 1
+                    $after = Get-TeamStateAfterInspection -Task $task -Verdict "RETURN"
+                    Set-TeamProperty -InputObject $task -Name "returns" -Value $after.Returns
+                    Set-TeamProperty -InputObject $task -Name "state" -Value $after.State
+                    Set-TeamProperty -InputObject $task -Name "reason" -Value ("alan dışı dosya: " + (($outside | Select-Object -First 5) -join ", "))
+                }
+                else {
+                    $sha = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("rev-parse", "refs/heads/$branch")
+                    if ($sha.Success) { Set-TeamProperty -InputObject $task -Name "sha" -Value $sha.StdOut.Trim() }
+                    Set-TeamProperty -InputObject $task -Name "state" -Value "inspecting"
+                }
+            }
+            "inspector" {
+                $verdict = Get-TeamVerdict -Report $done.Text
+                $after = Get-TeamStateAfterInspection -Task $task -Verdict $verdict.Verdict
+                Set-TeamProperty -InputObject $task -Name "returns" -Value $after.Returns
+                $reason = if ($verdict.Detail) { $verdict.Detail } else { $after.Reason }
+                if ($after.State -eq "merged") {
+                    $merge = Merge-TeamBranch -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) -Base $Base
+                    if ($merge.Merged) {
+                        $freshMerge = -not [bool]$merge.Already
+                        Set-TeamProperty -InputObject $task -Name "state" -Value "merged"
+                        Set-TeamProperty -InputObject $task -Name "integration_branch" -Value $merge.Integration
+                    }
+                    else {
+                        $script:cycle.conflicts = [int]$script:cycle.conflicts + 1
+                        $script:cycle.returned = [int]$script:cycle.returned + 1
+                        $back = Get-TeamStateAfterInspection -Task $task -Verdict "RETURN"
+                        Set-TeamProperty -InputObject $task -Name "returns" -Value $back.Returns
+                        Set-TeamProperty -InputObject $task -Name "state" -Value $back.State
+                        Set-TeamProperty -InputObject $task -Name "reason" -Value "entegrasyon dalında çakışma"
+                    }
+                }
+                else {
+                    if ($after.State -eq "returned") { $script:cycle.returned = [int]$script:cycle.returned + 1 }
+                    Set-TeamProperty -InputObject $task -Name "state" -Value $after.State
+                    Set-TeamProperty -InputObject $task -Name "reason" -Value $reason
+                }
+            }
+        }
+        Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+        # Written NOW, not when the other runs end: between this task's look at the store and
+        # this write there is only what was just done (a merge: seconds), not the rest of what
+        # is in flight (six seats: an hour). If the store refuses it all the same, the row is
+        # theirs - and a merge that was made is said by name, for the lead to take back. Never
+        # the strict write, even when this was the last run in flight: what follows a refusal
+        # (the merge taken back, the copy put back) must not be skipped by a store that is away.
+        $writtenNow = Save-QueueNow -What $id
+        if ($script:staleIds.ContainsKey($id) -and [string]$task.state -eq "merged") {
+            # Refused right after the merge: it is still the branch's last commit, and it is
+            # taken back. (Not when the merge was "already there": that commit is not ours.)
+            $undone = $false
+            if ($freshMerge) { $undone = Undo-TeamMerge -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) }
+            Add-RefusedMergeNote -Task $task -Undone $undone
+        }
+        elseif (-not $writtenNow -and [string]$task.state -eq "merged") { [void]$script:unwrittenMerges.Add([pscustomobject]@{ Task = $task; Before = $beforeResult }) }
+        # Refused: the copy says again what it said before this result.
+        if ($script:staleIds.ContainsKey($id)) { Restore-TaskCopy -Task $task -Before $beforeResult }
+        # A merge of an EARLIER run whose write had to wait and was refused in this save.
+        Resolve-UnwrittenMerges
+    }
+
+    function Complete-PoolRun {
+        <# A run of the pool is over: what it left is kept, and its result is applied. #>
+        param($Started)
+        $done = Complete-RoleRun -Started $Started
+        switch ([string]$Started.Role) {
+            "researcher" { Complete-Research -Started $Started -Done $done }
+            "lead" { Complete-Split -Started $Started -Done $done }
+            default { Complete-TaskRun -Started $Started -Done $done }
+        }
+    }
+
+    Send-IdeaTexts
+    $refillDue = $true
+    $nextRefill = [datetime]::UtcNow
+    while ($true) {
+        # The runs that are over, in the order they were started. Each is completed before the
+        # next is looked at: two approved inspections that end in the same poll are merged one
+        # after the other.
+        foreach ($over in @($pool.ToArray() | Where-Object { Test-TeamRunOver -Run $_.Run -Deadline $_.Deadline })) {
+            $pool.Remove($over)
+            Complete-PoolRun -Started $over
+            $refillDue = $true
+        }
+        # The limit was waited out - or somebody asked for a stop, which ends the wait.
+        if ($null -ne $limitWaitUntil -and ([datetime]::UtcNow -ge $limitWaitUntil -or (Test-Path -LiteralPath $stopFlagPath))) {
+            $limitWaitUntil = $null
+            $usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
+            Write-CycleStatus
+            $refillDue = $true
+        }
+        # Nothing ended: the store and the settings are still looked at every -RefillSeconds.
+        if ([datetime]::UtcNow -ge $nextRefill) { $refillDue = $true }
+        if ($refillDue) {
+            $refillDue = $false
+            $nextRefill = [datetime]::UtcNow.AddSeconds($RefillSeconds)
+            $pass = Start-PoolRuns
+            # A start that failed is a change, not "nothing can be started": the seat it was given
+            # is still free and the next of the queue takes it in the next refill, at once - with
+            # nothing else in flight too (the first pool ended there, two assigned tasks never
+            # run; the batch loop went on). It ends: every failed start stops its task, or is the
+            # one try of the researcher or of a split.
+            if ($pass.Failed -gt 0) { $refillDue = $true }
+            if ($pass.Started -gt 0 -or $pass.Failed -gt 0) { $idlePasses = 0 }
+            elseif (@($pool).Count -eq 0 -and $null -eq $limitWaitUntil) {
+                # Nothing is in flight and this refill started nothing.
+                if ($pass.Moved -and -not $capped) {
+                    # It used to be a bare 'continue': a store that refused the same move after every
+                    # read made thousands of requests a minute, past the stop flag and the caps, the
+                    # lock held.
+                    $idlePasses++
+                    if ($idlePasses -ge 3) {
+                        # Nothing is runnable in such a refill, so ending here loses no work - and it is said.
+                        $why = if (@($staleIds.Keys).Count -gt 0) { "depo aynı yazmayı üst üste reddetti (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + ")" } else { "üst üste üç turda yalnız durum taşındı, hiçbir koşu başlamadı" }
+                        Add-CycleNote -List "risks" -Text ($why + "; döngünün iş turu burada bitti")
+                        break
+                    }
+                    if (Test-CapReached) { break }
+                    # What moved may have made something runnable: looked at again at once.
+                    $refillDue = $true
+                    continue
+                }
+                # Every run that could start waits for a model: the limit is waited out (a known
+                # reset), or the cycle stops with the line (nobody said when).
+                $waits = (-not $capped -and $pass.Blocked -gt 0 -and (Set-LimitWait -ResetsAt ([string]$pass.BlockedReset)))
+                # The end: nothing is in flight and nothing can be started.
+                if (-not $waits) { break }
+            }
+        }
+        # Only the limit is waited for, and this process has had its hours: the next start waits.
+        if (@($pool).Count -eq 0 -and $null -ne $limitWaitUntil -and $MaxHours -gt 0 -and ([datetime]::UtcNow - $started).TotalHours -ge $MaxHours) {
+            [void](Test-CapReached)
+            break
+        }
+        # The heartbeat: a status nobody refreshed for ten minutes reads as "no cycle".
+        if (([datetime]::UtcNow - $statusWrittenAt).TotalSeconds -ge $statusTickSeconds) { Write-CycleStatus }
+        Start-Sleep -Milliseconds $(if (@($pool).Count -eq 0) { [Math]::Max($PollMilliseconds, 1000) } else { $PollMilliseconds })
+    }
+    # What a store that was away could not take while runs were in flight: nothing is in flight
+    # now, and this write is the strict one.
+    Save-Queue -Document $queue
+    Resolve-UnwrittenMerges
 
     # A flag that came up when nothing was left to stop is still the owner's word: say it, remove it.
     [void](Test-StopRequested)
@@ -1232,7 +1527,13 @@ try {
     Write-Host "cycle $CycleId ended; report: $path"
 }
 finally {
-    # Nothing is in flight any more, whatever ended the cycle.
+    # Nothing is in flight any more, whatever ended the cycle: a run still working when the
+    # cycle dies (an error in the middle of the pool) is killed - its worktree must not be
+    # written to after the lock is released. Its task is taken up again by the next cycle.
+    foreach ($orphan in @($pool.ToArray())) {
+        try { if (-not $orphan.Run.Process.HasExited) { Stop-TeamProcessTree -ProcessId $orphan.Run.Process.Id } } catch { }
+    }
+    $pool.Clear()
     $liveRuns.Clear()
     Write-CycleStatus
     if ($useApi) {
