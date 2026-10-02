@@ -58,6 +58,10 @@ def _bucket(settings: Settings) -> None:
 
 @pytest.fixture(scope="module")
 def ready_task(settings: Settings) -> tuple[uuid.UUID, uuid.UUID, str]:
+    return drive_to_ready(settings)
+
+
+def drive_to_ready(settings: Settings) -> tuple[uuid.UUID, uuid.UUID, str]:
     """Drive a research task to READY through the real durable workflow.
 
     Seeding the rows by hand would prove the endpoint works; running the
@@ -210,11 +214,11 @@ def test_revoking_a_session_stops_its_push_without_touching_the_row(
     live_after = {r.registration_id for r in service.live_registrations()}
     assert uuid.UUID(registration["registration_id"]) not in live_after
     # The registration row is untouched: the join is the enforcement point.
-    assert (
-        client.get("/v1/mobile/push/registrations")
-        .json()["registrations"][0]["status"]
-        in {"active", "revoked", "invalid"}
-    )
+    assert client.get("/v1/mobile/push/registrations").json()["registrations"][0]["status"] in {
+        "active",
+        "revoked",
+        "invalid",
+    }
 
 
 def test_device_revocation_invalidates_the_session_and_its_push_target(
@@ -223,9 +227,7 @@ def test_device_revocation_invalidates_the_session_and_its_push_target(
     """The full M9 chain through the real broker endpoint."""
     key = AgentKey()
     device_id = uuid.UUID(rest_enroll(client, key, name="itest-mobile-phone"))
-    phone = identity.service.issue_session(
-        client_kind="mobile", label="phone", device_id=device_id
-    )
+    phone = identity.service.issue_session(client_kind="mobile", label="phone", device_id=device_id)
     registration = client.post(
         "/v1/mobile/push/registrations",
         json={"provider": "fake", "token": "lost-phone-push-token", "platform": "ios"},
@@ -243,8 +245,7 @@ def test_device_revocation_invalidates_the_session_and_its_push_target(
 
     # The session is dead on the REST API...
     assert (
-        client.get("/v1/mobile/push/registrations", headers=bearer(phone.token)).status_code
-        == 401
+        client.get("/v1/mobile/push/registrations", headers=bearer(phone.token)).status_code == 401
     )
     # ...and it is no longer a push target.
     assert registration_id not in {r.registration_id for r in service.live_registrations()}
@@ -270,9 +271,7 @@ def test_artifact_ready_notifies_every_live_registration(
     assert title in payload["notification"]["body"]
 
     inbox = client.get("/v1/mobile/notifications").json()["notifications"]
-    mine = [
-        n for n in inbox if n["registration_id"] == registration["registration_id"]
-    ]
+    mine = [n for n in inbox if n["registration_id"] == registration["registration_id"]]
     assert len(mine) == 1
     assert mine[0]["data"]["artifact_id"] == str(artifact_id)
     # Constitution §3: the notification announces readiness, not the report.
@@ -287,9 +286,7 @@ def test_announcing_twice_leaves_one_unread_notification(
     task_id, _, _ = ready_task
     registration = register(client, token="collapse-probe-token")
     for _ in range(3):
-        client.post(
-            "/v1/mobile/notifications/artifact-ready", json={"task_id": str(task_id)}
-        )
+        client.post("/v1/mobile/notifications/artifact-ready", json={"task_id": str(task_id)})
     inbox = client.get("/v1/mobile/notifications").json()["notifications"]
     mine = [n for n in inbox if n["registration_id"] == registration["registration_id"]]
     assert len(mine) == 1
@@ -310,10 +307,7 @@ def test_a_task_that_is_not_ready_cannot_be_announced(
 
 def test_unknown_ids_are_404(client: TestClient) -> None:
     for body in ({"task_id": str(uuid.uuid4())}, {"artifact_id": str(uuid.uuid4())}):
-        assert (
-            client.post("/v1/mobile/notifications/artifact-ready", json=body).status_code
-            == 404
-        )
+        assert client.post("/v1/mobile/notifications/artifact-ready", json=body).status_code == 404
 
 
 # ---------------------------------------------------------------- share/export
@@ -380,27 +374,44 @@ def test_share_404s_for_an_unknown_artifact(client: TestClient) -> None:
 
 
 def test_the_announcer_fires_for_a_ready_task_with_no_one_calling_the_endpoint(
-    client: TestClient, ready_task: tuple[uuid.UUID, uuid.UUID, str]
+    client: TestClient, settings: Settings
 ) -> None:
     """The worker only makes a task READY; the API delivers.
 
     Nothing here calls /notifications/artifact-ready - the announcer drains
     READY-but-unannounced tasks by itself, which is what makes the push
     trigger real in production rather than test-only.
+
+    ONE sweeper decides this test (2026-10-02: the full gate was red here, and the module
+    alone failed every time once it took longer than a few seconds). The application under
+    test runs its own announcer loop - the lifespan starts it, a pass every five seconds -
+    and the module's shared ``ready_task`` is as old as the first test that asked for it:
+    whenever the loop's tick fell before this test's own pass, the loop had already taken
+    the task (announced it, or - with no device registered yet - recorded a failure and a
+    backoff) and ``sweep_once()`` here answered 0. The claim was true and the test was red
+    for where a tick fell. So: the loop is stopped for the length of the test, the device
+    is registered BEFORE a task of this test's own becomes READY, and the pass below is the
+    same ``sweep_once`` the loop calls. The loop is started again whatever happens.
     """
-    task_id, artifact_id, title = ready_task
-    register(client, token="announcer-driven-token")
-
     announcer = client.app.state.mobile.announcer
-    assert announcer.sweep_once() >= 1
+    client.portal.call(announcer.stop)
+    try:
+        assert not announcer.running, "the app's own loop is still sweeping beside this test"
+        register(client, token="announcer-driven-token")
+        task_id, artifact_id, title = drive_to_ready(settings)
 
-    inbox = client.get("/v1/mobile/notifications").json()["notifications"]
-    mine = [n for n in inbox if n["data"].get("artifact_id") == str(artifact_id)]
-    assert mine, "the ready task was not announced by the sweeper"
-    assert title in mine[0]["body"]
+        assert announcer.sweep_once() >= 1
 
-    # Exactly once: a second sweep must not re-announce the same task.
-    before = len(client.get("/v1/mobile/notifications").json()["notifications"])
-    assert announcer.sweep_once() == 0
-    after = len(client.get("/v1/mobile/notifications").json()["notifications"])
-    assert after == before
+        inbox = client.get("/v1/mobile/notifications").json()["notifications"]
+        mine = [n for n in inbox if n["data"].get("artifact_id") == str(artifact_id)]
+        assert mine, "the ready task was not announced by the sweeper"
+        assert title in mine[0]["body"]
+
+        # Exactly once: a second sweep must not re-announce the same task.
+        before = len(client.get("/v1/mobile/notifications").json()["notifications"])
+        assert announcer.sweep_once() == 0
+        after = len(client.get("/v1/mobile/notifications").json()["notifications"])
+        assert after == before
+    finally:
+        client.portal.call(announcer.start)
+    assert announcer.running, "the app's own loop was not started again"

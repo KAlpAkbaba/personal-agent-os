@@ -17,7 +17,36 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 
 **ÜRETİM: main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (2026-10-02 13:02 UTC, api-green), LKG `f91ad1e3`, pin = RELEASE,
 reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`d71a0bac`; 14 699 birim,
-2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**DÖRDÜNCÜ ENTEGRASYON HAZIRLANDI (lead, 2026-10-02 16:40): dal `gate/d20261002-4` (worktree `.claude/worktrees/gate7`) = lead
+dalı + `area-widen-rules` (ADR-0253) + `model-policy-api` (ADR-0214 ek 14) + lead'in bağlaması: `test_team_state.py`'nin iki
+düzenlemesi, `team-area.tests.ps1` CI dosyasına eklendi, QUALIFICATION 41.7'ye izlenebilir kanıt adı, korunan yollara dokuz
+giriş (liste kendisi, `.claude/hooks`, `.claude/settings*.json`, her `CLAUDE.md`, `PROJECT_CONSTITUTION.md`,
+`docs/DEVELOPMENT_POLICY.md`, `.git`, her `.gitignore`, `release-cloud-core.ps1`; kapı/CI/cycle.ps1/TeamQueue.ps1 BİLEREK
+korunmadı). ÖN KONTROL İKİ KIRMIZI YAKALADI (CI listesi, 41.7) - ikisi de kapandı. Compose/migration YOK → kapı yeşilse
+ONAYSIZ yayınlanır. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
+limitleri 'şu tarih itibarıyla' gösterilir" notu. KAPI ana kopyada bu dalın ucunda DETACHED koşar; günlük
+`scratchpad/gate/gate-<sha>.log`. Yeşilse main `--no-ff` → it → ön kontrol → yayın → pin → doğrula → `released` → Stage 45.**
+**17:25 KAPISI (`8425c6d9`) KIRMIZIYDI ve 3,5 SAAT sürdü (lead 21:05'te durdurdu); üç adım: (1) GERÇEK - `installer-strictmode`:
+`scripts/lib/TeamArea.ps1`'de yedi çıplak `.Count` (denetleyici o paketi koşmamıştı, lead'in ön kontrolü de) → `@( ).Count`,
+paket 24/0; (2) TEST YARIŞI - `test_mobile_push::test_the_announcer_fires…`: uygulamanın kendi 5 sn'lik duyuru döngüsü testin
+taramasından önce işi alıyordu; modül tek başına, yüksüz de düşüyordu (lead yeniden üretti) → test döngüyü durdurur, cihazı
+önce kaydeder, kendi işini READY yapar: 4/4 geçti; (3) YÜK - `SceneUnityProductionTests` Unity'de 600 sn'yi aştı (13 dk;
+öğleden sonraki kapıda Agent testlerinin TAMAMI 2 dk 40 sn). O saatlerde makinede kapı + üç denetleyici + sahip derlemini
+60+ dk koşturan bir çalışan vardı: birim paketi 56 dk yerine 2 sa 02 dk sürdü. ALTI AJAN + KAPI BU MAKİNEYE SIĞMIYOR:
+`cycle-seat-pool`'un çalışma zamanı ayarı gelince kapı koşarken koltuk sayısı düşürülecek (lead kararı, sahibe söylendi).
+AYRICA: döngü 6 saati geçince kilit "bayat" sayılıyor (`TeamLockStaleHours = 6`, yalnız `acquired_at`'e bakar): 20:05'ten
+beri Ofis "0/6, çalışmıyor" gösterdi ve başka bir makine kilidi DEVRALABİLİRDİ - kart `team-lock-heartbeat`.**
+**16:48 DENETİM SONUÇLARI: `cycle-seat-pool` GERİ DÖNDÜ (gerçek kusur: başlatılamayan bir iş, sırada iş varken döngüyü
+bitiriyordu; çalışanda - sahibin önceliği, onaylanınca BEKLETMEDEN ayrı kapı). `cycle-auto-integrate` beşinci denetimde
+onaylandı, lead bu tura ekledi ve GERİ ÇIKARDI: birleşik ağaçta paketin ön koşusu yük altında 77 geçti / 1 KALDI ("a process
+the lead's run leaves behind is stopped BEFORE its diff is read": geride kalan süreç YAZDI). Neden (lead'in okuması):
+`New-TeamRunJob` koşu BAŞLADIKTAN SONRA iş nesnesine alıyor; yük altında koşu, atamadan önce çocuğunu başlatıyor ya da
+bitiyor (`Held=false`), çocuk hiçbir iş nesnesinde değil. İş bulguyla çalışana döndü; lead'in bağlaması (ADR-0254 metni,
+kapı adımı, CI satırı) `lead/auto-integrate-wiring` @ `742d4f51` dalında SAKLI, yeniden kullanılacak. ADR-0254'ün açık
+kararları için beş kart kuyrukta: `integrate-own-lock`, `gate-own-database`, `gate-parallel-suites`,
+`integrate-skips-visible`, `run-liveness-visible` (sahip: "takılmalar var mı öğrenelim" - koşuların süre sınırı YOK ve
+çıktı ancak koşu bitince okunuyor; bugün takılan bir koşu görünmezdi).**
 **YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
 `f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
 Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:
