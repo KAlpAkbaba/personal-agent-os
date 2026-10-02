@@ -42,7 +42,10 @@ için döngü durdurmuştu) + narrative-failures-only-model ("tesisat" olarak; s
 `app/team/speech.py` sesli özet artık sayfanın saydığını (koşu) söyler; `Get-TeamVerdict` kapanış cümlesindeki hükmü
 okur ve `inspector.md` "son mesajın hükümle bitsin" der (ADR-0214 ek 12); ADR-0241…0244. İLK KAPI (`b35c6ddb`) TEK TESTTE KIRMIZIYDI:
 `test_every_error_class_has_turkish` - STT ölçüm aracı `ERROR_UNEXPECTED = "unexpected"` tanımlamış, Türkçe sözlükte
-(`app/errors/catalog.py`) karşılığı yoktu; eklendi, kapı yeniden koşuyor. SIRA: tam kapı (ana kopya
+(`app/errors/catalog.py`) karşılığı yoktu; eklendi. İKİNCİ KAPI (`614dedb4`) da TEK TESTTE KIRMIZIYDI: tarayıcı ajanında yük altında çıkan gerçek bir
+yarış (öksüz Chrome öldürülünce profil kilidi bir an daha tutuluyor; ADR-0246: kurtarma başlatması kilidi bekler).
+AYRICA 09:30'da BESLEYİCİ Fable limitini ÜÇ GÜN beklemeye geçip kilidi tuttu, döngü başlayamadı (sahip "0/6" gördü):
+süreç elle durduruldu, `feed.ps1` artık model zincirini izler ve 20 dk'dan uzun beklemez (ADR-0214 ek 13). SIRA: tam kapı (ana kopya
 detached) → yeşilse main `--no-ff` → kural gereği yayın (migration/compose YOK) → pin → doğrula → işleri `released`
 yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue`) bu entegrasyonda YOK: yayın gerektirmez,
 denetleyici onaylayınca lead dalına girer ve döngü `team/stop.flag` ile yenilenir.**

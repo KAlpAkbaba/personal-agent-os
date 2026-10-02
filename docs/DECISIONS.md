@@ -19224,3 +19224,52 @@ bitmedi". Two changes:
 `scripts/tests/team-cycle.tests.ps1`: seven cases (four RED before). Not closed here: the cycle still reads only the
 last message - a report followed by a remark with no verdict at all is still "no verdict", by design: silence is not
 an approval.
+
+## ADR-0246 — After an orphan Chrome is reaped, the one recovery launch waits for the profile's lock to be free (2026-10-02)
+
+**What happened.** The second gate of this integration (`614dedb4`) was RED on one browser test,
+`test_foreign_chrome_on_profile_is_reaped_then_one_recovery_launch`, with Chromium's own words: "Lock file can not be
+created … Failed to create a ProcessSingleton for your profile directory". The machine was loaded (six agent runs, a
+second suite). `reap_orphan_chrome` kills the browser that holds the research profile and waits for its MAIN process to
+exit; the launch that follows is deliberately never retried (the 2026-09-03 cascade). But the dying browser's children
+can hold the profile's `lockfile` a moment longer than the main process lives, and the recovery launch started into
+that moment. A kill is not an exit, and an exit is not a released file. On the owner's PC the same thing would be a
+research that fails with "browser is not reachable" right after a crash, when the machine is busy.
+
+**Decision.** `lifecycle.wait_for_profile_lock_free` waits (bounded by the same ten seconds as the wait for the
+processes, polling) until `<profile>/lockfile` is absent or can be opened; `reap_orphan_chrome` calls it after the
+processes are gone, and only when something was reaped - a clean launch pays nothing. The probe opens for reading and
+never creates the file. A lock still held at the bound is logged (`browser.profile_lock_still_held`) and the launch
+goes on to fail as it did: the wait removes the race, it does not hide a profile that really is in use. The launch
+itself is still never retried.
+
+**Evidence.** `services/browser/tests/unit/test_lifecycle_profile_lock.py` (6, RED before): the wait's three cases on a
+fake clock; the order kill -> processes -> lock with the same bound; no wait when nothing was reaped; the real probe
+against a file held with no sharing (`CreateFileW`, share mode 0). `PROVEN_AUTOMATED`; the browser unit suite 1012, the
+real-Chrome lifecycle tests 7/7 five times in a row. NOT proven: that this was the only way that test can fail under
+load - the next loaded gate says.
+
+### ADR-0214 addendum 13 (2026-10-02): the feeder never waits out a limit that is days away, and follows the model chain as the cycle does
+
+**What happened.** At 09:30 the scheduled tick started the feeder (the queue had fewer runnable tasks than seats: the
+team had finished everything it could reach). The feeder ran the lead on Fable - the lead's model - whose weekly limit
+had been used up at 03:32 (it lifts 2026-10-05 16:00 UTC; the cycle had known since then and lowered its own runs to
+Opus). The run was refused, and the feeder did what it was written to do: WAIT for the reset - three days - holding
+the team's lock, under which no cycle can start. The owner saw "koşan ajan 0/6" and asked why nobody worked. The lead
+stopped the waiting process by hand; the cycle started six minutes later.
+
+**Decision** (`scripts/team/feed.ps1`).
+1. The feeder reads what the cycles learnt (`team/limits.json`, read only) and starts its run on the lead's model or,
+   when that is limited, on the next open model down the chain (`Get-TeamRunModel`, the cycle's own rule); the report
+   says "model düşürüldü".
+2. A limit met IN the run that closes one model (or does not say whose it is) is not waited for: the same feed is
+   asked again at once, one model down - one try per model.
+3. No wait longer than `-MaxLimitWaitMinutes` (20), for any limit: the feeder holds the lock while it waits. A reset
+   further away than that, or no model open, is a line in the report ("beklenmedi") and the end of this feed; the tick
+   goes on to the cycle and the next tick asks again.
+
+**Evidence.** `scripts/tests/team-feed.tests.ps1`: four new cases (a model the cycle knows is limited is not asked; a
+limit met in the run goes one model down at once; every model limited for days - three runs, no wait, the lock
+released; a reset days away is not waited for whatever the model) beside the three old ones; four mutations RED,
+`feed.ps1` restored from a backup copy with sha256 equal. `PROVEN_AUTOMATED`. PROVEN_REAL is the next tick with Fable
+still limited: a feed run on Opus.

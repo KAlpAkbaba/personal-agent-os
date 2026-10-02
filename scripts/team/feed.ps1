@@ -71,6 +71,9 @@ param(
     [double]$RunMaxUsd = 0,
     [double]$RunMinutes = 0,
     [bool]$WaitForUsageLimit = $true,
+    # The longest reset the feeder waits for. It holds the team's lock while it waits, and no
+    # cycle can start under that lock: on 2026-10-02 it waited for Fable's week - three days.
+    [int]$MaxLimitWaitMinutes = 20,
     [string]$ClaudePath = (Join-Path $env:USERPROFILE ".local\bin\claude.exe"),
     [string[]]$ClaudePrefixArguments = @(),
     # The model when team/models.json does not name one for the lead.
@@ -124,6 +127,24 @@ if (Test-Path -LiteralPath $modelsPath) {
     if ($null -ne $named -and ([string]$named).Trim()) { $leadModel = ([string]$named).Trim() }
 }
 if ($leadModel -and $leadModel -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw "'$leadModel' is not a model name (the lead's)" }
+
+# What the cycles on this machine learnt about the limits (team/limits.json, the cycle's file;
+# read only): a model that is limited now starts no feed run. A file that cannot be read is no
+# knowledge - the run will say it again.
+$limitedModels = @{}
+$limitsPath = Join-Path $teamDir "limits.json"
+if (Test-Path -LiteralPath $limitsPath) {
+    try {
+        $known = Get-TeamProperty -InputObject (Read-TeamJson -Path $limitsPath) -Name "models"
+        if ($known -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($property in $known.PSObject.Properties) {
+                $until = [string](Get-TeamProperty -InputObject $property.Value -Name "until" -Default "")
+                if ((Test-TeamModelId -Model ([string]$property.Name)) -and $until) { $limitedModels[[string]$property.Name] = [pscustomobject]@{ until = $until } }
+            }
+        }
+    }
+    catch { $limitedModels = @{} }
+}
 
 $useApi = [bool]$QueueUrl
 if ($useApi -and -not $QueueToken) { throw "-QueueUrl needs -QueueToken: the path of a file holding the token" }
@@ -271,7 +292,6 @@ try {
     foreach ($folder in @((Split-Path -Parent $feedPath), $rawDir)) {
         if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
     }
-    $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $RunMaxUsd -Model $leadModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $exclude
     $card = New-TeamFeedCard -Queue $queue -RoadmapText $roadmapText -FeedFile $feedRelative -MaxNew $MaxNew -Date $day -Ideas $ideas
 
     # What the checkout looks like before the run, and the roadmap's own bytes: what the run
@@ -291,22 +311,50 @@ try {
             break
         }
         $attempt++
+        # The model of THIS try (ADR-0214 addendum 7, as in the cycle): the lead's model, or - when
+        # that one is limited - the next open model down the chain. No open model: no run.
+        $runModel = $leadModel
+        if (Test-TeamModelId -Model $leadModel) {
+            $pick = Get-TeamRunModel -Configured $leadModel -Limited $limitedModels -Fallback $true
+            if ($null -eq $pick.Model) {
+                $done = [pscustomobject]@{ Ok = $false; Outcome = "model yok"; UsageLimited = $true; ResetsAt = [string]$pick.ResetsAt }
+                Add-FeedNote -Text ("Max kullanım limiti: lead'in kullanabileceği modellerin hepsi limitte" + $(if ($pick.ResetsAt) { " (en erken sıfırlanma $($pick.ResetsAt))" } else { "" }) + "; beklenmedi, bir sonraki besleme yeniden dener")
+                break
+            }
+            $runModel = [string]$pick.Model
+            if ($pick.Lowered) { Add-FeedNote -Text "model düşürüldü: $leadModel -> $runModel (limit)" }
+        }
+        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $RunMaxUsd -Model $runModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $exclude
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $repoRoot
         $deadline = if ($RunMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
         $finished = Wait-TeamRun -Run $run -Deadline $deadline
-        $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr
+        $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model $runModel
         [void]$outputs.Add([pscustomobject]@{ StdOut = [string]$finished.StdOut; StdErr = [string]$finished.StdErr; Text = [string]$result.Text })
         $outcome = if ($finished.TimedOut) { "süre doldu ($RunMinutes dk)" } elseif ($result.Ok) { "tamam" } else { "başarısız: $($result.Why)" }
         $done = [pscustomobject]@{ Ok = ($result.Ok -and -not $finished.TimedOut); Outcome = $outcome; UsageLimited = [bool]$result.UsageLimited; ResetsAt = [string]$result.ResetsAt }
-        Add-FeedNote -Text ("lead koşusu: {0} (tahmini {1:0.00} USD, {2} sn, model {3})" -f $outcome, [double]$result.CostUsd, [int]$finished.Seconds, $(if ($leadModel) { $leadModel } else { "varsayılan" }))
-        if (-not $done.UsageLimited -or $attempt -ge 2) { break }
-        # The subscription's limit: wait it out when the tool said when it lifts, then ask once
-        # more; else stop here - the next feed run asks again (owner decision 2026-09-30).
-        if (-not $WaitForUsageLimit -or -not $done.ResetsAt) {
-            Add-FeedNote -Text ("Max kullanım limiti; " + $(if ($done.ResetsAt) { "sıfırlanma $($done.ResetsAt); " } else { "ne zaman açılacağı söylenmedi; " }) + "bir sonraki besleme yeniden dener")
+        Add-FeedNote -Text ("lead koşusu: {0} (tahmini {1:0.00} USD, {2} sn, model {3})" -f $outcome, [double]$result.CostUsd, [int]$finished.Seconds, $(if ($runModel) { $runModel } else { "varsayılan" }))
+        if (-not $done.UsageLimited) { break }
+        # A limit that closes ONE model (or does not say whose it is: then the model that ran):
+        # that model is remembered as limited and the same feed is asked again AT ONCE, one model
+        # down - not waited for. One try per model of the chain.
+        if ((Test-TeamModelId -Model $runModel) -and [string]$result.LimitScope -ne "all") {
+            $closed = if (Test-TeamModelId -Model ([string]$result.LimitedModel)) { [string]$result.LimitedModel } else { $runModel }
+            $limitedModels[$closed] = [pscustomobject]@{ until = [string]$done.ResetsAt }
+            # A reset that has passed (or was never said) would hand the same model out again.
+            if (-not (Test-TeamModelLimited -Limited $limitedModels -Model $closed)) { $limitedModels[$closed] = [pscustomobject]@{ until = "" } }
+            if ($attempt -lt (@(Get-TeamModelChain).Count + 1)) { continue }
             break
         }
-        $until = ([datetime]::Parse($done.ResetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)).AddSeconds(90)
+        if ($attempt -ge 2) { break }
+        # The subscription's limit: wait it out when the tool said when it lifts AND that is soon
+        # (-MaxLimitWaitMinutes: the lock is held while waiting), then ask once more; else stop
+        # here - the next feed run asks again (owner decision 2026-09-30).
+        $until = $null
+        if ($done.ResetsAt) { $until = ([datetime]::Parse($done.ResetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)).AddSeconds(90) }
+        if (-not $WaitForUsageLimit -or $null -eq $until -or ($until - [datetime]::UtcNow).TotalMinutes -gt $MaxLimitWaitMinutes) {
+            Add-FeedNote -Text ("Max kullanım limiti; " + $(if ($done.ResetsAt) { "sıfırlanma $($done.ResetsAt); " } else { "ne zaman açılacağı söylenmedi; " }) + "beklenmedi, bir sonraki besleme yeniden dener")
+            break
+        }
         Add-FeedNote -Text ("Max kullanım limiti: {0} sıfırlanmasına kadar beklendi ({1:0} dk)" -f $done.ResetsAt, [Math]::Max(0, ($until - [datetime]::UtcNow).TotalMinutes))
         while (($until - [datetime]::UtcNow).TotalSeconds -gt 0 -and -not (Test-Path -LiteralPath $stopFlagPath)) {
             Start-Sleep -Seconds ([int][Math]::Max(1, [Math]::Min(120, ($until - [datetime]::UtcNow).TotalSeconds)))
