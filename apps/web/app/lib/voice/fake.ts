@@ -892,6 +892,14 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
   readonly startedWith: Array<{ processLocally: boolean | undefined; phrases: unknown }> = [];
   /** Thrown by the next `start()` instead of starting (Chrome's `NotAllowedError` for a blocked policy). */
   failNextStart: Error | null = null;
+  /**
+   * Chrome's real order: `stop()` returns at once and `end` is an event that arrives LATER
+   * (a final for what was already heard can still come in between, and a `start()` before
+   * it is an InvalidStateError). When true, `stop()` only arms the end; the test delivers it
+   * with `deliverEnd()`. The default keeps the synchronous `onend` the older tests rely on.
+   */
+  delayEnd = false;
+  endPending = false;
   private processLocallyValue: boolean | undefined = undefined;
   private phrasesValue: unknown = undefined;
 
@@ -938,6 +946,18 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
   stop(): void {
     this.stops += 1;
     if (!this.running) return;
+    if (this.delayEnd) {
+      this.endPending = true; // still "started" as far as Chrome is concerned
+      return;
+    }
+    this.running = false;
+    this.onend?.();
+  }
+
+  /** The `end` a `stop()` armed under `delayEnd` arrives now. */
+  deliverEnd(): void {
+    if (!this.endPending) return;
+    this.endPending = false;
     this.running = false;
     this.onend?.();
   }
@@ -945,6 +965,7 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
   abort(): void {
     this.aborts += 1;
     if (!this.running) return;
+    this.endPending = false;
     this.running = false;
     this.onend?.();
   }
@@ -976,8 +997,12 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
   }
 }
 
-/** What a scripted on-device call does: resolve with a value, reject with an error, or never settle. */
-export type FakeOnDeviceScript<T> = T | Error | "hang";
+/**
+ * What a scripted on-device call does: resolve with a value, reject with an error, never
+ * settle, or - a function, given the call's 0-based index - whatever promise the test holds
+ * (an answer that arrives after the session that asked is gone).
+ */
+export type FakeOnDeviceScript<T> = T | Error | "hang" | ((call: number) => Promise<T>);
 
 /**
  * A scripted `SpeechRecognition.available()` / `.install()` (Chrome 139's static pair).
@@ -993,7 +1018,8 @@ export class FakeOnDevice {
     public installResult: FakeOnDeviceScript<boolean> = true,
   ) {}
 
-  private static play<T>(script: FakeOnDeviceScript<T>): Promise<T> {
+  private static play<T>(script: FakeOnDeviceScript<T>, call: number): Promise<T> {
+    if (typeof script === "function") return (script as (call: number) => Promise<T>)(call);
     if (script === "hang") return new Promise<T>(() => {});
     if (script instanceof Error) return Promise.reject(script);
     return Promise.resolve(script);
@@ -1001,12 +1027,12 @@ export class FakeOnDevice {
 
   available(options: Record<string, unknown>): Promise<string> {
     this.availableCalls.push(options);
-    return FakeOnDevice.play(this.status);
+    return FakeOnDevice.play(this.status, this.availableCalls.length - 1);
   }
 
   install(options: Record<string, unknown>): Promise<boolean> {
     this.installCalls.push(options);
-    return FakeOnDevice.play(this.installResult);
+    return FakeOnDevice.play(this.installResult, this.installCalls.length - 1);
   }
 }
 

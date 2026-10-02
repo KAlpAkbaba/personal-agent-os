@@ -12,7 +12,9 @@ KAPALI; turning it on is a separate decision after measurement. Plan and sources
    storage that throws, is `kapali`. There is no switch in the UI; `sttSettingUiEnabled()` reads the
    flag `pagentos.core.localSttUi = "1"` for the shell to use when the owner decides to adopt.
 2. **`kapali` writes nothing on the recogniser.** `processLocally` and `phrases` are never assigned,
-   nothing is installed, no question is shown, the start does not wait for anything.
+   nothing is installed, no question is shown, the start does not wait for anything. It is NOT
+   byte for byte what it was: the one read-only `available()` of decision 3 runs, un-awaited, so
+   that the engine name is honest. It writes nothing, fetches no phrase source and delays nothing.
 3. **Engine name on every utterance** (plan D1, taken as recommended): `payload.stt_engine` of the
    existing `utterance` event, captured when the final ARRIVES (finals queue behind speech).
    `chrome-cihaz-ici` = the run was started with `processLocally = true`; `chrome-bulut` = started
@@ -29,8 +31,13 @@ KAPALI; turning it on is a separate decision after measurement. Plan and sources
    `unavailable`, `downloading`, an unknown status, a throw, a hang (3 s guard on the injected
    timer), no API - is today's path with a reason code in `sttFallback` and in the log.
 5. **`olc`**: only with a usable pack. First run is today's path; after each final the next
-   recogniser run uses the other leg. The leg changes only between runs. Phrases ride only with
-   `processLocally` and are cleared (`phrases = []`, then `processLocally = false`) on the other leg.
+   recogniser run uses the other leg. The leg changes only between runs: Chrome's `end` arrives
+   after `stop()` returns, and until it does nothing is written on the recogniser and a final that
+   still arrives carries the old run's name. Phrases ride only with `processLocally` and are
+   cleared (`phrases = []`, then `processLocally = false`) on the other leg. A turn that speaks
+   nothing (a tool result with no `speech`) never pauses the recogniser, so in `olc` - and only
+   there - the run is ended with `stop()` when such a turn finishes; `onend` starts the next run on
+   the other leg. `kapali`, `acik` and an `olc` without a usable pack never stop it for this.
 6. **A device run Chrome refuses falls back once and stays there**: `language-not-supported`,
    `phrases-not-supported`, `service-not-allowed`, `not-allowed` while on the device leg, or a
    `start()` that throws anything but `InvalidStateError`. The restart is issued from the error
@@ -69,6 +76,16 @@ KAPALI; turning it on is a separate decision after measurement. Plan and sources
 
 ## Known limits
 
+- The probe runs before the recogniser's first `start()`. On a first-ever session, before the
+  origin has the microphone permission, an installed pack reads `downloadable` and the run is named
+  `chrome-bulut` although Chrome may hear on-device. The name is right from the next session on.
+- `olc` after a silent turn restarts the recogniser: the same short gap a spoken answer always
+  causes, now also where nothing is said. A sentence begun inside it may arrive cut, under the
+  ending run's name. That is a cost of measuring, and of `olc` only.
+- An install the owner started in one session and that finishes in a LATER session of the same
+  page is not adopted by that later session (an answer for a session that is gone writes nothing):
+  its engine name is whatever its own probe said (Chrome answers `downloading` meanwhile ->
+  `bilinmiyor`), and the device leg begins at the next start.
 - `downloadable` is named `chrome-bulut`, but Chromium masks an installed pack as `downloadable`
   for an origin that never installed it unless the origin has the microphone permission and `tr-TR`
   is an accept-language. On a Chrome without `tr-TR` in its languages the name could be wrong.

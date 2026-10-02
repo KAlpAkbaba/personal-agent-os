@@ -826,8 +826,27 @@ export class LocalVoiceMode {
       .catch(() => {})
       .then(() => {
         this.pending = Math.max(0, this.pending - 1);
-        if (this.active) this.listen();
+        if (!this.active) return;
+        this.endRunForOtherLeg();
+        this.listen();
       });
+  }
+
+  /**
+   * `olc` only. A turn that spoke nothing never paused the recogniser, so its run - and
+   * with it the leg - would go on for ever and every sentence would be heard by one engine.
+   * The run is ended here; `onend` starts the next one, and only THAT configures the leg.
+   * `stop()`, not `abort()`: what Chrome had already heard still arrives, under this run's name.
+   */
+  private endRunForOtherLeg(): void {
+    const recognizer = this.recognizer;
+    if (!recognizer || this.setting !== "olc" || !this.deviceUsable) return;
+    if (!this.running || this.paused || this.wantDevice === this.runDevice) return;
+    try {
+      recognizer.stop();
+    } catch {
+      /* already stopped */
+    }
   }
 
   // -------------------------------------------------------------- a turn
