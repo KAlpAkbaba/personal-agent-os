@@ -85,3 +85,24 @@ class NarrativeFacts:
     @property
     def is_empty(self) -> bool:
         return self.total == 0
+
+
+def _counts(keys: list[str]) -> tuple[tuple[str, int], ...]:
+    return tuple((key, keys.count(key)) for key in sorted(set(keys)))
+
+
+def only_failures(facts: NarrativeFacts) -> NarrativeFacts:
+    """The same period and device, told as if the failed rows were all there was ("ne
+    başarısız oldu"). Nothing completed is left in the facts, so a narrator cannot list it
+    and the auditor holds a text to the failures' own numbers: a count of the completed work
+    is a foreign number there."""
+    return NarrativeFacts(
+        covered=facts.covered,
+        device=facts.device,
+        failed=facts.failed,
+        completed=(),
+        counts_by_subsystem=_counts([e.subsystem for e in facts.failed]),
+        counts_by_device=_counts([e.device for e in facts.failed]),
+        no_capable_device=facts.no_capable_device,
+        total=len(facts.failed),
+    )

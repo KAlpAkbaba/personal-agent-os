@@ -15,23 +15,61 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `ca5cc79512de47574f81df471323615567122412` (2026-10-01 20:47 UTC, api-green), LKG `858c3e0b`, pin = RELEASE,
-reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`, çekirdek 6.8.0-142 (bakım 19:00 UTC'de koştu).
-Kapı 36/36 (`b8a44916`). QUALIFICATION Stage 40. Ana kopya `team/nightly/lead` üzerinde (main birleştirildi).**
-**SÜREN İŞ (lead, 2026-10-02 gece): ÜÇÜNCÜ ENTEGRASYON, dal `gate/d20261001-3` (worktree `.claude/worktrees/gate`) =
-`integrate/d20261001` @ `8d081d1b` + lead bağlaması. İçinde: understanding-stt-corpus, model-policy-cycle,
-lead-roadmap-feeder, webtask-model-planner, webtask-prc-gate-bindings (`a3a9e31e`, ADR-0240), approvals-detail-view
-(Onay Merkezi düğmeleri + "Detay"). Bağlama:
-`scripts/team/tick.ps1` (önce besleyici, sonra döngü; zamanlanmış görev artık bunu çalıştırır), `team-feed.tests.ps1`
-kapıda ve ci.yml'de, kapıya web lint+vitest+tsc adımı, ADR-0237…0240. İkinci entegrasyonun kapısı (`2c691585`)
-tek testte KIRMIZIYDI (`team-feed.tests.ps1` hiçbir yerde koşmuyordu) - döngü ben çalışırken entegrasyon dalına iş
-birleştirdiği için; bu yüzden kapı artık lead'in KENDİ dalında koşar. SIRA: bu commit'i ana kopyada detached aç, tam
-kapı, yeşilse main'e `--no-ff`, it, kural gereği sormadan blue/green yayınla + pin + doğrula, işleri `released` yap,
-görevi yeniden kaydet (`register-nightly.ps1 -Register …` → tick), Stage 41, ana kopyayı `team/nightly/lead`'e geri al.
-Ana kopya şu an DETACHED (`2c691585`). Öncelikli iş: `office-worker-seats` (sahip: 4. çalışan koltuğu).
-`understanding-corrections-memory` 0064 migration'ı taşır: expand-only testi geçiyorsa otomatik, değilse sahibe sor.**
-**BİLİNEN AÇIK: besleyici kilidi alır; döngü koşarken (iş oldukça bitmez) besleyici "kilit tutuluyor" der ve kart
-kesmez → kuyruk yalnız döngüler ARASINDA beslenir. Kapanışı `cycle-seat-pool` kartında (havuz besleyiciyi kendi çağırır).**
+**ÜRETİM: main `5f250e5bbd460c419950d9ad80286a456f2921d5` (2026-10-01 23:50 UTC, api-blue), LKG `ca5cc795`, pin = RELEASE,
+reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`, çekirdek 6.8.0-142. Kapı 38/38 (`d93f6a2a`; 14 401 birim,
+2 087 web). QUALIFICATION Stage 41. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**YAYINDA OLAN (üçüncü entegrasyon): Onay Merkezi "Detay" + döngü koşarken açık düğmeler (ADR-0239), döngüde model
+politikası (ADR-0214 ek 10), roadmap besleyici + `scripts/team/tick.ps1` (ADR-0237; zamanlanmış görev artık tick'i
+çalıştırır: önce besleyici, sonra döngü), tarayıcı görev planlayıcısı ve kapısı (ADR-0238, ADR-0240; üretimde henüz
+ULAŞILAMAZ: `start_task_db`'nin çağıranı yok, MAIL'de `-AuthorizeTasks` yok), STT ölçümü (%68,9 - hedef %95 TUTMADI).
+Kapı artık web lint+vitest+tsc ve `team-feed.tests.ps1` koşuyor. Kapı LEAD'İN KENDİ DALINDA koşar (döngü, lead
+çalışırken `integrate/<id>`'ye iş birleştirir; ikinci entegrasyonun kapısı bu yüzden kırmızıydı).**
+**SÜREN İŞ (lead, 2026-10-02 gece): `lead/cycle-rereads-queue` dalı (worktree `.claude/worktrees/gate`, tabanı `d93f6a2a`),
+ADR-0214 ek 11: döngü kuyruğu HER TURDA yeniden okur. Kusur: kuyruk yalnız döngü başlarken okunuyordu, iş oldukça döngü
+bitmediği için sonradan depoya yazılan hiçbir şey (kart, karar, besleyici kartı) görülmüyordu - sahibin "4. çalışan
+koltuğu" kartı 4 saat boş koltukların yanında bekledi. İlk commit `3d52902e` denetleyiciden GERİ DÖNDÜ (6 bulgu: reddedilen
+yazmanın işi yine koşuyordu; depoda durdurulan iş yine birleştiriliyordu; iki alan kuralı ayrıydı; üç iddia testsizdi);
+ikinci tur `3d1be9fc` ve üçüncü tur `91c70543` de GERİ DÖNDÜ (her seferinde gerçek bulgu: sonsuz dönen tur; koşu
+sürerken deponun cevap vermemesi döngüyü yarıda kesiyordu; düşen koşuların sınırı yoktu). Dördüncü tur: koşu sürerken
+yapılan yazma başarısız olursa döngü ÖLMEZ (satır yazar, toplu iş sonunda yeniden dener); deponun reddettiği taze
+birleştirme GERİ ALINIR (`Undo-TeamMerge`), alınamayan adıyla söylenir; bir işin düşen koşusu en çok 3; boş tur
+sınırı 3; yalnız `team/proposals` dosyası fikir metni olarak gönderilir. Dördüncü tur `3ce11180` de döndü (3 dar bulgu);
+beşinci tur: ret anında bilinir (aynı yazmada başka iş hata verse de), reddedilen sonuçtan sonra döngünün kopyası eski
+haline döner (rapor "merged" demez), fikir dosyası `-TeamRoot`tan okunur. **BAĞIMSIZ DENETLEYİCİ BEŞİNCİ TURDA `dbacc280`'i
+ONAYLADI** (gerçek rotalarla da koşturdu); istediği iki test eklendi, `team-cycle` 177, 35+2 mutasyon RED. SIRA:
+ONAYLI → `gate/d20261002-1` (worktree `.claude/worktrees/gate4`: 4. koltuk,
+STT ölçüm aracı, Postgres testleri, anlatı tesisatı, sesli özetin koşu sayması, hüküm ayrıştırıcısı) üstüne
+birleştir → tam kapı → main → kural gereği yayın → lead dalı → `team/stop.flag` ile döngüyü yenile. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
+BAŞLAMAMALI (şu an koşan döngü eski kuyruğu gördüğü için başlatmıyor; döngüyü düzeltmeden önce yenileme).**
+**DÖRDÜNCÜ ENTEGRASYON KAPIDA (lead, 2026-10-02 05:50): dal `gate/d20261002-1` (worktree `.claude/worktrees/gate4`) =
+lead + `integrate/d20261002` @ `03981422` (office-worker-seats: 4 çalışan koltuğu, sayı koşuyu sayar; stt-engines-measure:
+STT karşılaştırma aracı, ölçülecek kayıt YOK) + postgres-coverage-debt (denetleyici ONAYLADI; hüküm satırı okunamadığı
+için döngü durdurmuştu) + narrative-failures-only-model ("tesisat" olarak; sahibin cümlesi DEĞİŞMEZ). Lead bağlaması:
+`app/team/speech.py` sesli özet artık sayfanın saydığını (koşu) söyler; `Get-TeamVerdict` kapanış cümlesindeki hükmü
+okur ve `inspector.md` "son mesajın hükümle bitsin" der (ADR-0214 ek 12); ADR-0241…0244. İLK KAPI (`b35c6ddb`) TEK TESTTE KIRMIZIYDI:
+`test_every_error_class_has_turkish` - STT ölçüm aracı `ERROR_UNEXPECTED = "unexpected"` tanımlamış, Türkçe sözlükte
+(`app/errors/catalog.py`) karşılığı yoktu; eklendi. İKİNCİ KAPI (`614dedb4`) da TEK TESTTE KIRMIZIYDI: tarayıcı ajanında yük altında çıkan gerçek bir
+yarış (öksüz Chrome öldürülünce profil kilidi bir an daha tutuluyor; ADR-0246: kurtarma başlatması kilidi bekler).
+AYRICA 09:30'da BESLEYİCİ Fable limitini ÜÇ GÜN beklemeye geçip kilidi tuttu, döngü başlayamadı (sahip "0/6" gördü):
+süreç elle durduruldu, `feed.ps1` artık model zincirini izler ve 20 dk'dan uzun beklemez (ADR-0214 ek 13). SIRA: tam kapı (ana kopya
+detached) → yeşilse main `--no-ff` → kural gereği yayın (migration/compose YOK) → pin → doğrula → işleri `released`
+yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue` @ `4093a958`, denetleyici ONAYLI) ÜÇÜNCÜ KAPI için bu dala
+birleştirildi: main'e girince `cycle-rereads-queue` -> released, `cycle-seat-pool` zinciri açılır; döngü yeni kodu
+bir sonraki başlangıcında alır (ana kopyadaki betikler).**
+**DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
+execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)
+denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı. `narrative-failures-only-model` DURDU ve lead'de:
+kod doğru, ama kartın kabulü alanın dışında (yönlendirici `app/voice/intents.py`); karar: "tesisat" olarak dördüncü
+entegrasyonda birleştir + iki kart kes (yönlendirici: intents.py boşalınca; kablolama: `tools.py::activity_explain`'e
+`chat_provider`, ayar arkasında KAPALI - defter özetleri Anthropic'e gider, açmak sahibin kararı).**
+**SAHİBİ BEKLEYEN: Onay Merkezi'nde iki yeni fikir (metinleri depoda): "alan dışı geri verme" ve "yanlış anlaşılanlar
+defteri". Ertelenen: Home Assistant (cihaz envanteri). Denemeler: 38.3-38.5, 39.2-39.4 cümleleri; 41.1 (Detay + düğme).
+`temporal-init-reaper` compose değiştirir → yayını SAHİP onaylar. Soniox hesabı / ses verisinin yeni üçüncü tarafa
+gitmesi ayrı onay.**
+**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez → kuyruk yalnız döngüler ARASINDA beslenir
+(`cycle-seat-pool` sonrası ayrı kart). (2) Yayın betiğinin kilidi `flock -n`: dakikalık reconcile ile çakışınca exit 82
+(2026-10-02'de bir kez; hiçbir şey değişmedi, ikinci deneme geçti) - bakım betiği gibi beklemeli; kart kesilecek.
+(3) Ofis sayfası koltuğu sayıyor, koşuyu değil (`office-worker-seats` koşuyor).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,
@@ -44,12 +82,10 @@ eski 2 koltuklu süreç böyle yenilendi).**
 **KUYRUK VERİTABANINDA (ADR-0222): doğrusu `GET http://100.90.158.26:8001/v1/team/queue`; `team/queue.json` ESKİ tohum.
 İş eklemek / karar işlemek: `Invoke-TeamApi PUT /v1/team/queue/tasks/<id>` (belirteç `%LOCALAPPDATA%/PagentOS/team-queue.token`;
 `NativeProcess.ps1`+`TeamQueue.ps1`+`HttpJson.ps1` dot-source). Sıra `created_at` (öncelik alanı yok).
-Onay Merkezi düğmeleri döngü koşarken KİLİTLİ (düzeltmesi `proposals-on-cloud-core` + `approvals-detail-view`,
-yolda): o zamana kadar sahip kararını sohbetten söyler, lead işler.**
-**BEKLEYEN: `integrate/d20261001` üzerinde merged işler (real-host-rehearsal, office-page-polish, …) → lead bağlama +
-tam kapı + main + otomatik yayın. Roadmap sıra 2'den beş ürün kartı kesiliyor (planlayıcı). Web kabuğu:
-`preview_start web-cloud` (port 3000; 3210 yerel API'ye bağlıdır, sahibin kimliğini TANIMAZ). Sahibin deneyecekleri:
-38.3-38.5 ve 39.2-39.4'ün cümleleri.**
+Onay Merkezi düğmeleri döngü koşarken AÇIK (5f250e5b ile yayında); sahip kararını sayfadan verir. Lead kararı
+döngüye taşımak zorunda değil: ek 11 lead dalına girince döngü kararı bir sonraki turda kendisi görür.**
+**Web kabuğu: `preview_start web-cloud` (port 3000; 3210 yerel API'ye bağlıdır, sahibin kimliğini TANIMAZ). Lead sahibin
+kimliğiyle GİRİŞ YAPMAZ; sayfayı API'den doğrular (`GET /v1/team/approvals`, kuyruk belirteciyle).**
 **BAKIM PENCERESİ KOŞTU VE DOĞRULANDI (2026-10-01 19:00 UTC): çekirdek 6.8.0-142, 26→1 güncelleme, cihazlar ~1 dk'da geri;
 rapor `team/reports/maintenance-2026-10-01.md`, QUALIFICATION 38.13 PROVEN_REAL, ADR-0223 ek 2. Tek seferlik birimler
 kaldırıldı. Kalan: temporal'ın zombisi (`temporal-init-reaper` kuyrukta; compose değişikliği → yayını sahip onaylar).

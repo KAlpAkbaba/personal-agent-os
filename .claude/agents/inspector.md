@@ -40,7 +40,12 @@ Pass 2 — break it (adversarial):
   memory/CPU on CPX32; rollback path.
 
 Return a ≤ 40-line report to the lead, ending with exactly one verdict:
-`APPROVE` | `RETURN (list)` | `REJECT (reason)`. Evidence classes you may assign:
+`APPROVE` | `RETURN (list)` | `REJECT (reason)`.
+**Your LAST message is all the cycle reads.** Wait for every command you started before you
+write the report; leave nothing running. If you are woken after the report all the same (a
+command you left running reports back), your new last message must END with the verdict line
+again, alone on its own line - a closing remark without it is read as "no verdict" and stops
+an approved task (2026-10-02: `postgres-coverage-debt`, approved, stopped). Evidence classes you may assign:
 PROVEN_AUTOMATED, PROVEN_PROXY, READY_FOR_OWNER, NOT_RUN. You never write PROVEN_REAL.
 You never soften a finding to help the cycle finish; a second RETURN on the same task is
 allowed and stops the task.

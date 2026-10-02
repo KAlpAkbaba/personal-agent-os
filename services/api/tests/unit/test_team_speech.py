@@ -131,3 +131,55 @@ def test_tool_is_spelled_for_the_registry_and_takes_no_arguments():
     assert spec is not None
     assert spec.parameters["properties"] == {}
     assert spec.parameters["additionalProperties"] is False
+
+
+# ------------------------------------------- the voice counts what the page counts (2026-10-02)
+
+
+def _role_run(role, task, n):
+    return {"role": role, "task": task, "started_at": f"2026-10-01T11:0{n}:00Z"}
+
+
+def test_three_inspections_are_three_at_work_for_the_ear_as_they_are_on_the_page():
+    """The page counts RUNS since the fourth-seat work; the voice still counted working seats:
+    three inspections on one seat were "3/6" on the page and "bir çalışan" aloud. The module's
+    promise is that the two never disagree."""
+    queue = {
+        "tasks": [
+            _task("t-1", "Birinci iş: liste", "inspecting", role="inspector"),
+            _task("t-2", "İkinci iş", "inspecting", role="inspector"),
+            _task("t-3", "Üçüncü iş", "inspecting", role="inspector"),
+        ]
+    }
+    status = _status(
+        _role_run("inspector", "t-1", 1),
+        _role_run("inspector", "t-2", 2),
+        _role_run("inspector", "t-3", 3),
+    )
+    view = _view(queue, status)
+    assert view["cycle"]["running_agents"] == 3
+    said = office_paragraph(view)
+    assert said.startswith("Altı kişiden üç çalışan çalışıyor: "), said
+    assert "Birinci iş" in said and "İkinci iş" in said and "Üçüncü iş" in said, said
+    assert "t-1" not in said
+
+
+def test_seven_runs_are_seven_of_seven_as_on_the_page():
+    tasks = [_task(f"w-{n}", f"İş {n}", "in_progress") for n in range(1, 6)]
+    tasks += [_task(f"i-{n}", f"Denetim {n}", "inspecting", role="inspector") for n in (1, 2)]
+    runs = [_role_run("worker", f"w-{n}", n) for n in range(1, 6)]
+    runs += [_role_run("inspector", f"i-{n}", 5 + n) for n in (1, 2)]
+    view = _view({"tasks": tasks}, _status(*runs))
+    assert (view["cycle"]["running_agents"], view["cycle"]["capacity"]) == (7, 7)
+    said = office_paragraph(view)
+    assert said.startswith("Yedi kişiden yedi çalışan çalışıyor: "), said
+    assert said.count(",") <= 3 and "ve diğerleri" in said, said
+
+
+def test_a_view_without_the_run_count_is_still_spoken_from_its_seats():
+    """An older view (no ``running_agents``, no ``runs``): the seats are what there is."""
+    view = _busy_view()
+    view["cycle"].pop("running_agents", None)
+    for agent in view["agents"]:
+        agent.pop("runs", None)
+    assert office_paragraph(view).startswith("Altı kişiden iki çalışan çalışıyor: ")

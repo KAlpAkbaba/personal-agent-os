@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 
 from app.narrative.auditor import audit, repair
 from app.narrative.collector import Period, collect
+from app.narrative.facts import only_failures
 from app.narrative.narrator import Narrator, RuleNarrator
+
+#: "ne başarısız oldu" over a period that holds no failure. A constant: no narrator, rule or
+#: model, is asked to phrase the absence of something.
+NO_FAILURES_TEXT = "Bu dönemde başarısız iş yok."
 
 
 def tell(
@@ -18,8 +23,15 @@ def tell(
     narrator: Narrator | None = None,
     *,
     now: datetime | None = None,
+    failures_only: bool = False,
 ) -> str:
     facts = collect(db, period, device, now=now)
+    if failures_only:
+        # Narrowed BEFORE narrating: the narrators and the auditor are the ones every other
+        # narrative uses, and none of them is shown a completed row.
+        facts = only_failures(facts)
+        if not facts.failed:
+            return NO_FAILURES_TEXT
     text = repair(facts, (narrator or RuleNarrator()).tell(facts))
     if audit(facts, text).ok:
         return text

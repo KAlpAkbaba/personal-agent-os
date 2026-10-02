@@ -28,12 +28,20 @@ def _first_clause(title: Any) -> str:
     return " ".join(text.split()[:TITLE_WORDS])
 
 
+def _runs(agent: dict[str, Any]) -> list[dict[str, Any]]:
+    """The runs of a working seat: its ``runs`` (a seat may hold several - three inspections),
+    or the seat itself for a view that does not list them."""
+    listed = [r for r in agent.get("runs") or [] if isinstance(r, dict)]
+    return listed or [agent]
+
+
 def _titles(agents: list[dict[str, Any]]) -> list[str]:
     seen: list[str] = []
     for agent in agents:
-        title = _first_clause(agent.get("task_title")) or str(agent.get("role") or "")
-        if title and title not in seen:
-            seen.append(title)
+        for run in _runs(agent):
+            title = _first_clause(run.get("task_title")) or str(agent.get("role") or "")
+            if title and title not in seen:
+                seen.append(title)
     return seen
 
 
@@ -59,8 +67,16 @@ def office_paragraph(view: dict[str, Any]) -> str:
         titles = _titles(working)
         shown, more = titles[:MAX_TITLES], len(titles) > MAX_TITLES
         capacity = int(cycle.get("capacity") or 6)
+        # What the page's top bar counts: RUNS (three inspections on one seat are three at
+        # work). The seats' own runs are the count for a view that does not carry the number.
+        counted = cycle.get("running_agents")
+        at_work = (
+            counted
+            if isinstance(counted, int) and counted > 0
+            else sum(len(_runs(a)) for a in working)
+        )
         sentences.append(
-            f"{_number(capacity).capitalize()} kişiden {_number(len(working))} çalışan "
+            f"{_number(capacity).capitalize()} kişiden {_number(at_work)} çalışan "
             f"çalışıyor: {_list(shown)}{' ve diğerleri' if more else ''}."
         )
     else:

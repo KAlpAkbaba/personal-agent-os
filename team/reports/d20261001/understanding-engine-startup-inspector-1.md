@@ -1,0 +1,1 @@
+The first Owner Utterance run hit my own 25-minute timeout at 70 % (1953 of 2756 cases, 0 failures; the machine is shared with other agents' pytest runs). The remaining 824 cases are running now in the background; I'll issue the verdict when they finish.

@@ -45,6 +45,35 @@ $ErrorActionPreference = "Stop"
 $scenario = [string]$env:PAGENTOS_FAKE_CLAUDE_SCENARIO
 $log = [string]$env:PAGENTOS_FAKE_CLAUDE_LOG
 
+function Add-SharedLine {
+    <# Two fakes of one batch append to the test's call log at the same instant. Add-Content then
+       throws a sharing violation: the fake died before it did anything, the cycle counted a
+       failed run and ran it again, and a test that reads the calls or the requests saw one run
+       too few or too many (one run in three on a loaded machine, 2026-10-02). The log is
+       opened for append with a retry: a writer waits for the other one, it does not die. #>
+    param([string]$Path, [string]$Line)
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Line + "`r`n")
+    $deadline = [datetime]::UtcNow.AddSeconds(30)
+    while ($true) {
+        try {
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+            try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+            return
+        }
+        catch {
+            if (-not ($_.Exception.GetBaseException() -is [System.IO.IOException]) -or [datetime]::UtcNow -gt $deadline) { throw }
+            Start-Sleep -Milliseconds 20
+        }
+    }
+}
+
+# The line above, by itself (the suite holds the log open and starts this): say "trying", append, leave.
+if ([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_ONLY) {
+    if ([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_MARKER) { [System.IO.File]::WriteAllText([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_MARKER, "trying") }
+    Add-SharedLine -Path $log -Line ([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_ONLY)
+    exit 0
+}
+
 $roleFile = ""
 $budget = ""
 $tools = ""
@@ -69,7 +98,7 @@ $here = (Get-Location).ProviderPath
 
 if ($log) {
     $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
-    Add-Content -LiteralPath $log -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
+    Add-SharedLine -Path $log -Line ($entry | ConvertTo-Json -Compress)
 }
 
 # The model the result says really ran: --model, unless the test names another one for this role.
