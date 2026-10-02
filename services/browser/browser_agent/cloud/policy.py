@@ -17,6 +17,11 @@ CLOUD_SESSION_CLASSES: frozenset[policy.RiskClass] = policy.RESEARCH_SESSION_CLA
 #: The cloud worker has one dedicated profile; the owner's own browser is not reachable here.
 ALLOWED_PROFILES = frozenset({"research"})
 
+#: What the cloud device launches, whatever a ``session_open`` asks for: the image carries
+#: Playwright's Chromium and no Google Chrome, and the container has no display.
+CLOUD_CHANNEL = "chromium"
+CLOUD_VISIBLE = False
+
 
 def _refuse(message: str, **evidence: Any) -> BrowserError:
     return BrowserError(
@@ -37,7 +42,8 @@ def assert_policy_within(classes: Iterable[policy.RiskClass | str]) -> None:
 
 
 def clamp_command(capability: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the payload the worker may see. Only ``session_open`` carries a policy."""
+    """Return the payload the worker may see. Only ``session_open`` carries a policy, and
+    only it says which browser is launched and whether it has a window."""
     if capability != "browser.session_open":
         return payload
     profile = payload.get("profile", "research")
@@ -51,5 +57,10 @@ def clamp_command(capability: str, payload: dict[str, Any]) -> dict[str, Any]:
         session_policy["allowed_risk_classes"] = sorted(c.value for c in requested)
     else:
         session_policy["allowed_risk_classes"] = sorted(c.value for c in CLOUD_SESSION_CLASSES)
+    # Cloud Core's gateway sends one session_open for every device, and it says "visible
+    # Chrome" (right for the owner's machines). The worker takes both from the payload ahead
+    # of its own `--channel chromium --headless`; here they are not the caller's to choose.
+    session_policy["visible"] = CLOUD_VISIBLE
     out["policy"] = session_policy
+    out["channel"] = CLOUD_CHANNEL
     return out

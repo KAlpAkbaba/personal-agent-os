@@ -100,6 +100,7 @@ from app.voice.realtime_sessions.tools import (
 )
 from app.voice.realtime_sessions.tools_operator import enrolled_aliases, names_unbound_machine
 from app.voice.spoken_device import resolve_without_device_phrase
+from app.voice.understanding import corrections as understanding_corrections
 from app.voice.understanding import policy as understanding_policy
 
 logger = get_logger("app.voice.realtime_sessions.service")
@@ -1829,6 +1830,10 @@ def record_client_events(
             # the phrase is not part of the subject (a research topic, a media search, a
             # file pattern ...). ``spoken_devices`` is the alias words, ``subject_text`` the
             # words the subject helpers below read.
+            # ADR-0224 corrections: the owner's synonyms as the memory rows hold them NOW (a
+            # version check; parsed again only when a row changed), for the rule table and
+            # the layers of this turn.
+            understanding_corrections.vocabulary(db)
             intent: ResolvedIntent
             intent, subject_text, spoken_devices = resolve_without_device_phrase(
                 text,
@@ -1865,6 +1870,19 @@ def record_client_events(
             # what may be DONE with it. First the one thing only this relay knows: whether
             # this sentence is the owner's answer to the question the last turn asked.
             answered_device: str | None = None
+            # ... and whether it CORRECTS the turn before (a MEDIUM read-back or that
+            # question): rule first - only a sentence the tables left unrouted is looked at.
+            correction = (
+                understanding_corrections.correction_turn(
+                    ctx.get(understanding_corrections.CORRECTABLE_KEY),
+                    text or "",
+                    now=now,
+                    aliases=enrolled_aliases(db),
+                )
+                if intent.intent is Intent.NONE
+                else None
+            )
+            ctx.pop(understanding_corrections.CORRECTABLE_KEY, None)  # corrected once, or not
             answered = (
                 understanding_policy.pending_answer(
                     ctx.get("understanding_pending"), text or "", now=now
@@ -1883,8 +1901,20 @@ def record_client_events(
                     capability=None,
                     matched="understanding:answer",
                 )
+            elif correction is not None and correction.intent:
+                # "Hayır, ev bilgisayarında" / "onu değil, Not Defteri": the corrected turn
+                # is re-issued with the slot the owner named, on the machine they named.
+                answered_device = correction.device
+                intent = replace(
+                    intent,
+                    intent=Intent(correction.intent),
+                    application=correction.application,
+                    klass="",
+                    capability=None,
+                    matched="understanding:correction",
+                )
             machine_named = names_unbound_machine(text or "", spoken_devices)
-            decision = understanding_policy.read_turn(
+            decision = understanding_corrections.read_turn(
                 text or "",
                 rule=(
                     None
@@ -1921,6 +1951,43 @@ def record_client_events(
                     "intent": intent.intent.value,
                     "application": intent.application,
                     "at": now.isoformat().replace("+00:00", "Z"),
+                }
+            # ADR-0224 corrections: what the owner may correct in the next sentence (the
+            # slots and the ONE word the device slot was read from, never the sentence) ...
+            correctable = understanding_corrections.correctable(
+                text or "",
+                intent=intent.intent.value,
+                application=intent.application,
+                decision=decision,
+                now=now,
+            )
+            if correctable is not None:
+                ctx[understanding_corrections.CORRECTABLE_KEY] = correctable
+            # ... and the pair this sentence taught, through the memory write policy (explicit,
+            # class vocabulary) - counts and names on the audit row, never the words.
+            if correction is not None and correction.learnable:
+                if memory_runtime is None:
+                    meta["understanding_correction"] = {"written": False, "reason": "no_runtime"}
+                else:
+                    learned = understanding_corrections.learn(
+                        db, memory_runtime.embedder, correction, session_id=row.id
+                    )
+                    meta["understanding_correction"] = {
+                        "kind": correction.kind,
+                        "written": learned.written,
+                        "reason": learned.reason,
+                        "proposed": learned.proposal_written,
+                    }
+            elif (
+                correction is not None
+                and correction.reason == understanding_corrections.REASON_SECRET
+            ):
+                # A lesson refused for a secret in the spoken sentence is said, not hidden.
+                meta["understanding_correction"] = {
+                    "kind": correction.kind,
+                    "written": False,
+                    "reason": correction.reason,
+                    "proposed": False,
                 }
             reference = resolve_deictic_reference(db, intent.tokens, now=now)
             ctx["last_intent"] = intent.intent.value
