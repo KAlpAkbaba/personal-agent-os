@@ -12,6 +12,7 @@ import importlib.util
 import json
 import re
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -44,14 +45,17 @@ from app.webtask.planner import (
     parse_step,
 )
 from app.webtask.types import (
+    ACTION_CHECK,
     ACTION_CLICK,
     ACTION_FILL,
     ACTION_NAVIGATE,
+    ACTION_SELECT,
     ACTIONS,
     ASK_CANNOT_SEE,
     ASK_CONFIRM,
     ASK_KINDS,
     ASK_PAYMENT,
+    ASK_SENSITIVE_FIELD,
     CAPABILITY_OF,
     EXPECT_CHECKED,
     EXPECT_ELEMENT_ABSENT,
@@ -784,3 +788,434 @@ def test_a_named_host_allows_its_site_and_nothing_above_it(
     context = TaskContext(goal=f"{named} adresini aç")
     elsewhere = page(url="https://www.baslangic.example.net/")
     assert url_is_allowed(url, elsewhere, context) is allowed
+
+
+# ------------------------------------------------------------------ PR-C: what was binding
+#
+# ADR-0207, "Recorded for PR-C, and binding on it": what may not stay open once a model
+# plans the steps. Each rule by itself, with its near misses.
+
+WRITE_CTX = TaskContext(goal='Listeden "Yıllık" seç ve nota "Merhaba dünya" yaz')
+WRITES = (ACTION_FILL, ACTION_SELECT, ACTION_CHECK)
+
+
+def write(action: str, ref: str = "e1") -> Step:
+    """One of the three write actions, with a value the owner gave."""
+    if action == ACTION_FILL:
+        return Step(action=action, ref=ref, value="Merhaba dünya", expect=CHANGED)
+    if action == ACTION_SELECT:
+        return Step(action=action, ref=ref, value="Yıllık", expect=CHANGED)
+    return Step(action=action, ref=ref, checked=True, expect=CHANGED)
+
+
+@pytest.mark.parametrize(
+    ("action", "element", "expected"),
+    [
+        (ACTION_SELECT, el("e1", "combobox", "Hesabı sil"), RISK_HIGH_IMPACT),
+        (ACTION_SELECT, el("e1", "combobox", "Satın al"), RISK_HIGH_IMPACT),
+        (ACTION_CHECK, el("e1", "checkbox", "Abone ol"), RISK_HIGH_IMPACT),
+        (ACTION_CHECK, el("e1", "switch", "Paylaş"), RISK_EXTERNAL_COMMUNICATION),
+        (ACTION_FILL, el("e1", "textbox", "Yanıtla"), RISK_EXTERNAL_COMMUNICATION),
+        (ACTION_SELECT, el("e1", "combobox", "Ülke", submits=True), RISK_EXTERNAL_COMMUNICATION),
+        # The near misses: a named field in a form, a word that only CONTAINS a marker.
+        (ACTION_FILL, el("e1", "textbox", "Not", in_form=True), RISK_REVERSIBLE_WRITE),
+        (ACTION_FILL, el("e1", "textbox", "Silinecek hesap"), RISK_REVERSIBLE_WRITE),
+        (ACTION_SELECT, el("e1", "combobox", "Ülke", in_form=True), RISK_REVERSIBLE_WRITE),
+        (ACTION_CHECK, el("e1", "checkbox", "Beni hatırla", in_form=True), RISK_REVERSIBLE_WRITE),
+        # The worker's hint is never lowered here either.
+        (ACTION_FILL, el("e1", "textbox", "Not", risk_hint=RISK_HIGH_IMPACT), RISK_HIGH_IMPACT),
+        # Pressing a checkbox IS set_checked by another name; pressing a text field is not.
+        (ACTION_CLICK, el("e1", "checkbox", "Sil"), RISK_HIGH_IMPACT),
+        (ACTION_CLICK, el("e1", "radio", "Paylaş"), RISK_EXTERNAL_COMMUNICATION),
+        (ACTION_CLICK, el("e1", "textbox", "Sil"), RISK_REVERSIBLE_WRITE),
+    ],
+)
+def test_a_write_is_classified_from_its_element_as_a_click_is(
+    action: str, element: Element, expected: str
+) -> None:
+    assert risk.classify_step(action, element) == expected
+
+
+def test_a_select_that_cannot_be_undone_waits_for_the_read_back() -> None:
+    observed = page(el("e1", "combobox", "Hesabı sil", tag="select"))
+    step = write(ACTION_SELECT)
+    asked = decide(step, observed, WRITE_CTX)
+    assert asked.kind == DECISION_ASK and asked.ask_kind == ASK_CONFIRM
+    assert asked.risk == RISK_HIGH_IMPACT
+    assert "bir listeden seçim yapacağım" in asked.message and "düğme" not in asked.message
+    assert "'Hesabı sil'" in asked.message and "geri alınamaz" in asked.message
+    assert "Yıllık" not in asked.message  # a value is never said back, as it is never logged
+
+    grant = Grant(
+        step_digest=step.digest(observed.elements[0]), source="voice", facts=dict(asked.facts)
+    )
+    allowed = decide(step, observed, TaskContext(goal=WRITE_CTX.goal, grant=grant))
+    assert allowed.kind == DECISION_ALLOW and allowed.confirmed_by == "voice"
+    # The ceiling is IN the decision for these actions too; it goes on the wire with
+    # contract v1.8, not here.
+    assert allowed.risk == allowed.risk_ceiling == RISK_HIGH_IMPACT
+
+
+def test_a_checkbox_wired_to_a_request_waits_for_the_read_back() -> None:
+    observed = page(el("e1", "checkbox", "Yorumu paylaş"))
+    asked = decide(write(ACTION_CHECK), observed, WRITE_CTX)
+    assert asked.kind == DECISION_ASK and asked.ask_kind == ASK_CONFIRM
+    assert asked.risk == RISK_EXTERNAL_COMMUNICATION
+    assert "bir kutunun işaretini değiştireceğim" in asked.message
+    assert "Sayfanın bu kutuya verdiği ad: 'Yorumu paylaş'." in asked.message
+
+
+@pytest.mark.parametrize(
+    ("action", "element"),
+    [
+        # The task card's own two examples. Both names are PAYMENT markers, so what they
+        # get is the hand-over and not a read-back: decision 4 outranks a confirmation.
+        (ACTION_SELECT, el("e1", "combobox", "Satın al", tag="select")),
+        (ACTION_CHECK, el("e1", "checkbox", "Abone ol")),
+        (ACTION_FILL, el("e1", "textbox", "Öde")),
+        (ACTION_SELECT, el("e1", "combobox", "Öde")),
+        (ACTION_CHECK, el("e1", "checkbox", "Öde")),
+        (ACTION_CLICK, el("e1", "button", "Öde")),
+    ],
+)
+def test_a_payment_is_handed_over_whatever_the_action(action: str, element: Element) -> None:
+    observed = page(element)
+    step = click("e1") if action == ACTION_CLICK else write(action)
+    granted = TaskContext(
+        goal=WRITE_CTX.goal,
+        grant=Grant(
+            step_digest=step.digest(element),
+            source="voice",
+            facts=read_back_facts(step, element, observed),
+        ),
+    )
+    for context in (WRITE_CTX, granted):
+        decision = decide(step, observed, context)
+        assert decision.kind == DECISION_ASK and decision.ask_kind == ASK_PAYMENT, action
+        assert decision.risk == RISK_HIGH_IMPACT
+        assert "Ödemeyi ben yapmıyorum" in decision.message
+
+
+def test_an_ordinary_write_is_still_free() -> None:
+    observed = page(
+        el("e1", "textbox", "Not", in_form=True),
+        el("e2", "combobox", "Dönem", in_form=True),
+        el("e3", "checkbox", "Hediye paketi", in_form=True),
+    )
+    for action, ref in zip(WRITES, ("e1", "e2", "e3"), strict=True):
+        decision = decide(write(action, ref), observed, WRITE_CTX)
+        assert decision.kind == DECISION_ALLOW, action
+        assert decision.risk == decision.risk_ceiling == RISK_REVERSIBLE_WRITE
+
+
+# ---- a control with no name
+
+
+@pytest.mark.parametrize(
+    ("action", "element", "expected"),
+    [
+        (
+            ACTION_CLICK,
+            el("e1", "button", "", submits=True, in_form=True),
+            "EXTERNAL_COMMUNICATION",
+        ),
+        (ACTION_CLICK, el("e1", "button", "", in_form=True), "EXTERNAL_COMMUNICATION"),
+        # A glyph is not a name: nothing in it says what the control does.
+        (ACTION_CLICK, el("e1", "button", "×", in_form=True), "EXTERNAL_COMMUNICATION"),
+        (ACTION_CLICK, el("e1", "button", " \u200b ", in_form=True), "EXTERNAL_COMMUNICATION"),
+        (ACTION_CHECK, el("e1", "checkbox", "", in_form=True), "EXTERNAL_COMMUNICATION"),
+        (ACTION_SELECT, el("e1", "combobox", "", in_form=True), "EXTERNAL_COMMUNICATION"),
+        # Outside a form, submitting nothing: a menu, a close box. Free, as before.
+        (ACTION_CLICK, el("e1", "button", ""), "REVERSIBLE_WRITE"),
+        (ACTION_CHECK, el("e1", "checkbox", ""), "REVERSIBLE_WRITE"),
+        # A plain link goes somewhere and does nothing else, named or not.
+        (
+            ACTION_CLICK,
+            el("e1", "link", "", href_host="x.example", risk_hint="NAVIGATE", in_form=True),
+            "NAVIGATE",
+        ),
+        (
+            ACTION_CLICK,
+            el("e1", "link", "", href_host="x.example", risk_hint="REVERSIBLE_WRITE"),
+            "REVERSIBLE_WRITE",
+        ),
+        # Typing sends nothing; what SENDS the form is gated when it is pressed.
+        (ACTION_FILL, el("e1", "textbox", "", in_form=True), "REVERSIBLE_WRITE"),
+        (ACTION_CLICK, el("e1", "textbox", "", in_form=True), "REVERSIBLE_WRITE"),
+        # A NAMED button in a form is judged by its name, as before.
+        (ACTION_CLICK, el("e1", "button", "Temizle", in_form=True), "REVERSIBLE_WRITE"),
+    ],
+)
+def test_a_control_with_no_name_in_a_form_is_not_a_free_step(
+    action: str, element: Element, expected: str
+) -> None:
+    assert risk.classify_step(action, element) == expected
+
+
+def test_an_unnamed_button_that_submits_is_read_back_as_unnamed() -> None:
+    for button in (
+        el("e1", "button", "", submits=True, in_form=True),
+        el("e1", "button", "", in_form=True),
+        el("e1", "button", "›", in_form=True),
+    ):
+        decision = decide(click("e1"), page(button), CTX)
+        assert decision.kind == DECISION_ASK and decision.ask_kind == ASK_CONFIRM
+        assert decision.risk == RISK_EXTERNAL_COMMUNICATION
+        assert decision.message.startswith("example.com sitesinde adsız bir düğmeye basacağım.")
+        assert "Sayfa bu düğmeye ad vermemiş." in decision.message
+        assert "verdiği ad" not in decision.message and "›" not in decision.message
+
+
+def test_an_unnamed_plain_link_is_allowed() -> None:
+    link = el("e1", "link", "", href_host="www.magaza.example.com", risk_hint="NAVIGATE")
+    decision = decide(click("e1"), page(link), CTX)
+    assert decision.kind == DECISION_ALLOW and decision.risk == RISK_NAVIGATE
+    handler = el("e1", "link", "", href_host="www.magaza.example.com", in_form=True)
+    decision = decide(click("e1"), page(handler), CTX)
+    assert decision.kind == DECISION_ALLOW and decision.risk == RISK_REVERSIBLE_WRITE
+
+
+# ---- the site-name rule
+
+
+@pytest.mark.parametrize(
+    ("goal", "url", "allowed"),
+    [
+        ("YouTube'da aç", "https://www.youtube.com/", True),
+        ("youtubeda bir şarkı aç", "https://www.youtube.com/", True),
+        ("YouTube\u2019da bir şarkı aç", "https://www.youtube.com/", True),
+        ("YouTube'daki son videoyu aç", "https://www.youtube.com/", True),
+        ("Trendyol'dan kulaklık bak", "https://www.trendyol.com/", True),
+        ("Hepsiburada'ya gir", "https://www.hepsiburada.com/", True),
+        ("Netflix'te bir dizi aç", "https://www.netflix.com/", True),
+        ("Facebook'tan haberlere bak", "https://www.facebook.com/", True),
+        ("Google'a git", "https://www.google.com/", True),
+        ("trendyol sitesinde ara", "https://www.trendyol.com/", True),
+        ("Trendyol sitesi açılsın", "https://www.trendyol.com/", True),
+        ("YouTube sayfasını aç", "https://www.youtube.com/", True),
+        # A word he said that does not stand where a site is named names no site.
+        ("dünya haberlerini bul", "https://www.dunya.com/", False),
+        ("dünya haberlerini bul", "https://www.haberlerini.com/", False),
+        ("Bugünkü yapay zeka haberlerinden birini bul", "https://www.yapay.com/", False),
+        ("Barış Manço - Dönence çal", "https://www.donence.com/", False),
+        ("kulaklık sitesinde trendyol yazıyor", "https://www.trendyol.com/", False),
+        # Not the suffix of ANOTHER word, and not a longer word that starts like the site.
+        ("myyoutube'da aç", "https://www.youtube.com/", False),
+        ("youtuber'da aç", "https://www.youtube.com/", False),
+        # One letter is a dative only after an apostrophe: "dünya" is not "düny'a".
+        ("dünya haberlerini bul", "https://www.duny.com/", False),
+        # The limit, written down: a bare name is not site position. He says where.
+        ("Trendyol aç", "https://www.trendyol.com/", False),
+        # "Open X" is the accusative, and it is how he says it: the apostrophe is what
+        # makes the word a NAME, so after one every case ending is site position.
+        ("YouTube'u aç", "https://www.youtube.com/", True),
+        ("Trendyol'u aç ve kulaklık ara", "https://www.trendyol.com/", True),
+        ("Google'ı aç", "https://www.google.com/", True),
+        ("Instagram’ı aç", "https://www.instagram.com/", True),
+        ("Hepsiburada'yı aç", "https://www.hepsiburada.com/", True),
+        ("Netflix'i aç", "https://www.netflix.com/", True),
+        ("Kitapyurdu'nu aç", "https://www.kitapyurdu.com/", True),
+        # The genitive, alone after an apostrophe and before "sitesi" without one.
+        ("Trendyol'un indirimlerine bak", "https://www.trendyol.com/", True),
+        ("Trendyol'un sitesinde ara", "https://www.trendyol.com/", True),
+        ("trendyolun sitesinde ara", "https://www.trendyol.com/", True),
+        ("Yemeksepeti'nin sayfasını aç", "https://www.yemeksepeti.com/", True),
+        ("trendyol web sitesinde ara", "https://www.trendyol.com/", True),
+        ("Trendyol internet sitesini aç", "https://www.trendyol.com/", True),
+        # A name that ends in its own possessive takes the buffer n.
+        ("Yemeksepeti'nde pizza ara", "https://www.yemeksepeti.com/", True),
+        ("Yemeksepeti'nden pizza bak", "https://www.yemeksepeti.com/", True),
+        ("Yemeksepeti'ndeki kampanyaya bak", "https://www.yemeksepeti.com/", True),
+        ("Yemeksepeti'ne gir", "https://www.yemeksepeti.com/", True),
+        ("Kitapyurdu'ndan bir roman bak", "https://www.kitapyurdu.com/", True),
+        # Without the apostrophe these endings are what every ordinary noun carries.
+        ("dünyayı gez", "https://www.dunya.com/", False),
+        ("dünyı gez", "https://www.duny.com/", False),
+        ("dünyayı gez", "https://www.duny.com/", False),
+        ("youtubeu aç", "https://www.youtube.com/", False),
+        ("trendyolun indirimlerine bak", "https://www.trendyol.com/", False),
+        ("yapay zeka haberlerinde ara", "https://www.haberleri.com/", False),
+        ("yapay zeka haberlerini bul", "https://www.haberleri.com/", False),
+        ("dünyanın haberlerini bul", "https://www.dunya.com/", False),
+        # The limit, written down: the buffer n without its apostrophe names nothing.
+        ("yemeksepetinde pizza ara", "https://www.yemeksepeti.com/", False),
+        # Not across another word: "web" and "internet" are the only ones before "sitesi".
+        ("trendyol haber sitesinde ara", "https://www.trendyol.com/", False),
+    ],
+)
+def test_a_site_is_named_only_where_a_site_is_named(goal: str, url: str, allowed: bool) -> None:
+    elsewhere = page(url="https://www.baslangic.example.net/")
+    assert url_is_allowed(url, elsewhere, TaskContext(goal=goal)) is allowed
+    # An answer of his names a site by the same rule as his goal.
+    answered = TaskContext(goal="Devam et", answers=(goal,))
+    assert url_is_allowed(url, elsewhere, answered) is allowed
+
+
+@pytest.mark.parametrize(
+    ("goal", "answer", "url"),
+    [
+        ("Şarkıyı aç youtube", "sitesi hangisiydi bilmiyorum", "https://www.youtube.com/"),
+        ("Şarkıyı aç youtube", "web sitesi mi", "https://www.youtube.com/"),
+        ("Bana trendyolun", "sitesinde ne var bilmiyorum", "https://www.trendyol.com/"),
+    ],
+)
+def test_two_things_he_said_are_not_read_as_one_phrase(goal: str, answer: str, url: str) -> None:
+    elsewhere = page(url="https://www.baslangic.example.net/")
+    said_apart = TaskContext(goal=goal, answers=(answer,))
+    assert not url_is_allowed(url, elsewhere, said_apart)
+    # The same words said as ONE phrase do name the site: the boundary is what refuses.
+    assert url_is_allowed(url, elsewhere, TaskContext(goal=f"{goal} {answer}"))
+    between_answers = TaskContext(goal="Devam et", answers=(goal, answer))
+    assert not url_is_allowed(url, elsewhere, between_answers)
+
+
+# ---- the control that was read back is the control that is acted on
+
+
+def test_the_read_back_holds_what_the_control_is_wired_to() -> None:
+    button = el("e1", "button", "Yorumu yayınla", submits=True, in_form=True)
+    facts = read_back_facts(click("e1"), button, page(button))
+    assert (facts["submits"], facts["in_form"], facts["href_host"]) == (True, True, "")
+    link = el("e1", "link", "Yorumu yayınla", href_host="yorum.example.org")
+    assert read_back_facts(click("e1"), link, page(link))["href_host"] == "yorum.example.org"
+
+
+@pytest.mark.parametrize(
+    ("change", "why"),
+    [
+        ({"submits": False}, "submits_changed"),
+        ({"in_form": False}, "in_form_changed"),
+        ({"href_host": "toplayici.example.net"}, "href_host_changed"),
+    ],
+)
+def test_a_control_that_was_rewired_is_not_the_control_that_was_read_back(
+    change: dict[str, Any], why: str
+) -> None:
+    granted = {
+        "site": "example.com",
+        "host": "www.magaza.example.com",
+        "element": "Yorumu yayınla",
+        "role": "button",
+        "submits": True,
+        "in_form": True,
+        "href_host": "",
+        "amounts": [],
+    }
+    assert facts_still_hold(granted, dict(granted)) == (True, "")
+    assert facts_still_hold(granted, {**granted, **change}) == (False, why)
+    # A read-back taken BEFORE these facts existed opens nothing they would have refused.
+    old = {k: v for k, v in granted.items() if k not in ("submits", "in_form", "href_host")}
+    assert facts_still_hold(old, granted) == (False, "submits_changed")
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (
+            el("e1", "button", "Yorumu yayınla", submits=True, in_form=True),
+            el("e1", "button", "Yorumu yayınla", in_form=True),
+        ),
+        (
+            el("e1", "button", "Yorumu yayınla", in_form=True),
+            el("e1", "button", "Yorumu yayınla"),
+        ),
+        (
+            el("e1", "link", "Yorumu yayınla", href_host="yorum.example.org"),
+            el("e1", "link", "Yorumu yayınla", href_host="toplayici.example.net"),
+        ),
+    ],
+)
+def test_a_grant_does_not_open_the_same_named_control_rewired(
+    before: Element, after: Element
+) -> None:
+    step = click("e1")
+    asked = decide(step, page(before), CTX)
+    assert asked.kind == DECISION_ASK and asked.ask_kind == ASK_CONFIRM
+    grant = Grant(step_digest=step.digest(before), source="voice", facts=dict(asked.facts))
+    context = TaskContext(goal=CTX.goal, grant=grant)
+    assert step.digest(after) == grant.step_digest  # the SAME step, by name and role
+    assert decide(step, page(before), context).kind == DECISION_ALLOW
+
+    again = decide(step, page(after), context)
+    assert again.kind == DECISION_ASK and again.ask_kind == ASK_CONFIRM
+    assert again.message.startswith("Onayınızdan sonra sayfa değişti; yeniden soruyorum. ")
+    assert again.facts != asked.facts
+    # The first read-back does not say that: nothing was confirmed yet.
+    assert "değişti" not in asked.message
+
+
+# ---- the read-back says what will be done
+
+
+@pytest.mark.parametrize(
+    ("action", "opening", "named", "unnamed"),
+    [
+        (
+            ACTION_CLICK,
+            "example.org sitesinde bir düğmeye basacağım.",
+            "Sayfanın bu düğmeye verdiği ad: 'Devam'.",
+            "example.org sitesinde adsız bir düğmeye basacağım. Sayfa bu düğmeye ad vermemiş.",
+        ),
+        (
+            ACTION_FILL,
+            "example.org sitesinde bir alana yazacağım.",
+            "Sayfanın bu alana verdiği ad: 'Devam'.",
+            "example.org sitesinde adsız bir alana yazacağım. Sayfa bu alana ad vermemiş.",
+        ),
+        (
+            ACTION_SELECT,
+            "example.org sitesinde bir listeden seçim yapacağım.",
+            "Sayfanın bu listeye verdiği ad: 'Devam'.",
+            "example.org sitesinde adsız bir listeden seçim yapacağım. "
+            "Sayfa bu listeye ad vermemiş.",
+        ),
+        (
+            ACTION_CHECK,
+            "example.org sitesinde bir kutunun işaretini değiştireceğim.",
+            "Sayfanın bu kutuya verdiği ad: 'Devam'.",
+            "example.org sitesinde adsız bir kutunun işaretini değiştireceğim. "
+            "Sayfa bu kutuya ad vermemiş.",
+        ),
+    ],
+)
+def test_the_read_back_says_what_will_be_done_to_what(
+    action: str, opening: str, named: str, unnamed: str
+) -> None:
+    facts = {"action": action, "site": "example.org", "element": "Devam"}
+    sentence = read_back_sentence(facts, RISK_EXTERNAL_COMMUNICATION)
+    assert sentence.startswith(opening + " " + named)
+    assert sentence.endswith("Bu işlem bir şey gönderir. Onaylıyor musunuz?")
+    assert read_back_sentence({**facts, "element": ""}, RISK_HIGH_IMPACT).startswith(unnamed)
+
+
+# ---- a field that is not a password and is still not typed into
+
+
+def test_a_card_number_field_is_the_owners_whatever_the_write() -> None:
+    # The worker marks the field, by its NAME: its own rule, run from its source. Its
+    # error taxonomy imports Playwright and is not what is under test, so it is a stub.
+    for module in ("injection", "risk_markers"):
+        _worker_module(module)
+    errors = types.ModuleType("browser_agent_under_test.errors")
+    errors.BrowserError = type("BrowserError", (Exception,), {})  # type: ignore[attr-defined]
+    errors.ErrorClass = type("ErrorClass", (), {})  # type: ignore[attr-defined]
+    sys.modules.setdefault(errors.__name__, errors)
+    observe = _worker_module("observe")
+    raw = {"role": "textbox", "name": "Kart numarası", "type": "text", "autocomplete": ""}
+    assert observe.is_sensitive(raw) is True
+    assert observe.is_sensitive({**raw, "name": "Kart sahibinin notu"}) is False
+
+    for action, role in zip(WRITES, ("textbox", "combobox", "checkbox"), strict=True):
+        field = el("e1", role, "Kart numarası", in_form=True, sensitive=True)
+        granted = TaskContext(
+            goal=WRITE_CTX.goal,
+            grant=Grant(step_digest=write(action).digest(field), source="voice"),
+        )
+        for context in (WRITE_CTX, granted):
+            decision = decide(write(action), page(field), context)
+            assert decision.kind == DECISION_ASK, action
+            assert decision.ask_kind == ASK_SENSITIVE_FIELD, action
+            assert "'Kart numarası' alanına ben yazmıyorum" in decision.message
+    # The same field, not marked: an ordinary write. The mark is what the gate reads.
+    plain = el("e1", "textbox", "Kart numarası", in_form=True)
+    assert decide(write(ACTION_FILL), page(plain), WRITE_CTX).kind == DECISION_ALLOW

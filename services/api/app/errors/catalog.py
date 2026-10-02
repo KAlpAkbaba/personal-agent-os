@@ -361,6 +361,11 @@ TR: dict[str, OwnerMessage] = {
     "too_many_running": _m(
         "Aynı anda çalışan iş sayısı sınırda", "Biri bitince sıradakini başlatırım."
     ),
+    # 2026-10-02 (ADR-0242): the STT comparison's per-file failure that is no voice error class
+    # (a model that will not load, a body that is not JSON); the exception's type follows it.
+    "unexpected": _m(
+        "Beklenmeyen bir hata oldu", "Ayrıntısı kayıtta; nedenini oradan bulabilirim."
+    ),
     "unsupported_provider": _m("Bu sağlayıcıyı tanımıyorum", "Tanıdıklarımı sayabilirim."),
     # 2026-09-18: a mission's approve/resume said by the model, not the owner.
     "owner_word_required": _m(

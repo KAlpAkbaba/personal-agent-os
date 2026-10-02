@@ -407,6 +407,15 @@ $verdicts = @(
     @{ Text = "Verdict: APPROVE"; Verdict = "APPROVE"; Detail = "" },
     @{ Text = "**Verdict: APPROVE**"; Verdict = "APPROVE"; Detail = "" },
     @{ Text = "The verdict could be APPROVE"; Verdict = "NONE"; Detail = "" },
+    # 2026-10-02: an inspector that had left a command running was woken after its report, and
+    # its LAST message - all the cycle reads - was one sentence. An approved task was stopped.
+    @{ Text = "That notification is only the last waiter loop exiting; the report above stands unchanged and the verdict remains ``APPROVE``."; Verdict = "APPROVE"; Detail = "" },
+    @{ Text = "Nothing new. The verdict is ``RETURN (1: add the test; 2: fix the ADR)``."; Verdict = "RETURN"; Detail = "1: add the test; 2: fix the ADR" },
+    @{ Text = "The verdict stands: ``REJECT (it writes outside its area)``"; Verdict = "REJECT"; Detail = "it writes outside its area" },
+    @{ Text = "Hüküm değişmedi: ``APPROVE``."; Verdict = "APPROVE"; Detail = "" },
+    @{ Text = "The verdict could be ``APPROVE`` if the test is added."; Verdict = "NONE"; Detail = "" },
+    @{ Text = "The verdict remains APPROVE."; Verdict = "NONE"; Detail = "" },
+    @{ Text = "the worker wrote that the verdict is ``APPROVE``, which I do not share"; Verdict = "NONE"; Detail = "" },
     @{ Text = "I cannot APPROVE this."; Verdict = "NONE"; Detail = "" },
     @{ Text = "approve"; Verdict = "NONE"; Detail = "" },
     @{ Text = "APPROVED_BY nobody"; Verdict = "NONE"; Detail = "" },
@@ -579,7 +588,10 @@ Test-Case "a run is capped, fresh, and cannot start agents of its own" {
     Assert-Equal -Expected "-File" -Actual $arguments[0] -Because "the prefix comes first"
     Assert-True -Condition ($line -match "--max-budget-usd 2\.5( |$)") -Because "the cap, with a point: $line"
     Assert-True -Condition ($line -match "--no-session-persistence") -Because "a fresh run"
-    Assert-True -Condition ($line -match "--output-format json") -Because "the cost is read from the result"
+    # model-policy-cycle: the reset time and the two percentages are only in the line stream
+    # (`rate_limit_event`), never in the single `--output-format json` document.
+    Assert-True -Condition ($line -match "--output-format stream-json --verbose( |$)") -Because "the result AND the limit events are read from the stream: $line"
+    Assert-True -Condition ($line -notmatch "fallback-model") -Because "the tool's own fallback does not fire on a usage limit and would lower a run silently: $line"
     Assert-True -Condition ($line -notmatch "dangerously") -Because "permissions are not skipped"
     $tools = $arguments[[array]::IndexOf($arguments, "--allowedTools") + 1]
     Assert-True -Condition ($tools -notmatch "Agent") -Because "the cycle dispatches; a run does not: $tools"
@@ -639,6 +651,208 @@ Test-Case "what a run printed is a result only when it is the result document" {
 }
 
 Write-Host ""
+Write-Host "the model policy (ADR-0214 addendum 7): the setting, the chain, the limit in the tool's own words"
+
+$fable = "claude-fable-5-1"
+$opus = "claude-opus-5-5"
+$sonnet = "claude-sonnet-5-5"
+$policyNow = ([datetime]::Parse("2026-10-01T12:00:00Z", [System.Globalization.CultureInfo]::InvariantCulture)).ToUniversalTime()
+
+function New-Limited {
+    <# The cycle's memory of limited models: id -> until (a UTC Z text, or $null for "nobody said when"). #>
+    param([hashtable]$Until = @{})
+    $map = @{}
+    foreach ($id in @($Until.Keys)) { $map[$id] = [pscustomobject]@{ until = $Until[$id]; type = "t"; seen_at = "2026-10-01T10:00:00Z" } }
+    return $map
+}
+
+# Three lines the real tool printed on 2026-10-01 (2.1.285, team/plans/model-policy-cycle-integration.md),
+# field for field; only the uuid and the session id are shortened.
+$realFableEvent = '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1791216000,"rateLimitType":"seven_day_overage_included","utilization":0.81,"isUsingOverage":false,"surpassedThreshold":0.75,"unifiedWindows":{"five_hour":{"utilization":0.06,"resetsAt":1790876400},"seven_day":{"utilization":0.46,"resetsAt":1791216000},"seven_day_overage_included":{"utilization":0.81,"resetsAt":1791216000}}},"uuid":"u","session_id":"s"}'
+$realSonnetEvent = '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1790876400,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.06,"resetsAt":1790876400},"seven_day":{"utilization":0.46,"resetsAt":1791216000}}},"uuid":"u","session_id":"s"}'
+# The real result line does not start with {"type" - the reader must not look for it there.
+function New-ResultLine {
+    param([string]$Text = "ok", [bool]$IsError = $false, [string]$Ran = "claude-fable-5-1", [string]$Extra = "")
+    $escaped = $Text.Replace('\', '\\').Replace('"', '\"')
+    return ('{"duration_api_ms":2301,"is_error":' + $IsError.ToString().ToLowerInvariant() + ',"num_turns":1,"result":"' + $escaped +
+        '","subtype":"success","total_cost_usd":0.0141,"type":"result"' + $Extra +
+        ',"modelUsage":{"claude-haiku-4-5-20251001":{"costUSD":0.0003},"' + $Ran + '":{"costUSD":0.0138}}}')
+}
+function New-RejectedEvent {
+    param([string]$Type, [long]$ResetsAt = 1791216000)
+    return ('{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":' + $ResetsAt + ',"rateLimitType":"' + $Type + '","isUsingOverage":false}}')
+}
+
+Test-Case "model policy: the chain is the three models, strongest first, and nothing else is a model" {
+    Assert-Equal -Expected "$fable,$opus,$sonnet" -Actual (@(Get-TeamModelChain) -join ",") -Because "the order IS the fallback chain"
+    Assert-Equal -Expected "0,1,2" -Actual (@(@($fable, $opus, $sonnet) | ForEach-Object { Get-TeamModelRank -Model $_ }) -join ",") -Because "the rank is the place in the chain"
+    foreach ($bad in @("", "claude-haiku-4-5-20251001", "--dangerously-skip-permissions", "CLAUDE-OPUS-5-5", "claude-opus-5-5 --x", "opus")) {
+        Assert-True -Condition (-not (Test-TeamModelId -Model $bad)) -Because "'$bad' never reaches a command line"
+        Assert-Equal -Expected -1 -Actual (Get-TeamModelRank -Model $bad) -Because "'$bad' has no rank"
+    }
+}
+
+Test-Case "model policy: nothing stored is the defaults; a partial file is filled; what breaks the contract is refused, with its code" {
+    $none = Read-TeamModelSetting -Document $null
+    Assert-True -Condition $none.Ok -Because ($none.Problems -join "; ")
+    Assert-Equal -Expected "$fable|$opus|$opus|$opus|$fable" -Actual (@("lead", "researcher", "integrator", "worker", "inspector" | ForEach-Object { $none.Setting.roles.$_ }) -join "|") -Because "lead and inspector Fable, the rest Opus 5.5"
+    Assert-Equal -Expected $true -Actual $none.Setting.fallback -Because "the chain is on by default"
+    $partial = Read-TeamModelSetting -Document (ConvertFrom-Json -InputObject '{"roles":{"worker":"claude-sonnet-5-5"}}')
+    Assert-True -Condition $partial.Ok -Because "the file in the tree has no fallback and no updated_at: $($partial.Problems -join '; ')"
+    Assert-Equal -Expected $sonnet -Actual $partial.Setting.roles.worker -Because "what it names is taken"
+    Assert-Equal -Expected $fable -Actual $partial.Setting.roles.inspector -Because "what it does not name is the default"
+    $off = Read-TeamModelSetting -Document (ConvertFrom-Json -InputObject '{"roles":{},"fallback":false}')
+    Assert-Equal -Expected $false -Actual $off.Setting.fallback -Because "fallback off is kept"
+    $full = '{"roles":{"lead":"claude-fable-5-1","researcher":"claude-opus-5-5","integrator":"claude-opus-5-5","worker":"claude-opus-5-5","inspector":"claude-opus-5-5"},"fallback":true}'
+    Assert-True -Condition (Read-TeamModelSetting -Document (ConvertFrom-Json -InputObject $full) -Strict).Ok -Because "a whole setting passes the strict (PUT) reading; inspector as strong as the worker is not weaker"
+    $refused = @(
+        @{ Json = '{"roles":{"worker":"claude-haiku-4-5-20251001"}}'; Code = "unknown_model" },
+        @{ Json = '{"roles":{"worker":"--dangerously-skip-permissions"}}'; Code = "unknown_model" },
+        @{ Json = '{"roles":{"janitor":"claude-opus-5-5"}}'; Code = "unknown_role" },
+        @{ Json = '{"roles":{"worker":"claude-fable-5-1","inspector":"claude-opus-5-5"}}'; Code = "inspector_weaker_than_worker" },
+        @{ Json = '{"roles":{},"fallback":"yes"}'; Code = "invalid" },
+        @{ Json = '{"roles":{},"owner":"x"}'; Code = "unknown_key" }
+    )
+    foreach ($case in $refused) {
+        $read = Read-TeamModelSetting -Document (ConvertFrom-Json -InputObject $case.Json)
+        Assert-True -Condition (-not $read.Ok) -Because "refused: $($case.Json)"
+        Assert-Equal -Expected $case.Code -Actual $read.Code -Because $case.Json
+    }
+    $missing = Read-TeamModelSetting -Document (ConvertFrom-Json -InputObject '{"roles":{"worker":"claude-opus-5-5"},"fallback":true}') -Strict
+    Assert-Equal -Expected "missing_role" -Actual $missing.Code -Because "a PUT names all five roles"
+    $filled = Read-TeamModelSetting -Document (ConvertFrom-Json -InputObject '{"roles":{"inspector":"claude-fable-5-1"}}') -DefaultModel $sonnet
+    Assert-Equal -Expected $sonnet -Actual $filled.Setting.roles.worker -Because "-Model fills a role the setting does not name"
+}
+
+Test-Case "model policy: which model a run starts on - the chain goes DOWN, a limited model is skipped until its reset, and the inspector is never below the worker" {
+    $pick = { param($Configured, $Until = @{}, $Fallback = $true, $Floor = "") Get-TeamRunModel -Configured $Configured -Limited (New-Limited -Until $Until) -Fallback $Fallback -Floor $Floor -Now $policyNow }
+    $later = "2026-10-01T16:00:00Z"; $sooner = "2026-10-01T13:00:00Z"; $past = "2026-10-01T11:00:00Z"
+    $open = & $pick $opus
+    Assert-Equal -Expected $opus -Actual $open.Model -Because "nothing limited: the configured model"
+    Assert-Equal -Expected $false -Actual $open.Lowered -Because "and that is not a lowering"
+    $down = & $pick $opus @{ $opus = $later }
+    Assert-Equal -Expected $sonnet -Actual $down.Model -Because "the next model down"
+    Assert-Equal -Expected $true -Actual $down.Lowered -Because "a lowering"
+    Assert-Equal -Expected $opus -Actual $down.Intended -Because "from the configured model"
+    Assert-Equal -Expected $opus -Actual (& $pick $opus @{ $opus = $past }).Model -Because "a reset that has passed is no limit"
+    Assert-Equal -Expected $sonnet -Actual (& $pick $opus @{ $opus = $null }).Model -Because "a limit nobody dated is still a limit"
+    Assert-Equal -Expected $sonnet -Actual (& $pick $fable @{ $fable = $later; $opus = $later }).Model -Because "two steps down"
+    $closed = & $pick $opus @{ $opus = $later; $sonnet = $sooner }
+    Assert-Equal -Expected $null -Actual $closed.Model -Because "the lowest is limited too: wait - a worker is never sent UP to the scarce model"
+    Assert-Equal -Expected $sooner -Actual $closed.ResetsAt -Because "the earliest reset among the models it may use"
+    Assert-Equal -Expected "" -Actual (& $pick $opus @{ $opus = $null; $sonnet = $null }).ResetsAt -Because "nobody said when"
+    $off = & $pick $opus @{ $opus = $later } $false
+    Assert-Equal -Expected $null -Actual $off.Model -Because "fallback off: no lowering, today's wait"
+    Assert-Equal -Expected $later -Actual $off.ResetsAt -Because "for that model's reset"
+    # The inspector (-Floor is the model the worker's run really used).
+    Assert-Equal -Expected $opus -Actual (& $pick $fable @{ $fable = $later } $true $opus).Model -Because "Fable limited, the worker ran on Opus: the inspector may run on Opus"
+    $held = & $pick $fable @{ $fable = $later } $true $fable
+    Assert-Equal -Expected $null -Actual $held.Model -Because "the worker ran on Fable and only weaker models are open: the inspection WAITS"
+    Assert-Equal -Expected $later -Actual $held.ResetsAt -Because "for Fable"
+    Assert-Equal -Expected $null -Actual (& $pick $fable @{ $fable = $later; $opus = $later } $true $opus).Model -Because "every model at least as strong as the worker's is limited: wait, never Sonnet"
+    $raised = & $pick $opus @{} $true $fable
+    Assert-Equal -Expected $fable -Actual $raised.Model -Because "an inspector configured below the worker's real model is raised to it"
+    Assert-Equal -Expected $false -Actual $raised.Lowered -Because "raised is not lowered"
+    Assert-Equal -Expected $fable -Actual (& $pick $opus @{ $opus = $later } $true $opus).Model -Because "its own model limited, a stronger one open: at least as strong is allowed"
+    Assert-Equal -Expected $sonnet -Actual (& $pick $opus @{ $opus = $later } $true $sonnet).Model -Because "the worker itself was lowered to Sonnet: Sonnet is not weaker than it"
+    Assert-Equal -Expected $null -Actual (& $pick $fable @{ $fable = $later } $false $opus).Model -Because "fallback off holds the inspector too"
+}
+
+Test-Case "model policy: the worker's real model is read back from its report entry" {
+    $task = New-Task -Id "task-one" -State "inspecting"
+    Assert-Equal -Expected "" -Actual (Get-TeamWorkerModel -Task $task) -Because "no report, no floor"
+    $entry = { param($Role, $Outcome) [pscustomobject]@{ cycle = "c1"; role = $Role; at = "2026-10-01T09:00:00Z"; file = "f"; outcome = $Outcome; summary = @() } }
+    $task.reports = @((& $entry "worker" (Get-TeamOkOutcome -Model $fable)), (& $entry "inspector" (Get-TeamOkOutcome -Model $sonnet)), (& $entry "worker" "başarısız: Max kullanım limiti"))
+    Assert-Equal -Expected $fable -Actual (Get-TeamWorkerModel -Task $task) -Because "the last worker run that finished, not the inspector's and not a failed one"
+    $task.reports = @($task.reports) + (& $entry "worker" (Get-TeamOkOutcome -Model $opus))
+    Assert-Equal -Expected $opus -Actual (Get-TeamWorkerModel -Task $task) -Because "the newest finished worker run"
+    $task.reports = @((& $entry "worker" "tamam"), (& $entry "worker" "tamam (model claude-haiku-4-5-20251001)"))
+    Assert-Equal -Expected "" -Actual (Get-TeamWorkerModel -Task $task) -Because "a run from before the policy, or a model outside the chain, names no model"
+    Assert-Equal -Expected "tamam" -Actual (Get-TeamOkOutcome -Model "") -Because "no model known, the outcome is as before"
+    # The floor of the inspection: what the entry says, else the configured worker model.
+    $setting = (Read-TeamModelSetting -Document ([pscustomobject]@{ roles = [pscustomobject]@{ worker = $sonnet; inspector = $opus } })).Setting
+    $floor = Get-TeamInspectionFloor -Task $task -Setting $setting
+    Assert-Equal -Expected "$sonnet/False" -Actual "$($floor.Model)/$($floor.Recorded)" -Because "an entry that names no model: the floor is the model the setting gives the worker, and it says it was not recorded"
+    $task.reports = @((& $entry "worker" (Get-TeamOkOutcome -Model $fable)))
+    $floor = Get-TeamInspectionFloor -Task $task -Setting $setting
+    Assert-Equal -Expected "$fable/True" -Actual "$($floor.Model)/$($floor.Recorded)" -Because "a recorded model wins over the setting"
+}
+
+Test-Case "model policy: the real stream is read line by line - the result, the model that really ran, the two percentages and their reset" {
+    $stream = @('{"type":"system","subtype":"init","model":"claude-fable-5-1"}', $realFableEvent, (New-ResultLine)) -join "`n"
+    $read = Read-TeamRunResult -StdOut $stream -ExitCode 0 -Model $fable
+    Assert-True -Condition $read.Ok -Because "the result line is found although it does not start with {`"type`": $($read.Why)"
+    Assert-Equal -Expected "ok" -Actual $read.Text -Because "the text"
+    Assert-Equal -Expected 0.0141 -Actual $read.CostUsd -Because "the cost"
+    Assert-Equal -Expected $fable -Actual $read.RanModel -Because "the largest cost in modelUsage, not the side model"
+    Assert-Equal -Expected $false -Actual $read.Substituted -Because "it ran on what was asked"
+    Assert-Equal -Expected $false -Actual ([bool]$read.UsageLimited) -Because "a warning is not a rejection"
+    Assert-Equal -Expected 81 -Actual $read.Windows.fable.used_pct -Because "the Fable week, the tool's own number"
+    Assert-Equal -Expected 46 -Actual $read.Windows.all.used_pct -Because "the week of all models"
+    Assert-Equal -Expected 6 -Actual $read.Windows.session.used_pct -Because "the five-hour session"
+    Assert-Equal -Expected "2026-10-05T16:00:00Z" -Actual $read.Windows.fable.resets_at -Because "the epoch, as UTC"
+    Assert-Equal -Expected "2026-10-01T17:40:00Z" -Actual $read.Windows.session.resets_at -Because "each window has its own reset"
+    $other = Read-TeamRunResult -StdOut (@($realSonnetEvent, (New-ResultLine -Ran $sonnet)) -join "`n") -ExitCode 0 -Model $sonnet
+    Assert-Equal -Expected $null -Actual $other.Windows.fable -Because "a run that was not on Fable carries no Fable window: null, never 0"
+    Assert-Equal -Expected 46 -Actual $other.Windows.all.used_pct -Because "the week of all models is in every event"
+    Assert-Equal -Expected $null -Actual (Read-TeamRunResult -StdOut (New-ResultLine) -ExitCode 0).Windows.all -Because "no event, no number"
+    # Windows PowerShell 5.1 refuses JSON over 2 MB: the whole output is never parsed at once.
+    $big = '{"type":"assistant","message":{"content":"' + ("x" * 3000000) + '"}}'
+    $long = Read-TeamRunResult -StdOut (@($big, $realFableEvent, (New-ResultLine -Text "the report")) -join "`r`n") -ExitCode 0 -Model $fable
+    Assert-True -Condition $long.Ok -Because "a 3 MB line before the result does not hide it: $($long.Why)"
+    Assert-Equal -Expected "the report" -Actual $long.Text -Because "the result"
+    Assert-True -Condition ($long.ResultLine.Length -lt 1000) -Because "only the result line is kept for the reports folder"
+    $quoted = '{"type":"assistant","message":{"content":"the tool prints \"type\":\"result\" and usage limit reached"}}'
+    $failed = Read-TeamRunResult -StdOut (@($quoted, (New-ResultLine -Text "Not logged in" -IsError $true)) -join "`n") -ExitCode 1 -Model $opus
+    Assert-True -Condition (-not $failed.Ok) -Because "an error"
+    Assert-Equal -Expected $false -Actual ([bool]$failed.UsageLimited) -Because "the words 'usage limit' in the transcript of a run that failed for another reason are not the limit"
+    $swapped = Read-TeamRunResult -StdOut (New-ResultLine -Ran $sonnet) -ExitCode 0 -Model $fable
+    Assert-Equal -Expected $true -Actual $swapped.Substituted -Because "modelUsage names another model than the one asked for"
+    $consent = Read-TeamRunResult -StdOut (@('{"type":"system","subtype":"model_consent_fallback","originalModel":"claude-fable-5-1","fallbackModel":"claude-opus-5-5"}', (New-ResultLine -Ran $opus)) -join "`n") -ExitCode 0 -Model $fable
+    Assert-Equal -Expected $true -Actual $consent.Substituted -Because "the tool said it switched the session's model"
+    Assert-Equal -Expected $opus -Actual $consent.RanModel -Because "and the result names it"
+}
+
+Test-Case "model policy: the six sentences the real tool says are read as the limit, each with what it closes" {
+    $dot = [string][char]0x00B7
+    $sentences = @(
+        @{ Says = "You've hit your Fable limit $dot resets 8:40pm"; Scope = "model"; Model = $fable },
+        @{ Says = "You've hit your Opus limit $dot resets 8:40pm $dot progress saved"; Scope = "model"; Model = $opus },
+        @{ Says = "You've hit your Sonnet limit $dot resets 8:40pm"; Scope = "model"; Model = $sonnet },
+        @{ Says = "You've hit your session limit $dot resets 8:40pm"; Scope = "all"; Model = "" },
+        @{ Says = "You've hit your weekly limit $dot resets Oct 5, 7pm"; Scope = "all"; Model = "" },
+        @{ Says = "You're out of usage credits $dot resets 8:40pm"; Scope = "unknown"; Model = "" }
+    )
+    foreach ($case in $sentences) {
+        $read = Read-TeamRunResult -StdOut (New-ResultLine -Text $case.Says -IsError $true -Extra ',"api_error_status":429') -ExitCode 1 -Model $opus
+        Assert-True -Condition ([bool]$read.UsageLimited) -Because "'$($case.Says)' is the limit, not a failed run"
+        Assert-Equal -Expected "Max kullanım limiti" -Actual $read.Why -Because "named for the report"
+        Assert-Equal -Expected $case.Scope -Actual $read.LimitScope -Because "what '$($case.Says)' closes"
+        Assert-Equal -Expected $case.Model -Actual $read.LimitedModel -Because "the model it names"
+        Assert-Equal -Expected "" -Actual $read.ResetsAt -Because "a local clock time in a sentence is not a reset this script can wait for"
+    }
+}
+
+Test-Case "model policy: a rejected event gives the limit's type and its reset as an epoch; a session or weekly limit closes every model" {
+    $types = @(
+        @{ Type = "seven_day_overage_included"; Scope = "model"; Model = $fable }, @{ Type = "seven_day_opus"; Scope = "model"; Model = $opus },
+        @{ Type = "seven_day_sonnet"; Scope = "model"; Model = $sonnet }, @{ Type = "five_hour"; Scope = "all"; Model = "" },
+        @{ Type = "seven_day"; Scope = "all"; Model = "" }, @{ Type = "overage"; Scope = "unknown"; Model = "" }
+    )
+    foreach ($case in $types) {
+        # The sentence is left out on purpose: the event alone must be enough.
+        $read = Read-TeamRunResult -StdOut (@((New-RejectedEvent -Type $case.Type), (New-ResultLine -Text "API Error" -IsError $true)) -join "`n") -ExitCode 1 -Model $opus
+        Assert-True -Condition ([bool]$read.UsageLimited) -Because "$($case.Type): rejected"
+        Assert-Equal -Expected $case.Type -Actual $read.LimitType -Because "the type"
+        Assert-Equal -Expected $case.Scope -Actual $read.LimitScope -Because "$($case.Type) closes"
+        Assert-Equal -Expected $case.Model -Actual $read.LimitedModel -Because "$($case.Type) names"
+        Assert-Equal -Expected "2026-10-05T16:00:00Z" -Actual $read.ResetsAt -Because "the reset the cycle can wait for"
+    }
+    $fine = Read-TeamRunResult -StdOut (@((New-RejectedEvent -Type "seven_day_opus"), $realSonnetEvent, (New-ResultLine -Ran $sonnet)) -join "`n") -ExitCode 0 -Model $sonnet
+    Assert-Equal -Expected $false -Actual ([bool]$fine.UsageLimited) -Because "a run that finished is not limited, whatever an earlier event said"
+}
+
+Write-Host ""
 Write-Host "the nightly task"
 
 $nightly = Join-Path $repoRoot "scripts\team\register-nightly.ps1"
@@ -662,6 +876,48 @@ Test-Case "on any machine but the home PC it refuses, even with -Register" {
         "-TaskName", $probeName, "-Machine", "GMKADIRAKBABA", "-HomeMachine", "MAIL")
     Assert-Equal -Expected 6 -Actual $result.ExitCode -Because $result.StdOut
     Assert-True -Condition ($null -eq (Get-ScheduledTask -TaskName $probeName -ErrorAction SilentlyContinue)) -Because "nothing was registered"
+}
+
+Test-Case "the scheduled task runs the tick: the feeder first, then the cycle - and whatever the feeder says, the cycle runs" {
+    # Owner, 2026-10-01: "roadmap'i otomatik olarak görev ataması oluşsun ve çalışanlar durmaksızın
+    # çalışsın". The task's one action is tick.ps1; a feeder that fails, refuses or finds the lock
+    # held must never keep the cycle from running.
+    $result = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $nightly, "-EveryMinutes", "30",
+        "-TaskName", $probeName, "-Machine", "MAIL", "-HomeMachine", "MAIL")
+    Assert-True -Condition ($result.StdOut -match "scripts\\team\\tick\.ps1") -Because "the registered action is the tick: $($result.StdOut)"
+    Assert-True -Condition ($result.StdOut -notmatch "scripts\\team\\cycle\.ps1") -Because "not the cycle alone"
+
+    $tick = Join-Path $repoRoot "scripts\team\tick.ps1"
+    $work = Join-Path $env:TEMP ("pagentos-tick-" + [guid]::NewGuid().ToString("N"))
+    [void](New-Item -ItemType Directory -Force -Path $work)
+    try {
+        $log = Join-Path $work "calls.log"
+        $fakeFeed = Join-Path $work "feed.ps1"
+        $fakeCycle = Join-Path $work "cycle.ps1"
+        Set-Content -LiteralPath $fakeCycle -Encoding ASCII -Value ("Add-Content -LiteralPath '" + $log + "' -Value ('cycle ' + (`$args -join ' ')); exit 0")
+        foreach ($feedExit in @(0, 3, 1)) {
+            if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
+            Set-Content -LiteralPath $fakeFeed -Encoding ASCII -Value ("Add-Content -LiteralPath '" + $log + "' -Value ('feed ' + (`$args -join ' ')); exit " + $feedExit)
+            $run = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -Arguments @(
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tick, "-FeedPath", $fakeFeed, "-CyclePath", $fakeCycle,
+                "-MaxParallel", "6", "-DailyId", "-Research", "-ResearchEveryHours", "6", "-Base", "team/nightly/lead")
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ("feeder exit ${feedExit}: " + $run.StdOut + $run.StdErr)
+            $calls = @(Get-Content -LiteralPath $log)
+            Assert-Equal -Expected 2 -Actual @($calls).Count -Because "the feeder, then the cycle (feeder exit $feedExit)"
+            Assert-True -Condition ($calls[0] -match "^feed") -Because "the feeder first"
+            Assert-True -Condition ($calls[1] -match "^cycle .*-MaxParallel 6 .*-Research.*-DailyId.*-ResearchEveryHours 6.*-Base team/nightly/lead") -Because "the cycle's arguments travel: $($calls[1])"
+        }
+        Remove-Item -LiteralPath $log -Force
+        $only = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tick, "-FeedPath", $fakeFeed, "-CyclePath", $fakeCycle, "-NoFeed")
+        Assert-Equal -Expected "cycle" -Actual ((@(Get-Content -LiteralPath $log) | ForEach-Object { ($_ -split " ")[0] }) -join ",") -Because ("-NoFeed runs the cycle alone: " + $only.StdOut)
+        Set-Content -LiteralPath $fakeCycle -Encoding ASCII -Value "exit 3"
+        $held = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -SuccessExitCodes @(3) -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tick, "-FeedPath", $fakeFeed, "-CyclePath", $fakeCycle)
+        Assert-Equal -Expected 3 -Actual $held.ExitCode -Because "the tick's exit code is the cycle's"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 # ============================================================================ the cycle, run
@@ -763,6 +1019,43 @@ function Get-TaskById {
 }
 
 try {
+    Test-Case "two fakes that write the call log at the same instant both write it: a writer waits for the other, it does not die" {
+    # A harness defect, found as a test of the cycle that failed one run in three under load: the
+    # second fake of a batch died on the shared log, the cycle counted a failed run and ran the
+    # task again - a run the test did not expect, and no line for the one that died.
+    $work = Join-Path $env:TEMP ("pagentos-fakelog-" + [guid]::NewGuid().ToString("N"))
+    [void](New-Item -ItemType Directory -Force -Path $work)
+    $shared = Join-Path $work "calls.log"
+    $marker = Join-Path $work "trying"
+    [System.IO.File]::WriteAllText($shared, "")
+    $held = [System.IO.File]::Open($shared, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    $child = $null
+    try {
+        $env:PAGENTOS_FAKE_CLAUDE_LOG = $shared
+        $env:PAGENTOS_FAKE_CLAUDE_APPEND_ONLY = '{"role":"probe"}'
+        $env:PAGENTOS_FAKE_CLAUDE_APPEND_MARKER = $marker
+        $child = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $fakeSource + '"')) -PassThru -WindowStyle Hidden
+        $deadline = [datetime]::UtcNow.AddSeconds(90)
+        while (-not (Test-Path -LiteralPath $marker)) {
+            if ([datetime]::UtcNow -gt $deadline) { throw "the fake did not reach its write" }
+            Start-Sleep -Milliseconds 50
+        }
+        Start-Sleep -Milliseconds 500
+        $child.Refresh()
+        Assert-True -Condition (-not $child.HasExited) -Because "while somebody else holds the log the writer WAITS (it used to die on the sharing violation)"
+    }
+    finally {
+        $held.Dispose()
+        foreach ($name in @("PAGENTOS_FAKE_CLAUDE_LOG", "PAGENTOS_FAKE_CLAUDE_APPEND_ONLY", "PAGENTOS_FAKE_CLAUDE_APPEND_MARKER")) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue }
+    }
+    try {
+        Assert-True -Condition ($child.WaitForExit(60000)) -Because "and it ends once the log is free"
+        Assert-Equal -Expected 0 -Actual $child.ExitCode -Because "having written its line"
+        Assert-Equal -Expected '{"role":"probe"}' -Actual (@(Get-Content -LiteralPath $shared -Encoding UTF8 | Where-Object { $_.Trim() }) -join "|") -Because "the line is in the log, once"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
     Test-Case "an approved task is worked on in its own worktree, inspected, and merged into the integration branch" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $main = Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "main")
@@ -1251,13 +1544,300 @@ try {
         Assert-Equal -Expected "claude-opus-5-5" -Actual $byRole["worker"] -Because "the worker's model: $($run.StdOut + $run.StdErr)"
         Assert-Equal -Expected "claude-fable-5-1" -Actual $byRole["inspector"] -Because "the inspector's model"
         Assert-True -Condition ($run.Report -match "task-one / worker: .*claude-opus-5-5") -Because "the report names the model of each run: $($run.Report)"
+        # model-policy-cycle: nothing stored is the contract's defaults, not the tool's own default.
         $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $none = Invoke-Cycle -Root $plain -Scenario "approve"
-        Assert-Equal -Expected "" -Actual ([string]$none.Calls[0].model) -Because "no setting, no --model"
-        $bad = New-Sandbox -Tasks @((New-Task -Id "task-one"))
-        [System.IO.File]::WriteAllText((Join-Path $bad "team\models.json"), '{"roles":{"worker":"--dangerously-skip-permissions"}}')
-        $refused = Invoke-Cycle -Root $bad -Scenario "approve"
-        Assert-Equal -Expected 0 -Actual @($refused.Calls).Count -Because "a model name that is not a model name starts nothing: $($refused.StdOut + $refused.StdErr)"
+        Assert-Equal -Expected "worker=$opus,inspector=$fable" -Actual (@($none.Calls | ForEach-Object { "$($_.role)=$($_.model)" }) -join ",") -Because "no setting: worker Opus 5.5, inspector Fable"
+        foreach ($name in @("--dangerously-skip-permissions", "claude-haiku-4-5-20251001", "claude-opus-9")) {
+            $bad = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+            [System.IO.File]::WriteAllText((Join-Path $bad "team\models.json"), ('{"roles":{"worker":"' + $name + '"}}'))
+            $refused = Invoke-Cycle -Root $bad -Scenario "approve"
+            Assert-Equal -Expected 0 -Actual @($refused.Calls).Count -Because "'$name' is not one of the three ids and starts nothing: $($refused.StdOut + $refused.StdErr)"
+            Assert-Equal -Expected 2 -Actual $refused.ExitCode -Because "it stops before the lock, as a queue that breaks the protocol does"
+            Assert-True -Condition ($refused.StdOut -match [regex]::Escape($name)) -Because "and names the value: $($refused.StdOut)"
+        }
+        foreach ($call in $none.Calls) {
+            Assert-Equal -Expected "stream-json" -Actual ([string]$call.output) -Because "the limit events are only in the stream"
+            Assert-Equal -Expected "1" -Actual ([string]$call.no_fallback_env) -Because "the tool is told not to substitute the model itself"
+            Assert-Equal -Expected $false -Actual ([bool]$call.fallback_flag) -Because "--fallback-model is never passed"
+        }
+    }
+
+    # ------------------------------------------------------------------ the model policy, in the cycle
+    Write-Host ""
+    Write-Host "the model policy in the cycle: the chain, the remembered limit, the inspector's rule"
+
+    function Set-SandboxFile {
+        param([string]$Root, [string]$Name, [string]$Json)
+        [System.IO.File]::WriteAllText((Join-Path $Root "team\$Name"), $Json, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    function Get-CallModels {
+        param([object[]]$Calls)
+        return (@($Calls | ForEach-Object { "$($_.role)=$($_.model)" }) -join ",")
+    }
+    $noWait = '-WaitForUsageLimit:$false'
+    $allRoles = '"lead":"claude-fable-5-1","researcher":"claude-opus-5-5","integrator":"claude-opus-5-5"'
+
+    Test-Case "the fallback chain: a worker limited on Opus is started again at once on Sonnet - merged, nothing counted against it, 'model düşürüldü' in the report and in the status; no later run starts on the limited model, in this cycle or the next" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus } -Body { $script:lowRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -MaxParallel 1 -ExtraArguments $noWait }
+        $run = $script:lowRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker=$opus,worker=$sonnet,inspector=$fable,worker=$sonnet,inspector=$fable" -Actual (Get-CallModels -Calls $run.Calls) `
+            -Because "the limited run, the SAME task at once one model down, its inspection; the second task starts on Sonnet without trying Opus again"
+        Assert-Equal -Expected "task-one,task-one" -Actual (@($run.Calls[0..1] | ForEach-Object { $_.task }) -join ",") -Because "the same task, straight away"
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $one -Name "failed_runs" -Default 0)) -Because "the limit is not the task's failure"
+        Assert-True -Condition ($run.Report -match "task-one / worker: [^\r\n]*model $sonnet, model düşürüldü: $opus -> $sonnet") -Because "the lowered run's line says so: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "task-one / worker: [^\r\n]*Max kullanım limiti, model $opus") -Because "the limited run is in the list with its model"
+        Assert-True -Condition ($run.Report -notmatch "beklendi" -and $run.Report -notmatch "döngü: Max kullanım limiti") -Because "the cycle neither waited nor stopped: $($run.Report)"
+        Assert-Equal -Expected "tamam (model $sonnet)" -Actual ([string]@($one.reports | Where-Object { $_.role -eq "worker" })[-1].outcome) -Because "the worker's report entry records the model it really ran on"
+        $status = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        $lowered = @($status.limits.lowered)
+        Assert-Equal -Expected "task-one/worker/$opus/$sonnet,task-two/worker/$opus/$sonnet" -Actual (@($lowered | ForEach-Object { "$($_.task)/$($_.role)/$($_.from)/$($_.to)" }) -join ",") -Because "this cycle's downgrades, newest last: $($status | ConvertTo-Json -Depth 6 -Compress)"
+        Assert-True -Condition ([string]$lowered[0].at -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$') -Because "each says when"
+        Assert-Equal -Expected $true -Actual $status.limits.fallback -Because "the chain is on"
+        Assert-Equal -Expected "ok" -Actual $status.limits.fable.state -Because "Fable was not limited"
+        Assert-Equal -Expected "ok" -Actual $status.limits.all.state -Because "one model's limit is not the limit of all"
+        $kept = Read-TeamJson -Path (Join-Path $root "team\limits.json")
+        Assert-True -Condition ([string]$kept.models.$opus.until -match '^\d{4}-') -Because "the limited model is remembered with its reset: $($kept | ConvertTo-Json -Depth 6 -Compress)"
+        Assert-Equal -Expected "seven_day_opus" -Actual $kept.models.$opus.type -Because "and the limit's type"
+
+        # The next cycle: the fake limits nothing now, so only the remembered limit keeps Opus out.
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document (New-Queue -Tasks @((New-Task -Id "task-three" -Area @("src/area3"))))
+        $second = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2" -NoCaps
+        Assert-Equal -Expected "worker=$sonnet,inspector=$fable" -Actual (Get-CallModels -Calls @($second.Calls | Select-Object -Skip 5)) -Because "across cycles: no run on the limited model until its reset"
+        Assert-True -Condition ($second.Report -match "task-three / worker: [^\r\n]*model düşürüldü: $opus -> $sonnet") -Because $second.Report
+        # Its reset has passed: the entry is ignored and the model is used again.
+        Set-SandboxFile -Root $root -Name "limits.json" -Json ('{"models":{"' + $opus + '":{"until":"2026-09-30T00:00:00Z","type":"seven_day_opus","seen_at":"2026-09-29T00:00:00Z"}},"windows":{}}')
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document (New-Queue -Tasks @((New-Task -Id "task-four" -Area @("src/area4"))))
+        $third = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c3" -NoCaps
+        Assert-Equal -Expected "worker=$opus,inspector=$fable" -Actual (Get-CallModels -Calls @($third.Calls | Select-Object -Skip 7)) -Because "after the reset the configured model is back"
+    }
+
+    Test-Case "the inspector's rule: Fable limited and the worker ran on Opus - the inspection runs on Opus, and the report says the model was lowered" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $fable } -Body { $script:inspRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $run = $script:inspRun
+        Assert-Equal -Expected "worker=$opus,inspector=$fable,inspector=$opus" -Actual (Get-CallModels -Calls $run.Calls) -Because "Opus is not weaker than the worker's Opus: $($run.StdOut + $run.StdErr)"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because $run.Report
+        Assert-True -Condition ($run.Report -match "task-one / inspector: [^\r\n]*model düşürüldü: $fable -> $opus") -Because $run.Report
+        $status = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected "limited" -Actual $status.limits.fable.state -Because "Fable came back limited"
+        Assert-True -Condition ([string]$status.limits.fable.resets_at -match '^\d{4}-') -Because "with its reset: $($status | ConvertTo-Json -Depth 6 -Compress)"
+        Assert-Equal -Expected "inspector" -Actual @($status.limits.lowered)[0].role -Because "the downgrade is recorded"
+    }
+
+    Test-Case "the inspector's rule: the worker ran on Fable and only weaker models are open - the inspection WAITS: no inspector run is started, it is not lowered, and the report says why" {
+        # The worker's run is on record (an earlier cycle) and Fable is remembered as limited.
+        $task = New-Task -Id "task-one" -State "inspecting"
+        $task.reports = @([pscustomobject]@{ cycle = "c0"; role = "worker"; at = "2026-10-01T09:00:00Z"; file = "team/reports/c0/task-one-worker-1.md"; cost_usd = 0.25; outcome = "tamam (model $fable)"; summary = @("sha: see the branch") })
+        $root = New-Sandbox -Tasks @($task)
+        $until = Get-TeamTimestamp -Now ([datetime]::UtcNow.AddHours(1))
+        Set-SandboxFile -Root $root -Name "limits.json" -Json ('{"models":{"' + $fable + '":{"until":"' + $until + '","type":"seven_day_overage_included","seen_at":"2026-10-01T09:30:00Z"}},"windows":{}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no inspector run was started - not on Fable, and not on a weaker model: $(Get-CallModels -Calls $run.Calls)"
+        Assert-Equal -Expected "inspecting" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the inspection waits; it is not skipped"
+        Assert-True -Condition ($run.Report -match "denetim bekliyor: task-one[^\r\n]*işçi $fable[^\r\n]*daha zayıf modelde denetlenmez") -Because "the report says why: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma $until") -Because "and the existing stop line names Fable's reset: $($run.Report)"
+        $status = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected "limited" -Actual $status.limits.fable.state -Because "the remembered limit is in the status"
+        Assert-Equal -Expected $until -Actual $status.limits.fable.resets_at -Because "with its reset"
+        Assert-Equal -Expected 0 -Actual @($status.limits.lowered).Count -Because "nothing was lowered"
+
+        # The same rule when the limit is found by the inspector's own run, in one cycle.
+        $live = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Set-SandboxFile -Root $live -Name "models.json" -Json ('{"roles":{' + $allRoles + ',"worker":"' + $fable + '","inspector":"' + $fable + '"},"fallback":true}')
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $fable; PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES = "inspector" } -Body { $script:holdRun = Invoke-Cycle -Root $live -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $held = $script:holdRun
+        Assert-Equal -Expected "worker=$fable,inspector=$fable" -Actual (Get-CallModels -Calls $held.Calls) -Because "after the limited inspection no inspector run is started on Opus or Sonnet"
+        $one = Get-TaskById -Queue $held.Queue -Id "task-one"
+        Assert-Equal -Expected "inspecting" -Actual $one.state -Because $held.Report
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $one -Name "failed_runs" -Default 0)) -Because "the limit is not counted against the task"
+        Assert-True -Condition ($held.Report -match "denetim bekliyor: task-one") -Because $held.Report
+    }
+
+    Test-Case "the inspector's rule holds against the tool too: an inspection the tool itself ran on a weaker model than the worker's gives no verdict" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_RAN_MODEL = "inspector=$sonnet" } -Body { $script:swapRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $run = $script:swapRun
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "inspecting" -Actual $one.state -Because "an APPROVE from Sonnet over an Opus worker is not an approval: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "task-one / inspector: [^\r\n]*model düşürüldü \(araç\): $fable -> $sonnet") -Because "the run list names the substitution: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "hüküm alınmadı") -Because "and why no verdict was taken"
+        $threw = $false
+        try { [void](Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "--verify", "--quiet", "refs/heads/integrate/c1")) } catch { $threw = $true }
+        Assert-True -Condition $threw -Because "nothing was merged"
+    }
+
+    Test-Case "the lead's split run and the researcher follow the setting and the chain like any role" {
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $fable; PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES = "lead" } -Body { $script:leadRun = Invoke-Cycle -Root $root -Scenario "split" -NoCaps -ExtraArguments $noWait }
+        $run = $script:leadRun
+        Assert-Equal -Expected "lead=$fable,lead=$opus" -Actual (Get-CallModels -Calls @($run.Calls | Select-Object -First 2)) -Because "the split, limited on Fable, is run again at once on Opus: $($run.StdOut + $run.StdErr)"
+        Assert-True -Condition (@($run.Calls[0..1] | Where-Object { ([string]$_.tools) -match "Bash|Edit" }).Count -eq 0) -Because "the second lead run has the split run's tools, not the role's"
+        Assert-Equal -Expected "merged,merged" -Actual (@("idea-one-a", "idea-one-b" | ForEach-Object { (Get-TaskById -Queue $run.Queue -Id $_).state }) -join ",") -Because "the split was taken and its tasks ran: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "idea-one / lead: [^\r\n]*model düşürüldü: $fable -> $opus") -Because $run.Report
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Select-Object -Skip 1 | Where-Object { $_.model -eq $fable }).Count -Because "Fable is remembered as limited: the inspectors of this cycle are not started on it either"
+        $research = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus } -Body { $script:researchRun = Invoke-Cycle -Root $research -Scenario "approve" -NoCaps -Research -ExtraArguments $noWait }
+        Assert-Equal -Expected "researcher=$opus,researcher=$sonnet" -Actual (Get-CallModels -Calls $script:researchRun.Calls) -Because "the researcher too"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $research "team\research-last.txt")) -Because "and its finished run is recorded"
+        Assert-True -Condition ($script:researchRun.Report -match "cycle / researcher: [^\r\n]*model düşürüldü: $opus -> $sonnet") -Because $script:researchRun.Report
+    }
+
+    Test-Case "fallback off: a limited run is not lowered - the cycle waits or stops as it always did" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Set-SandboxFile -Root $root -Name "models.json" -Json ('{"roles":{' + $allRoles + ',"worker":"' + $opus + '","inspector":"' + $fable + '"},"fallback":false}')
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus } -Body { $script:offRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $run = $script:offRun
+        Assert-Equal -Expected "worker=$opus" -Actual (Get-CallModels -Calls $run.Calls) -Because "no run on Sonnet"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the task is where it was"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma \d{4}-[^;]*; limit açılınca aynı -CycleId ile yeniden başlat") -Because "today's stop line, now with the reset the event gave: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "model düşürüldü") -Because "nothing was lowered"
+        $status = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected $false -Actual $status.limits.fallback -Because "the status says the chain is off"
+        Assert-Equal -Expected "stopped" -Actual $status.usage_limit.state -Because "the existing field is kept"
+        # And the wait: the old document, reset already past - waited out, run again on the SAME model.
+        $wait = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Set-SandboxFile -Root $wait -Name "models.json" -Json ('{"roles":{},"fallback":false}')
+        $waited = Invoke-Cycle -Root $wait -Scenario "limited" -NoCaps
+        Assert-Equal -Expected "worker=$opus,worker=$opus,inspector=$fable" -Actual (Get-CallModels -Calls $waited.Calls) -Because "the run after the wait is on the same model"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $waited.Queue -Id "task-one").state -Because $waited.Report
+        Assert-True -Condition ($waited.Report -match "sıfırlanmasına kadar beklendi") -Because $waited.Report
+    }
+
+    Test-Case "every model of the chain limited: after the last one the existing stop line, and the task is where it was" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = "$fable,$opus,$sonnet" } -Body { $script:allRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $run = $script:allRun
+        Assert-Equal -Expected "worker=$opus,worker=$sonnet" -Actual (Get-CallModels -Calls $run.Calls) -Because "down the chain once, and no further: $($run.StdOut + $run.StdErr)"
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "assigned" -Actual $one.state -Because $run.Report
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $one -Name "failed_runs" -Default 0)) -Because "neither limited run is the task's failure"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma \d{4}-") -Because $run.Report
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
+    }
+
+    Test-Case "a limit whose reset is already past is believed once: the second time the same model refuses the same task it is closed for the cycle - lowered with fallback on, the stop line with it off - and the cycle never spins" {
+        # The inspector's probe (2026-10-01): "Opus limited, reset ten minutes ago" gave 123 worker
+        # runs in a minute - the model is not marked (its reset has passed), the wait is 0 s and the
+        # try is handed back. -CycleMinutes is the hang guard only; what is asserted is the run list.
+        $stale = @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus; PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS = "-600" }
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment $stale -Body { $script:staleRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments "-CycleMinutes 2" }
+        $run = $script:staleRun
+        Assert-Equal -Expected "worker=$opus,worker=$opus,worker=$sonnet,inspector=$fable" -Actual (Get-CallModels -Calls $run.Calls) `
+            -Because "one retry after the reset it named, then Opus is closed and the task goes one model down: $(@($run.Calls).Count) runs"
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $one.state -Because $run.Report
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $one -Name "failed_runs" -Default 0)) -Because "the limit is not the task's failure"
+        Assert-True -Condition ($run.Report -match "task-one / worker: [^\r\n]*model düşürüldü: $opus -> $sonnet") -Because $run.Report
+        Assert-True -Condition ($run.Report -match "$opus[^\r\n]*sıfırlanma saati geçmişte[^\r\n]*bu döngüde kapalı sayıldı") -Because "the report says why Opus was closed: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "süre tavanı") -Because "the hang guard did not end it: $($run.Report)"
+        $kept = Read-TeamJson -Path (Join-Path $root "team\limits.json")
+        Assert-True -Condition ($null -eq $kept.models.PSObject.Properties[$opus]) -Because "a limit nobody dated believably is not carried to the next cycle: $($kept | ConvertTo-Json -Depth 6 -Compress)"
+
+        $off = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Set-SandboxFile -Root $off -Name "models.json" -Json ('{"roles":{},"fallback":false}')
+        Use-FakeHooks -Environment $stale -Body { $script:staleOff = Invoke-Cycle -Root $off -Scenario "approve" -NoCaps -ExtraArguments "-CycleMinutes 2" }
+        $run = $script:staleOff
+        Assert-Equal -Expected "worker=$opus,worker=$opus" -Actual (Get-CallModels -Calls $run.Calls) -Because "fallback off: the retry, and then nothing: $(@($run.Calls).Count) runs"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because $run.Report
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; ne zaman açılacağı söylenmedi") -Because "the stop line of a limit nobody dated: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "süre tavanı") -Because $run.Report
+
+        $all = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $every = @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = "$fable,$opus,$sonnet"; PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS = "-600" }
+        Use-FakeHooks -Environment $every -Body { $script:staleAll = Invoke-Cycle -Root $all -Scenario "approve" -NoCaps -ExtraArguments "-CycleMinutes 2" }
+        $run = $script:staleAll
+        Assert-Equal -Expected "worker=$opus,worker=$opus,worker=$sonnet,worker=$sonnet" -Actual (Get-CallModels -Calls $run.Calls) -Because "two tries a model, down the chain, and no further: $(@($run.Calls).Count) runs"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; ne zaman açılacağı söylenmedi") -Because $run.Report
+        Assert-True -Condition ($run.Report -notmatch "süre tavanı") -Because $run.Report
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
+
+        # The researcher's path (Invoke-RoleRun) closes the model the same way.
+        $research = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment $stale -Body { $script:staleResearch = Invoke-Cycle -Root $research -Scenario "approve" -NoCaps -Research -ExtraArguments "-CycleMinutes 2" }
+        Assert-Equal -Expected "researcher=$opus,researcher=$opus,researcher=$sonnet" -Actual (Get-CallModels -Calls $script:staleResearch.Calls) -Because "the same bound for a run the cycle waits for by itself"
+    }
+
+    Test-Case "the inspector's rule for a worker entry that names no model (a run from before the policy): the floor is the configured worker model - no inspection on Sonnet, and no verdict from a tool that ran it there" {
+        # The inspector's probe (2026-10-01): plain 'tamam', Fable and Opus limited - the
+        # inspection ran on Sonnet and the task was merged.
+        $entry = [pscustomobject]@{ cycle = "c0"; role = "worker"; at = "2026-10-01T09:00:00Z"; file = "team/reports/c0/task-one-worker-1.md"; cost_usd = 0.25; outcome = "tamam"; summary = @("sha: see the branch") }
+        $task = New-Task -Id "task-one" -State "inspecting"
+        $task.reports = @($entry)
+        $root = New-Sandbox -Tasks @($task)
+        $until = Get-TeamTimestamp -Now ([datetime]::UtcNow.AddHours(1))
+        $closed = '{"until":"' + $until + '","type":"seven_day","seen_at":"2026-10-01T09:30:00Z"}'
+        Set-SandboxFile -Root $root -Name "limits.json" -Json ('{"models":{"' + $fable + '":' + $closed + ',"' + $opus + '":' + $closed + '},"windows":{}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "the worker is set to Opus: no inspector run on Sonnet: $(Get-CallModels -Calls $run.Calls)"
+        Assert-Equal -Expected "inspecting" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the inspection waits; it is not skipped: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "denetim bekliyor: task-one[^\r\n]*işçinin modeli kayıtlı değil[^\r\n]*$opus[^\r\n]*daha zayıf modelde denetlenmez") -Because "the report says which floor and why: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma $until") -Because $run.Report
+
+        # Only Fable limited: Opus is at least as strong as the configured worker model, so it runs there.
+        $open = New-Task -Id "task-one" -State "inspecting"
+        $open.reports = @($entry)
+        $openRoot = New-Sandbox -Tasks @($open)
+        Set-SandboxFile -Root $openRoot -Name "limits.json" -Json ('{"models":{"' + $fable + '":' + $closed + '},"windows":{}}')
+        $ran = Invoke-Cycle -Root $openRoot -Scenario "approve" -NoCaps -ExtraArguments $noWait
+        Assert-Equal -Expected "inspector=$opus" -Actual (Get-CallModels -Calls $ran.Calls) -Because "the floor is a floor, not a wait: $($ran.StdOut + $ran.StdErr)"
+
+        # The tool-substitution check uses the same floor.
+        $swapped = New-Task -Id "task-one" -State "inspecting"
+        $swapped.reports = @($entry)
+        $swapRoot = New-Sandbox -Tasks @($swapped)
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_RAN_MODEL = "inspector=$sonnet" } -Body { $script:plainSwap = Invoke-Cycle -Root $swapRoot -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $swap = $script:plainSwap
+        Assert-Equal -Expected "inspecting" -Actual (Get-TaskById -Queue $swap.Queue -Id "task-one").state -Because "an APPROVE the tool ran on Sonnet is not an approval of an Opus-configured worker's task: $($swap.Report)"
+        Assert-True -Condition ($swap.Report -match "hüküm alınmadı") -Because $swap.Report
+        Assert-True -Condition (@($swap.Calls | Where-Object { $_.model -eq $sonnet }).Count -eq 0) -Because "and no inspector run was STARTED on Sonnet either: $(Get-CallModels -Calls $swap.Calls)"
+    }
+
+    Test-Case "a session limit closes every model: no lowered run is started, the status says 'all' is limited, and the existing stop line follows" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus; PAGENTOS_FAKE_CLAUDE_LIMIT_TYPE = "five_hour" } -Body { $script:sessionRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $run = $script:sessionRun
+        Assert-Equal -Expected "worker=$opus" -Actual (Get-CallModels -Calls $run.Calls) -Because "a run on Sonnet would hit the same limit: none is started"
+        Assert-True -Condition ($run.Report -notmatch "model düşürüldü") -Because "and no false 'model düşürüldü' line: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma \d{4}-") -Because $run.Report
+        $status = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected "limited" -Actual $status.limits.all.state -Because "the limit of all models"
+        Assert-True -Condition ([string]$status.limits.all.resets_at -match '^\d{4}-') -Because "with its reset"
+        Assert-Equal -Expected "limited" -Actual $status.limits.fable.state -Because "and so Fable too"
+    }
+
+    Test-Case "the two percentages are the tool's own numbers: null until a run gave one, never computed, gone once their window has reset; every run in the status carries its model" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:pctRun = Invoke-Cycle -Root $root -Scenario "approve" }
+        Assert-Equal -Expected 0 -Actual $script:pctRun.ExitCode -Because ($script:pctRun.StdOut + $script:pctRun.StdErr)
+        $during = Read-TeamJson -Path (Join-Path $snapshots "worker-task-one.json")
+        Assert-Equal -Expected "worker=$opus" -Actual (@($during.runs | ForEach-Object { "$($_.role)=$($_.model)" }) -join ",") -Because "the run in flight names the model it was started on: $($during | ConvertTo-Json -Depth 6 -Compress)"
+        Assert-True -Condition ($null -ne $during.limits.fable.PSObject.Properties["used_pct"] -and $null -eq $during.limits.fable.used_pct) -Because "no run has finished: Fable's percentage is null (the page says 'bilinmiyor'), not 0"
+        Assert-Equal -Expected $null -Actual $during.limits.all.used_pct -Because "and so is the one of all models"
+        Assert-Equal -Expected "ok" -Actual $during.limits.fable.state -Because "nothing said otherwise"
+        $inspecting = Read-TeamJson -Path (Join-Path $snapshots "inspector-task-one.json")
+        Assert-Equal -Expected 46 -Actual $inspecting.limits.all.used_pct -Because "the worker's run on Opus carried the week of all models"
+        Assert-Equal -Expected $null -Actual $inspecting.limits.fable.used_pct -Because "but no Fable window: still null while the first Fable run is in flight"
+        $final = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected 81 -Actual $final.limits.fable.used_pct -Because "the inspector's run on Fable gave the Fable week"
+        Assert-Equal -Expected 46 -Actual $final.limits.all.used_pct -Because "the week of all models"
+        Assert-Equal -Expected 0 -Actual @($final.limits.lowered).Count -Because "nothing was lowered"
+        # The next cycle starts from what the last one saw; a window whose reset has passed is dropped.
+        $kept = Read-TeamJson -Path (Join-Path $root "team\limits.json")
+        Assert-Equal -Expected 81 -Actual $kept.windows.fable.used_pct -Because "the numbers are kept with their reset and when they were seen: $($kept | ConvertTo-Json -Depth 6 -Compress)"
+        Set-SandboxFile -Root $root -Name "limits.json" -Json '{"models":{},"windows":{"fable":{"used_pct":81,"resets_at":"2026-09-30T00:00:00Z","observed_at":"2026-09-29T00:00:00Z"},"all":{"used_pct":46,"resets_at":"2099-01-01T00:00:00Z","observed_at":"2026-09-29T00:00:00Z"}}}'
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document (New-Queue -Tasks @())
+        [void](Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2")
+        $next = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected $null -Actual $next.limits.fable.used_pct -Because "that week is over: the number describes a window that no longer exists"
+        Assert-Equal -Expected 46 -Actual $next.limits.all.used_pct -Because "a window still open keeps its last seen number"
     }
 
     Test-Case "what the lead asks the researcher to study reaches it, subject by subject" {
@@ -1326,17 +1906,112 @@ try {
         Assert-Equal -Expected "changed by a" -Actual (Get-Content -LiteralPath (Join-Path $tree "src\area\README.txt") -TotalCount 1) -Because "the first merge stands"
     }
 
+    Test-Case "an approved task whose files a task in work holds waits for it, and is run when they are free" {
+        # Two approved tasks that share a file and no dependency were both moved into work: a
+        # queue Test-TeamQueue refuses, so the NEXT cycle ran nothing at all. (On 2026-10-02 the
+        # live queue held such a pair, waiting only for their common dependency to reach main.)
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area/deep", "src/second")))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:holderRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 4 }
+        $run = $script:holderRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $order = @($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ","
+        Assert-Equal -Expected "worker:task-one,inspector:task-one,worker:task-two,inspector:task-two" -Actual $order -Because "one after the other, in the same cycle"
+        # The order of the STARTS is the same when task-two's worker starts BESIDE task-one's
+        # inspector (the inspector of 3d52902e: 'inspecting' as a holder was unproven). What was
+        # in flight while each run worked says it: the holder's inspection ran alone, and so did
+        # the waiter's worker.
+        foreach ($alone in @("inspector-task-one", "worker-task-two")) {
+            $seen = Read-TeamJson -Path (Join-Path $snapshots "$alone.json")
+            $expected = ($alone -replace '^(\w+)-(.+)$', '$2:$1')
+            Assert-Equal -Expected $expected -Actual (@(@($seen.runs) | ForEach-Object { "$($_.task):$($_.role)" } | Sort-Object) -join ",") -Because "alone in flight during ${alone}: $($seen | ConvertTo-Json -Depth 5 -Compress)"
+        }
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the first"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "and the one that waited"
+        Assert-True -Condition ($run.Report -match "bekliyor: task-two -> task-one aynı dosyaları bırakınca") -Because "the wait is said: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue it left keeps the protocol"
+    }
+
+    Test-Case "a returned task holds its files too: an approved task that shares them is not started beside its rework" {
+        $back = New-Task -Id "task-one" -State "returned" -Area @("src/area") -Branch "team/c1/worker-task-one"
+        $root = New-Sandbox -Tasks @($back, (New-Task -Id "task-two" -Area @("src/area/deep")))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("branch", "team/c1/worker-task-one", "main"))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:returnedRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 4 }
+        Assert-Equal -Expected 0 -Actual $script:returnedRun.ExitCode -Because ($script:returnedRun.StdOut + $script:returnedRun.StdErr)
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "worker-task-one.json")
+        Assert-Equal -Expected "task-one:worker" -Actual (@(@($seen.runs) | ForEach-Object { "$($_.task):$($_.role)" } | Sort-Object) -join ",") -Because "the rework ran alone: $($seen | ConvertTo-Json -Depth 5 -Compress)"
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $script:returnedRun.Queue | ForEach-Object { $_.state }) -join ",") -Because "and both end merged"
+    }
+
+    Test-Case "a task that comes back from its integrator with a plan waits for the holder of its files as any approved task does" {
+        $plain = New-Task -Id "task-plain" -Area @("src/area")
+        $study = New-Task -Id "task-study" -Area @("src/area/deep")
+        $study | Add-Member -NotePropertyName "needs_integration" -NotePropertyValue $true
+        $study.created_at = "2026-09-30T00:00:01Z"
+        $root = New-Sandbox -Tasks @($plain, $study)
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:studyRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 4 }
+        Assert-Equal -Expected 0 -Actual $script:studyRun.ExitCode -Because ($script:studyRun.StdOut + $script:studyRun.StdErr)
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "inspector-task-plain.json")
+        Assert-Equal -Expected "task-plain:inspector" -Actual (@(@($seen.runs) | ForEach-Object { "$($_.task):$($_.role)" } | Sort-Object) -join ",") -Because "the planned task's worker was NOT started beside the holder's inspection: $($seen | ConvertTo-Json -Depth 5 -Compress)"
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $script:studyRun.Queue | ForEach-Object { $_.state }) -join ",") -Because "and both end merged"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $script:studyRun.Queue).Count -Because "the queue it left keeps the protocol"
+    }
+
+    Test-Case "the two area rules are one rule: what the cycle would move into work, the queue's judge accepts - and an area that is the whole repository is no area" {
+        # The inspector of 3d52902e: Get-TeamAreaHolders and Test-TeamQueue compared areas with two
+        # different keys and disagreed on 4 of 17 pairs, in the dangerous direction - the cycle
+        # moved the task and the judge refused the queue it had made.
+        $pairs = @(
+            @("src/area", "src/area"), @("src/area", "src/area/deep"), @("src/area/", "src/area/deep"), @("src/area/*", "src/area/deep"),
+            @("SRC/Area", "src/area/deep"), @("src\area", "src/area/deep"), @("./src/area", "src/area/deep"), @(" src/area", "src/area/deep"),
+            @("src/area ", "src/area /deep"), @("src/area", "src/area2"), @("src/area", "src/are"), @("src/a.py", "src/a.pyc"),
+            @("docs", "src"), @("src/area/x.py", "src/area")
+        )
+        foreach ($pair in $pairs) {
+            $holder = New-Task -Id "task-one" -State "in_progress" -Area @($pair[0])
+            $waiter = New-Task -Id "task-two" -Area @($pair[1])
+            $held = @(Get-TeamAreaHolders -Task $waiter -Queue (New-Queue -Tasks @($holder, $waiter))).Count -gt 0
+            $moved = New-Task -Id "task-two" -State "assigned" -Area @($pair[1])
+            $refused = @(Test-TeamQueue -Queue (New-Queue -Tasks @($holder, $moved)) | Where-Object { $_ -match "overlaps" }).Count -gt 0
+            Assert-Equal -Expected $refused -Actual $held -Because "'$($pair[0])' against '$($pair[1])': the judge refuses the pair = the cycle holds the task back"
+        }
+        foreach ($whole in @("*", ".", "./", "/*", ".\")) {
+            $problems = @(Test-TeamQueue -Queue (New-Queue -Tasks @((New-Task -Id "task-one" -Area @($whole)))))
+            Assert-True -Condition (@($problems | Where-Object { $_ -match "whole repository|inside the repository" }).Count -gt 0) -Because "'$whole' is refused as an area: $($problems -join '; ')"
+        }
+    }
+
     # ------------------------------------------------------------------ the queue on the Cloud Core
     Write-Host ""
     Write-Host "the queue and the lock on the Cloud Core (a fake listener with the real routes' rules)"
 
     function Start-FakeApi {
-        param([object[]]$Tasks = @(), $Lock = $null, [switch]$FailStatus)
+        param([object[]]$Tasks = @(), $Lock = $null, [switch]$FailStatus, $Models = $null, [switch]$NoModels, [switch]$LegacyStatus,
+            # Another writer of the store: these tasks are put into it once -LateAfter task PUTs came in,
+            # or - with -LateOnRun "<role>:<task>" - when the live status names that run in flight.
+            [object[]]$Late = @(), [int]$LateAfter = 1, [string]$LateOnRun = "",
+            # With -LateOnRun: wait for this many more GETs of the queue first; and ids to take out.
+            [int]$LateAfterGets = 0, [string[]]$LateRemove = @(),
+            # The store broken on purpose: @{ queue_get_after = N } and/or @{ task_put = @{ id; status } }.
+            $Faults = $null)
         $work = Join-Path $env:TEMP ("pagentos-teamapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
         [void](New-Item -ItemType Directory -Force -Path $work)
         [void]$sandboxes.Add($work)
         $lockDocument = if ($null -ne $Lock) { $Lock } else { New-TeamLockReleased }
         $seed = [pscustomobject]@{ queue = (New-Queue -Tasks $Tasks); lock = $lockDocument }
+        if ($null -ne $Models) { $seed | Add-Member -NotePropertyName models -NotePropertyValue $Models }
+        if (@($Late).Count -gt 0 -or @($LateRemove).Count -gt 0) {
+            $second = [pscustomobject]@{ after_task_puts = $LateAfter; tasks = @($Late); remove = @($LateRemove) }
+            if ($LateOnRun) { $second | Add-Member -NotePropertyName on_status_run -NotePropertyValue $LateOnRun }
+            if ($LateAfterGets -gt 0) { $second | Add-Member -NotePropertyName after_queue_gets -NotePropertyValue $LateAfterGets }
+            $seed | Add-Member -NotePropertyName late -NotePropertyValue $second
+        }
+        if ($null -ne $Faults) { $seed | Add-Member -NotePropertyName faults -NotePropertyValue $Faults }
         [System.IO.File]::WriteAllText((Join-Path $work "seed.json"), (ConvertTo-Json -InputObject $seed -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
         $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
         $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
@@ -1344,6 +2019,8 @@ try {
             "-Port", $port, "-Seed", ('"' + (Join-Path $work "seed.json") + '"'), "-Log", ('"' + (Join-Path $work "requests.log") + '"'),
             "-Ready", ('"' + (Join-Path $work "ready") + '"'), "-Token", "test-token")
         if ($FailStatus) { $arguments += "-FailStatus" }
+        if ($NoModels) { $arguments += "-NoModels" }
+        if ($LegacyStatus) { $arguments += "-LegacyStatus" }
         $process = Start-Process -FilePath $powershell -ArgumentList $arguments -PassThru -WindowStyle Hidden
         [void]$fakeApis.Add($process)
         $deadline = [datetime]::UtcNow.AddSeconds(40)
@@ -1388,11 +2065,500 @@ try {
         $requests = @(Get-FakeApiRequests -Api $api)
         Assert-Equal -Expected 2 -Actual @($requests | Where-Object { $_ -match "^POST /v1/team/queue/lock 200" }).Count -Because "one acquire, one release"
         Assert-True -Condition (@($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 200" }).Count -ge 2) -Because ($requests -join "; ")
-        Assert-True -Condition (@($requests | Where-Object { $_ -match "^GET /v1/team/queue 200" }).Count -eq 1) -Because "the queue is read once"
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^GET /v1/team/queue 200" }).Count -ge 2) -Because "the queue is read at the start and again before each pass: $($requests -join '; ')"
         Assert-True -Condition ($state.reports.PSObject.Properties["c1.md"].Value -match "pilot|c1") -Because "the report text is in the store"
         Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the sandbox's queue.json was not written in API mode"
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "nor was its lock.json ever held"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\reports\c1.md")) -Because "the report is still a file"
+    }
+
+    Test-Case "a task that reaches the store while the cycle runs is run by that same cycle" {
+        # 2026-10-02: the cycle read the queue once, at its start, and a cycle with work never
+        # ends. The owner's "4. çalışan koltuğu" card, put into the store nine minutes after the
+        # cycle began, waited four hours beside idle seats; so would a card the feeder cut and a
+        # decision the owner clicked in the Onay Merkezi.
+        $late = New-Task -Id "task-two" -Area @("src/other")
+        $late.created_at = "2026-09-30T00:00:01Z"; $late.updated_at = "2026-09-30T00:00:01Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($late) -LateAfter 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the task the cycle began with"
+        $two = @($state.tasks | Where-Object { $_.id -eq "task-two" })[0]
+        Assert-Equal -Expected "merged" -Actual $two.state -Because "the task that came while the cycle ran was run, not left for the next cycle"
+        Assert-Equal -Expected 2 -Actual @($two.reports).Count -Because "its worker and its inspector"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match " 409$" }).Count -Because "and nothing was written over a version the cycle had not read"
+    }
+
+    Test-Case "a decision made in the store while the cycle runs is the cycle's next pass: a proposed task that became approved is run" {
+        $waiting = New-Task -Id "task-two" -State "proposed" -Area @("src/other")
+        $decided = New-Task -Id "task-two" -Area @("src/other")
+        $decided.updated_at = "2026-09-30T09:00:00Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"), $waiting) -Late @($decided) -LateAfter 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the owner's word was seen in the same cycle"
+        # The decision landed between the cycle's read and its own write of that task (proposed ->
+        # awaiting_owner): that ONE write is refused by the store and dropped, and nothing else is.
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match " 409$" }).Count -Because "the cycle's stale write of the task was refused, once"
+        Assert-True -Condition ($run.Report -match "task-two: depoda başkası değiştirdi") -Because "and the report says whose word stood: $($run.Report)"
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the other task was written as ever"
+    }
+
+    Test-Case "a task whose write the store refused is not run on the copy the cycle has: the store's 'stopped' stands, no worker is started" {
+        # The inspector of 3d52902e, PROBE-C: the lead stopped a task between the cycle's read and
+        # its first save; the write was refused, the copy stayed 'assigned' and a worker was started.
+        $stopped = New-Task -Id "task-two" -State "stopped" -Area @("src/other")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $stopped | Add-Member -NotePropertyName reason -NotePropertyValue "the lead stopped it"
+        $first = New-Task -Id "task-one"
+        $second = New-Task -Id "task-two" -Area @("src/other")
+        $second.created_at = "2026-09-30T00:00:01Z"
+        $api = Start-FakeApi -Tasks @($first, $second) -Late @($stopped) -LateAfter 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_.task -eq "task-two" }).Count -Because "nothing was started for the stopped task: $(@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ',')"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the store's word stands"
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the other task went on"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-two 409" }).Count -Because "one refused write, not one per save"
+    }
+
+    Test-Case "a task stopped in the store while its inspector runs is not merged: the run's result is not applied" {
+        # The inspector of 3d52902e, PROBE-A: the merge into the integration branch ran BEFORE the
+        # write the store then refused, so stopped work reached the branch the lead gates.
+        $stopped = New-Task -Id "task-one" -State "stopped"
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $stopped | Add-Member -NotePropertyName reason -NotePropertyValue "the lead stopped it"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($stopped) -LateOnRun "inspector:task-one"
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $task = @($state.tasks | Where-Object { $_.id -eq "task-one" })[0]
+        Assert-Equal -Expected "stopped" -Actual $task.state -Because "the store's word stands"
+        $integration = Join-Path $root ".claude\worktrees\integrate\c1"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $integration "src\area\task-one.txt"))) -Because "the stopped task's work is NOT on the integration branch"
+        Assert-True -Condition ($run.Report -match "task-one: koşu \(inspector\) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı") -Because "and the report says so: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "task-one[^\r\n]*\[merged\]") -Because "the report does not call it merged"
+        Assert-Equal -Expected 0 -Actual @($task.reports).Count -Because "nothing of the run was written over the stop"
+        # The stop arrives as the run starts: the cycle's own "an inspector took it" write is the
+        # one refused write. The RESULT is never sent, so it is never refused.
+        Assert-True -Condition (@(Get-FakeApiRequests -Api $api | Where-Object { $_ -match " 409$" }).Count -le 1) -Because "at most the start's write was refused: $((Get-FakeApiRequests -Api $api) -join '; ')"
+    }
+
+    Test-Case "a card edited while its worker runs: the run's result is not applied, the edit is kept, and the task is worked again from the store's version" {
+        # The store changes AFTER the cycle's own "a worker took it" write: nothing of the cycle's
+        # was refused, so only asking the store when the run ends can see it. The price is said
+        # in the ADR: the first run's work is repeated (its report stays in its file).
+        $edited = New-Task -Id "task-one" -State "in_progress" -Branch "team/c1/worker-task-one"
+        $edited.assignee = "worker"; $edited.worktree = ".claude/worktrees/team/c1/worker-task-one"
+        $edited.updated_at = "2026-09-30T09:00:00Z"
+        $edited | Add-Member -NotePropertyName goal -NotePropertyValue "the lead's new wording"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($edited) -LateAfter 2
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one,worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "worked again from the store's version, then inspected"
+        $task = @((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" })[0]
+        Assert-Equal -Expected "merged" -Actual $task.state -Because "and it ends merged"
+        Assert-Equal -Expected "the lead's new wording" -Actual ([string]$task.goal) -Because "the edit was not written over"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match " 409$" }).Count -Because "the first run's result was never sent: $((Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-True -Condition ($run.Report -match "task-one: koşu \(worker\) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı") -Because "the report says it: $($run.Report)"
+    }
+
+    Test-Case "each run's result is written when it is applied, not when the batch ends: the store has the first task's merge while the second inspection still runs" {
+        # The inspector of 3d1be9fc, PROBE-I: the store was asked when a run ended, the merge was
+        # made, and NOTHING was written until the last run of the batch ended - with six seats, the
+        # window in which a stop could arrive unseen was the rest of the batch.
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $lines = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(GET /v1/team/queue|PUT /v1/team/queue/tasks/task-(one|two)) 200" } | ForEach-Object { ($_ -replace '^(\w+) /v1/team/queue/?(tasks/)?', '$1 ') -replace ' 200$', '' })
+        $tail = @($lines)[(@($lines).Count - 5)..(@($lines).Count - 1)] -join " | "
+        Assert-Equal -Expected "GET  | PUT task-one | GET  | PUT task-two | GET " -Actual $tail -Because "asked, written; asked, written; then the next pass's read: $($lines -join ' | ') :: calls $(@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ',') :: $(Get-FakeApiRequests -Api $api | Select-Object -Last 14) :: $((Get-FakeApiState -Api $api).tasks | ConvertTo-Json -Depth 6 -Compress)"
+    }
+
+    Test-Case "a merge whose write could only be tried at the batch's end and was refused there cannot be taken back: the report NAMES the merge" {
+        # The store is away when task-one's merge is to be written (the other inspection is still in
+        # flight), task-two is merged on top of it, and when the store answers again task-one has been
+        # stopped there. The integration branch has moved on: nothing is reset, the lead is told.
+        $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        # A broken card arrives with the stop: the store cannot be read again afterwards, so what
+        # the report says of task-one is what the cycle's OWN copy says (the inspector's PROBE-Z).
+        $broken = New-Task -Id "task-three" -Area @("src/third")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $outage = [pscustomobject]@{ task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 } }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $outage `
+            -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the other task was written"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti[^\r\n]*o birleştirme dalda duruyor") -Because "the lead is told there is a merge to take back: $($run.Report)"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root ".claude\worktrees\integrate\c1\src\area2\task-two.txt")) -Because "task-two's merge, made on top of it, was not thrown away"
+        Assert-True -Condition ($run.Report -match "kuyruk yeniden okunamadı") -Because "the store could not be read again: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "task-one[^\r\n]*\[merged\]") -Because "and the cycle's own copy does not call the refused task merged"
+    }
+
+    Test-Case "a store that refuses the same write after every read does not spin the cycle: it ends, says so, and the stop flag and the lock are honoured" {
+        # The inspector of 3d1be9fc, PROBE-N: 13 578 reads and 13 576 refused writes in 100 seconds,
+        # the stop flag and the time cap ignored, the lock held.
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Faults ([pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-one"; status = 409 } })
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing was started for a task the store will not let the cycle take"
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^GET /v1/team/queue 200" }).Count -le 6) -Because "a handful of reads, not thousands: $(@($requests).Count) requests"
+        Assert-True -Condition ($run.Report -match "depo aynı yazmayı üst üste reddetti") -Because "the report says why it ended: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool](Get-FakeApiState -Api $api).lock.held) -Because "the lock is released"
+    }
+
+    Test-Case "a task whose write was refused is not looked at again while the store cannot be read: no run on the stale copy in any later pass" {
+        $stopped = New-Task -Id "task-two" -State "stopped" -Area @("src/other")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $broken = New-Task -Id "task-three" -Area @("src/third")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $second = New-Task -Id "task-two" -Area @("src/other")
+        $second.created_at = "2026-09-30T00:00:01Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"), $second) -Late @($stopped, $broken) -LateAfter 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "the stopped task was never run, in the first pass or after"
+        Assert-Equal -Expected "stopped" -Actual (@((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the store's word stands"
+    }
+
+    Test-Case "a task taken out of the store while its inspector runs is not merged" {
+        # Taken out right AFTER the cycle's own "an inspector took it" write (its fourth write of the task):
+        # nothing of the cycle's is refused, so only the look at the store when the run ends can see it.
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -LateRemove @("task-one") -LateAfter 4
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 0 -Actual @((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" }).Count -Because "it is not written back into the store"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root ".claude\worktrees\integrate\c1\src\area\task-one.txt"))) -Because "and its work is not on the integration branch"
+        Assert-True -Condition ($run.Report -match "task-one: koşu \(inspector\) sürerken depoda başkası değiştirdi") -Because "the report says it: $($run.Report)"
+    }
+
+    Test-Case "a dropped run that came back limited: the model's limit is still registered, and the try is handed back" {
+        $edited = New-Task -Id "task-one" -State "in_progress" -Branch "team/c1/worker-task-one"
+        $edited.assignee = "worker"; $edited.worktree = ".claude/worktrees/team/c1/worker-task-one"
+        $edited.updated_at = "2026-09-30T09:00:00Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($edited) -LateAfter 2
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus; PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES = "worker" } -Body {
+            $script:droppedLimited = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments ($noWait + " -MaxRunsPerTask 2") -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:droppedLimited
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker=$opus,worker=$sonnet,inspector=$fable" -Actual (Get-CallModels -Calls $run.Calls) -Because "the second worker did not try the limited model again: the limit was registered though the run was dropped"
+        Assert-Equal -Expected "merged" -Actual (@((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "with two tries allowed the task still finished: the dropped run was not counted"
+    }
+
+    Test-Case "a store that does not keep an idea's text does not stop the cycle; the NEXT cycle posts it - an idea never stays without its text" {
+        # The inspector of 3d1be9fc, PROBE-L: only the ideas queued in that run were posted, so one
+        # failed POST left the idea without text for ever - the incident of 2026-10-02 again.
+        $api = Start-FakeApi -Tasks @() -Faults ([pscustomobject]@{ proposal_post = [pscustomobject]@{ status = 500; times = 1 } })
+        $root = New-Sandbox -Tasks @()
+        $first = Invoke-Cycle -Root $root -Scenario "approve" -Research -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $first.ExitCode -Because ($first.StdOut + $first.StdErr)
+        Assert-True -Condition ($first.Report -match "fikrin metni depoya yazılamadı") -Because "a line in the report, not a stop: $($first.Report)"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected 0 -Actual @($state.proposals.PSObject.Properties).Count -Because "the store did not keep it"
+        Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "and the lock is released"
+        $second = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $second.ExitCode -Because ($second.StdOut + $second.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $idea = @($state.tasks | Where-Object { $_.state -eq "awaiting_owner" })[0]
+        $name = [System.IO.Path]::GetFileName([string]$idea.proposal)
+        Assert-True -Condition ($null -ne $state.proposals.PSObject.Properties[$name]) -Because "the next cycle - with no researcher run of its own - posted the waiting idea's text"
+    }
+
+    Test-Case "a store that is away while a batch is in flight does not end the cycle: the result is written when the store answers again" {
+        # The inspector of 91c70543, PROBE-O: one 503 on the write of a finished run's result ended
+        # the cycle with the other run still in flight - both tasks left in_progress, the lock
+        # released, the finished worker's result lost. The cycle before that write existed lived
+        # through the same outage.
+        $outage = [pscustomobject]@{ task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 } }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $outage
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "merged,merged" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because "both tasks finished and were written"
+        Assert-True -Condition (@(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-\w+ 503" }).Count -ge 2) -Because "the outage was really met, in both batches"
+        Assert-True -Condition ($run.Report -match "sonuç depoya şimdi yazılamadı") -Because "and it is a line in the report: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "the lock is released at the END, not in the middle"
+    }
+
+    Test-Case "a task whose runs are dropped again and again is left alone after three: the hand-back of the try is not a way to run it for ever" {
+        # The inspector of 91c70543, PROBE-P: a store that takes the move and refuses every "a worker
+        # took it" write - 133 paid worker runs in 61 seconds with no budget cap.
+        $refuses = [pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-one"; status = 409; state = "in_progress" } }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Faults $refuses
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        # The harness's budget cap is left ON: a cycle that does not stop by itself ends on the cap, and the count says so.
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 3 -Actual @($run.Calls | Where-Object { $_.role -eq "worker" -and $_.task -eq "task-one" }).Count -Because "three runs whose result could not be applied, then none"
+        Assert-True -Condition ($run.Report -match "task-one: üç koşusunun sonucu uygulanamadı") -Because "the report says the cycle left it: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool](Get-FakeApiState -Api $api).lock.held) -Because "the lock is released"
+    }
+
+    Test-Case "a merge the store then refuses is taken back at once when it is still the integration branch's last commit" {
+        $stopped = New-Task -Id "task-one" -State "stopped"
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $tree "src\area\task-one.txt"))) -Because "the stopped task's work is not on the integration branch any more"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $tree -Arguments @("status", "--porcelain")) -Because "and the integration worktree is clean"
+        Assert-Equal -Expected (Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "main")).Trim() -Actual (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")).Trim() -Because "it is back where it was before the merge"
+        Assert-True -Condition (Test-TeamBranch -RepoRoot $root -Branch "team/c1/worker-task-one") -Because "the task's own branch is untouched"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti[^\r\n]*birleştirme GERİ ALINDI") -Because "the report says both: $($run.Report)"
+    }
+
+    Test-Case "a refused 'merged' is not forgotten when the same save then fails on another task: the merge is still named" {
+        # The inspector of 3ce11180, PROBE-S: the store refused task-one's 'merged' and, in the same
+        # save, answered an error to task-two's write. The refusal was known only at the END of that
+        # save; the error threw first. The stopped task's merge stayed on the integration branch,
+        # neither taken back nor named, and the report sent the lead to gate that branch.
+        $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $faults = [pscustomobject]@{
+            task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 }
+            task_put           = [pscustomobject]@{ id = "task-two"; status = 503; state = "merged"; times = 1 }
+        }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
+            -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-Equal -Expected 1 -Actual @($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 409" }).Count -Because "task-one's 'merged' was refused"
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-two 503" }).Count -ge 1) -Because "and task-two's write failed in the same save: $($requests -join '; ')"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "task-two was written when the store answered"
+        Assert-True -Condition ($run.Report -match "task-one: depoda başkası değiştirdi") -Because "the refusal is said: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti") -Because "and the merge is named: $($run.Report)"
+    }
+
+    Test-Case "a refused 'merged' is TAKEN BACK when the same save then fails on another task: the refusal is acted on in that iteration" {
+        # The inspector's PROBE-S, as it ran it: task-two's "an inspector took it" write fails, so
+        # task-two is still unwritten when task-one's result is saved - the store refuses task-one
+        # and THEN answers an error to task-two in that one save. The refusal must be known in
+        # that iteration (the merge is still the branch's last commit), not only at the batch's end.
+        $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $faults = [pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-two"; status = 503; state = "inspecting"; assignee = "inspector"; times = 2 } }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
+            -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $writes = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-(one 409|two 503)" } | ForEach-Object { ($_ -replace '^PUT /v1/team/queue/tasks/', '') }) -join ", "
+        Assert-Equal -Expected "task-two 503, task-one 409, task-two 503" -Actual $writes -Because "the start's failed write, then the refusal and the failure in ONE save"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "task-two finished"
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $tree "src\area\task-one.txt"))) -Because "the stopped task's merge was taken back"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $tree "src\area2\task-two.txt")) -Because "and task-two's stands"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti[^\r\n]*birleştirme GERİ ALINDI") -Because "the report says so: $($run.Report)"
+    }
+
+    Test-Case "after a refused write the cycle's own copy says what the store let it say: the report does not list a merge that was taken back" {
+        # The inspector of 3ce11180, PROBE-U: the merge was taken back and the store could not be
+        # read again (another card broke the queue); the report listed the task as merged and
+        # sent the lead to gate a branch that did not hold the work.
+        $stopped = New-Task -Id "task-one" -State "stopped"
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $broken = New-Task -Id "task-three" -Area @("src/third")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition ($run.Report -match "birleştirme GERİ ALINDI") -Because "the merge was taken back: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "kuyruk yeniden okunamadı") -Because "and the store could not be read again"
+        Assert-True -Condition ($run.Report -notmatch "task-one[^\r\n]*\[merged\]") -Because "the task is not listed as merged: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "üzerinde tam kapı ve main'e birleştirme") -Because "and the lead is not sent to gate a branch that holds nothing of it"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 409" }).Count -Because "the refused write is not sent again"
+    }
+
+    Test-Case "an idea's file is read from the proposals folder of -TeamRoot, wherever that is" {
+        $root = New-Sandbox -Tasks @()
+        $elsewhere = Join-Path $root "other-team"
+        foreach ($folder in @((Join-Path $root "team\proposals"), (Join-Path $elsewhere "proposals"))) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+        Set-Content -LiteralPath (Join-Path $root "team\proposals\waiting.md") -Value "the repository's own folder" -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $elsewhere "proposals\waiting.md") -Value "the folder of -TeamRoot" -Encoding UTF8
+        $idea = New-Task -Id "idea-one" -State "awaiting_owner" -Area @()
+        $idea.roadmap_row = ""
+        $idea | Add-Member -NotePropertyName proposal -NotePropertyValue "team/proposals/waiting.md"
+        $api = Start-FakeApi -Tasks @($idea)
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -ExtraArguments ("-TeamRoot '" + $elsewhere + "'") -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $posted = (Get-FakeApiState -Api $api).proposals.PSObject.Properties["waiting.md"]
+        Assert-True -Condition ($null -ne $posted) -Because "the idea's text was posted"
+        Assert-True -Condition ([string]$posted.Value -match "the folder of -TeamRoot") -Because "from the folder the cycle was told is the team's: $($posted.Value)"
+    }
+
+    Test-Case "a store that is away at the moment a run starts does not end the cycle either: the run goes on and its result is written" {
+        $outage = [pscustomobject]@{ task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 } }
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Faults $outage
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "each run once"
+        Assert-Equal -Expected "merged" -Actual (@((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "written when the store answered again"
+        Assert-True -Condition (@(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 503" }).Count -ge 2) -Because "the write after each start met the outage"
+        Assert-True -Condition ($run.Report -match "koşuların başlangıcı: sonuç depoya şimdi yazılamadı") -Because "a line in the report: $($run.Report)"
+    }
+
+    Test-Case "a branch that was ALREADY on the integration branch is never taken back: only the merge this run made is the cycle's to undo" {
+        $root = New-Sandbox -Tasks @()
+        [void](Invoke-SandboxGit -Root $root -Arguments @("checkout", "-q", "-b", "team/c1/worker-task-one", "main"))
+        Set-Content -LiteralPath (Join-Path $root "src\area\task-one.txt") -Value "work on task-one" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $root -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "work on task-one"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("checkout", "-q", "main"))
+        $earlier = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-task-one" -Base "main"
+        Assert-True -Condition ($earlier.Merged -and -not $earlier.Already) -Because "an earlier cycle's merge"
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        $before = (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")).Trim()
+        $inspecting = New-Task -Id "task-one" -State "inspecting" -Branch "team/c1/worker-task-one"
+        $inspecting.worktree = ".claude/worktrees/team/c1/worker-task-one"
+        $stopped = New-Task -Id "task-one" -State "stopped"
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $api = Start-FakeApi -Tasks @($inspecting) -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected $before -Actual (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")).Trim() -Because "the integration branch is where the earlier merge left it"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti[^\r\n]*o birleştirme dalda duruyor") -Because "named, not undone: $($run.Report)"
+    }
+
+    Test-Case "Undo-TeamMerge takes back the last merge of that branch and nothing else: not an older merge, not from a dirty tree, not a plain commit" {
+        $root = New-Sandbox -Tasks @()
+        foreach ($name in @("a", "b")) {
+            [void](Invoke-SandboxGit -Root $root -Arguments @("checkout", "-q", "-b", "team/c1/worker-$name", "main"))
+            Set-Content -LiteralPath (Join-Path $root "src\area\$name.txt") -Value "work of $name" -Encoding ASCII
+            [void](Invoke-SandboxGit -Root $root -Arguments @("add", "-A"))
+            [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "work of $name"))
+            [void](Invoke-SandboxGit -Root $root -Arguments @("checkout", "-q", "main"))
+        }
+        Assert-Equal -Expected $false -Actual (Undo-TeamMerge -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-a") -Because "no integration worktree yet"
+        [void](Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-a" -Base "main")
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        $afterA = (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")).Trim()
+        [void](Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-b" -Base "main")
+        $afterB = (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")).Trim()
+        Assert-Equal -Expected $false -Actual (Undo-TeamMerge -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-a") -Because "a is not the last merge: b stands on it"
+        Assert-Equal -Expected $afterB -Actual (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")).Trim() -Because "nothing moved"
+        Set-Content -LiteralPath (Join-Path $tree "unsaved.txt") -Value "somebody's work" -Encoding ASCII
+        Assert-Equal -Expected $false -Actual (Undo-TeamMerge -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-b") -Because "the worktree is not clean"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $tree "unsaved.txt")) -Because "and the stray file is still there"
+        Remove-Item -LiteralPath (Join-Path $tree "unsaved.txt") -Force
+        Assert-Equal -Expected $true -Actual (Undo-TeamMerge -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-b") -Because "b is the last merge"
+        Assert-Equal -Expected $afterA -Actual (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")).Trim() -Because "back on a's merge"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $tree "src\area\b.txt"))) -Because "b's file is gone from the integration branch"
+        Assert-True -Condition (Test-TeamBranch -RepoRoot $root -Branch "team/c1/worker-b") -Because "b's own branch is untouched"
+        $again = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-b" -Base "main"
+        Assert-True -Condition ($again.Merged -and -not $again.Already) -Because "and it can be merged again: a reset, not a revert"
+        Set-Content -LiteralPath (Join-Path $tree "plain.txt") -Value "a plain commit" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", "a plain commit on the integration branch"))
+        Assert-Equal -Expected $false -Actual (Undo-TeamMerge -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-b") -Because "HEAD is not a merge"
+    }
+
+    Test-Case "only a file of team/proposals is ever posted as an idea's text, for a proposed idea as for a waiting one" {
+        # The inspector of 91c70543: with the path guard removed, team/plans/secret.md, a path that
+        # climbs out of the folder and a source file went to the store.
+        $root = New-Sandbox -Tasks @()
+        $folder = Join-Path $root "team\proposals"
+        [void](New-Item -ItemType Directory -Force -Path $folder)
+        foreach ($name in @("waiting.md", "proposed.md", "other.md")) { Set-Content -LiteralPath (Join-Path $folder $name) -Value "# Öneri: $name" -Encoding UTF8 }
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "team\plans"))
+        Set-Content -LiteralPath (Join-Path $root "team\plans\secret.md") -Value "not a proposal" -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $root "outside.md") -Value "not a proposal" -Encoding UTF8
+        $ideas = @()
+        $number = 0
+        foreach ($pair in @(@("awaiting_owner", "team/proposals/waiting.md"), @("proposed", "team/proposals/proposed.md"), @("awaiting_owner", "team/plans/secret.md"),
+                @("awaiting_owner", "team/proposals/../../outside.md"), @("awaiting_owner", "src/area/README.txt"), @("awaiting_owner", "team/proposals/missing.md"), @("awaiting_owner", "team/plans/other.md"))) {
+            $number++
+            $idea = New-Task -Id "idea-$number" -State $pair[0] -Area @()
+            $idea.roadmap_row = ""
+            $idea | Add-Member -NotePropertyName proposal -NotePropertyValue $pair[1]
+            $ideas += $idea
+        }
+        $api = Start-FakeApi -Tasks $ideas
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $posted = @((Get-FakeApiState -Api $api).proposals.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ","
+        Assert-Equal -Expected "proposed.md,waiting.md" -Actual $posted -Because "the two proposals, and nothing that is not one"
+    }
+
+    Test-Case "only a stale write is one task's: a write the store answers with an error ends the cycle as before" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Faults ([pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-one"; status = 500 } })
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-True -Condition ($run.ExitCode -ne 0 -or ($run.StdOut + $run.StdErr) -match "HTTP 500") -Because "a 500 is not swallowed as 'somebody else changed it': exit $($run.ExitCode) $($run.StdOut) $($run.StdErr)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "and nothing was started on a store that does not take the cycle's writes"
+        Assert-Equal -Expected $false -Actual ([bool](Get-FakeApiState -Api $api).lock.held) -Because "the lock is released all the same"
+    }
+
+    Test-Case "a store that stops answering while the cycle runs changes nothing: the cycle finishes on the copy it has, and says so once" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Faults ([pscustomobject]@{ queue_get_after = 1 })
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (@((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the cycle's task was finished and written"
+        $notes = @($run.Report -split "`n" | Where-Object { $_ -match "kuyruk yeniden okunamadı" })
+        Assert-Equal -Expected 1 -Actual @($notes).Count -Because "said once: $($run.Report)"
+        Assert-True -Condition ($notes[0] -match "503") -Because "with what the store answered: $($notes[0])"
+    }
+
+    Test-Case "an idea the researcher wrote is in the store WITH its text: the Onay Merkezi's Detay has something to show" {
+        # 2026-10-02: two ideas waited for the owner with proposal_text of 0 characters. ADR-0236
+        # gave the store a place for the text and nothing posted it.
+        $api = Start-FakeApi -Tasks @()
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -Research -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $idea = @($state.tasks | Where-Object { $_.state -eq "awaiting_owner" })[0]
+        Assert-True -Condition ($null -ne $idea) -Because "the idea is queued for the owner"
+        $name = [System.IO.Path]::GetFileName([string]$idea.proposal)
+        $onDisk = [System.IO.File]::ReadAllText((Join-Path $root ("team\proposals\" + $name)), [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($null -ne $state.proposals.PSObject.Properties[$name]) -Because "its text was posted: $(@($state.proposals.PSObject.Properties | ForEach-Object { $_.Name }) -join ',')"
+        Assert-Equal -Expected $onDisk -Actual ([string]$state.proposals.PSObject.Properties[$name].Value) -Because "the file's text, whole"
+    }
+
+    Test-Case "a queue that breaks the protocol while the cycle runs changes nothing: the cycle finishes on the copy it has, and says so" {
+        $broken = New-Task -Id "task-two" -Area @("src/other")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($broken) -LateAfter 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the cycle's own task was finished"
+        Assert-Equal -Expected "approved" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the broken card was neither run nor written"
+        $notes = @($run.Report -split "`n" | Where-Object { $_ -match "kuyruk yeniden okunamadı" })
+        Assert-Equal -Expected 1 -Actual @($notes).Count -Because "said once, not once per pass: $($run.Report)"
+        Assert-True -Condition ($notes[0] -match "no-such-task") -Because "with the reason: $($notes[0])"
     }
 
     Test-Case "in API mode the live status goes through PUT /v1/team/queue/status: the same documents, the limit's wait included, and the end with no run" {
@@ -1497,6 +2663,103 @@ try {
         $script = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\team\cycle.ps1"), [System.Text.Encoding]::UTF8)
         Assert-True -Condition ($script -match '\[string\]\$QueueToken') -Because "the parameter is a string path"
         Assert-True -Condition ($script -match 'TokenFile \$QueueToken') -Because "and it is handed to the reader of the file"
+    }
+
+    function New-ModelSetting {
+        param([string]$Worker = $opus, [string]$Inspector = $fable, [bool]$Fallback = $true)
+        return [pscustomobject]@{
+            roles = [pscustomobject]@{ lead = $fable; researcher = $opus; integrator = $opus; worker = $Worker; inspector = $Inspector }
+            fallback = $Fallback; updated_at = "2026-10-01T10:00:00Z"
+        }
+    }
+
+    Test-Case "in API mode the model setting comes from GET /v1/team/queue/models and wins over the local file; every run in the status carries its model and the status carries the limits" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Models (New-ModelSetting -Worker $sonnet -Inspector $opus)
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Set-SandboxFile -Root $root -Name "models.json" -Json ('{"roles":{"worker":"' + $opus + '","inspector":"' + $fable + '"}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker=$sonnet,inspector=$opus" -Actual (Get-CallModels -Calls $run.Calls) -Because "the team store's setting, not the file's"
+        Assert-True -Condition (@(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^GET /v1/team/queue/models 200" }).Count -eq 1) -Because "read once, through the API"
+        $history = @((Get-FakeApiState -Api $api).statuses)
+        $flying = @($history | ForEach-Object { @($_.runs) } | Where-Object { $null -ne $_ })
+        Assert-True -Condition (@($flying).Count -ge 2) -Because "runs were seen in flight"
+        Assert-Equal -Expected 0 -Actual @($flying | Where-Object { -not (Test-TeamModelId -Model ([string]$_.model)) }).Count -Because "each run carries the id it was started on: $($history | ConvertTo-Json -Depth 6 -Compress)"
+        Assert-True -Condition (@($flying | Where-Object { $_.role -eq "worker" -and $_.model -eq $sonnet }).Count -ge 1) -Because "the worker's is the store's"
+        $last = $history[@($history).Count - 1]
+        Assert-Equal -Expected "fable,all,fallback,lowered" -Actual (@($last.limits.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -Because "the contract's four keys"
+        foreach ($name in @("fable", "all")) {
+            Assert-Equal -Expected "state,resets_at,used_pct" -Actual (@($last.limits.$name.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -Because "limits.$name has the contract's three keys"
+        }
+        Assert-Equal -Expected 46 -Actual $last.limits.all.used_pct -Because "the week of all models, from the runs' own events"
+        Assert-Equal -Expected $null -Actual $last.limits.fable.used_pct -Because "no run was on Fable in this cycle: null"
+        Assert-Equal -Expected "ok" -Actual $last.usage_limit.state -Because "what the status had is still there"
+    }
+
+    Test-Case "in API mode a Cloud Core without the models route (404) does not stop the cycle: the local file is used, and without one the defaults" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -NoModels
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Set-SandboxFile -Root $root -Name "models.json" -Json ('{"roles":{"worker":"' + $sonnet + '","inspector":"' + $opus + '"}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker=$sonnet,inspector=$opus" -Actual (Get-CallModels -Calls $run.Calls) -Because "the file's setting"
+        Assert-True -Condition (@(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^GET /v1/team/queue/models 404" }).Count -eq 1) -Because "the route was asked and said 404: $(@(Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-Equal -Expected "merged" -Actual @((Get-FakeApiState -Api $api).tasks)[0].state -Because "the work was done"
+        $bare = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -NoModels
+        $plain = Invoke-Cycle -Root (New-Sandbox -Tasks @((New-Task -Id "task-one"))) -Scenario "approve" -QueueUrl $bare.Url -QueueTokenFile $bare.TokenFile
+        Assert-Equal -Expected "worker=$opus,inspector=$fable" -Actual (Get-CallModels -Calls $plain.Calls) -Because "no route and no file: the defaults"
+    }
+
+    Test-Case "in API mode a setting that names an unknown model starts nothing and takes no lock" {
+        $setting = New-ModelSetting
+        $setting.roles.worker = "claude-haiku-4-5-20251001"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Models $setting
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 2 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "a model id outside the three never reaches a command line"
+        Assert-True -Condition ($run.StdOut -match "claude-haiku-4-5-20251001") -Because "it says which: $($run.StdOut)"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "the lock was never taken"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(PUT|POST)" }).Count -Because "no write at all"
+    }
+
+    Test-Case "in API mode a Cloud Core that does not know the status' new fields yet (422) still gets the status it knows, and the report says so once" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -LegacyStatus
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "merged" -Actual @($state.tasks)[0].state -Because "the work was done"
+        $history = @($state.statuses)
+        Assert-True -Condition (@($history | Where-Object { @($_.runs).Count -ge 1 }).Count -ge 2) -Because "the Ofis page still sees the runs in flight: $(@(Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-Equal -Expected 0 -Actual @($history | Where-Object { $null -ne $_.PSObject.Properties["limits"] }).Count -Because "in the form that Cloud Core accepts"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/status 422" }).Count -Because "the new form is tried once, not at every write"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "model ve limit alanlarını henüz tanımıyor")).Count -Because "one line under the risks: $($run.Report)"
+    }
+
+    Test-Case "the fake's models route keeps the contract: a whole setting is stored and read back; an unknown model, a missing role, another key and an inspector weaker than the worker are 422" {
+        $api = Start-FakeApi -Tasks @()
+        $store = New-TeamApiStore -Url $api.Url -TokenFile $api.TokenFile
+        $default = Get-TeamModelsApi -Store $store
+        Assert-Equal -Expected "$fable/$opus/true" -Actual "$($default.roles.inspector)/$($default.roles.worker)/$("$($default.fallback)".ToLowerInvariant())" -Because "nothing stored: the defaults"
+        $stored = Invoke-TeamApi -Store $store -Method "PUT" -Path "/v1/team/queue/models" -Body (New-ModelSetting -Worker $sonnet -Inspector $opus -Fallback $false)
+        Assert-Equal -Expected $sonnet -Actual $stored.roles.worker -Because "the PUT answers the setting"
+        $back = Get-TeamModelsApi -Store $store
+        Assert-Equal -Expected "$sonnet/$opus/false" -Actual "$($back.roles.worker)/$($back.roles.inspector)/$("$($back.fallback)".ToLowerInvariant())" -Because "and GET hands it back"
+        $weaker = New-ModelSetting -Worker $fable -Inspector $opus
+        $unknown = New-ModelSetting; $unknown.roles.worker = "claude-opus-9"
+        $missing = New-ModelSetting; $missing.roles.PSObject.Properties.Remove("lead")
+        $extra = New-ModelSetting; $extra | Add-Member -NotePropertyName owner -NotePropertyValue "x"
+        $cases = @(@{ Body = $weaker; Code = "inspector_weaker_than_worker" }, @{ Body = $unknown; Code = "unknown_model" }, @{ Body = $missing; Code = "missing_role" }, @{ Body = $extra; Code = "unknown_key" })
+        foreach ($case in $cases) {
+            $message = ""
+            try { [void](Invoke-TeamApi -Store $store -Method "PUT" -Path "/v1/team/queue/models" -Body $case.Body) } catch { $message = $_.Exception.Message }
+            Assert-True -Condition ($message -match "HTTP 422" -and $message -match $case.Code) -Because "$($case.Code): '$message'"
+        }
+        Assert-Equal -Expected $sonnet -Actual (Get-TeamModelsApi -Store $store).roles.worker -Because "a refused PUT changed nothing"
+        $gone = Start-FakeApi -Tasks @() -NoModels
+        Assert-Equal -Expected $null -Actual (Get-TeamModelsApi -Store (New-TeamApiStore -Url $gone.Url -TokenFile $gone.TokenFile)) -Because "404 is 'this Cloud Core has no such route', not an error"
     }
 }
 finally {

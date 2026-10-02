@@ -495,6 +495,15 @@ if (-not $Fast) {
     Assert-ExitCode "team-cycle tests"
   }
 
+  Invoke-Step "Agent team roadmap feeder (PS5.1 + git, no model)" {
+    # ADR-0214 addendum 8: the feeder that cuts the roadmap's next items into cards when the
+    # worker seats would idle, and the judge of what the lead run wrote - against a fake.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-feed.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-feed tests"
+  }
+
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
     # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
     # fake docker, apt, systemctl and curl. Nothing here touches a host.
@@ -522,6 +531,23 @@ if (-not $Fast) {
       Assert-ExitCode "pnpm install"
       & $pnpm --dir apps\web build
       Assert-ExitCode "pnpm build (apps/web)"
+    } finally { Pop-Location }
+  }
+
+  Invoke-Step "Web shell lint, unit tests and types (oxlint, vitest, tsc)" {
+    # CI's web job, here: GitHub Actions is off (2026-09-19), so this gate is the only place
+    # the web suite is ever run before a release. After the build, as in ci.yml: tsconfig
+    # includes the types `next build` generates.
+    $pnpm = Resolve-Tool "pnpm" @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
+    if (-not $pnpm) { throw "pnpm not found" }
+    Push-Location $repoRoot
+    try {
+      & $pnpm --dir apps\web lint
+      Assert-ExitCode "oxlint (apps/web)"
+      & $pnpm --dir apps\web test
+      Assert-ExitCode "vitest (apps/web)"
+      & $pnpm --dir apps\web typecheck
+      Assert-ExitCode "tsc --noEmit (apps/web)"
     } finally { Pop-Location }
   }
 }

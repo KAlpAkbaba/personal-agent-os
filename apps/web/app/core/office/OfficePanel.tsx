@@ -14,6 +14,18 @@ export default function OfficePanel({ panel }: { panel: Panel | null }) {
     <aside className="office-panel" data-office="panel" data-panel-seat={panel.seat}>
       <h2>{panel.role}</h2>
       <p className="muted">Durum: {panel.stateText}</p>
+      {panel.runs.length > 0 && (
+        <section data-panel="runs">
+          <h3>Koşan işler ({panel.runs.length})</h3>
+          <ol className="office-runs">
+            {panel.runs.map((run, index) => (
+              <li key={`${index}-${run.title}`}>
+                {run.title} · <span className="muted">{run.since}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
       {panel.task ? (
         <section data-panel="card">
           <h3>{panel.task.title}</h3>

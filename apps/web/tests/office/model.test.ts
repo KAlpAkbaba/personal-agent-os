@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildOffice, buildPanel, selectSeat } from "../../app/core/office/officeModel";
-import { SEAT_ORDER, twoWorkers } from "./fixtures";
+import { SEAT_ORDER, busyCycle, twoWorkers } from "./fixtures";
 
 describe("the office model", () => {
   it("draws two working workers typing with their task titles and 2/6 in the top bar", () => {
@@ -13,7 +13,7 @@ describe("the office model", () => {
     expect(office.topBar.runningAgents).toBe("koşan ajan 2/6");
   });
 
-  it("keeps the eight seats in contract order", () => {
+  it("keeps the seats in the order the API sends them", () => {
     expect(buildOffice(twoWorkers()).seats.map((s) => s.seat)).toEqual([...SEAT_ORDER]);
   });
 
@@ -77,6 +77,124 @@ describe("the office model", () => {
     const top = buildOffice(v).topBar;
     expect(top.cycleId).toBe("döngü yok");
     expect(top.runningAgents).toBe("koşan ajan 0/6");
+  });
+});
+
+const names = (view: ReturnType<typeof busyCycle>) => buildOffice(view).seats.map((s) => s.name);
+
+describe("the seats the API sends", () => {
+  it("draws four worker desks, Çalışan 1 to Çalışan 4, in an office with no run", () => {
+    expect(names(busyCycle(0, 0))).toEqual([
+      "Hakim",
+      "Araştırmacı",
+      "Entegratör",
+      "Çalışan 1",
+      "Çalışan 2",
+      "Çalışan 3",
+      "Çalışan 4",
+      "Denetleyici",
+      "Sahip",
+    ]);
+    expect(buildOffice(twoWorkers()).seats.find((s) => s.seat === "worker-4")!.ariaLabel).toBe(
+      "Çalışan 4, bekliyor",
+    );
+  });
+
+  it("draws a fifth and a sixth worker desk when the cycle runs that many", () => {
+    const office = buildOffice(busyCycle(6, 0));
+    expect(office.seats).toHaveLength(11);
+    expect(office.seats.slice(3, 9).map((s) => [s.name, s.pose])).toEqual(
+      [1, 2, 3, 4, 5, 6].map((n) => [`Çalışan ${n}`, "typing"]),
+    );
+    expect(office.seats.every((s) => !s.plain)).toBe(true);
+  });
+
+  it("says 5/6 for four workers and one inspection, from the API's own numbers", () => {
+    expect(buildOffice(busyCycle(4, 1)).topBar.runningAgents).toBe("koşan ajan 5/6");
+    expect(buildOffice(busyCycle(5, 2)).topBar.runningAgents).toBe("koşan ajan 7/7");
+  });
+
+  it("marks a seat with three runs ×3, labelled with the first task's title", () => {
+    const seat = buildOffice(busyCycle(0, 3)).seats.find((s) => s.seat === "inspector")!;
+    expect(seat.runCount).toBe("×3");
+    expect(seat.label).toBe("Denetim 1");
+    expect(seat.ariaLabel).toBe("Denetleyici, çalışıyor, 3 koşu");
+  });
+
+  it("gives a seat with one run, or none, no run count", () => {
+    const office = buildOffice(busyCycle(4, 1));
+    expect(office.seats.map((s) => s.runCount)).toEqual(office.seats.map(() => null));
+    expect(office.seats.find((s) => s.seat === "inspector")!.ariaLabel).toBe(
+      "Denetleyici, çalışıyor",
+    );
+    // an answer from before `runs` existed draws as it always did
+    expect(buildOffice(twoWorkers()).seats.map((s) => s.runCount)).toEqual(
+      SEAT_ORDER.map(() => null),
+    );
+  });
+
+  it("draws a seat id it does not know as a plain desk named by its id", () => {
+    const view = busyCycle(1, 0);
+    view.agents.splice(3, 0, {
+      seat: "auditor-2",
+      role: "auditor",
+      state: "working",
+      task_id: "t-one",
+      task_title: "Birinci iş",
+      since: null,
+    });
+    view.agents.push({ ...view.agents[0], seat: "constructor", state: "waiting" });
+    const office = buildOffice(view);
+    const unknown = office.seats.find((s) => s.seat === "auditor-2")!;
+    expect([unknown.name, unknown.plain, unknown.label]).toEqual(["auditor-2", true, "Birinci iş"]);
+    expect(unknown.ariaLabel).toBe("auditor-2, çalışıyor");
+    expect(office.seats.find((s) => s.seat === "constructor")!.name).toBe("constructor");
+    expect(office.seats.filter((s) => s.plain).map((s) => s.seat)).toEqual([
+      "auditor-2",
+      "constructor",
+    ]);
+    expect(buildPanel(view, "auditor-2")!.role).toBe("auditor-2");
+    expect(buildPanel(view, "auditor-2")!.task?.title).toBe("Birinci iş");
+  });
+
+  it("does not take worker-0, worker-x or a padded number for a worker seat", () => {
+    const view = busyCycle(0, 0);
+    for (const seat of ["worker-0", "worker-x", "worker-04", "worker-", "xworker-1", "worker-1d"]) {
+      view.agents = [{ ...view.agents[0], seat }];
+      const drawn = buildOffice(view).seats[0];
+      expect([drawn.name, drawn.plain], seat).toEqual([seat, true]);
+    }
+  });
+
+  it("names a worker seat past the ninth by its whole number", () => {
+    const view = busyCycle(0, 0);
+    view.agents = ["worker-10", "worker-12"].map((seat) => ({ ...view.agents[0], seat }));
+    expect(names(view)).toEqual(["Çalışan 10", "Çalışan 12"]);
+  });
+});
+
+describe("the panel of a seat with several runs", () => {
+  it("lists every run with its title and start time, the first one's card below", () => {
+    const panel = buildPanel(busyCycle(0, 3), "inspector")!;
+    expect(panel.runs.map((r) => r.title)).toEqual(["Denetim 1", "Denetim 2", "Denetim 3"]);
+    for (const run of panel.runs) expect(run.since).toMatch(/^\d\d:\d\d$/);
+    expect(new Set(panel.runs.map((r) => r.since)).size).toBe(3);
+    expect(panel.task?.goal).toBe("ilk denetimin hedefi");
+    expect(panel.branch).toBe("team/cycle/inspect-one");
+  });
+
+  it("names a run without a title by its task id", () => {
+    const view = busyCycle(0, 2);
+    const inspector = view.agents.find((a) => a.seat === "inspector")!;
+    inspector.runs![1].task_title = null;
+    expect(buildPanel(view, "inspector")!.runs[1].title).toBe("t-inspector-2");
+  });
+
+  it("lists nothing for a seat with one run or with none", () => {
+    expect(buildPanel(busyCycle(4, 1), "inspector")!.runs).toEqual([]);
+    expect(buildPanel(busyCycle(4, 1), "worker-4")!.runs).toEqual([]);
+    expect(buildPanel(twoWorkers(), "worker-1")!.runs).toEqual([]);
+    expect(buildPanel(busyCycle(0, 3), "owner")!.runs).toEqual([]);
   });
 });
 

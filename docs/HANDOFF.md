@@ -15,14 +15,32 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `ca5cc79512de47574f81df471323615567122412` (2026-10-01 20:47 UTC, api-green), LKG `858c3e0b`, pin = RELEASE,
-reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`, çekirdek 6.8.0-142 (bakım 19:00 UTC'de koştu).
-Kapı 36/36 (`b8a44916`). QUALIFICATION Stage 40. Ana kopya `team/nightly/lead` üzerinde (main birleştirildi).**
-**SIRADAKİ ENTEGRASYON: `integrate/d20261001` üzerinde `b8a44916`'dan SONRA merged olanlar (understanding-stt-corpus,
-model-policy-cycle, …) + denetimden geçecekler (approvals-detail-view → sahibin düğmeleri açılır; roadmap 2a/2b/2c işleri).
-Lead: bağla, tam kapı, main, kural gereği sormadan yayınla (istisnalar ADR-0214 ek 9; `understanding-corrections-memory`
-0064 migration'ı taşır: expand-only testi geçiyorsa otomatik, değilse sahibe sor). Döngü 6 yuva, 30 dk'da bir.
-Öncelikli iş: `office-worker-seats` (sahip: 4. çalışan koltuğu).**
+**ÜRETİM: main `e5c4d1f3ce550eae7e5e2edb0aa696ce329b3cae` (2026-10-02 08:19 UTC, api-green), LKG `5f250e5b`, pin = RELEASE,
+reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`6f3d9f6f`; 14 509 birim, 2 104 web).
+QUALIFICATION Stage 42. Lead dalı = main + yayın kaydı.**
+**YAYINDA: 4 çalışan koltuğu + Ofis koşuyu sayar (ADR-0241), döngü kuyruğu her turda yeniden okur (ADR-0214 ek 11, bağımsız
+denetleyici 5. turda onayladı), besleyici model zincirini izler ve 20 dk'dan uzun beklemez (ek 13), hüküm kapanış
+cümlesinden okunur (ek 12), tarayıcı kurtarma başlatması profil kilidini bekler (ADR-0246), STT ölçüm aracı (ADR-0242;
+ölçülecek KAYIT YOK), Postgres testleri (ADR-0243), anlatı tesisatı (ADR-0244). Önceki yayın (`5f250e5b`): Onay Merkezi
+"Detay" + açık düğmeler, döngüde model politikası, roadmap besleyici + tick, tarayıcı görev planlayıcısı/kapısı.**
+**KAPIDA (lead, 2026-10-02 11:20): İKİNCİ ENTEGRASYON, dal `gate/d20261002-2` @ `786dec9d` (worktree `.claude/worktrees/gate5`),
+ana kopya o commit'te DETACHED: understanding-engine-startup (lead satırı `main.py`: `configure_understanding`; kapatma ayarı
+`understanding_semantic_enabled`) + understanding-corrections-memory (0064: CHECK genişletme, expand-only) +
+execution-call-site-research (ayar KAPALI) + chrome-on-device-stt (ayar KAPALI) + release-lock-waits + web-voice-test-flakes;
+ADR-0245, 0247…0251. SIRA: kapı yeşilse main `--no-ff` → it → kural gereği yayın (istisna yok: 0064 expand-only, compose
+YOK) → pin → doğrula → işleri `released` yap → Stage 43 → ana kopyayı `team/nightly/lead`'e al.**
+**SAHİBE SORULDU, YANIT BEKLİYOR (ikisi de compose değişikliği, sormadan yayınlanmaz): (1) `temporal-init-reaper`
+(`init: true`; uygulanırken Temporal ~10 sn kapanır; dalı `integrate/d20261002`'de, `gate/…-2`'de YOK); (2) bulutta-araştırma
+ayarının compose satırı (`PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED`; satır olmadan ayar üretimde açılamaz - ADR-0248).
+Onay Merkezi'nde iki fikir bekliyor: "koruyucu testler iş dalında", "ölçüm kaydı" (metinleri depoda).**
+**DÖNGÜ: 11:25'te `team/stop.flag` kondu (koşan süreç eski kodla başlamıştı); bir sonraki tick yeni kodla (yeniden okuma +
+besleyici düzeltmesi) başlar. Fable'ın haftalık limiti 2026-10-05 16:00 UTC'ye kadar DOLU: denetimler ve lead koşuları
+Opus 5.5'te ("model düşürüldü"). Lead'in bakacağı: `cycle-auto-integrate` yine DURDU (returns 2) - son denetçi raporunu oku,
+bulgularıyla yeniden aç ya da kartı böl. Kuyrukta yeni kartlar: web-voice-session-storm-flake, local-embedder-lru-lock,
+narrative-model-wiring, narrative-failures-router; sahibin onayladığı iki fikir bölündü (area-widen-*, misheard-*).**
+**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez (`cycle-seat-pool` sonrası ayrı kart). (2) kapı
+~80 dk ve tek sıra: iki kırmızı kapı bu sabah ~3 saat götürdü - araştırmacının "koruyucu testler iş dalında" fikri tam bunu
+hedefliyor. (3) `LocalEmbedder` önbelleği kilitsiz (kart kuyrukta). (4) tarayıcı görev zinciri üretimde ulaşılamaz (PR-D).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,
@@ -35,12 +53,10 @@ eski 2 koltuklu süreç böyle yenilendi).**
 **KUYRUK VERİTABANINDA (ADR-0222): doğrusu `GET http://100.90.158.26:8001/v1/team/queue`; `team/queue.json` ESKİ tohum.
 İş eklemek / karar işlemek: `Invoke-TeamApi PUT /v1/team/queue/tasks/<id>` (belirteç `%LOCALAPPDATA%/PagentOS/team-queue.token`;
 `NativeProcess.ps1`+`TeamQueue.ps1`+`HttpJson.ps1` dot-source). Sıra `created_at` (öncelik alanı yok).
-Onay Merkezi düğmeleri döngü koşarken KİLİTLİ (düzeltmesi `proposals-on-cloud-core` + `approvals-detail-view`,
-yolda): o zamana kadar sahip kararını sohbetten söyler, lead işler.**
-**BEKLEYEN: `integrate/d20261001` üzerinde merged işler (real-host-rehearsal, office-page-polish, …) → lead bağlama +
-tam kapı + main + otomatik yayın. Roadmap sıra 2'den beş ürün kartı kesiliyor (planlayıcı). Web kabuğu:
-`preview_start web-cloud` (port 3000; 3210 yerel API'ye bağlıdır, sahibin kimliğini TANIMAZ). Sahibin deneyecekleri:
-38.3-38.5 ve 39.2-39.4'ün cümleleri.**
+Onay Merkezi düğmeleri döngü koşarken AÇIK (5f250e5b ile yayında); sahip kararını sayfadan verir. Lead kararı
+döngüye taşımak zorunda değil: ek 11 lead dalına girince döngü kararı bir sonraki turda kendisi görür.**
+**Web kabuğu: `preview_start web-cloud` (port 3000; 3210 yerel API'ye bağlıdır, sahibin kimliğini TANIMAZ). Lead sahibin
+kimliğiyle GİRİŞ YAPMAZ; sayfayı API'den doğrular (`GET /v1/team/approvals`, kuyruk belirteciyle).**
 **BAKIM PENCERESİ KOŞTU VE DOĞRULANDI (2026-10-01 19:00 UTC): çekirdek 6.8.0-142, 26→1 güncelleme, cihazlar ~1 dk'da geri;
 rapor `team/reports/maintenance-2026-10-01.md`, QUALIFICATION 38.13 PROVEN_REAL, ADR-0223 ek 2. Tek seferlik birimler
 kaldırıldı. Kalan: temporal'ın zombisi (`temporal-init-reaper` kuyrukta; compose değişikliği → yayını sahip onaylar).

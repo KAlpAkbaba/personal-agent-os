@@ -18273,3 +18273,1207 @@ Rollback: revert the commit; the page returns to four fixed columns.
 
 The title's second half ("tahmini USD koşu sürerken de güncellensin") was not built and had no acceptance criterion: the
 estimate is updated by the cycle when a run ENDS (the tool reports cost at the end of a run), which is what the page shows.
+
+### ADR-0214 addendum 10 (2026-10-01): the model policy in the cycle as built - the setting from the store, the chain, the remembered limit, the inspector's floor
+
+*From `team/plans/model-policy-cycle-adr.md` (ADR-0214 addendum (2026-10-01, model-policy-cycle): the model policy in the cycle - the setting from the team store, the chain, the remembered limit, the inspector's floor).*
+
+Task `model-policy-cycle`, the cycle's third of the contract in addendum 7. The contract itself
+is unchanged. Integration plan: `team/plans/model-policy-cycle-integration.md` (tool 2.1.285).
+
+**What the cycle does now.**
+* *The setting* is read once, before the lock: API mode `GET /v1/team/queue/models`; a 404 (a
+  Cloud Core without the route) or an unreadable answer falls to `team/models.json`, then to the
+  defaults (lead and inspector `claude-fable-5-1`, the rest `claude-opus-5-5`, fallback on). It
+  never stops the cycle for a missing route. It DOES stop (exit 2, nothing run, no lock) for a
+  value that is not one of the three ids, an unknown role or key, or an inspector weaker than
+  the worker. Nothing stored used to mean "the tool's own default"; it now means the defaults.
+* *A run is started with* `--output-format stream-json --verbose` and
+  `CLAUDE_CODE_NO_MODEL_FALLBACK=1`, never `--fallback-model`. The limit's type, its reset as
+  an epoch and the two percentages exist only in the stream's `rate_limit_event`.
+* *The chain.* A run that comes back with the usage limit marks what the limit closes and the
+  SAME task is started again at once on the next open model DOWN (not a failed run, not one of
+  MaxRunsPerTask); the run's line says `model düşürüldü: <from> -> <to>` and the status lists
+  it under `limits.lowered`. A marked model starts no run until its reset, in this cycle and -
+  through `team/limits.json` - the next. No model left, or fallback off: the existing wait
+  (known reset) or stop line (unknown), now for the earliest reset among the models the role
+  may use. The lead's split run and the researcher go through the same path.
+* *The inspector's floor* is the model the task's last finished worker run really used. The
+  inspection is started on nothing weaker: a setting below the floor is raised to it, the
+  chain stops at it, a stronger open model is taken before waiting, and when every model at
+  least that strong is limited the inspection WAITS (`denetim bekliyor: ...` under the risks).
+
+**Decisions made here, each reversible.**
+1. *Today's limit detector was wrong against the real tool, and is replaced.* Its regex matched
+   none of the six sentences 2.1.285 says ("You've hit your Fable limit ..."), and the string
+   it took the reset from is not in the tool at all: a limited run was counted as a failed run
+   and the cycle stopped instead of waiting. The reader now takes the result line, the limit
+   events and the tool's "I switched the model" notice by their parsed type, line by line (5.1
+   refuses JSON over 2 MB), and looks for the limit's words only in the result and in stderr -
+   a worker's transcript can hold any sentence.
+2. *A session or weekly limit closes every model: no lowering.* Lowering then would start runs
+   that hit the same limit and write a false "model düşürüldü". `overage` / "out of usage
+   credits" is read as "unknown" - the model that ran is marked and the chain finds out the
+   rest - where the integration plan said "all": the owner's account answers
+   `overageStatus: rejected` on every ordinary run, so the words do not say whose limit it was,
+   and two doomed starts cost less than a needless wait of hours.
+3. *The chain goes down only.* A worker whose Opus and Sonnet are limited is not sent UP to
+   Fable: the strongest model's limit is the scarce thing (addendum 7). Only the inspector may
+   go up, because its rule is "at least as strong as the worker".
+4. *The worker's real model is kept in the report entry's `outcome`* (`tamam (model <id>)`),
+   written and read by one pair of functions. The card says "the worker's report entry records
+   its model"; a `model` FIELD would be refused by the queue's schema (`additionalProperties:
+   false`, `team/queue.schema.json`, not in this task's area) - on the serving Cloud Core every
+   task write would be 422 and the all-day cycle would die. `outcome` is free text, travels
+   with the task to the other machine, and no reader compares it. If the three cards agree on
+   a field, the pair of functions is the only place to change.
+5. *An older Cloud Core still gets a status.* The serving status route forbids unknown keys, so
+   the new `runs[].model` and `limits` are 422 there until `model-policy-api` is released. The
+   cycle then writes the form that Cloud Core knows for the rest of the cycle and says so once
+   under the risks; without this the Ofis page would read "no cycle" the moment this merges.
+6. *The rule holds against the tool too.* If `modelUsage` shows the tool ran an inspection on a
+   model weaker than the worker's, no verdict is taken, the model asked for is treated as
+   limited for this cycle, and the inspection is started again on a model at least as strong
+   or waits. The run's line says `model düşürüldü (araç): <asked> -> <ran>`. (Goes past the
+   card's acceptance; the integrator raised it. It is ten lines and closes the one way an
+   approval could come from a weaker judge.)
+7. *The two percentages* are `seven_day_overage_included.utilization` (Fable) and
+   `seven_day.utilization` (all models) of the last event that carried them, shown as the
+   tool's own number times one hundred. Null until a run gave one; null again once the window's
+   own reset has passed. The Fable number is only as fresh as the last run ON Fable.
+8. *`team/limits.json` is machine-local*, written beside the queue files in both store modes. A
+   limit nobody dated is not written to it: on disk it would bar the model for ever.
+
+9. *A limit whose reset is already past is believed once per task.* Such a limit marks nothing
+   (its reset has passed), the wait is 0 s and the try is handed back, so the main loop had no
+   bound: the inspector's probe gave 123 worker runs in a minute. The old detector matched none
+   of the real sentences, so the real tool could not reach this; the new one can (a PC clock
+   ahead of the tool's, a stale `resetsAt`). The first such answer is today's "waited out, run
+   again". When the SAME run (task and role) gets it a second time on the same model, the hour
+   it names is not taken as the truth: what the limit closed is closed for the rest of the
+   cycle, undated, with a line under the risks. From there the existing paths apply - the chain
+   goes one model down, or (fallback off, nothing left) the stop line of a limit nobody dated.
+   Counted per task, so parallel runs that each meet a limit which has just lifted are each
+   retried once. Undated is not written to `team/limits.json`: the next cycle asks again, at
+   most two runs. `Invoke-RoleRun` (researcher, the lead's split) goes through the same count.
+10. *A worker entry that names no model gives the floor of the configured worker model.* Every
+   task whose worker finished before this merges has a plain `tamam`; "no floor" let its
+   inspection run on Sonnet with Fable and Opus limited, and skipped the tool-substitution
+   check. One function (`Get-TeamInspectionFloor`) now answers both the start and that check;
+   the wait line says which floor it is (`işçinin modeli kayıtlı değil, ayarlı işçi modeli ...`).
+   If the old worker really ran on something stronger than the setting says today, nobody
+   knows it: the setting is the best statement there is.
+
+**Found on the way.** `scripts/tests/lib/fake-claude.ps1` never received `--output-format`:
+PowerShell bound the tool's `-p` to its own `-PipelineVariable` and swallowed the next
+argument. Nothing read it until now. The fake takes `$args`. `fake-team-api.ps1` logged an
+error answer without its method.
+
+**Evidence.** PROVEN_AUTOMATED: `scripts/tests/team-cycle.tests.ps1`, the "model policy" cases,
+against fixtures in the real tool's format. PROVEN_REAL for the read half only: one real run on
+`claude-sonnet-5-5` through `Get-TeamRunArguments` / `Start-TeamRun` / `Read-TeamRunResult`
+read the result, `modelUsage` and both windows (all models 47 %, no Fable window). The
+rejection itself has not been seen from the real tool: its shape is from the binary and the
+documentation, and the first real lowering is the proof.
+
+**Rollback.** `"fallback": false` in the setting restores the wait without a code change;
+`team/limits.json` can be deleted at any time; `Get-TeamRunArguments` back to
+`"--output-format","json"` still reads, through the single-document branch.
+
+**For the lead at merge.**
+* Merge AFTER `model-policy-api`, or accept one RED: `services/api/tests/unit/test_team_state.py`
+  holds every route `TeamQueue.ps1` calls to the server's, and `GET /v1/team/queue/models` is
+  not served on this branch's base.
+* `docs/THIRD_PARTY_COMPONENTS.md`: the entry text is in the integration plan.
+* `.gitignore`: `team/limits.json` (new) and `team/status.json` are machine-local.
+* `team/models.json` in the tree has no `fallback` / `updated_at`; the defaults fill them.
+* `team/queue.schema.json`: nothing needed (decision 4). `docs/TEAM_PROTOCOL.md` section 3
+  could name the chain; this task did not touch it.
+
+**Wired by the lead at merge.** The cycle calls `GET /v1/team/queue/models` before the server serves it (`model-policy-api` is
+queued behind `office-worker-seats`): `test_team_state.py` names that one route as called ahead, with the guard that fails the
+day the server serves it and the entry is still there; a 404 falls back to `team/models.json` and then the defaults (tested).
+`team/status.json`, `team/limits.json`, `team/research-last.txt` and `team/stop.flag` are ignored by git. **Open, from the
+inspection, queued as `model-policy-floor`:** the inspector's floor is the LAST worker run's model, not the strongest that
+worked on the branch - a branch written mostly on Fable and reworked on Sonnet was inspected on Sonnet; and a failed run whose
+text merely contains "usage limit" is read as a limit of that model. A real lowering has never happened: `NOT_RUN`.
+
+### ADR-0224 addendum 4 (2026-10-01): the measurement is built, and the target is NOT met - 68.9 % on the STT corpus
+
+*From `team/plans/understanding-stt-corpus-adr.md` (ADR (lead numbers it) — ADR-0224 measurement as built: the STT corpus, its judge, and the first number (68.9 %, target NOT met)).*
+
+**Status.** The INSTRUMENT is delivered (worker, cycle d20261001); the TARGET is NOT MET. Tests and
+one tool only; no product code changed. The task card's acceptance "the unit test asserts >= 95 %"
+is therefore not passed, and this text must not be read as if it were: whether the task stays open
+or is re-carded as "instrument delivered, target NOT MET" with the product follow-ups queued is the
+lead's decision, not the worker's.
+
+**The number (2026-10-01, main 858c3e0b, layers 1-3, no layer-2 engine as in production).**
+106 cases: 3 real (the trial of 2026-09-30) + 103 derived. **73 correct = 68.9 %** (72 done at
+HIGH/MEDIUM + 1 question at LOW), **0 wrong-device actions**, 25 not understood (left to the model),
+8 read as ANOTHER intent at HIGH 1.0. The three real sentences: 3/3. By distortion: diacritics
+24/24, invented suffix 18/21, polite 16/29, fused 12/29. **The 95 % target of ADR-0224 is not met.**
+
+**What "0 wrong-device" covers: 11 of 106.** A wrong machine can only be SEEN where two machines
+are enrolled: the 3 real cases and the 8 derived ones that name a machine. The other 95 run on the
+canonical world's single fake device, where every command lands on "the" device - including the 8
+confident wrong readings. The report carries the denominator as `wrong_device_observable_cases`
+beside `wrong_device_actions`, in the run and in the nightly `understanding.stt_corpus` block, so
+the zero is never read as a claim about all 106. Widening it (every acting case over two devices)
+is a follow-up, not done here.
+
+**Decision.**
+- `tests/voice_corpus/stt_corpus.py`: `SttCase(rendering, meant, intent, tool, application, device,
+  bands, origin, distortion, base_case_id, heard_at)`. `origin="real"` only for what production
+  heard (dated); `origin="derived"` for a canonical sentence with ONE named distortion (`polite`,
+  `diacritics`, `fused`, `invented_suffix`), `meant` = the canonical sentence letter for letter.
+- **The bases are a rule, not a choice**: per `corpus.py` category, the first canonical single-turn
+  case that names an intent, expects `ok`/`control`, has 2+ words and ends in a verb of
+  `IMPERATIVES` (26 categories), plus the trial family (`op.app.8`, `op.app.office.1`,
+  `op.app.home.1`). Every distortion that applies is taken. The unit test recomputes the rule and
+  checks each rendering's shape, so the corpus cannot be tuned to pass.
+- `tests/voice_corpus/stt_harness.py`: the same path as `harness.py` (POST /events -> router ->
+  policy -> POST /tool-calls -> device). Two worlds: a derived case runs through `run_case` of the
+  owner corpus with the rendering in place of the sentence; a case that names a machine, and the
+  three real ones, run over two enrolled devices behind the real `BrokerDeviceAction`, the session
+  bound to the machine the sentence does NOT name - `harness.py`'s single fake device cannot show
+  which machine acted. The harness plays the model and calls the meant tool even when the layers
+  understood nothing: that call landing on the session's machine is what 2026-09-30 was.
+- `judge(case, seen)` (pure): any command on a machine other than the meant one = `wrong_device`
+  in every band; meant intent+entities executed at HIGH/MEDIUM = `correct`; LOW with exactly one
+  question and nothing run = `question` (correct); LOW with no question = `not_understood` even
+  when the model's guess lands; another reading at HIGH/MEDIUM = `wrong_reading`
+  (`confident_wrong_readings` in the report).
+- **The target test is a strict expected failure, with a ratchet under it.** `KNOWN_GAPS` (33
+  cases, each with its verdict) must EQUAL the failing set: a new failure names itself, a case the
+  layers learn must be removed, a real case or a `wrong_device` can never be listed. Asserting 95 %
+  outright would hold every release red for a gap only later work can close (the shape of "an
+  alarm that blocks its own remedy"); bending the corpus to pass would repeat the lesson ADR-0224
+  opens with. `0 wrong-device` and the three real sentences are hard assertions.
+- Report: `write_reports` adds `understanding {owner_corpus, stt_corpus}` and the full `stt_corpus`
+  run to the owner suite's report file (`PAGENTOS_VOICE_CORPUS_REPORT`) - only when that file is
+  the owner suite's own, never creating it - and/or writes `PAGENTOS_STT_CORPUS_REPORT`. With no
+  owner report the owner number is `NOT_RUN`, never invented.
+- `scripts/voice/collect-stt-corpus.ps1`: parses a read-only JSON-lines dump into a proposals JSON
+  (`origin real`, `status needs_owner_meaning`, meaning slots null); `-ShowQuery` prints the one
+  SELECT. "Already in the corpus" is decided on WHOLE renderings, letter for letter, read out of the
+  corpus file's own tables - never a substring of its text (the first version dropped any sentence
+  that occurred inside a longer line, a docstring or a `meant`). A sentence equal to a REAL rendering
+  is skipped; one equal to a DERIVED rendering is proposed with `confirms_derived_case` = that case's
+  id, because a derived case production really heard is the best proposal there is. The reader
+  counts what it parsed against the lines that should have produced it and stops when they differ,
+  and a unit test sends every corpus rendering through the collector and compares the ids with
+  Python's - the two halves read each other. Refused as output: a `.py`, the corpus, the dump it
+  reads, and any path inside the repository outside `state/reports` (git-ignored) - proposals hold
+  raw sentences, possibly other people's (KVKK).
+
+**Found on the way (not fixable inside this task's area).**
+1. Production keeps the owner's sentence in ONE place: `last_utterance.chat_question`, local mode,
+   intent none, one turn. A paid session keeps none and the audit row holds no word (KVKK). So
+   "real renderings from the production audit" can only come from local-mode misses; collecting
+   paid-session renderings needs a recorded, owner-approved capture - a new idea for the owner.
+2. Eight distorted sentences match ANOTHER intent's rule at HIGH 1.0 ("Hesapü makinesini aç." and
+   "Notü Defteri'ni aç." -> `media_play`; "Kendi kendini geliştirmeyi duraklatın." -> `explain`;
+   "Şubug'ı kendin düzelt." -> `memory_correct`; "Buresmi Paint'te yeniden çiz." -> `repeat`). An
+   exact rule is never contested (addendum 3), so layer 3 cannot catch them.
+3. The polite imperative is read only by the open-verb tables (ADR-0233): "Ekranları kapatın.",
+   "Haberleri açın.", "Maillerime bakın." resolve to nothing.
+
+**Consequences.** The nightly run reports two numbers once the lead adds this file to it. Closing the
+gap is product work (polite forms through layer 1 for every verb table, a fused-word split, a
+semantic reading allowed to contest an exact rule); each fix shortens `KNOWN_GAPS`.
+
+**The lead's reading, for the owner.** The owner's target for this architecture is >= 95 % on sentences as the STT renders
+them. Measured on 106 such cases (the three real ones of 2026-09-30 and derived renderings, each marked derived): **73 correct
+(68.9 %)** - 72 acted on correctly and 1 answered with the one question; **25 not understood; 8 read wrongly WITH confidence;
+0 actions on a wrong device** (over the 11 cases where a device is observable). The owner corpus (2754 canonical sentences)
+stays at 100 %. The target test is a strict xfail so the gate stays green while the number is honest; the nightly report
+carries both numbers and `BELOW_TARGET`. This task delivered the INSTRUMENT, not the target. What closes the gap is product
+work, queued: `understanding-polite-forms-everywhere` (the polite imperative for every verb table, not only "aç"),
+`understanding-fused-words` (a rendering that fuses two words), `understanding-engine-startup` (layer 2 is not configured in
+production: the 25 "not understood" get no semantic candidate at all today), and the 8 confident wrong readings are the
+first to study (`understanding-confident-wrong`). The collector has not been run against production: the real renderings are
+three.
+
+## ADR-0237 — The roadmap feeds the queue: `scripts/team/feed.ps1`, and the scheduled task's one action is `tick.ps1` (2026-10-02)
+
+Implements ADR-0214 addendum 8 (and the "feeder" of addendum 9); narrows nothing. The worker's text
+(`team/plans/lead-roadmap-feeder-adr.md`) follows; the lead's wiring is at the end.
+
+### Context
+
+The queue was fed by the lead in a chat session. When it ran dry at night, eight seats sat
+idle until a person wrote cards. The owner, 2026-10-01: "hiçbir ajan mümkün olduğunca
+durmasın, mümkün olduğunca roadmap'ten ilerleyelim ve araştırmacının yeni fikirleri
+onaylanırsa bu fikirler roadmap'e eklensin."
+
+### Decision
+
+`scripts/team/feed.ps1` (decisions in `scripts/lib/TeamFeed.ps1`) is a step the scheduled task
+runs BEFORE `cycle.ps1`, on the same store (files, or `-QueueUrl`/`-QueueToken`).
+
+1. **Runnable** = state `approved`, `assigned`, `returned`, `in_progress` or `inspecting`
+   AND no unmet dependency (`Get-TeamUnmetDependencies`). With `-MinRunnable` (3) or more the
+   script does nothing: no lock, no file, one line on stdout.
+2. **One lead run** (`.claude/agents/lead.md`, the model `team/models.json` names for the
+   lead; tools = the role file's minus `Agent`, `Bash`, and `Edit` unless an idea row is to
+   be written) is asked for at most `-MaxNew` (3) cards in ONE file,
+   `team/plans/feed-<date>-<n>.json`. The prompt carries the roadmap's rows as the script
+   reads them, "The limits, stated once", "The order", every task of the queue (id, state,
+   title) and the areas in work.
+3. **The script judges, whole or nothing** (`Test-TeamFeed`). The cards go through the judge
+   of the lead's split, `Test-TeamSplit` - reused, not forked: fields, a free id, no area of
+   a task in work, no shared file, no main. The feeder adds: at most `-MaxNew`; a title no
+   task has; `roadmap_row` IS a row of `docs/ROADMAP.md`. Accepted cards are appended as
+   `approved`, reason `roadmap: <row>; fed by the lead run <date>`, `created_at` one second
+   apart so the lead's order is the queue's order (the queue is ordered by `created_at`).
+4. **What a row is.** Read from "## The JARVIS target": the first cell of each row of the
+   JARVIS table (and its bold part; not the row whose state says NEVER), the bold title of each item of "The order", the
+   section's other headings ("Definition of done", "How it is built from here"), the bold
+   name of each approved idea. A card quotes one exactly; ONE note in brackets may follow
+   ("browser-use, anywhere (order 2b, ADR-0213)") - that is how the queue's cards are written
+   today, and a test holds eleven of them to the real ROADMAP.md.
+5. **What needs the owner is never a task.** The lead run marks such an item `needs_owner`
+   with one sentence (a new dependency or account, a paid service, an irreversible or
+   production action, a roadmap row that does not exist). The script queues it
+   `awaiting_owner`, without an area, WITH a proposal file it writes itself
+   (`team/proposals/<date>-feed-<id>.md`). The proposal is not decoration: an approved task
+   with neither an area nor a proposal is moved to `assigned` by the cycle and breaks the
+   queue's protocol for every cycle; with a proposal it is the lead's to split.
+   A card whose row does not exist and is NOT marked is refused with the whole file.
+6. **Approved ideas -> roadmap.** For a task that is `done`, has a `proposal`, a reason
+   starting "sahip onayladı", and whose proposal path is nowhere in ROADMAP.md, the same run
+   adds one row to the "Approved ideas" table. `Test-TeamFeedRoadmapEdit` accepts only: every
+   old line still there in order; new lines inside that table; five cells, a date first, no
+   empty cell; each row names exactly one asked idea's proposal path; no idea twice. The
+   script then commits `docs/ROADMAP.md` alone (`git commit -m ... -- docs/ROADMAP.md`) on the
+   branch the checkout is on. On `main`, on a detached HEAD, or when ROADMAP.md has
+   uncommitted changes, the row is not asked for at all and the report says why. No push.
+7. **A run that left its file is not trusted.** `git status` + a sha256 of every listed file
+   is taken before and after the run (the main checkout is rarely clean, so "dirty" is not
+   the test - the difference is). Any path that differs, other than the feed file (and
+   ROADMAP.md when a row was asked for), refuses the WHOLE run: nothing queued, nothing
+   committed, ROADMAP.md put back byte for byte. The stray file itself is left as found and
+   named in the report - in a checkout a person also works in, the script cannot tell a stray
+   write from that person's work, and the working tree is never reset.
+   The two verdicts are otherwise independent: a refused feed file does not stop a sound
+   idea row from being committed, and a missing idea row does not stop sound cards.
+8. **The same stops as the cycle.** The team lock is taken as cycle `feed-<date>` and
+   released in `finally` (other machine's fresh lock: exit 3; stale or dead: taken over, said
+   so). `team/stop.flag`: nothing starts and the flag is LEFT - it is the cycle's to remove.
+   Usage limit: waited out and asked once more when the tool says when it lifts, else stop.
+   `-DryRun` prints the plan and writes nothing. Report: `team/reports/feed-<date>.md`
+   (Turkish, a section per lead run that was STARTED; posted to the store in API mode).
+9. **No run, no report.** When nothing was started - the seats are full, `team/stop.flag`, a
+   lock somebody holds (read, or lost in the race of the API's acquire) - the feeder says so
+   on standard output and neither writes nor posts a report. The Onay Merkezi shows the
+   newest report in the store; a "the lock is held" section posted every 30 minutes while a
+   cycle runs took the place of that cycle's report (inspector, on the real routes).
+   A run that fails or is killed at its deadline is not trusted either, whatever it left on
+   disk: a valid feed file written before the failure is not read.
+
+### Consequences / what is deliberately not here
+
+- The feeder cannot see whether an item "needs the owner"; it relies on the lead's mark plus
+  the checks a script can make (row exists, area rules). The inspector's first approved feed
+  card is the real test of the prompt.
+- Idea rows are written only when a lead run happens, i.e. when the queue is low (the card's
+  letter). With a full queue an approved idea waits for the next low moment.
+- An idea the CYCLE splits ends with reason "bölündü: ..." - it no longer starts with "sahip
+  onayladı", so step 6 does not see it. Keeping the owner's word on that task is the cycle's
+  or the Onay Merkezi's (outside this task's area).
+- On today's queue seed three ideas of 2026-09-30 (`idea-2026-09-30-anlati-satiri`,
+  `-bulutta-yurutme`, `-gorev-dongusu-bulutta`) match step 6: they became items 2b/2c of "The
+  order" and were never rows of "Approved ideas". The first real run will ask for their rows.
+- A lead run every 30 minutes while the roadmap's next item cannot be cut (an empty list
+  each time) is not throttled here.
+- The live status (Ofis page) is not written by the feeder: the lead's seat shows nothing
+  while the feed run works.
+- The feeder's roadmap commit does not touch `docs/HANDOFF.md` (the lead's file).
+- The LEAD wires it: the call in the scheduled task (`scripts/team/register-nightly.ps1`,
+  before `cycle.ps1`, same `-QueueUrl/-QueueToken`), `scripts/tests/team-feed.tests.ps1` in
+  `scripts/quality-gate.ps1` and in `.github/workflows/ci.yml` beside `team-cycle.tests.ps1`.
+
+### The lead's wiring (integration d20261001, third)
+
+- `scripts/team/tick.ps1` is the scheduled task's one action: `feed.ps1`, then `cycle.ps1`, each in a child
+  process, on the same store arguments. **The feeder never decides whether the cycle runs**: whatever it
+  answers (seats full, the lock held, a refused feed file, a crash, a script that could not be started) the
+  cycle is started and the tick's exit code is the cycle's. `-NoFeed` is the cycle alone.
+  `scripts/team/register-nightly.ps1` registers the tick (it registered `cycle.ps1`); the arguments are the
+  same ones, so a task registered before this change keeps working until it is registered again.
+- `scripts/tests/team-feed.tests.ps1` is a step of `scripts/quality-gate.ps1` and a line of
+  `.github/workflows/ci.yml`. The second integration's gate (`2c691585`) was RED on exactly this: the suite
+  existed and nothing ran it (`test_ci_runs_every_powershell_suite`).
+- The gate gains "Web shell lint, unit tests and types (oxlint, vitest, tsc)". GitHub Actions has been off
+  since 2026-09-19, so CI's web job ran nowhere: the Ofis and Onay Merkezi suites were run by their workers
+  and inspectors only. From this commit a release cannot leave with a red web suite.
+- **Known limit, not closed here.** The feeder takes the team lock, and a cycle holds it for as long as it
+  has work. While a cycle runs with idle worker seats the tick's feeder therefore answers "the lock is held"
+  and cuts nothing: the queue is fed only BETWEEN cycles. Feeding from inside the running cycle belongs to
+  the seat pool (`cycle-seat-pool`: the pool asks the feeder when fewer tasks are runnable than there are
+  worker seats); its card says so.
+
+## ADR-0238 — The browser task loop's model planner: one forced `step` call, cheap by default, capable for the re-plan (ADR-0207 PR-C 1/2) (2026-10-02)
+
+**Decision.** `app/webtask/model_planner.py::ModelPlanner` is the model behind the `TaskPlanner` interface.
+One Messages API request per plan: `system` = `build_prompt()["system"]`; ONE user message holding the blocks
+`GOAL`, `ELEMENTS`, `HISTORY`, `PAGE` in that order (the goal is read first; the page excerpt is the last thing in
+the message and exists only inside the untrusted-content wrapper); `tools=[STEP_TOOL]`,
+`tool_choice={"type":"tool","name":"step"}`, `max_tokens=600`, `temperature=0`, no `thinking`. The model is
+`settings.research_anthropic_model` (Haiku), and `settings.executive_planner_model` (Sonnet) when
+`request.capable` - which the loop sets for the round after a step that did not hold. That field is the whole
+re-plan rule: this module adds no budget and no second call. Raw `httpx` through an injectable `send`, one retry
+after 1.5 s on 429/529, 30 s timeout (two attempts stay inside the round activity's 150 s heartbeat timeout):
+the shape of `assistant_chat.AnthropicChatProvider`. No SDK, no new dependency, no `config.py` change.
+`default_planner()` chains `[RuleTablePlanner, ModelPlanner]` when `anthropic_api_key` is set and
+`[RuleTablePlanner, NoModelPlanner]` otherwise - a consent banner still costs nothing.
+
+**What is accepted back.** Exactly one `tool_use` block named `step`, whose input survives `parse_step`.
+Words, a refusal, another tool, two calls, `stop_reason == "max_tokens"` (a step cut off mid-arguments), any
+non-200, a transport failure or a timeout is a `PlannerError`, which the loop already turns into a failed task
+(`FAIL_PLANNER`). Every such message is built from fixed words, a status number, an exception CLASS name or a
+count: never the model's text, never the vendor's error message, never a key the model invented
+(`parse_step` names unknown keys in its error; here that case is replaced by a fixed sentence, because a model
+that read a hostile page can write anything as a key).
+
+**Why.** Until now every round the rules could not answer asked the owner "model henüz bağlı değil". The
+boundary (prompt, tool, strict parse, gate) was built and tested before a model existed; this puts a model
+behind it without the loop, the gate or the service changing.
+
+**Open - for the next card (real model, fixture site), none verified here.**
+* No request has been sent to the real API. `temperature: 0` and a forced `tool_choice` are accepted by Haiku
+  4.5 as documented; whether `executive_planner_model` (`claude-sonnet-5` by default) accepts a non-default
+  `temperature` is NOT_RUN. If it answers 400, every capable round fails with "status 400" - loud, not silent.
+* With the key that production already has for research, `default_planner()` returns the model planner as soon
+  as this is released. A task still needs the device's `-AuthorizeTasks` grant to run at all (PR-C), so no
+  round is planned by a model before the owner grants it; after that each unruled round costs one Haiku call.
+* Element NAMES are page-written and sit in `ELEMENTS`, outside the wrapper (`build_prompt`'s design: defused,
+  one line each, labelled as data by the system prompt). The guarantee stays `parse_step` + the gate.
+* The trail's `planner` field says `model`, not which model; the round after a hint is the capable one.
+* A 404 (retired model id) is reported as "status 404" and logged with the model id; it is not retried.
+
+**The lead's reading at merge.** Nothing in production reaches this planner today: `start_task_db` has no
+caller outside its own module (the voice/Kokpit entry is PR-D), and the home PC's agent is not installed with
+`-AuthorizeTasks`. So this release changes no behaviour the owner can meet, and the "Open" list above is
+exactly what the next card (`webtask-prc-gate-bindings`, then a real run against the fixture site) has to
+close before any claim above PROVEN_AUTOMATED: **the real API has not been called (NOT_RUN)**.
+
+## ADR-0239 — The Onay Merkezi's "Detay" reads a proposal with its own small parser (2026-10-02)
+
+**Context.** Owner, 2026-10-01: each waiting idea needs a "Detay" that tells him, with examples,
+what the idea would bring. The page dumped `proposal_text` in one `<pre>`. The text is Markdown
+written by the researcher; it reaches the browser from the Cloud Core and is not trusted markup.
+
+**Decision.**
+- `apps/web/app/core/approvals/proposalSections.ts` is a pure parser, not a Markdown renderer and
+  not a dependency. It yields sections, paragraphs, lists and links; `ProposalDetail.tsx` renders
+  them as React text nodes. No `dangerouslySetInnerHTML`, no HTML from the text, ever.
+- A link exists only for `http://` / `https://` (prefix check AND `new URL().protocol`; the
+  normalised `href` is what is rendered, `rel="noopener noreferrer"`, new tab). Any other scheme
+  stays in the sentence exactly as written. Bare URLs are not auto-linked.
+- Sections are cut at `## ` headings with any title (unknown ones kept under their own title);
+  a `## ` line inside a code fence is the fence's text. The older `**Heading**:` /
+  `**Heading:**` line cuts a section ONLY when the proposal has no `## ` heading at all, ONLY
+  when the line is not a list item, and ONLY for the seven names of the researcher's rule (Ne,
+  Faydası…, Neden şimdi, Nasıl, Maliyet…, Kanıt planı, Karar): the real proposals write
+  `- **Maliyet**: 5 USD/ay` and `**Efor**: orta` as ordinary sentences under a `## ` heading
+  (inspector, d20261001: such a bullet produced a second "Maliyet" and a second "Karar").
+- The benefit section is matched by whole name (`fayda`, `faydası`, `faydalar…` followed by a
+  space, dash or the end), not by stem: "Faydalanılan kaynaklar" is not it. Its "Bugün:" /
+  "Bununla:" lines (plain, bold, numbered or bulleted, with wrapped continuation lines) become
+  pairs, and so does the one-line form `Bugün: … / Bununla: …` (separator `/`, `→`, `->`, `=>`,
+  `—`, `–`, `|` or none; the second label capitalised - "…, bununla: …" is a sentence).
+  "Kazanç:" and "Kazanmadığımız:" (capitals too) are the two closing lines; anything else in the
+  section is kept and shown after them. A half pair shows only the half it has - a label is
+  never rendered with nothing after it - and a pair with neither half is dropped. A benefit
+  section with no pair at all gets the "fayda örnekleri olmadan" sentence above what it holds.
+- Headings and links are found by a single forward scan, not by a backtracking expression: the
+  text comes over the network, and a 100 KB `## # # #…` line or 500 KB of `[` froze the page
+  thread for 8-10 s. A link's text is what stands after the LAST `[` before its `](`. The tests
+  assert the answer on those inputs; the runner's timeout is only the hang guard.
+- A list is numbered (`<ol>`) when its first item is, bulleted otherwise.
+- Order in the panel: benefit, Ne, then every other section in the file's order (the untitled
+  lines under the title - date, roadmap row - come first among those, without a heading).
+- `**bold**` markers are removed and the words kept as plain text; emphasis, code spans, tables
+  and nested lists are not rendered (a `###` line is a paragraph, a nested item a flat item).
+- "Detay" is offered on every idea, and on a release only when it carries a proposal. It is never
+  disabled by the decision lock: reading is not deciding. `aria-expanded`, and `aria-controls`
+  while open; the state is per card, so several may be open.
+- `decisions_open` (sibling task approvals-while-cycle-runs) is optional in the view type;
+  `decisionsOpen(view) = decisions_open ?? !cycle_running` is the only reader. The buttons lock on
+  `!decisionsOpen`. Three sentences: running + open -> "kararınız bir sonraki döngüde uygulanır";
+  running + closed -> the old "bitene kadar karar verilemez"; not running + closed (a state the
+  API may send) -> "Şu anda karar verilemez; biraz sonra yeniden deneyin." - a disabled button is
+  never left unexplained.
+- `page.tsx` keeps the fetch; the rendering moved to `ApprovalsList.tsx` (a Next page may export
+  only its page, and the tests render the list from a view).
+
+**Consequences.** A proposal written with constructs outside this list is still fully readable,
+as text. The three ideas of 2026-10-01 have no benefit section and show the "fayda örnekleri
+olmadan yazılmış" sentence until the researcher rewrites them. No stylesheet was touched (outside
+the area): the panel uses plain `h3` / `p` / `ul` / `ol` inside the existing `detail-row`, and
+takes a row of its own there with an inline `flex-basis: 100%` (the card is a wrapping flex row).
+`tests/approvals/proposal-shapes.test.ts` reads every file under `team/proposals/` and compares
+the parser's section titles with the file's own `## ` lines, so a new shape from the researcher
+fails a test instead of reaching the owner. Not rendered, still: code spans (backticks stay
+literal), a second benefit section (shown as an ordinary section), nested lists.
+
+## ADR-0240 — PR-C's binding limits close at the gate: a write is classified from its element, the site name is read in site position only (ADR-0207, PR-C 2/2) (2026-10-02)
+
+The worker's text (`team/plans/webtask-prc-gate-bindings-adr.md`), numbered by the lead at merge. Like ADR-0238 it is
+unreachable in production until PR-D gives `start_task_db` a caller and the home PC is installed with `-AuthorizeTasks`;
+its two "Not here" items are the next cards of roadmap item 2b (the ceiling on the wire for `fill` / `select_option` /
+`set_checked`, and the retention of the last observation).
+
+### Context
+
+ADR-0207 lists, under "Recorded for PR-C, and binding on it", what may not stay open once
+a model plans a browser task's steps. `webtask-model-planner` wires that model. This
+closes the items that live in the Cloud Core's gate (`app/webtask/gate.py`,
+`app/webtask/risk.py`). The retention of the last observation and the ceiling ON THE WIRE
+for `fill` / `select_option` / `set_checked` are not here (see "Not here").
+
+### Decisions
+
+1. **A write is classified from its element.** `fill`, `select_option` and `set_checked`
+   are judged by the element's name and `submits`, with the marker file, as a click is:
+   HIGH_IMPACT name -> HIGH_IMPACT, `submits` or an external-communication name ->
+   EXTERNAL_COMMUNICATION, otherwise REVERSIBLE_WRITE. The worker's `risk_hint` is never
+   lowered. `classify_element` is unchanged: it is the contract's section 4 and the
+   worker's rule, where a field is REVERSIBLE_WRITE because pressing it only focuses it.
+   `Decision.risk_ceiling` carries the class for these actions.
+2. **A click on a checkbox, radio or switch is `set_checked` by another name** and is
+   classified the same way. Not on the card; found on the way: without it a planner
+   reaches the wired checkbox through `click` and the rule above closes nothing.
+3. **Payment is the same boundary for every action that names an element.** A payment
+   marker in the name -> `ask_owner(payment)`, for click, fill, select_option and
+   set_checked; a grant does not change it.
+   *Where this departs from the card:* the card's examples ('Satın al' select, 'Abone ol'
+   checkbox) are asked to give a HIGH_IMPACT read-back, and both names are PAYMENT
+   markers. A read-back can be confirmed; ADR-0207 decision 4 says a payment is not
+   performed "with a confirmation either". So they are handed over (risk HIGH_IMPACT,
+   kind `payment`), and the confirmable HIGH_IMPACT read-back is shown on a non-payment
+   name ('Hesabı sil'). The stricter reading; reversible by narrowing the check.
+4. **An unnamed control that submits or sits in a form is EXTERNAL_COMMUNICATION**, and
+   the read-back says "adsız bir düğme ... Sayfa bu düğmeye ad vermemiş". Unnamed = no
+   letter and no digit after folding (an icon glyph such as "×" is not a name). Exempt:
+   a plain link (`role=link` with an href - it navigates), text entry (`fill`, and a
+   click that only focuses a text field: typing sends nothing and the control that sends
+   is gated when pressed). An unnamed control outside any form that submits nothing
+   stays REVERSIBLE_WRITE (a menu, a close box).
+5. **The site-name rule reads site position only.** The label of the registrable domain
+   (>= 4 letters) must be followed, on folded text, by: a locative / ablative / dative
+   suffix with an optional apostrophe (`da de ta te`, the same with `ki`, `dan den tan
+   ten`, `ya ye`); or the word `sitesi…` / `sayfası…`, optionally after `web` /
+   `internet`, the name before it in the genitive or not, apostrophe or not ("trendyol
+   web sitesinde", "Trendyol'un sitesinde", "trendyolun sitesinde"). Added to the
+   card's list: `tan/ten` and `-ki` ("Facebook'tan", "YouTube'daki").
+   **After an apostrophe every case ending is site position; without one, only the
+   endings above.** The apostrophe is what marks the word as a NAME. So, apostrophe
+   required: the accusative `'u 'ü 'ı 'i 'yu 'yü 'yı 'yi` ("YouTube'u aç", "Google'ı
+   aç", "Hepsiburada'yı aç" - the owner's own recorded phrasing, which the first form
+   of this rule refused; found by the inspector), the one-letter dative `'a 'e`
+   ("Google'a"), the genitive `'ın 'in 'un 'ün 'nın …` ("Trendyol'un indirimlerine
+   bak"), and the buffer n of a name ending in its own possessive: `'nde 'nda 'nden
+   'ndan 'ndeki 'ne 'na 'ni 'nı 'nu 'nü` ("Yemeksepeti'nde", "Kitapyurdu'ndan").
+   Without the apostrophe these are the endings every ordinary noun carries:
+   "dünyayı gez", "dünyanın haberleri", "yapay zeka haberlerinde" name no site.
+   The goal and each answer are separate utterances: a name at the end of one and
+   "sitesi" at the start of the next is not a phrase (held by a test).
+6. **The grant is bound to what the control is wired to.** The read-back facts now hold
+   `submits`, `in_form` and `href_host`; `facts_still_hold` compares them. The same name
+   and role rewired between the read-back and the word -> the grant is spent and the
+   owner hears a new read-back that begins "Onayınızdan sonra sayfa değişti; yeniden
+   soruyorum." A read-back stored before these facts existed opens only a control where
+   they are absent now too.
+7. **The read-back says what will be done.** `fill` / `select_option` / `set_checked`
+   now reach it, so it says "bir alana yazacağım" / "bir listeden seçim yapacağım" /
+   "bir kutunun işaretini değiştireceğim" instead of "bir düğmeye basacağım". The value
+   is never said, as it is never logged.
+8. **The non-password sensitive field** needed no code: the gate already hands over on
+   the worker's `sensitive` mark for all three writes. It now has its test, which runs
+   the worker's own `is_sensitive` from its source on a `type=text` field named
+   'Kart numarası'.
+
+### Known limits, written down
+
+* A bare name is not site position: "Trendyol aç" / "YouTube aç" name no site any more.
+  The planner's navigation is refused (`url_not_from_owner_or_page`) and the task fails
+  after three such rounds. If that phrasing matters, it needs its own rule (it cannot be
+  "any word before a verb": "şu haberi aç").
+* The apostrophe-required endings are refused when speech-to-text drops the apostrophe:
+  "youtubeu aç", "yemeksepetinde pizza ara", "trendyolun indirimleri" name no site
+  (tested as such). "yemeksepeti sitesinde" and "youtubeda" work without one.
+* An ordinary noun in the locative is still site position: "listede" and "Adana'da"
+  allow `liste.com` and `adana.com`; and since the apostrophe rule, any proper name in
+  any case does ("Ankara'yı", "Kadir'in" -> `ankara.com`, `kadir.com`), as does "haber
+  sitesi" -> `haber.com`. Navigation only; the destination policy, the deny-list and
+  the per-element gate still apply.
+* Between "X" and "sitesi" only `web` / `internet` may stand: "trendyol alışveriş
+  sitesinde" names `alisveris.com`, not trendyol.
+* A control that was read back as submitting and is rewired into one the rules call
+  FREE is clicked without the comparison: a free step never reaches the grant.
+* The second read-back for a link whose target moved does not name the new host.
+* A text field with a marker in its name ("Yanıtla", "Paylaş") is read back before it is
+  typed into. Over-asking, by the card's rule (name-based, as click).
+* `loop._rebind` says "sayfa değişmiş" when two unnamed controls cannot be told apart;
+  the outcome (no click) is right, the sentence is not exact. `loop.py` is outside this
+  task.
+
+### Not here (for the lead at merge)
+
+* **Next card: "contract v1.8: the ceiling on fill/select/set_checked"** - the worker
+  still performs these three without a ceiling; the Decision already carries it.
+* The retention rule for the last observation in `web_tasks.state_json` (PR-C list).
+
+### Evidence
+
+`tests/unit/test_webtask_gate.py`, `tests/unit/test_webtask_acceptance.py`:
+PROVEN_AUTOMATED. Seven mutations RED, each restored from a backup copy with sha256
+equal before and after. After the inspector's return: ten more on `gate.py` (answers
+joined with a space; accusative off; apostrophe made optional; genitive off, twice;
+`web` / `internet` off; buffer n off; a grant that opens a click only; and the card's
+two - payment for click only, the site rule back to every word), all RED, same restore.
+The confirm path of a HIGH_IMPACT select and checkbox (performed once, `confirmed_by`
+set, planned again -> read back again) is in the acceptance file.
+
+### ADR-0214 addendum 11 (2026-10-02): the cycle reads the store again before every pass, a stale write is one task's, and a task never enters work beside the holder of its files
+
+**What happened.** On 2026-10-01 the owner asked for a fourth worker seat on the Ofis page; the card was put into the
+team's store at 19:40 UTC, first in the queue's order. Four hours later it had not been started, with worker seats idle on
+the page he was looking at. The cycle that was running had begun at 19:31 UTC and `cycle.ps1` read the queue ONCE, at its
+start (`$queue = Read-TeamQueueApi`, one line). A cycle that has work does not end, so nothing written to the store after
+19:31 - the lead's cards, the reset of a return, a decision in the Onay Merkezi, a card the feeder cut - existed for it.
+A test even asserted the defect ("the queue is read once"). ADR-0236 let the owner decide while a cycle runs and said
+"kararınız bir sonraki döngüde uygulanır"; with a cycle that lasts all day that was "tomorrow".
+
+**Decision.**
+1. **Before every pass** (`Sync-Queue`, API mode): the cycle's own changes are written, the queue is read again, checked
+   with `Test-TeamQueue`, and only then adopted with its versions (`Get-TeamQueueApi` + `Set-TeamQueueBaseline`; the old
+   `Read-TeamQueueApi` is the two together). A store that does not answer, or a queue that breaks the protocol at that
+   moment, changes nothing: the pass runs on the copy the cycle has and the report says so once
+   ("kuyruk yeniden okunamadı, döngü elindeki kopyayla sürdü: …"). With files there is one writer - the lock's holder -
+   and nothing is read again.
+2. **A stale write is that one task's, not the cycle's end** (`Save-TeamQueueApi -SkipStale`). Somebody else wrote the
+   task after the cycle read it: the store's version stands, the cycle's write of THAT task is dropped and said in the
+   report ("<id>: depoda başkası değiştirdi; …"), every other task is written, and the next pass reads the store's version.
+   Before, the 409 ended the cycle and the results of the tasks after it in the queue were never written. The feeder and
+   every other caller keep the strict form (no switch: a stale write throws).
+3. **An approved task is not moved into work beside a task that holds its files** (`Get-TeamAreaHolders`: assigned,
+   in_progress, inspecting, returned; the same overlap rule as the split's). It waits ("bekliyor: X -> Y aynı dosyaları
+   bırakınca") and is moved in the pass after the holder leaves. Found on the way: two approved tasks that share a file
+   and no dependency were both moved to `assigned`, which is a queue `Test-TeamQueue` refuses - so the next cycle ran
+   NOTHING ("the queue breaks the protocol"), and with decision 1 the running one would have refused every re-read. The
+   live queue held such a pair on 2026-10-02 (`researcher-every-cycle` and `model-policy-floor`, both waiting only for
+   `cycle-seat-pool`). The same rule holds for a task that comes back from its integrator with a plan.
+
+**Not here.** A pass still starts a batch and waits for all of it (`cycle-seat-pool`): a card that arrives during a
+batch is seen when the batch ends, not when a seat frees. The settings of a running cycle (`-MaxParallel`, the script
+itself) are still those it started with. The feeder still cannot cut cards while a cycle holds the lock (ADR-0237).
+
+**Evidence.** `scripts/tests/team-cycle.tests.ps1`, PROVEN_AUTOMATED (a fake listener with the real routes' rules, which
+now plays a second writer at a known moment: seed `late`): a task that reaches the store while the cycle runs is run by
+that cycle; a decision made in the store between the cycle's read and its write is the store's - one refused write, said
+in the report, the task run in the same cycle; a queue that breaks the protocol mid-cycle changes nothing and is said
+once; an approved task whose files a task in work holds waits and is run after it. Each RED before the change (the first
+two as written; the "read once" assertion turned into "read again before each pass"). Four mutations RED, `cycle.ps1`
+restored from a backup copy with sha256 equal before and after: the re-read removed; the stale write fatal again; a broken
+queue adopted; the holder check removed. PROVEN_REAL is the next real cycle picking up a card stored while it runs.
+
+**Addendum 11 after the inspector's return of `3d52902e` (2026-10-02).** The first form held for the ROW and not for the
+RUN, and three of its claims had no test. What changed:
+
+4. **A task whose write the store refused is not the cycle's until the store is read again** (`$staleIds`). It leaves the
+   pass's runnable tasks at once - the lead stopped a task between the cycle's read and its first save, the write was
+   refused, and a worker was started on the stale copy all the same - and it is not looked at again in any pass before a
+   re-read succeeds. One refused write per change, not one per save.
+5. **When a run ends, the store is asked before the result is applied** (`Test-TaskMovedInStore`: the whole queue is read
+   and NOT judged, so a broken card elsewhere cannot hide this task's stop; the task's `updated_at` is compared with the
+   version the cycle wrote from). If somebody else wrote the task while its run was in flight, the result is NOT applied:
+   no merge, no state, no report entry - the report stays in its file and the report of the cycle names it. The merge into
+   the integration branch used to run BEFORE the write the store then refused: a task the lead stopped while its inspector
+   ran was merged, and the lead gates and merges that branch. What the run said about a MODEL's limit is still registered.
+   **The price, accepted:** a card the lead edits while its worker runs loses that run - the worker is started again from
+   the store's version (the edit may have changed what is asked). An edit to a running task costs one run.
+   A store that does not answer at that moment says nothing: the result is applied and its write fails as before.
+6. **One area rule.** `Test-TeamQueue` compared areas with its own key and disagreed with `Get-TeamAreaHolders` on 4 of 17
+   pairs - in the dangerous direction: the cycle moved the task and the judge refused the queue it had made. Both now use
+   `Get-TeamAreaKey` / `Test-TeamAreasOverlap`, the split's rule. An area that is the whole repository (`*`, `.`, `./`)
+   is refused as an area: compared by one key it held every task out of work, by the other none. (The server's schema
+   still accepts any non-empty string: the protocol's meaning is judged by the cycle, as the path rule beside it is.)
+7. **Only a 409 is "somebody else's"**: any other answer to a task's write still ends the cycle (held by a test now).
+8. **The researcher's ideas reach the store with their text** (`Send-TeamProposalApi` after the idea is queued; a failed
+   post is a line in the report, not a stop). ADR-0236 gave the store the place and the page the "Detay"; nothing posted
+   the text, and on 2026-10-02 two ideas waited for the owner with `proposal_text` of 0 characters (posted by hand).
+
+**Evidence, second form.** Thirteen tests in `scripts/tests/team-cycle.tests.ps1` (the fake listener's second writer now
+also acts "when the live status names run X", and the store can be broken on purpose: `faults`): the four of the first
+form; a refused move is not run (RED before); a stop during the inspection is not merged (RED before); a card edited
+during the worker's run; only a 409 is skipped; a store that stops answering; an idea's text is posted (RED before); a
+returned task and an inspecting task hold their files - proven by WHAT WAS IN FLIGHT during each run (the status
+snapshot), because the order of the starts is the same when the second worker starts beside the first's inspector; the
+holder rule after the integrator; the two area rules agree on fourteen pairs and refuse five spellings of "everything"
+(RED before). Thirteen mutations, the inspector's three survivors among them, each restored from a backup copy with
+sha256 equal: all RED.
+
+**Addendum 11 after the inspector's second return, of `3d1be9fc` (2026-10-02).** Five findings; the second form's
+reasoning about the endless pass was wrong.
+
+9. **Each applied result is written at once**, not when the batch's last run ends. The store was asked when a run ended
+   and the merge was made, but nothing was written until every run of the batch had ended: with six seats the window in
+   which a stop could arrive unseen was the rest of the batch. It is now what lies between this task's look at the store
+   and its own write - the merge, seconds. A merge the store then refuses is **named** in the report
+   ("X: entegrasyon dalına (integrate/…) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti … lead geri alır ya da işi yeniden
+   açar"): the cycle does not take a merge back by itself, and the lead gates that branch.
+10. **A pass that only had refused moves is bounded.** The second form said a stale task is skipped at the top of the
+    pass, so the pass cannot move it again. False: a good re-read clears the stale set (rightly), and a store that refuses
+    the same write after every read then made the pass go round without end - 13 578 reads in 100 seconds on the fake,
+    past the stop flag and the caps, the lock held (the inspector's PROBE-N). Three passes in a row that moved a state,
+    started nothing and had a write refused end the task loop with a line ("depo aynı yazmayı üst üste reddetti (…)");
+    ten such passes of any kind, or a cap or the stop flag, end it too. The real routes keep row and document versions
+    equal, so this is not reachable today; it is bounded because a held lock and 270 requests a second are not a price
+    to learn it at.
+11. **A dropped run is not a try.** The run whose result was not applied (decision 5) is handed back to
+    `-MaxRunsPerTask`, as a usage-limited run is: with the cap at 2 an edited card was stopped by the cycle itself and
+    never inspected. So "an edit costs one run" is the whole price.
+12. **Every waiting idea's text is posted in every cycle**, whether a researcher ran or not (the route keeps or replaces).
+    The second form posted only the ideas queued in that run: one failed POST and the idea stayed without its text for
+    ever - the incident this was written for. A failed POST is a line in the report, never a stop.
+13. The exemption for `POST /v1/team/queue/proposals` in `test_team_state.py` ("served before its caller lands") is
+    gone: the client calls it. The card `researcher-every-cycle` no longer has that step to do.
+
+**Evidence, third form.** Twenty tests for this addendum in `scripts/tests/team-cycle.tests.ps1` (seven new: the order
+of reads and writes of two inspections in one batch; the merge named when the stop lands between the look and the
+write; the store that refuses for ever - the cycle ends after four reads; a stale task not looked at while re-reads fail;
+a task taken out of the store during its inspection; a dropped run that came back limited - the limit registered, the
+try handed back; the idea whose POST failed posted by the next cycle). The fake listener's second writer can now wait
+for the cycle's own look at the store, take a task out, and fail a proposal's POST a given number of times.
+Twenty-two mutations, each restored from a backup copy with sha256 equal - the inspector's survivors of both passes
+(M1, M2, M5, N1, N2, N8, N10) among them: all RED.
+
+**Addendum 11 after the inspector's third return, of `91c70543` (2026-10-02).** Three findings, two of them things the
+third form itself had opened.
+
+14. **A write made while runs are in flight never ends the cycle** (`Save-QueueNow`: the write after the starts, and the
+    write of each applied result). The third form wrote each result at once - and one 503 at that moment ended the cycle
+    with the other run still working: both tasks left `in_progress`, the lock released, the finished worker's result
+    lost, and the next tick free to start workers in the same worktrees. The form before it had lived through the same
+    outage, because it wrote only when nothing was in flight. Now such a write that fails (anything but the 409, which
+    is somebody else's word and handled as before) is a line in the report, and the batch's LAST write - made when
+    nothing is in flight - is the strict one that writes what is pending.
+15. **A refused fresh merge is taken back; a merge that cannot be is named** (`Undo-TeamMerge`, the inspector's own
+    suggestion). When the store refuses "merged" right after the merge this iteration made, that merge is still the
+    integration branch's last commit: checked (HEAD has two parents, the second is the task branch's tip, the worktree
+    is clean) and then reset to its first parent - a reset, not a revert, so the branch can be merged again later and
+    "already merged" never answers for content that is gone. NOT taken back: a branch that was already on the
+    integration branch (that commit is not this run's), and a merge whose write had to wait for the batch's end and
+    was refused there (other merges may stand on it) - those are named, for the lead.
+16. **Dropped runs are bounded: three per task per cycle.** Decision 11 handed the try of a dropped run back, and
+    nothing else then bounded a store that takes the move and refuses every later write: 133 paid worker runs in 61
+    seconds on the fake, with no budget cap. After three runs of a task whose result could not be applied the cycle
+    starts nothing more for it and says so; it does not write the task (it is not the cycle's).
+17. **One bound on idle passes, with its line.** Three passes in a row that moved a state and started nothing end the
+    task loop, whatever the reason, and the report says so. (Nothing is runnable in such a pass, so nothing is lost. The
+    separate bound of ten passes, which ended the cycle without a word and had no test, is gone.)
+18. **An idea's file is a file OF `team/proposals`**: the card's `proposal` must be exactly `team/proposals/<name>.md`,
+    and the file is read from the proposals folder of `-TeamRoot`. A card naming a plan, a source file or a path that
+    climbs out is not posted. Known and left: this PC's file replaces the store's text in every cycle (one PC runs
+    cycles); the real route refuses more than 200 000 characters and an upper-case name, which is then a line in every
+    cycle's report until the file is fixed.
+
+**Evidence, fourth form.** Twenty-eight tests for this addendum (eight new: the outage in the middle of a batch; the
+outage as a run starts; the refused fresh merge taken back; the "already there" branch not taken back; `Undo-TeamMerge`
+by itself - an older merge, a dirty tree, a plain commit, and merging again after it; the merge named when its write
+could only be tried at the batch's end; three dropped runs and no fourth; only a file of `team/proposals`, for a
+proposed idea as for a waiting one). Thirty-two mutations, each restored from a backup copy with sha256 equal.
+
+19. **The harness's own race, found as a test of this addendum that failed one run in three on a loaded machine.**
+    The fakes of one batch appended to the suite's call log with `Add-Content`; two that started in the same instant
+    met on the file, the second died on the sharing violation before it did anything, the cycle counted a failed run
+    and ran the task again - one run more than the test expected and no line for the one that died. Not the product:
+    the cycle did what it does with a failed run. But a gate-only failure is a defect until it is explained, and this
+    one could turn any test with two runs in a batch red. `scripts/tests/lib/fake-claude.ps1` now opens the log for
+    append with a retry (a writer waits for the other, it does not die), held by a test that keeps the log open while a
+    fake writes (the mutation that lets it die again is RED). Suite: 173 tests.
+
+**Addendum 11 after the inspector's fourth return, of `3ce11180` (2026-10-02).** Three narrow findings, the first
+against decision 15's own guarantee.
+
+20. **A refusal is known the moment it happens, not at the end of the save.** `Save-TeamQueueApi -SkipStale` returned the
+    refused ids when it finished; a save that was refused one task and then FAILED on another threw first, and
+    `Save-QueueNow` swallowed the throw - so the stopped task's merge stayed on the integration branch, neither taken
+    back nor named. The store object now keeps the refusals as they happen (`Refused`), and the cycle reads them in a
+    `finally`.
+21. **After a refused write the cycle's own copy goes back to what it was before that result** (`Restore-TaskCopy`).
+    The merge was taken back, and the copy still said `merged`: when the store could not be read again (a broken card
+    elsewhere), the report listed the task as merged and sent the lead to gate a branch that did not hold the work. The
+    put-back copy is noted as written, so it is not sent.
+22. The idle bound's line says what happened: "depo aynı yazmayı üst üste reddetti (…)" only when something was
+    refused; otherwise that three passes in a row only moved a state.
+
+**Known and left, said so.** (a) "Three dropped runs" is per CYCLE: a store that refuses for ever costs three runs in
+every cycle, with its line in every report - a mark in the store is impossible by construction (the store refuses the
+cycle's writes), and a local file would bound it across cycles; not built. (b) A store that is away from a batch's
+start to its end still ends the cycle at the batch's last, strict write: exit 1, the lock released, no report file
+(its lines are lost), and the next cycle repeats one run - as before this addendum. (c) This PC's proposal file
+replaces the store's text in every cycle; one PC runs cycles.
+
+**Evidence, fifth form.** Thirty-one tests for this addendum (three new: a refusal and a failure in one save; the report
+after a merge that was taken back when the store cannot be read again; an idea's file from a `-TeamRoot` elsewhere).
+Thirty-five mutations plus the fake's, each restored from a backup copy with sha256 equal. The inspector's own
+experiment on the harness race: two fakes started together on one log, forty rounds - 29 died with the old fake, none
+with the new.
+
+**Addendum 11, approved (2026-10-02).** The independent inspector approved `dbacc280` on its FIFTH pass (four returns:
+six, five, three and three findings - every one real, two of them opened by the fix of the pass before). Its last pass
+also ran the cycle against the REAL routes (`app/team/routes.py` with the real `DbStore`, over SQLite on a local port):
+a stop written through the real PUT while an inspector runs is not merged, and the report says so (PROVEN_PROXY).
+After the approval, tests only: the two shapes it named are in the suite - the refusal acted on in the SAME iteration
+when the save then fails on another task (the merge is taken back, not only named), and the copy put back at the
+batch's end when the store cannot be read again - each held by a mutation that is RED (no `finally`; no put-back at
+the batch's end). Suite: 177.
+
+**Known and left, (d).** A lost ANSWER raises a false alarm: the store applies the cycle's "merged" and answers 503;
+the batch's last write is then refused against the cycle's own earlier write. Nothing is reset or re-run and the
+store and the branch are right - but the report says "depoda başkası değiştirdi" and "lead geri alır ya da işi
+yeniden açar" of a task nobody else touched. The lead reads the store before acting on that line.
+
+What is still `NOT_RUN`: the full gate on the integration branch, and a real cycle on the Cloud Core picking up a card
+stored while it runs - the PROVEN_REAL this addendum is for.
+
+## ADR-0241 — The Ofis counts runs, not seats: four worker seats (more when the cycle runs more), every run of a seat, and the voice says the same number (2026-10-02)
+
+The owner, 2026-10-01, looking at the page during a cycle: "4. çalışan koltuğunu da sayfaya ekle" - four workers ran
+and three had a desk; three inspections were "1/6". The worker's text (`team/plans/office-worker-seats-adr.md`) follows;
+the lead's wiring is at the end.
+
+Tarih: 2026-10-02 · Görev: `office-worker-seats` · Durum: önerildi (worker)
+
+### Bağlam
+
+Sahip, 2026-10-01: döngü DÖRT çalışan + bir denetim koşarken `/core/office` üç çalışan koltuğu
+gösterdi (dördüncü koşu hiçbir yerde yoktu) ve üst çubuk beş koşu varken `koşan ajan 4/6` dedi.
+Aynı akşam üç denetleyici koşusu TEK çalışan denetleyici ve `1/6` olarak göründü. Sebep tek:
+`office_view` sekiz sabit koltuğu sayıyordu, koşuları değil; rol başına ilk koşu dışındakiler
+ve dördüncü çalışandan sonrası sessizce atılıyordu.
+
+### Karar
+
+1. **Koltuklar veriden gelir.** Çalışan koltukları `worker-1..N`, `N = max(4, canlı çalışan
+   koşusu)`. Sıra değişmez: lead, researcher, integrator, worker-1..N, inspector, owner. Dört
+   koltuk her zaman vardır; beşinci ve altıncı (ve gerekirse fazlası) döngü o kadar koşarsa.
+   Bir koşu asla koltuksuz kalmaz - üst sınır yoktur, sınırı döngünün kendi yuva sayısı koyar.
+2. **`running_agents` canlı KOŞU sayısıdır** (koltuğa oturan her koşu), çalışan koltuk sayısı
+   değil. `capacity = max(6, running_agents)`: döngü kendi yuva sayısını bildirene kadar sayı
+   kapasiteyi aşamaz (`7/6` hiç yazılmaz).
+3. **Her koltuk `runs` taşır**: o koltuğun canlı koşuları, başlangıç sırasıyla, her biri
+   `{task_id, task_title, since}`. Çalışan koltuğunda en çok bir tane; lead / researcher /
+   integrator / inspector koltuğunda o rolün HER canlı koşusu. Koltuğun kendi `task_id` /
+   `task_title` / `since` alanları İLK koşunundur: eski okuyucular (sesli özet dahil) bozulmaz.
+   Canlı koşusu olmayan koltukta `runs` boştur; bekliyor / döndü kuralları aynı kalır ve
+   "döndü" kuralı boş çalışan koltuklarını bugünkü gibi sırayla doldurur (artık dördüncüye kadar).
+4. **Sayfa gönderileni çizer.** Sayfada sekizlik sabit liste yok: koltuk adı kimlik deseninden
+   çıkar (`worker-<n>` -> `Çalışan <n>`, bilinen beş rol kendi adı). Tanınmayan bir koltuk
+   kimliği, başında kimse olmayan düz bir masa olarak ve kimliğiyle çizilir; sayfa çökmez.
+   `SeatId` artık `string`, `runs` tipte isteğe bağlı (eski API cevabı eskisi gibi çizilir).
+5. **Birden çok koşusu olan koltuk** `çalışıyor ×3` rozetini (hareket tercihi ne olursa olsun)
+   ve ilk işin başlığını gösterir; `aria-label` "…, çalışıyor, 3 koşu" der. Sağ panel önce
+   "Koşan işler (3)" listesini (başlık · saat), altında ilk işin kartını ve raporunu gösterir.
+   Tek koşulu koltukta liste ve rozet yoktur - bugünkü görünüm.
+6. Üst çubuk `running_agents` / `capacity` değerlerini API'den okur (zaten öyleydi; artık
+   testle kilitli: sayfa koltuk saymaya dönerse kırmızı).
+
+### Sonuçlar
+
+- Dokuz koltuk, office-page-polish'in ızgarasında 4+4+1 dizilir (sahip tek başına üçüncü
+  satırda); altı çalışanla 4+4+3. Izgaraya dokunulmadı.
+- `model-policy-api` ve `model-policy-office-ui` bu şeklin üstüne kurulur: koşu başına bilgi
+  `runs[i]`'ye, koltuk başına bilgi koltuğa eklenir.
+- **Alan dışı, lead için:** `app/team/speech.py` (sesli özet) hâlâ çalışan KOLTUKLARI sayıyor
+  ("altı kişiden bir çalışan" - üç denetim koşarken). `cycle.running_agents` okumalı; ayrı kart.
+- Durum şeması (`StatusRequest`) yuva sayısı taşımıyor; taşıdığında `capacity` ondan okunur.
+
+### Reddedilenler
+
+- *Rol koltuklarını da çoğaltmak (inspector-1..3):* sıra sözleşmesini ve sayfanın yerleşimini
+  bozar; görev kartı tek koltuk + `runs` istedi.
+- *Çalışan koltuklarını altıda sabitlemek:* boş ofiste iki ölü masa; yedinci koşu yine kaybolur.
+
+### The lead's wiring (integration d20261002, first)
+
+The inspector found, by a direct call, that the voice and the page now DISAGREED: `app/team/speech.py` ("ekip ne
+yapıyor?") still counted working SEATS - three inspections were "3/6" on the page and "bir çalışan" aloud; five workers
+and two inspectors were "7/7" and "altı çalışan". The module's own promise is that the two never disagree, and the file
+was outside the card's area. Closed at merge: the paragraph says `cycle.running_agents` (the seats' own `runs` for a
+view that does not carry the number), and the titles are those of every run, not of every seat.
+`tests/unit/test_team_speech.py`: three tests, two RED before. The two web tests the inspector saw fail once each under
+load (`tests/voice/latency.test.ts`, `tests/voice/store.test.tsx`) are outside this work and are carded.
+
+## ADR-0242 — STT engine comparison: the instrument is built, there is nothing to measure yet (2026-10-02)
+
+**Status.** The INSTRUMENT is delivered (worker, cycle d20261001). **No number exists**: the
+repository and this machine hold zero recordings of the owner's speech (plan §4), so nothing was
+sent to any engine and no WER is claimed. MEASUREMENT ONLY (owner, 2026-10-01): nothing is adopted,
+no default changed, no provider registered, no `Settings` field added, no dependency added, no
+account opened.
+
+**Context.** The owner approved measuring "the existing STT recordings on three engines, compared
+by numbers; adoption and opening an account are separate approvals". The integrator's plan
+(`team/plans/stt-engines-measure-integration.md`) read Soniox's terms (no training on customer
+content; real-time requests not stored; US processing by default, DPA unread without an account)
+and found that the "existing recordings" are 22 text labels and one recorded confusion - no audio.
+
+**Decision.**
+- `app/voice/stt_compare.py`: a folder of WAV files + `manifest.json` (file, reference,
+  recorded_where) → one report. Engines are rows keyed by their OWN label (`openai:gpt-4o-transcribe`,
+  `openai:whisper-1`, `soniox:stt-rt-v5`, `azure:tr-TR`, `faster-whisper:large-v3-turbo`,
+  `chrome-web-speech`), never by `provider.name` (two OpenAI models share one). An engine that
+  cannot run stays in the table as `NOT_RUN` with the reason (`not configured`, `not installed`,
+  `no file input`, `not selected`, `no usable recording`); one that fails every file is `FAILED`,
+  not a rate of 0; one that fails some files keeps its row with both counts.
+- **Rates are pooled** (Σ edits / Σ reference words or letters) - the number to rank by; the mean
+  of the per-sentence rates is reported beside it (`mean_sentence_wer`), since
+  `benchmark.run_stt_benchmark` reports that one. `levenshtein`, `word_error_rate` and
+  `char_error_rate` are `benchmark.py`'s own; `benchmark.py` is unchanged.
+- **Normalisation** (`normalize_for_compare`): `intents.turkish_casefold` (I→ı, İ→i), apostrophes
+  dropped (`Iğdır'ın` = `Iğdırın`), other punctuation to a space. Numbers stay as spoken ("7" vs
+  "yedi" is an error) and Turkish letters are kept (ı/i, ü/u are the errors being measured) - so
+  neither `normalize_transcript` nor `loopback.normalize_for_comparison` is used.
+- **"Intent change" is a signature, not `.intent`.** The acceptance pair ("Ofis bilgisayarımdan
+  hesap makinesini aç" / "Ofisü bilgisayarında hesap makinesini açın") resolves to `app_open` /
+  `calc` on both sides; what differs is the device named. The signature is: every `ResolvedIntent`
+  field a tool acts on (all fields except `normalized_text`, `tokens`, `fillers_removed`,
+  `confidence`, `matched`, `route_repair`, `band`, `candidates`) + the device aliases from
+  `spoken_device.resolve_without_device_phrase`, string values compared in normalised form. One
+  exception found by test: `reference` is filled for EVERY utterance with the sentence's content
+  words and made every misheard word an "intent change" ("aç"→"açın" counted); it is compared only
+  when `research_class` is set. The transcript is read as heard, not through the ADR-0224 repair
+  layer: the number is what the engine did.
+- `app/voice/providers_soniox.py`: `SonioxSTTProvider` over `websockets.sync.client` (already
+  locked; no vendor SDK). Real-time endpoint only, `audio_format: auto`, `language_hints`, no
+  `client_reference_id`. The key travels in the first frame, so with no key or no audio the socket
+  is never opened; the key is never in the URL, and a vendor error message is scrubbed of it.
+  Every `recv` has a timeout. Exercised against a fake server only.
+- `scripts/voice/stt-compare.ps1 -Folder <dir>`: no manifest → writes `manifest.template.json`
+  (the twenty sentences) and stops; otherwise loads the keys that exist in the DPAPI store into
+  the child's environment, runs, writes `docs/evidence/stt-compare-<date>.json` and a `.md`
+  summary (Turkish, numbers and engine names only), clears the keys. A same-day rerun gets a
+  timestamped name; evidence is never overwritten.
+- **Writes:** the comparison writes exactly the output file it is given; no transcript is printed.
+  A manifest entry that resolves outside the folder is refused.
+
+**Choices the lead may reverse.**
+- No `-LocalWhisper` switch: installing faster-whisper and a 1.6 GB download on the home PC was
+  left as a lead decision and is not in the card's acceptance. The row exists and reads
+  `not installed`; if the package is ever importable it runs with `large-v3-turbo`, CPU `int8`.
+- An Azure row was added (the adapter and its setting already exist; it reads `not configured`).
+- WAV only. Another container is skipped per file (`unsupported container`), never sent.
+- Latency is wall time per file sent in one go - processing time, not first-token latency.
+
+**Not done / owner.** READY_FOR_OWNER: twenty WAV recordings (PCM 16-bit, mono, 16 kHz) of the
+template's sentences - Windows Voice Recorder writes `.m4a`, so how they are recorded without the
+owner becoming an operator is an open follow-up (a `-Record` mode through the companion's capture).
+By a SEPARATE approval: a Soniox account (ask for the EU region, read the DPA in the Console),
+then `scripts\secret-store.ps1 -Set PAGENTOS_VOICE_SONIOX_API_KEY`. Unverified against the real
+service: the model name `stt-rt-v5` and the wire format (read from the documentation only).
+
+**Addendum (cycle d20261002, after the inspector's return).**
+- **A file's failure is the file's, whatever is raised.** `run_comparison` caught only `VoiceError`;
+  a `RuntimeError` from one engine (a model that will not load, a 200 body that is not JSON) ended
+  the run with no report, after earlier engines had received the audio. Now any exception in
+  transcribing or scoring one file is that file's error (`unexpected: <ExceptionType>` - the type
+  only, never the message, which can carry a path, a key or a transcript); the row keeps both
+  counts, an engine that raises on every file is `FAILED` and is still named in `audio_sent_to`.
+- **The report's place is settled before any engine is called.** `main` takes `--out` exclusively
+  (`open("x")`) first: a missing or unwritable folder and an existing file are both exit 2 with
+  nothing sent, and two runs that chose one name cannot both hold it. The held name is given back
+  (deleted) when the run ends in bad input, so no empty "report" is left. Consequence: `--out`
+  must not exist - the CLI never overwrites.
+- **The script finds a free name:** the day's, then the second's, then `-2`, `-3`, ...; the `.md`
+  beside it is checked too.
+- A manifest saved with a UTF-8 BOM (PowerShell 5.1, Notepad) is held by a test.
+- **Left for the lead to accept or queue (inspector Pass 2, items 4-8), not changed here:**
+  `--write-template` overwrites an edited `manifest.template.json`; WAV is checked by header only
+  (PCM 16-bit / mono / 16 kHz not validated, a truncated stub counts with `audio_ms` 0); a spelling
+  variant in a research sentence (`zeka`→`zekâ`) counts as an intent change; the faster-whisper row
+  would download to the default Hugging Face cache on C: if the package became importable;
+  `--soniox-url` accepts any host, `ws://` included.
+
+**Rollback.** Additive and unwired: delete the two modules, the two test files and the script.
+
+**The lead's reading at merge.** The owner approved the MEASUREMENT only (2026-10-01); an account with a new provider,
+and his recordings leaving for it, are a separate approval. Nothing here calls Soniox: its adapter is exercised against
+a fake server, and without a key the script refuses that engine. What is missing is the material - twenty recordings
+of the owner's own sentences: `READY_FOR_OWNER`.
+
+The first gate of this integration (`b35c6ddb`) was RED on one test, `test_every_error_class_has_turkish`: the comparison's
+per-file failure class `unexpected` (`ERROR_UNEXPECTED`, added in the task's last round) had no Turkish sentence in
+`app/errors/catalog.py`. The guard reads every `ERROR_*` constant of the application; neither the worker nor the inspector
+ran the full unit suite (both said so: `NOT_RUN`, "the lead's gate runs them"), and the gate did. Added at merge.
+
+## ADR-0243 — Postgres coverage debt, first slice: how a table leaves the baseline (2026-10-02)
+
+Status: proposed by worker `postgres-coverage-debt`; the lead numbers it at merge. Extends
+ADR-0214 addendum 4 (a database change only SQLite has seen does not pass the gate).
+
+### Decision
+
+A table leaves `UNEXERCISED_BASELINE` when a test under `tests/integration` writes it on the
+dev stack's PostgreSQL **through the production function that writes it**, with the four
+values SQLite forgives. Naming the table is what the ratchet can check; these are what the
+test must actually do, and what the eight tables of this slice now have:
+
+| Edge | How it is taken to PostgreSQL |
+|---|---|
+| longest string the surface allows | written through the service at exactly that length, in Turkish letters (two bytes each in UTF-8, so a byte-counted column or validation would fail) |
+| one character more | sent to the surface that claims the refusal (REST → 422, a service's typed error); the test then proves no row was written |
+| JSONB | one nested document with Turkish keys and values, a null, a boolean, a float and a list inside an object inside a list; read back through a fresh session and compared whole |
+| timestamp | aware and not UTC (Europe/Istanbul); compared as an instant and asserted aware on the way back |
+| NULL | every nullable column asserted `None` on a row the production path leaves that way |
+
+Per table, the production writer the test goes through:
+
+| Table | Writer |
+|---|---|
+| `memory_versions` | `service.remember_explicit`, `service.edit_memory`, `PATCH /v1/memory/{id}`, `POST /v1/memory/remember` |
+| `memory_evidence` | `service.record_observation` (→ `lifecycle.add_evidence`) |
+| `memory_audit_events` | `lifecycle.record_audit` via `service.record_observation` / `remember_explicit`, `lifecycle.reindex_missing`, `POST /v1/memory/remember`, the `memory.remember` voice tool |
+| `entities` | `service.create_entity`, `graph.sync_from_events`, `POST /v1/memory/entities` |
+| `entity_edges` | `service.create_edge`, `graph.sync_from_events`, `POST /v1/memory/edges` |
+| `routines` | `routines_service.create_routine` / `pause_routine` / `resume_routine` / `cancel_routine`, `evaluate_due` (the condition edge), `POST /v1/routines`, the `routine.create` / `routine.pause` voice tools |
+| `routine_firings` | `routines_service.evaluate_due` |
+| `wake_alarms` | `alarms_service.create_alarm`, `reconcile_local_fired`, `snooze_alarm`, `cancel_alarm`, `POST /v1/alarms`; and the cloud ring: `alarms_service.tick` (arm, greeting) → `routines_service.evaluate_due` → `ActionDispatcher` → `WakeAlarmRunner.fire` → `fire_alarm` → `WakeSequence.fire` / `speak_greeting`, then `stop_alarm` |
+
+The cloud ring is run with the production dispatcher, runner and wake sequence as `app.main`
+wires them (the runner in its own session); only the device port and the TTS provider are
+fakes. It is what writes `armed_at`, `last_firing_id`, `media_session_id`, `greeting_due_at`
+and `greeted_at`, which the device-local path only ever leaves NULL.
+
+### Rules the next slice should keep
+
+1. **A found defect is a strict xfail that names its exception.** `xfail(strict=True,
+   raises=DataError, reason="<the PostgreSQL error>")`: a different failure is a real failure,
+   and the fix turns the marker into an XPASS that fails the run until it is removed. The
+   assertion accepts either honest answer (a refusal in the surface's own words, or a stored
+   value that fits) so the test does not choose the fix.
+2. **Do not name a table you are not paying for.** The ratchet matches table and model names
+   as words anywhere under `tests/integration`. `graph.sync_from_events` is fed plain objects
+   with the four attributes it reads, and the alarm history is read through
+   `app.alarms.history`, so the ledger's table is not "covered" by a file that never tests it.
+   The baseline lost exactly the eight tables of this slice (51 → 43).
+3. **The engine is never run over a routine the test did not create; the year is not what
+   guarantees that.** `evaluate_due` has no filter: it takes every armed routine in the
+   database. A `now` in 2001 keeps it off exactly one kind, an `at` trigger in the future.
+   It does NOT protect the others: `check_schedule_due` compares the weekday and the wall
+   clock and never the year, so a 2001 instant DOES fire any armed schedule routine whose
+   weekday and time match (measured on PostgreSQL: `weekdays=[2]`, 07:30 Europe/Istanbul,
+   evaluated at 2001-09-12 07:30:20 → `('triggered', '2001-09-12')`); a presence trigger
+   does not read `now`; a condition trigger answers to the context the test passes. With the
+   production dispatcher that is a developer's own alarm driven to PLAYING by a test.
+   So every `evaluate_due` and every alarm `tick` in the file goes through a wrapper that
+   first reads the armed routines and **fails the test** (`pytest.fail`, naming the rows) if
+   one exists that the test did not create - by id, by its `pgcov-<token>` name, or by the
+   `alarm:<id>` source_ref of an alarm it made. The comparison is done in Python: `NOT
+   (source_ref LIKE …)` is NULL for a NULL `source_ref`, and that row would pass a SQL guard.
+   A test proves the guard on a weekday routine seen from a test that does not own it.
+   What 2001 is still for: an alarm "rung" in 2001 starts a display holdoff that ended long
+   ago, and `alarms_service.tick` moves no foreign alarm (it arms what is within twelve hours
+   of `now`, greets and completes by stored instants; by reading, not probed).
+   Limits, stated: the guard and the engine are two statements, not one transaction - the
+   suite's advisory lock keeps other pytest runs out, a live API on the same database is not
+   kept out (conftest warns). And the 10-second routine clock of an open application object
+   runs with the REAL `now` and is not guarded: no test leaves a routine armed while one is
+   open, except with a trigger in 2099.
+4. **Rows go when the test ends; the append-only ones stay.** Memories are forgotten through
+   `service.forget_memory`; entities, routines and alarms have no production delete and are
+   removed by the fixture (their children by the tables' own ON DELETE CASCADE, which only
+   PostgreSQL enforces — a missing cascade fails the teardown). Memory audit rows and ledger
+   rows are left, as production leaves them.
+5. **A client gives its connections back.** `create_app` builds a pool per runtime and the
+   application disposes none, so each `owner_client` left about four connections open until
+   the process ended. Both files open their clients through a local `_client` that listens
+   for the engines that connect while it is open and disposes them on exit (the suite's
+   shared identity runtime excepted). Measured on the two files, idle baseline 43: peak 125
+   without the disposal, 54 with it. The helper is duplicated in the two files because
+   `tests/integration/conftest.py` is outside this task's area; it belongs there, in
+   `owner_client` itself, where it would also relieve the rest of the suite (289 of 300
+   without this branch) - for the lead to queue.
+
+### Defects found (not fixed here; each has a strict-xfail test with the error quoted)
+
+| # | Where | What PostgreSQL said |
+|---|---|---|
+| 1 | `POST /v1/routines`: `source` has no `max_length`, the column is VARCHAR(32) | `StringDataRightTruncation: value too long for type character varying(32)` → 500 |
+| 2 | `routine.create` voice tool passes the model's `name` unbounded; VARCHAR(200) | `... character varying(200)` |
+| 3 | `routine.pause` / `routine.cancel` voice tools pass `reason` unbounded; VARCHAR(500) | `... character varying(500)` |
+| 4 | `evaluate_due`: `skip_reason` is every unmet condition joined, unbounded; VARCHAR(500). The exception leaves the tick, so every routine after it in that pass is not evaluated | `... character varying(500)` on `INSERT INTO routine_firings` |
+| 5 | `alarms_service.cancel_alarm` with a reason of 189+ characters (REST allows 200; measured: 188 passes, 189 raises): the `alarm.cleaned_up` ledger row's `source_ref` embeds the reason and is VARCHAR(256); `_record_ledger`'s handler then reads `alarm.id` on the rolled-back session | `... character varying(256)`, then `PendingRollbackError` out of a function documented "never fails the caller"; alarm already CANCELLED, caller gets 500, cleanup row never written |
+| 6 | `POST /v1/memory/entities` with U+0000 in `name` or inside `attrs` | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes`; `UntranslatableCharacter: unsupported Unicode escape sequence` → 500 |
+| 7 | `POST /v1/routines` with U+0000 in `name` | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes` → 500 |
+| 8 | `memory.remember` voice tool bounds the statement (500) and passes the model's `key` unbounded (`tools_memory.py`, the tool's schema names no length); `memories.key` and `memory_audit_events.key` are VARCHAR(256). Driven through the tool handler itself | `StringDataRightTruncation: value too long for type character varying(256)` on `INSERT INTO memories` |
+| 9 | `POST /v1/memory/remember` with U+0000 in `text` (what `memories.text` and `memory_versions.text` store) | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes` on `INSERT INTO memories` → 500 |
+| 10 | `POST /v1/alarms` with U+0000 in `label` | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes` on `INSERT INTO wake_alarms` → 500 |
+
+Defect 5 probably generalises: `app.alarms.service._record_ledger` logs an ORM attribute in its
+`except` branch without rolling the session back first, so any ledger write PostgreSQL refuses
+turns "the ledger is evidence, not a dependency" into an exception in the caller (measured for
+the alarm path only, with and without a wake sequence: 188 passes and 200 raises either way).
+`app.routines.service._record_ledger` has the same shape by reading; it was NOT run. Because
+of defect 5, `terminal_reason` (VARCHAR(200)) is proven by a passing test at 188 characters
+only; 189–200 is the strict-xfail test.
+
+Defects 6, 7, 9 and 10 are one class: no surface strips or refuses U+0000. Five fields of
+four in-slice POST bodies were probed and every one answers 500 (entity `name` and `attrs`,
+routine `name`, remembered `text`, alarm `label`).
+NOT_RUN for this class: the other text and JSONB fields of the same bodies (memory `key`,
+`value`, `source`; `PATCH /v1/memory/{id}`; edge `relation`; routine `source_ref`,
+`detail_json`, reasons; alarm `greeting_text`, `media`, cancel `reason`), the voice tools,
+and every table outside this slice. The fix belongs at one place in front of all of them,
+not per field.
+
+### Unpaid in this slice's tables (for the lead to queue)
+
+`wake_alarms` paths no integration test takes yet, each with writes PostgreSQL has not seen:
+
+- the ring that fails (`WakeSequence.fire` → FAILED): `terminal_reason` cut to exactly 200
+  from the device's own messages, `events.alarm_failed`'s notification;
+- the tone fallback after a media failure (`detail_json.media_failure_reason`) and the
+  stand-down when the device already rang (`local_fallback_already_rang`);
+- a recurring alarm's release and catch-up (`_release` re-scheduling, `_catch_up_recurring`),
+  `complete_alarm` at `max_play_seconds`, and `reconcile_local_snoozed`;
+- a greeting that cannot be spoken (`detail_json.greeting_failure`, delivered as text).
+
+`wake_alarms.device_id` has no writer in `app/` at all: it is NULL in every row production
+can make, which is what the tests assert. `media_session_id` is VARCHAR(128) and the only
+value production writes is `alarm-<id>`, 42 characters; that is the value tested.
+
+**The lead's note at merge.** The inspector APPROVED this on its third pass; the cycle recorded "no verdict" and
+stopped the task, because the inspector's last message was a closing sentence after a waiter's notification
+("... the verdict remains `APPROVE`."). The branch was merged by the lead from the report itself; the parser and the
+inspector's rule are ADR-0214 addendum 12.
+
+## ADR-0244 — The narrative can tell the failures only; the explain source uses the model narrator with the CALLER's provider - plumbing, not yet the owner's sentence (2026-10-02)
+
+Bağlam: ADR-0216/0221/0230 toplayıcıyı, kural anlatıcıyı, denetçiyi ve `ModelNarrator`'ı yazdı.
+`LedgerEvidenceSource.narrative` yalnız kural anlatıcıyı çağırıyordu ve `NarrativeAsk.failures_only`
+taşınıyor ama uygulanmıyordu: anlatıya ulaşan başarısızlık sorusuna tamamlanan her alan da okunuyordu.
+
+Karar:
+1. `facts.only_failures(facts)` saf bir daraltmadır: `completed=()`, sayımlar yalnız başarısız
+   satırlardan, `total=len(failed)`; dönem ve cihaz aynen kalır.
+2. `narrative.service.tell(..., failures_only=False)` daraltmayı ANLATMADAN ÖNCE uygular. Anlatıcılar
+   ve denetçi değişmedi: tamamlanan satır olgularda olmadığı için modele gösterilmez, tamamlananların
+   sayısı da denetçi için "yabancı sayı"dır (taslak reddedilir, kural metni okunur). Başarısız iş
+   yoksa tek sabit cümle döner (`NO_FAILURES_TEXT`) ve hiçbir anlatıcı çağrılmaz.
+3. `LedgerEvidenceSource(db, chat_provider=None)`: sağlayıcı verilmiş VE `configured` ise
+   `ModelNarrator(provider)`, değilse kural anlatıcı.
+4. (Denetleyici dönüşü, madde 2) Sağlayıcı SÜREÇ AYARINDAN OKUNMAZ. İlk sürümde fabrika
+   `get_settings()` okuyordu: anahtarlı bir kabuk ya da `.env`, `explain_to_briefing`'e ulaşan her
+   testin (korpus dahil) gerçek API'yi çağırmasına yeterdi. Şimdi:
+   - `explain.service.narrative_chat_provider(live)`: oturumun `ctx.live` sözlüğünden, `assistant.chat`
+     ile aynı sırayla (`live["chat_provider"]`, yoksa `build_chat_provider(live["settings"])`) alır;
+     anahtar yoksa / ayar okunamazsa `None`, asla fırlatmaz. Yeni istemci yok.
+   - `explain_to_briefing(..., chat_provider=None)` ve `evidence_source_factory(db, chat_provider=None)`:
+     sağlayıcıyı yalnız çağıran verir. Verilmezse kural anlatıcı; tek argümanlı test fabrikaları
+     (`lambda db: source`) aynen çalışır.
+
+AÇIK - bu kartın alanında çözülemedi (lead'e, iki ayrı karar):
+A. Yönlendirici. Sahibin cümlesi "ne başarısız oldu" (Türkçe harflerle; "bu hafta/bugün/neler …" de)
+   explain `failures` ailesine gider, anlatıya ULAŞMAZ; o aile yalnız EN SON başarısızlığı söyler
+   (ölçüldü: 2 başarısızdan 1'i okunuyor, tamamlanan okunmuyor). Anlatıya `failures_only=True` ile
+   bugün yalnız "ne basarisiz oldu" (ASCII) ulaşır. Kart `query_for`'u ve yönlendiriciyi dondurduğu için
+   değiştirilmedi; karar `app/voice/intents` + `test_narrative_intent_wiring._OWNED` alanında.
+   Bu yüzden başlık "'ne başarısız oldu' yalnız başarısızları anlatır" İDDİA EDİLEMEZ; birleştirme
+   başlığı "anlatı başarısız-yalnız kipini ve model anlatıcı bağlantısını taşır" olmalı.
+B. Ses aracı. `tools.py::activity_explain` henüz sağlayıcı geçirmiyor (alan dışı), yani üretimde
+   anlatı bu birleştirmeden sonra da KURAL anlatıcıyla okunur; Haiku isteği yapılmaz. Bağlamak tek
+   satır: `explain_to_briefing(..., chat_provider=narrative_chat_provider(ctx.live))`. O satır
+   girdiğinde "bu hafta ne oldu" her soruda bir Haiku isteği yapar (en çok `assistant_chat_timeout_s`,
+   bir yeniden deneme; araç iş parçacığında) - bu davranış değişikliği o kartın başlığında yazmalı.
+
+Sonuçlar: bu birleştirme üretimde sesli davranışı DEĞİŞTİRMEZ (A ve B'ye kadar); anahtarlı bir kabuk
+hiçbir testte gerçek API'ye çıkamaz. Hangi anlatıcının konuştuğu (model/kural, düşüş sebebi, token)
+hâlâ kaydedilmiyor (`tell()` yalnız metin döner) - ayrı iş.
+Kanıt: sahte sağlayıcı ve sahte taşıma ile PROVEN_AUTOMATED; gerçek Haiku NOT_RUN; sahibin sesi NOT_RUN
+(A çözülmeden READY_FOR_OWNER değil).
+Geri alma: `narrative()` içinde `narrator=None`, `failures_only=False` geçirmek yeter.
+
+**The lead's decision at merge (the card was wrong, twice).** The card's acceptance - "ne başarısız oldu" reaches the
+narrative with `failures_only=True` - cannot be met inside the card's area: the real router sends every Turkish-letter
+spelling of that sentence to the explain `failures` family, which speaks the latest failure only, and the router is
+`app/voice/intents.py`, a file three tasks of ADR-0224 hold in turn. The inspector returned it twice for that, said the
+code in the diff is correct and safe, and named the two ways out. Taken: this is merged AS PLUMBING - nothing the
+owner says changes with this release, and no title may claim that it does - and two cards follow: the router
+(`narrative-failures-router`, behind the ADR-0224 chain that holds `intents.py`) and the wiring
+(`narrative-model-wiring`: `tools.py::activity_explain` hands on `narrative_chat_provider(ctx.live)`, behind a setting
+that is OFF by default - with it on, summaries of the ledger leave for the model's provider on every ask, which is the
+owner's to switch on, not a default).
+
+### ADR-0214 addendum 12 (2026-10-02): the inspector's last message is all the cycle reads - the verdict in a closing sentence, and the role's rule
+
+`postgres-coverage-debt` was approved by its inspector and stopped by the cycle ("ayni is iki kez geri verildi"). The
+cycle reads the run's RESULT, which is the agent's last message; the inspector had left a command running, was woken by
+its notification after the report, and its last message was one sentence: "... the report above stands unchanged and
+the verdict remains `APPROVE`." `understanding-engine-startup` was returned the same night with "rapor bir hukumle
+bitmedi". Two changes:
+
+1. `Get-TeamVerdict` also reads a closing SENTENCE that restates the verdict, in one shape only: "... verdict
+   is / remains / stands / stays [unchanged][:] `X`" (and `hüküm` / `karar` with `değişmedi` / `aynı` / `geçerli`), the
+   verdict in backticks and nothing after it but a full stop. "could be `APPROVE` if …", an unquoted "remains APPROVE"
+   and a quotation of somebody else's verdict stay `NONE`. A line that IS a verdict still wins as before.
+2. `.claude/agents/inspector.md`: wait for every command before the report, leave nothing running, and if woken all
+   the same, end the new last message with the verdict line again.
+
+`scripts/tests/team-cycle.tests.ps1`: seven cases (four RED before). Not closed here: the cycle still reads only the
+last message - a report followed by a remark with no verdict at all is still "no verdict", by design: silence is not
+an approval.
+
+## ADR-0246 — After an orphan Chrome is reaped, the one recovery launch waits for the profile's lock to be free (2026-10-02)
+
+**What happened.** The second gate of this integration (`614dedb4`) was RED on one browser test,
+`test_foreign_chrome_on_profile_is_reaped_then_one_recovery_launch`, with Chromium's own words: "Lock file can not be
+created … Failed to create a ProcessSingleton for your profile directory". The machine was loaded (six agent runs, a
+second suite). `reap_orphan_chrome` kills the browser that holds the research profile and waits for its MAIN process to
+exit; the launch that follows is deliberately never retried (the 2026-09-03 cascade). But the dying browser's children
+can hold the profile's `lockfile` a moment longer than the main process lives, and the recovery launch started into
+that moment. A kill is not an exit, and an exit is not a released file. On the owner's PC the same thing would be a
+research that fails with "browser is not reachable" right after a crash, when the machine is busy.
+
+**Decision.** `lifecycle.wait_for_profile_lock_free` waits (bounded by the same ten seconds as the wait for the
+processes, polling) until `<profile>/lockfile` is absent or can be opened; `reap_orphan_chrome` calls it after the
+processes are gone, and only when something was reaped - a clean launch pays nothing. The probe opens for reading and
+never creates the file. A lock still held at the bound is logged (`browser.profile_lock_still_held`) and the launch
+goes on to fail as it did: the wait removes the race, it does not hide a profile that really is in use. The launch
+itself is still never retried.
+
+**Evidence.** `services/browser/tests/unit/test_lifecycle_profile_lock.py` (6, RED before): the wait's three cases on a
+fake clock; the order kill -> processes -> lock with the same bound; no wait when nothing was reaped; the real probe
+against a file held with no sharing (`CreateFileW`, share mode 0). `PROVEN_AUTOMATED`; the browser unit suite 1012, the
+real-Chrome lifecycle tests 7/7 five times in a row. NOT proven: that this was the only way that test can fail under
+load - the next loaded gate says.
+
+### ADR-0214 addendum 13 (2026-10-02): the feeder never waits out a limit that is days away, and follows the model chain as the cycle does
+
+**What happened.** At 09:30 the scheduled tick started the feeder (the queue had fewer runnable tasks than seats: the
+team had finished everything it could reach). The feeder ran the lead on Fable - the lead's model - whose weekly limit
+had been used up at 03:32 (it lifts 2026-10-05 16:00 UTC; the cycle had known since then and lowered its own runs to
+Opus). The run was refused, and the feeder did what it was written to do: WAIT for the reset - three days - holding
+the team's lock, under which no cycle can start. The owner saw "koşan ajan 0/6" and asked why nobody worked. The lead
+stopped the waiting process by hand; the cycle started six minutes later.
+
+**Decision** (`scripts/team/feed.ps1`).
+1. The feeder reads what the cycles learnt (`team/limits.json`, read only) and starts its run on the lead's model or,
+   when that is limited, on the next open model down the chain (`Get-TeamRunModel`, the cycle's own rule); the report
+   says "model düşürüldü".
+2. A limit met IN the run that closes one model (or does not say whose it is) is not waited for: the same feed is
+   asked again at once, one model down - one try per model.
+3. No wait longer than `-MaxLimitWaitMinutes` (20), for any limit: the feeder holds the lock while it waits. A reset
+   further away than that, or no model open, is a line in the report ("beklenmedi") and the end of this feed; the tick
+   goes on to the cycle and the next tick asks again.
+
+**Evidence.** `scripts/tests/team-feed.tests.ps1`: four new cases (a model the cycle knows is limited is not asked; a
+limit met in the run goes one model down at once; every model limited for days - three runs, no wait, the lock
+released; a reset days away is not waited for whatever the model) beside the three old ones; four mutations RED,
+`feed.ps1` restored from a backup copy with sha256 equal. `PROVEN_AUTOMATED`. PROVEN_REAL is the next tick with Fable
+still limited: a feed run on Opus.

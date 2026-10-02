@@ -137,6 +137,39 @@ function Merge-TeamBranch {
     return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail }
 }
 
+function Undo-TeamMerge {
+    <#
+    .SYNOPSIS
+        Take back the merge Merge-TeamBranch just made - when, and only when, it is still the
+        integration branch's last commit.
+
+    .DESCRIPTION
+        For the one case where the team's store refuses the task's "merged" right after the
+        merge (somebody stopped the task in that moment). The integration branch is written by
+        the lock's holder alone, so its HEAD is that merge unless something else was merged
+        since. Checked, all three: HEAD has two parents, the second is the task branch's tip,
+        and the worktree is clean. Then the branch is put back on the first parent (a reset,
+        not a revert: after a revert the task's branch would still be an ancestor, and a later
+        merge of it would answer "already merged" for content that is gone). Returns $true
+        when the merge was taken back; anything else leaves everything as it is.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$CycleId,
+        [Parameter(Mandatory = $true)][string]$Branch
+    )
+    $path = Join-Path $RepoRoot (".claude\worktrees\integrate\" + $CycleId)
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    $second = Invoke-TeamGit -WorkingDirectory $path -Arguments @("rev-parse", "--verify", "--quiet", "HEAD^2")
+    $tip = Invoke-TeamGit -WorkingDirectory $path -Arguments @("rev-parse", "--verify", "--quiet", "refs/heads/$Branch")
+    if (-not $second.Success -or -not $tip.Success) { return $false }
+    if ($second.StdOut.Trim() -ne $tip.StdOut.Trim()) { return $false }
+    $dirty = Invoke-TeamGit -WorkingDirectory $path -Arguments @("status", "--porcelain")
+    if (-not $dirty.Success -or $dirty.StdOut.Trim()) { return $false }
+    $reset = Invoke-TeamGit -WorkingDirectory $path -Arguments @("reset", "--hard", "--quiet", "HEAD^1")
+    return [bool]$reset.Success
+}
+
 # ---------------------------------------------------------------------------- a role run
 
 function New-TeamTaskCard {
@@ -243,8 +276,11 @@ function Get-TeamRunArguments {
     $tools = @($tools | Where-Object { $_ -ne "Agent" -and $_ -ne "Task" -and @($ExcludeTools) -notcontains $_ })
     $arguments = New-Object System.Collections.ArrayList
     foreach ($argument in @($PrefixArguments)) { [void]$arguments.Add([string]$argument) }
+    # The line stream, not the single document: the usage limit's type, its reset and the two
+    # percentages are only in the stream's `rate_limit_event` (model-policy-cycle). Never
+    # --fallback-model: it does not fire on a usage limit and would lower a run without a word.
     foreach ($argument in @(
-            "-p", "--output-format", "json", "--no-session-persistence",
+            "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
             "--append-system-prompt-file", $RoleFile,
             "--allowedTools", ($tools -join ","),
             "--permission-mode", "acceptEdits"
@@ -285,6 +321,10 @@ function Start-TeamRun {
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
     $psi.WorkingDirectory = (Resolve-Path -LiteralPath $WorkingDirectory).Path
+    # The tool can switch a session off the model it was started on by itself (found in the
+    # 2.1.285 binary; the variable is not on the documented page - best effort). The proof
+    # that a run was not lowered is its modelUsage, which the cycle compares after every run.
+    $psi.EnvironmentVariables["CLAUDE_CODE_NO_MODEL_FALLBACK"] = "1"
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
@@ -434,6 +474,14 @@ function New-TeamCycleReport {
         $line = ("{0} / {1}: {2:0.00} USD, {3} sn, {4}" -f $run.task, $run.role, [double]$run.cost_usd, [int]$run.seconds, $run.outcome)
         $ranOn = [string](Get-TeamProperty -InputObject $run -Name "model" -Default "")
         if ($ranOn) { $line += ", model $ranOn" }
+        # The model policy (ADR-0214 addendum 7): a run the cycle started below the model its
+        # role is set to says so on its own line; so does one the TOOL ran on another model.
+        $from = [string](Get-TeamProperty -InputObject $run -Name "lowered_from" -Default "")
+        if ($from) { $line += ", model düşürüldü: $from -> $ranOn" }
+        $really = [string](Get-TeamProperty -InputObject $run -Name "ran_model" -Default "")
+        if ([bool](Get-TeamProperty -InputObject $run -Name "substituted" -Default $false)) {
+            $line += ", model düşürüldü (araç): $ranOn -> $(if ($really) { $really } else { '?' })"
+        }
         $budget += $line
     }
     Add-Section -Title "Harcanan bütçe" -Rows $budget

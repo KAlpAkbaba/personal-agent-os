@@ -19,19 +19,72 @@
                  rule named, any other scenario writes no file (cycle-lead-run)
       limited    the FIRST worker run of a task answers with the subscription's usage-limit
                  error (reset time 200 s in the past); every later run is as approve
+
+    The output has the shape the run asked for: with `--output-format stream-json` it is the
+    line stream of the real tool (2.1.285: an init line, one `rate_limit_event`, and a result
+    line that does NOT start with {"type" and whose `modelUsage` names the model of --model);
+    otherwise the single result document. The model policy's hooks (model-policy-cycle),
+    independent of the scenario:
+
+      PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS  ids, comma separated: a run started on one of them
+          answers the real limit sentence ("You've hit your Opus limit ...") and a `rejected`
+          event of that model's limit type; a run on any other model works
+      PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES   only these roles are limited (default: every role)
+      PAGENTOS_FAKE_CLAUDE_LIMIT_TYPE      the rejected event's rateLimitType instead of the
+          model's own (five_hour closes every model)
+      PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS  the reset, seconds from now (default 3600)
+      PAGENTOS_FAKE_CLAUDE_RAN_MODEL       "<role>=<id>": that role's modelUsage names <id>
+          whatever --model said, as a tool that substituted the model itself would print
 #>
-[CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
+# No param block, on purpose: with one, PowerShell binds the tool's `-p` to its own common
+# parameter -PipelineVariable and swallows the argument after it (`--output-format` never
+# reached this script; it went unnoticed while nothing read it).
+$Rest = @($args | ForEach-Object { [string]$_ })
 
 $ErrorActionPreference = "Stop"
 $scenario = [string]$env:PAGENTOS_FAKE_CLAUDE_SCENARIO
 $log = [string]$env:PAGENTOS_FAKE_CLAUDE_LOG
 
+function Add-SharedLine {
+    <# Two fakes of one batch append to the test's call log at the same instant. Add-Content then
+       throws a sharing violation: the fake died before it did anything, the cycle counted a
+       failed run and ran it again, and a test that reads the calls or the requests saw one run
+       too few or too many (one run in three on a loaded machine, 2026-10-02). The log is
+       opened for append with a retry: a writer waits for the other one, it does not die. #>
+    param([string]$Path, [string]$Line)
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Line + "`r`n")
+    $deadline = [datetime]::UtcNow.AddSeconds(30)
+    while ($true) {
+        try {
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+            try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+            return
+        }
+        catch {
+            if (-not ($_.Exception.GetBaseException() -is [System.IO.IOException]) -or [datetime]::UtcNow -gt $deadline) { throw }
+            Start-Sleep -Milliseconds 20
+        }
+    }
+}
+
+# The line above, by itself (the suite holds the log open and starts this): say "trying", append, leave.
+if ([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_ONLY) {
+    if ([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_MARKER) { [System.IO.File]::WriteAllText([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_MARKER, "trying") }
+    Add-SharedLine -Path $log -Line ([string]$env:PAGENTOS_FAKE_CLAUDE_APPEND_ONLY)
+    exit 0
+}
+
 $roleFile = ""
 $budget = ""
 $tools = ""
 $model = ""
+$format = ""
+$verbose = $false
+$fallbackFlag = $false
 for ($i = 0; $i -lt $Rest.Length; $i++) {
+    if ($Rest[$i] -eq "--output-format") { $format = $Rest[$i + 1] }
+    if ($Rest[$i] -eq "--verbose") { $verbose = $true }
+    if ($Rest[$i] -eq "--fallback-model") { $fallbackFlag = $true }
     if ($Rest[$i] -eq "--append-system-prompt-file") { $roleFile = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--max-budget-usd") { $budget = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--allowedTools") { $tools = $Rest[$i + 1] }
@@ -44,14 +97,54 @@ if ($card -match '(?m)^- id: (\S+)') { $taskId = $Matches[1] }
 $here = (Get-Location).ProviderPath
 
 if ($log) {
-    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
-    Add-Content -LiteralPath $log -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
+    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
+    Add-SharedLine -Path $log -Line ($entry | ConvertTo-Json -Compress)
+}
+
+# The model the result says really ran: --model, unless the test names another one for this role.
+$ranModel = $model
+if ([string]$env:PAGENTOS_FAKE_CLAUDE_RAN_MODEL -match ('(?:^|,)' + [regex]::Escape($role) + '=([A-Za-z0-9._-]+)')) { $ranModel = $Matches[1] }
+
+function Get-LimitEvent {
+    <# One `rate_limit_event` line, field for field as 2.1.285 prints it. The Fable week is in
+       the windows only when the run is on Fable - as in the real tool. #>
+    param([string]$Status, [string]$Type, [long]$ResetsAt)
+    $week = [DateTimeOffset]::UtcNow.AddDays(4).ToUnixTimeSeconds()
+    $windows = [ordered]@{
+        five_hour = [ordered]@{ utilization = 0.06; resetsAt = [DateTimeOffset]::UtcNow.AddHours(3).ToUnixTimeSeconds() }
+        seven_day = [ordered]@{ utilization = 0.46; resetsAt = $week }
+    }
+    if ($model -eq "claude-fable-5-1") { $windows["seven_day_overage_included"] = [ordered]@{ utilization = 0.81; resetsAt = $week } }
+    $info = [ordered]@{ status = $Status; resetsAt = $ResetsAt; rateLimitType = $Type; isUsingOverage = $false; unifiedWindows = $windows }
+    return (([ordered]@{ type = "rate_limit_event"; rate_limit_info = $info; uuid = "u"; session_id = "s" }) | ConvertTo-Json -Compress -Depth 6)
+}
+
+function Write-Answer {
+    <# The result, as one document or as the stream's lines, whichever the run asked for. #>
+    param([string]$Text, [double]$Cost, [bool]$IsError, [string]$EventLine)
+    if ($format -ne "stream-json") {
+        $document = [pscustomobject]@{ type = "result"; subtype = "success"; is_error = $IsError; result = $Text; total_cost_usd = $Cost }
+        [Console]::Out.Write(($document | ConvertTo-Json -Compress))
+        return
+    }
+    $usage = [ordered]@{}
+    if ($ranModel) { $usage[$ranModel] = [ordered]@{ inputTokens = 10; outputTokens = 5; costUSD = $Cost } }
+    $result = [ordered]@{
+        duration_api_ms = 1200; type = "result"; subtype = "success"; is_error = $IsError; result = $Text
+        total_cost_usd = $Cost; modelUsage = $usage
+    }
+    $lines = @(
+        (([ordered]@{ type = "system"; subtype = "init"; model = $model; session_id = "s" }) | ConvertTo-Json -Compress),
+        $EventLine,
+        ($result | ConvertTo-Json -Compress -Depth 6)
+    )
+    [Console]::Out.Write(($lines -join "`n") + "`n")
 }
 
 function Send-Result {
     param([string]$Text, [double]$Cost = 0.25)
-    $document = [pscustomobject]@{ type = "result"; subtype = "success"; is_error = $false; result = $Text; total_cost_usd = $Cost }
-    [Console]::Out.Write(($document | ConvertTo-Json -Compress))
+    $session = [DateTimeOffset]::UtcNow.AddHours(3).ToUnixTimeSeconds()
+    Write-Answer -Text $Text -Cost $Cost -IsError $false -EventLine (Get-LimitEvent -Status "allowed" -Type "five_hour" -ResetsAt $session)
     exit 0
 }
 
@@ -96,6 +189,23 @@ if ($scenario -eq "silent") {
 if ($scenario -eq "slow") {
     Start-Sleep -Seconds 600
     exit 0
+}
+# The model policy: a run on a model the test named as limited answers what the real tool answers.
+$limitedModels = @(([string]$env:PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$limitedRoles = @(([string]$env:PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($model -and $limitedModels -contains $model -and ($limitedRoles.Length -eq 0 -or $limitedRoles -contains $role)) {
+    $names = @{ "claude-fable-5-1" = @("Fable", "seven_day_overage_included"); "claude-opus-5-5" = @("Opus", "seven_day_opus"); "claude-sonnet-5-5" = @("Sonnet", "seven_day_sonnet") }
+    $type = $names[$model][1]
+    $name = $names[$model][0]
+    if ($env:PAGENTOS_FAKE_CLAUDE_LIMIT_TYPE) {
+        $type = [string]$env:PAGENTOS_FAKE_CLAUDE_LIMIT_TYPE
+        if ($type -eq "five_hour") { $name = "session" } elseif ($type -eq "seven_day") { $name = "weekly" }
+    }
+    $seconds = 3600
+    if ([string]$env:PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS -match '^-?\d+$') { $seconds = [int]$env:PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS }
+    $epoch = [DateTimeOffset]::UtcNow.AddSeconds($seconds).ToUnixTimeSeconds()
+    Write-Answer -Text ("You've hit your $name limit " + [char]0x00B7 + " resets 8:40pm") -Cost 0 -IsError $true -EventLine (Get-LimitEvent -Status "rejected" -Type $type -ResetsAt $epoch)
+    exit 1
 }
 if ($scenario -eq "limited" -and $role -eq "worker") {
     # This call's own log entry is already written: one entry means the first call.

@@ -11,6 +11,7 @@ the same words.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -24,6 +25,7 @@ from app.artifacts.models import (
     ARTIFACT_STATE_RENDERS_PENDING,
 )
 from app.artifacts.renderers import content_hash
+from app.assistant_chat import ChatProvider, build_chat_provider
 from app.explain.classify import LEVEL_EXECUTIVE, ExplainQuery, classify
 from app.explain.engine import (
     QUERY_NARRATIVE,
@@ -117,8 +119,9 @@ class LedgerEvidenceSource:
     """The production :class:`EvidenceSource`: the activity ledger plus the records it
     points at. Read-only; a missing ledger (older deployment) reads as no evidence."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, chat_provider: ChatProvider | None = None) -> None:
         self._db = db
+        self._chat_provider = chat_provider
 
     def events(self, *, since, subsystems, statuses, limit) -> list[EventView]:
         try:
@@ -132,12 +135,24 @@ class LedgerEvidenceSource:
 
     def narrative(self, ask: Any, *, now: datetime) -> str:
         """ "Bu hafta ne oldu?" (ADR-0216/0221): one audited account of the ledger for
-        the period and device the owner named. The rule narrator: its text is built
-        from the facts alone and passes the auditor by construction. A model narrator
-        behind the same Protocol is a later wiring (it needs the chat provider here)."""
+        the period and device the owner named - the failures alone when that is what
+        was asked ("ne başarısız oldu"). With a configured chat provider the model
+        writes the draft and ``tell`` audits it: a dropped failure is put
+        back, and a draft that still fails is replaced by the rule text. Without one
+        the rule narrator answers; its text passes the auditor by construction."""
         from app.narrative import service as narrative_service
+        from app.narrative.model_narrator import ModelNarrator
 
-        return narrative_service.tell(self._db, ask.period, ask.device, None, now=now)
+        provider = self._chat_provider
+        narrator = ModelNarrator(provider) if provider is not None and provider.configured else None
+        return narrative_service.tell(
+            self._db,
+            ask.period,
+            ask.device,
+            narrator,
+            now=now,
+            failures_only=bool(getattr(ask, "failures_only", False)),
+        )
 
     def research_report(self, task_id: str) -> dict[str, Any] | None:
         from app.research import runs_service
@@ -383,9 +398,32 @@ class LedgerEvidenceSource:
         ]
 
 
-#: How the service obtains evidence. Tests replace it with an in-memory source; the
-#: production value is the ledger adapter above.
-evidence_source_factory = LedgerEvidenceSource
+def narrative_chat_provider(live: Mapping[str, Any] | None) -> ChatProvider | None:
+    """The chat provider a voice session already carries (``ToolContext.live``), for the
+    narrative's model narrator - taken the way ``assistant.chat`` takes it: the injected
+    ``chat_provider``, else one built from the session's ``settings`` with
+    ``app.assistant_chat``'s own builder. Building sends nothing.
+
+    Never the process-wide settings: a shell or ``.env`` that carries the key must not
+    make a caller that handed nothing over (a test, a suite, the corpus) call the real
+    API. ``None`` when the session has no usable key, and it never raises: an answer
+    about the record must not fail because the model's settings could not be read."""
+    try:
+        live = live or {}
+        provider = live.get("chat_provider") or build_chat_provider(live.get("settings"))
+        return provider if provider.configured else None
+    except Exception as exc:  # noqa: BLE001 - the rule narrator answers instead
+        logger.warning("narrative_chat_provider_unavailable", detail=str(exc)[:200])
+        return None
+
+
+def evidence_source_factory(
+    db: Session, chat_provider: ChatProvider | None = None
+) -> EvidenceSource:
+    """How the service obtains evidence. Tests replace it with an in-memory source; the
+    production value is the ledger adapter above, narrating with the provider the caller
+    hands over (none: the rule narrator)."""
+    return LedgerEvidenceSource(db, chat_provider)
 
 
 # ------------------------------------------------------------------ briefing artifact
@@ -486,13 +524,17 @@ def explain_to_briefing(
     device_id: uuid.UUID | None = None,
     attach_narration: bool = True,
     research_job_id: str | None = None,
+    chat_provider: ChatProvider | None = None,
 ) -> BriefingRecord:
     """The whole path: classify → retrieve → compose → artifact → narration session
     positioned at the requested level, with the text to speak for that level.
 
     ``research_job_id`` binds the answer to one completed research (ADR-0075); it is
     passed straight through to :func:`app.explain.engine.explain`, which uses it to
-    choose WHICH recorded run to read. Nothing here starts or re-runs a research."""
+    choose WHICH recorded run to read. Nothing here starts or re-runs a research.
+
+    ``chat_provider`` is the caller's own (:func:`narrative_chat_provider`); only a
+    narrative asks it anything, and without one the rule narrator answers."""
     now = now or datetime.now(UTC)
     query = query_for(question, now=now)
     if level and level != query.level:
@@ -504,8 +546,16 @@ def explain_to_briefing(
             module=query.module,
             normalized=query.normalized,
         )
+    if source is None:
+        # A factory replaced by a test takes the session alone; the provider is passed
+        # only when there is one to pass.
+        source = (
+            evidence_source_factory(db)
+            if chat_provider is None
+            else evidence_source_factory(db, chat_provider=chat_provider)
+        )
     briefing = explain(
-        source or evidence_source_factory(db),
+        source,
         question,
         query,
         now=now,
@@ -595,5 +645,6 @@ __all__ = [
     "BriefingRecord",
     "LedgerEvidenceSource",
     "explain_to_briefing",
+    "narrative_chat_provider",
     "persist_briefing",
 ]

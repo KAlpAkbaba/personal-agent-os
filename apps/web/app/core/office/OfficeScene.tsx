@@ -1,5 +1,5 @@
 /**
- * The pixel office: one desk and one character per seat, each seat a button.
+ * The pixel office: one desk and one character per seat the API sends, each seat a button.
  * Pure rendering of `DrawnSeat`s - selection and motion preference come in as props.
  */
 
@@ -28,7 +28,7 @@ function Figure({ seat, reducedMotion }: { seat: DrawnSeat; reducedMotion: boole
       focusable="false"
     >
       <Pixels map={DESK} x={16} y={12} />
-      {seat.pose === "standing" ? (
+      {seat.plain ? null : seat.pose === "standing" ? (
         <Pixels map={STANDING} x={1} y={10} />
       ) : (
         <>
@@ -92,9 +92,12 @@ export default function OfficeScene({
               {seat.name}
               {seat.badge !== null && <span className="office-count"> · {seat.badge} onay</span>}
             </span>
-            {seat.state === "working" && reducedMotion && (
+            {seat.state === "working" && (reducedMotion || seat.runCount !== null) && (
               <span className="office-badge-static" aria-hidden="true">
                 çalışıyor
+                {seat.runCount !== null && (
+                  <span className="office-run-count"> {seat.runCount}</span>
+                )}
               </span>
             )}
           </button>

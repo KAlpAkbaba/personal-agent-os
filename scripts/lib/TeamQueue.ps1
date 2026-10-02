@@ -184,6 +184,12 @@ function Test-TeamQueue {
             if ($text -match '^[\\/]' -or $text -match '\.\.' -or $text -match '^[A-Za-z]:') {
                 [void]$problems.Add("${label}: the area '$text' must be a path inside the repository")
             }
+            elseif (@("", ".") -contains (Get-TeamAreaKey -Area $text)) {
+                # '*', '.', './': everything. An area names files or folders; "the whole
+                # repository" would hold every other task out of work, or - compared by another
+                # key - none (the two rules disagreed on exactly these, 2026-10-02).
+                [void]$problems.Add("${label}: the area '$text' is the whole repository; an area names files or folders inside it")
+            }
         }
         $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
         if ($branch -match 'hand-gestures' -or $branch -eq "main") {
@@ -207,17 +213,18 @@ function Test-TeamQueue {
             if (@($taskAreas).Count -eq 0) {
                 [void]$problems.Add("${label}: a task that is being worked on names its file area")
             }
-            # Section 4: two concurrent tasks never share an area.
+            # Section 4: two concurrent tasks never share an area. ONE rule for it
+            # (Test-TeamAreasOverlap): the split's judge, the cycle's holder check
+            # (Get-TeamAreaHolders) and this one compare the same key.
             foreach ($area in $taskAreas) {
-                $key = ([string]$area).TrimEnd("/", "*").ToLowerInvariant()
                 foreach ($other in @($areas.Keys)) {
-                    if ($key -eq $other -or $key.StartsWith($other + "/") -or $other.StartsWith($key + "/")) {
+                    if (Test-TeamAreasOverlap -First ([string]$area) -Second ([string]$other)) {
                         [void]$problems.Add("${label}: the area '$area' overlaps the area of $($areas[$other])")
                     }
                 }
             }
             foreach ($area in $taskAreas) {
-                $areas[([string]$area).TrimEnd("/", "*").ToLowerInvariant()] = $label
+                $areas[(Get-TeamAreaKey -Area ([string]$area))] = $label
             }
         }
     }
@@ -315,6 +322,30 @@ function Get-TeamNextRole {
         "inspecting" { return [pscustomobject]@{ Kind = "run"; Role = "inspector"; NextState = ""; Gate = "" } }
         default { return [pscustomobject]@{ Kind = "rest"; Role = ""; NextState = ""; Gate = "" } }
     }
+}
+
+function Get-TeamAreaHolders {
+    <# The ids of the tasks IN WORK (assigned, in_progress, inspecting, returned) whose area
+       overlaps this task's. Section 4: two concurrent tasks never share an area - Test-TeamQueue
+       refuses a queue that has two such tasks, so a task is not moved into work beside one. #>
+    param([Parameter(Mandatory = $true)]$Task, [Parameter(Mandatory = $true)]$Queue)
+    $id = [string](Get-TeamProperty -InputObject $Task -Name "id" -Default "")
+    $mine = @(Get-TeamProperty -InputObject $Task -Name "area" -Default @())
+    $holders = New-Object System.Collections.ArrayList
+    foreach ($other in (Get-TeamTasks -Queue $Queue)) {
+        $otherId = [string](Get-TeamProperty -InputObject $other -Name "id" -Default "")
+        if ($otherId -eq $id) { continue }
+        $state = [string](Get-TeamProperty -InputObject $other -Name "state" -Default "")
+        if (@("assigned", "in_progress", "inspecting", "returned") -notcontains $state) { continue }
+        $shared = $false
+        foreach ($theirs in @(Get-TeamProperty -InputObject $other -Name "area" -Default @())) {
+            foreach ($area in $mine) {
+                if (Test-TeamAreasOverlap -First ([string]$area) -Second ([string]$theirs)) { $shared = $true }
+            }
+        }
+        if ($shared) { [void]$holders.Add($otherId) }
+    }
+    return @($holders.ToArray())
 }
 
 # ------------------------------------------------------------------ the lead's split
@@ -512,6 +543,15 @@ function Get-TeamVerdict {
             $verdict = $Matches[1]
             $detail = $Matches[2].Trim()
         }
+        # A closing SENTENCE that restates the verdict: an inspector woken after its report (a
+        # command it left running reported back) ends on one, and the last message is all the
+        # cycle reads. Only this shape: "... verdict is / remains / stands [unchanged][:] `X`"
+        # (hüküm / karar değişmedi / aynı / geçerli) with the verdict in backticks and NOTHING
+        # after it but a full stop - not "could be", not a quotation of somebody else's verdict.
+        elseif ($line -cmatch '(?i:\b(?:verdict|karar|hüküm)\s+(?:is|remains|stands|stays|değişmedi|aynı|geçerli)(?:\s+unchanged)?)\s*:?\s*`(APPROVE|RETURN|REJECT)\b\s*[:(-]?\s*([^`]*?)\)?\s*`\s*\.?\s*$') {
+            $verdict = $Matches[1]
+            $detail = $Matches[2].Trim()
+        }
     }
     return [pscustomobject]@{ Verdict = $verdict; Detail = $detail }
 }
@@ -547,36 +587,120 @@ function Get-TeamSummary {
     return @(@("[... $(@($lines).Count - ($MaxLines - 1)) satir kesildi; tamami rapor dosyasinda]") + $kept)
 }
 
+function ConvertFrom-TeamEpoch {
+    <# Unix seconds as the timestamp this module writes; "" for anything that is not a number. #>
+    param($Seconds)
+    if ($null -eq $Seconds -or $Seconds -isnot [ValueType] -or $Seconds -is [bool]) { return "" }
+    try { return (Get-TeamTimestamp -Now ([DateTimeOffset]::FromUnixTimeSeconds([long]$Seconds)).UtcDateTime) }
+    catch { return "" }
+}
+
 function Read-TeamRunResult {
     <#
     .SYNOPSIS
-        What `claude -p --output-format json` printed: the text, the cost, whether it failed.
+        What `claude -p` printed: the text, the cost, whether it failed - and, from the line
+        stream (`--output-format stream-json --verbose`), the model that really ran, the usage
+        limit it hit and the two percentages the tool itself reports.
 
     .DESCRIPTION
-        Output that is not the JSON document is not trusted to be a report: the run FAILED,
-        and its raw output stays in its file.
+        Both shapes are read: the line stream of a run, and the single result document (the
+        old runs' files). In a stream only three kinds of line are parsed, each ALONE: the
+        result, a `rate_limit_event`, and the tool's own notice that it switched the model.
+        The whole output is never parsed at once: Windows PowerShell 5.1 refuses JSON over
+        2 MB and a worker's stream is larger. A line is taken by its PARSED type - the real
+        result line starts with {"duration_api_ms", not {"type", and an assistant line can
+        quote any of these words.
+
+        Output with no result document is not trusted to be a report: the run FAILED, and its
+        raw output stays in its file.
+
+        The usage limit (team/plans/model-policy-cycle-integration.md, tool 2.1.285): the last
+        `rate_limit_event` says `rejected`, with the limit's type and its reset as an epoch;
+        or the result says "You've hit your <Fable|Opus|Sonnet|session|weekly> limit". What
+        the limit closes is LimitScope: one model (LimitedModel), all of them, or unknown.
     #>
-    param([string]$StdOut, [int]$ExitCode = 0, [string]$StdErr = "")
+    param([string]$StdOut, [int]$ExitCode = 0, [string]$StdErr = "", [string]$Model = "")
     $text = ""
     $cost = 0.0
     $ok = $false
     $why = ""
     $usageLimited = $false
     $resetsAt = ""
-    try {
-        $document = ConvertFrom-Json -InputObject ([string]$StdOut)
+    $limitType = ""
+    $limitScope = ""
+    $limitedModel = ""
+    $ranModel = ""
+    $substituted = $false
+    $resultLine = ""
+    $document = $null
+    $lastEvent = $null
+    $windows = @{ fable = $null; all = $null; session = $null }
+    $windowNames = @{ "seven_day_overage_included" = "fable"; "seven_day" = "all"; "five_hour" = "session" }
+    $eventLines = New-Object System.Collections.ArrayList
+    $raw = [string]$StdOut
+    foreach ($line in @($raw -split "`r?`n")) {
+        $isResult = $line.Contains('"type":"result"')
+        $isEvent = $line.Contains('"type":"rate_limit_event"')
+        if (-not ($isResult -or $isEvent -or $line.Contains('"subtype":"model_consent_fallback"'))) { continue }
+        $parsed = $null
+        try { $parsed = ConvertFrom-Json -InputObject $line } catch { continue }
+        $kind = [string](Get-TeamProperty -InputObject $parsed -Name "type" -Default "")
+        if ($kind -eq "result") { $document = $parsed; $resultLine = $line }
+        elseif ($kind -eq "rate_limit_event") {
+            $info = Get-TeamProperty -InputObject $parsed -Name "rate_limit_info"
+            if ($null -eq $info) { continue }
+            $lastEvent = $info
+            [void]$eventLines.Add($line)
+            $unified = Get-TeamProperty -InputObject $info -Name "unifiedWindows"
+            if ($null -eq $unified) { continue }
+            foreach ($property in $unified.PSObject.Properties) {
+                if (-not $windowNames.ContainsKey([string]$property.Name)) { continue }
+                $used = Get-TeamProperty -InputObject $property.Value -Name "utilization"
+                # The tool's own number in the tool's own unit (a fraction of 1): shown as a
+                # percentage, never computed from anything else. Not a number, no value.
+                if ($null -eq $used -or $used -isnot [ValueType] -or $used -is [bool]) { continue }
+                $windows[$windowNames[[string]$property.Name]] = [pscustomobject]@{
+                    used_pct  = [int][Math]::Round(100 * [double]$used, [System.MidpointRounding]::AwayFromZero)
+                    resets_at = (ConvertFrom-TeamEpoch -Seconds (Get-TeamProperty -InputObject $property.Value -Name "resetsAt"))
+                }
+            }
+        }
+        elseif ([string](Get-TeamProperty -InputObject $parsed -Name "subtype" -Default "") -eq "model_consent_fallback") { $substituted = $true }
+    }
+    if ($null -eq $document -and $raw.Length -le 1000000) {
+        # One document and nothing else: what `--output-format json` printed.
+        try {
+            $whole = ConvertFrom-Json -InputObject $raw
+            if ($whole -is [System.Management.Automation.PSCustomObject]) { $document = $whole }
+        }
+        catch { }
+    }
+    $said = ""
+    if ($null -ne $document) {
         $text = [string](Get-TeamProperty -InputObject $document -Name "result" -Default "")
+        $said = $text
         $cost = [double](Get-TeamProperty -InputObject $document -Name "total_cost_usd" -Default 0)
         $isError = [bool](Get-TeamProperty -InputObject $document -Name "is_error" -Default $false)
         $subtype = [string](Get-TeamProperty -InputObject $document -Name "subtype" -Default "")
+        # The model that really ran: side models (a small one for titles) appear beside it,
+        # so it is the entry that cost the most.
+        $usage = Get-TeamProperty -InputObject $document -Name "modelUsage"
+        if ($usage -is [System.Management.Automation.PSCustomObject]) {
+            $most = -1.0
+            foreach ($property in $usage.PSObject.Properties) {
+                $spent = Get-TeamProperty -InputObject $property.Value -Name "costUSD" -Default 0
+                $spent = if ($spent -is [ValueType] -and $spent -isnot [bool]) { [double]$spent } else { 0.0 }
+                if ($spent -gt $most) { $most = $spent; $ranModel = [string]$property.Name }
+            }
+        }
         $ok = ($ExitCode -eq 0) -and (-not $isError) -and ($text.Trim().Length -gt 0)
         if (-not $ok) {
             # The tool's own words first ("Not logged in"): a run that failed with the
             # subtype 'success' was reported to the owner as 'failed: success'
             # (pilot-01, 2026-09-30). ASCII, one line, bounded: it goes into a report.
-            $said = (($text -split "`r?`n")[0] -replace '[^\x20-\x7E]', ' ').Trim()
-            if ($said.Length -gt 120) { $said = $said.Substring(0, 120) }
-            if ($isError -and $said) { $why = $said }
+            $first = (($text -split "`r?`n")[0] -replace '[^\x20-\x7E]', ' ').Trim()
+            if ($first.Length -gt 120) { $first = $first.Substring(0, 120) }
+            if ($isError -and $first) { $why = $first }
             elseif ($subtype -and $subtype -ne "success") { $why = $subtype }
             elseif (-not $text.Trim()) { $why = "the run returned an empty report" }
             else { $why = "exit $ExitCode" }
@@ -584,23 +708,297 @@ function Read-TeamRunResult {
             if ($isError) { $text = "" }
         }
     }
-    catch {
+    else {
         $why = "the run printed no result document (exit $ExitCode)"
+        # Prose instead of a document: only its beginning is the tool's own word. The rest of a
+        # stream is the run's transcript, which may hold any sentence at all.
+        $said = if ($raw.Length -gt 2000) { $raw.Substring(0, 2000) } else { $raw }
     }
+    # A model the tool ran in place of the one asked for (it can switch a session off Fable
+    # by itself; CLAUDE_CODE_NO_MODEL_FALLBACK is best effort). Only a model of the chain is
+    # compared: a name this script does not know proves nothing.
+    if ($Model -and (Test-TeamModelId -Model $ranModel) -and $ranModel -cne $Model) { $substituted = $true }
     if (-not $ok) {
         # Owner decision 2026-09-30: the ONE stop the team has is the subscription's usage
-        # limit. The tool says it in its result ("Claude AI usage limit reached|<epoch>",
-        # "You've hit your limit ...") or on stderr; the epoch, when given, is when it lifts.
-        $said = ([string]$StdOut) + "`n" + ([string]$StdErr)
-        if ($said -match "(?i)usage limit|hit your (usage |rate )?limit|limit reached|out of extra usage") {
+        # limit. It is read from the result's words and from stderr - never from the rest of
+        # the stream.
+        $said = $said + "`n" + ([string]$StdErr)
+        $rejected = ($null -ne $lastEvent -and [string](Get-TeamProperty -InputObject $lastEvent -Name "status" -Default "") -eq "rejected")
+        if ($rejected -or $said -match "(?i)hit your (\w+ )?limit|usage limit|limit reached|out of (extra usage|usage credits)") {
             $usageLimited = $true
             $why = "Max kullanım limiti"
-            if ($said -match "limit reached\|(\d{10})") {
-                $resetsAt = ([DateTimeOffset]::FromUnixTimeSeconds([long]$Matches[1])).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
+            if ($rejected) {
+                $limitType = [string](Get-TeamProperty -InputObject $lastEvent -Name "rateLimitType" -Default "")
+                $resetsAt = ConvertFrom-TeamEpoch -Seconds (Get-TeamProperty -InputObject $lastEvent -Name "resetsAt")
+            }
+            if (-not $resetsAt -and $said -match "limit reached\|(\d{10})") { $resetsAt = ConvertFrom-TeamEpoch -Seconds ([long]$Matches[1]) }
+            $closes = Get-TeamLimitScope -Type $limitType -Text $said
+            $limitScope = $closes.Scope
+            $limitedModel = $closes.Model
+        }
+    }
+    return [pscustomobject]@{
+        Ok = $ok; Text = $text; CostUsd = $cost; Why = $why; UsageLimited = $usageLimited; ResetsAt = $resetsAt
+        LimitType = $limitType; LimitScope = $limitScope; LimitedModel = $limitedModel
+        RanModel = $ranModel; Substituted = $substituted
+        Windows = [pscustomobject]@{ fable = $windows["fable"]; all = $windows["all"]; session = $windows["session"] }
+        ResultLine = $resultLine; EventLines = @($eventLines.ToArray())
+    }
+}
+
+# ------------------------------------------------------------------ the model policy
+#
+# ADR-0214 addendum 7 (owner, 2026-10-01). Three models, strongest first: the order IS the
+# fallback chain and the meaning of "weaker". One setting document in the team store; the
+# rules of that document are here, so the cycle and the fake API judge it with one list.
+
+$script:TeamModelChain = @("claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5")
+$script:TeamModelRoles = @("lead", "researcher", "integrator", "worker", "inspector")
+# What a limit of the tool closes (the tool's own table, 2.1.285): one model, or every model.
+$script:TeamLimitOfModel = @{
+    "seven_day_overage_included" = "claude-fable-5-1"
+    "seven_day_opus"             = "claude-opus-5-5"
+    "seven_day_sonnet"           = "claude-sonnet-5-5"
+}
+$script:TeamLimitOfAll = @("five_hour", "seven_day")
+
+function Get-TeamModelChain { return @($script:TeamModelChain) }
+
+function Test-TeamModelId {
+    <# Whether a text is one of the three model ids. Nothing else ever reaches a command line. #>
+    param([string]$Model)
+    return (@($script:TeamModelChain) -ccontains $Model)
+}
+
+function Get-TeamModelRank {
+    <# The place in the chain: 0 is the strongest; -1 is not a model. A HIGHER rank is WEAKER. #>
+    param([string]$Model)
+    for ($index = 0; $index -lt @($script:TeamModelChain).Count; $index++) {
+        if ($script:TeamModelChain[$index] -ceq $Model) { return $index }
+    }
+    return -1
+}
+
+function Get-TeamModelDefaults {
+    <# The setting when nothing is stored: lead and inspector on the strongest, the rest one below. #>
+    param([datetime]$Now = [datetime]::UtcNow)
+    return [pscustomobject]@{
+        roles      = [pscustomobject][ordered]@{
+            lead = "claude-fable-5-1"; researcher = "claude-opus-5-5"; integrator = "claude-opus-5-5"
+            worker = "claude-opus-5-5"; inspector = "claude-fable-5-1"
+        }
+        fallback   = $true
+        updated_at = (Get-TeamTimestamp -Now $Now)
+    }
+}
+
+function Read-TeamModelSetting {
+    <#
+    .SYNOPSIS
+        The model setting as the contract states it, or every way a document breaks it.
+
+    .DESCRIPTION
+        {"roles": {"lead": m, "researcher": m, "integrator": m, "worker": m, "inspector": m},
+         "fallback": bool, "updated_at": "<UTC Z>"}, every m one of the three ids. Refused,
+        with the code of the first problem: a key or a role the contract does not have, a model
+        that is not one of the three, a fallback that is not true or false, and an inspector
+        WEAKER than the worker (inspector_weaker_than_worker).
+
+        -Strict is the PUT: all five roles and `fallback` must be there. Without it (the file
+        a person wrote, or nothing stored) what is missing is filled: a role from -DefaultModel
+        when given, else from the defaults; fallback on.
+    #>
+    param($Document, [switch]$Strict, [string]$DefaultModel = "")
+    $problems = New-Object System.Collections.ArrayList
+    $codes = New-Object System.Collections.ArrayList
+    $defaults = Get-TeamModelDefaults
+    $roles = [ordered]@{}
+    foreach ($role in $script:TeamModelRoles) {
+        $roles[$role] = if ($DefaultModel) { $DefaultModel } else { [string]$defaults.roles.$role }
+    }
+    $fallback = $true
+    $updated = [string]$defaults.updated_at
+    $named = @{}
+    if ($null -ne $Document -and $Document -isnot [System.Management.Automation.PSCustomObject]) {
+        [void]$problems.Add("the setting is not an object"); [void]$codes.Add("invalid")
+    }
+    elseif ($null -eq $Document) {
+        if ($Strict) { [void]$problems.Add("the setting is empty"); [void]$codes.Add("invalid") }
+    }
+    else {
+        foreach ($property in $Document.PSObject.Properties) {
+            if (@("roles", "fallback", "updated_at") -cnotcontains [string]$property.Name) {
+                [void]$problems.Add("'$($property.Name)' is not a key of the setting"); [void]$codes.Add("unknown_key")
+            }
+        }
+        $rolesNode = Get-TeamProperty -InputObject $Document -Name "roles"
+        if ($rolesNode -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($property in $rolesNode.PSObject.Properties) {
+                $role = [string]$property.Name
+                $model = [string]$property.Value
+                if (@($script:TeamModelRoles) -cnotcontains $role) {
+                    [void]$problems.Add("'$role' is not a role"); [void]$codes.Add("unknown_role")
+                    continue
+                }
+                if ($property.Value -isnot [string] -or -not (Test-TeamModelId -Model $model)) {
+                    [void]$problems.Add("'$model' is not a model (role $role): one of $(@($script:TeamModelChain) -join ', ')"); [void]$codes.Add("unknown_model")
+                    continue
+                }
+                $roles[$role] = $model
+                $named[$role] = $true
+            }
+        }
+        elseif ($null -ne $rolesNode -or $Strict) { [void]$problems.Add("'roles' is missing or not an object"); [void]$codes.Add("invalid") }
+        $fallbackNode = Get-TeamProperty -InputObject $Document -Name "fallback"
+        if ($fallbackNode -is [bool]) { $fallback = $fallbackNode }
+        elseif ($null -ne $fallbackNode -or $Strict) { [void]$problems.Add("'fallback' is true or false"); [void]$codes.Add("invalid") }
+        $stamp = [string](Get-TeamProperty -InputObject $Document -Name "updated_at" -Default "")
+        if ($stamp) { $updated = $stamp }
+    }
+    if ($Strict) {
+        foreach ($role in $script:TeamModelRoles) {
+            if (-not $named.ContainsKey($role) -and @($codes | Where-Object { $_ -eq "invalid" }).Count -eq 0) {
+                [void]$problems.Add("the role '$role' is missing"); [void]$codes.Add("missing_role")
             }
         }
     }
-    return [pscustomobject]@{ Ok = $ok; Text = $text; CostUsd = $cost; Why = $why; UsageLimited = $usageLimited; ResetsAt = $resetsAt }
+    # The inspector never runs on a weaker model than the worker (owner, 2026-10-01).
+    if ((Get-TeamModelRank -Model $roles["inspector"]) -gt (Get-TeamModelRank -Model $roles["worker"])) {
+        [void]$problems.Add("the inspector's model ($($roles['inspector'])) is weaker than the worker's ($($roles['worker']))")
+        [void]$codes.Add("inspector_weaker_than_worker")
+    }
+    $setting = [pscustomobject]@{ roles = [pscustomobject]$roles; fallback = $fallback; updated_at = $updated }
+    $code = if (@($codes).Count -gt 0) { [string]$codes[0] } else { "" }
+    return [pscustomobject]@{ Ok = (@($problems).Count -eq 0); Setting = $setting; Problems = @($problems.ToArray()); Code = $code }
+}
+
+function Get-TeamLimitScope {
+    <#
+    .SYNOPSIS
+        What a usage limit closes: Scope `model` (with Model), `all`, or `unknown`.
+
+    .DESCRIPTION
+        From the event's type when there is one, else from the limit's name in the sentence.
+        A session or weekly limit closes every model: lowering would start runs that hit the
+        same limit. `overage` / "out of usage credits" does not say whose limit it was: it is
+        `unknown`, the cycle marks the model that ran and the chain finds out the rest.
+    #>
+    param([string]$Type = "", [string]$Text = "")
+    if ($Type) {
+        if ($script:TeamLimitOfModel.ContainsKey($Type)) { return [pscustomobject]@{ Scope = "model"; Model = [string]$script:TeamLimitOfModel[$Type] } }
+        if (@($script:TeamLimitOfAll) -ccontains $Type) { return [pscustomobject]@{ Scope = "all"; Model = "" } }
+        return [pscustomobject]@{ Scope = "unknown"; Model = "" }
+    }
+    if ($Text -match '(?i)hit your (fable|opus|sonnet) limit') {
+        $byName = @{ "fable" = "claude-fable-5-1"; "opus" = "claude-opus-5-5"; "sonnet" = "claude-sonnet-5-5" }
+        return [pscustomobject]@{ Scope = "model"; Model = [string]$byName[$Matches[1].ToLowerInvariant()] }
+    }
+    if ($Text -match '(?i)hit your (session|weekly) limit') { return [pscustomobject]@{ Scope = "all"; Model = "" } }
+    return [pscustomobject]@{ Scope = "unknown"; Model = "" }
+}
+
+function Test-TeamModelLimited {
+    <#
+    .SYNOPSIS
+        Whether the cycle remembers a model as limited NOW. -Limited maps an id to an object
+        with `until` (UTC Z): a reset that has passed is no limit; no `until` at all is a
+        limit nobody dated, which holds for as long as the map does (one cycle).
+    #>
+    param($Limited, [string]$Model, [datetime]$Now = [datetime]::UtcNow)
+    if ($null -eq $Limited -or -not $Limited.ContainsKey($Model)) { return $false }
+    $until = [string](Get-TeamProperty -InputObject $Limited[$Model] -Name "until" -Default "")
+    if (-not $until) { return $true }
+    $at = ConvertFrom-TeamTimestamp -Text $until
+    return ($null -eq $at -or $Now.ToUniversalTime() -lt $at)
+}
+
+function Get-TeamRunModel {
+    <#
+    .SYNOPSIS
+        The model a run of a role starts on now, or Model = $null: it must WAIT.
+
+    .DESCRIPTION
+        The configured model when it is open. When it is limited and -Fallback is on, the next
+        open model DOWN the chain - never up: the strongest model's limit is the scarce thing
+        and a worker is not sent to it. With -Fallback off, only the configured model.
+
+        -Floor is the inspector's rule: the model the worker's run of that task really used.
+        The run starts on nothing weaker - a configured model below the floor is raised to it,
+        the chain stops at it, and before waiting a STRONGER open model is taken ("at least
+        as strong"). When every model at least that strong is limited the answer is $null:
+        the inspection waits; it is neither lowered nor skipped.
+
+        ResetsAt (when Model is $null) is the earliest reset among the models the run may
+        use, "" when nobody said when. Lowered is true when Model is weaker than Intended.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Configured,
+        $Limited = @{},
+        [bool]$Fallback = $true,
+        [string]$Floor = "",
+        [datetime]$Now = [datetime]::UtcNow
+    )
+    $chain = @($script:TeamModelChain)
+    $start = Get-TeamModelRank -Model $Configured
+    if ($start -lt 0) { throw "'$Configured' is not a model: one of $($chain -join ', ')" }
+    $floorRank = Get-TeamModelRank -Model $Floor
+    if ($floorRank -ge 0 -and $floorRank -lt $start) { $start = $floorRank }
+    $last = if ($Fallback) { @($chain).Count - 1 } else { $start }
+    if ($floorRank -ge 0 -and $last -gt $floorRank) { $last = $floorRank }
+    $candidates = New-Object System.Collections.ArrayList
+    for ($index = $start; $index -le $last; $index++) { [void]$candidates.Add($chain[$index]) }
+    if ($floorRank -ge 0 -and $Fallback) {
+        for ($index = $start - 1; $index -ge 0; $index--) { [void]$candidates.Add($chain[$index]) }
+    }
+    $picked = $null
+    $resets = ""
+    foreach ($candidate in $candidates) {
+        if (-not (Test-TeamModelLimited -Limited $Limited -Model $candidate -Now $Now)) { $picked = $candidate; break }
+        $until = [string](Get-TeamProperty -InputObject $Limited[$candidate] -Name "until" -Default "")
+        if ($until -and (-not $resets -or [string]::CompareOrdinal($until, $resets) -lt 0)) { $resets = $until }
+    }
+    return [pscustomobject]@{
+        Model      = $picked
+        Intended   = $chain[$start]
+        Lowered    = ($null -ne $picked -and (Get-TeamModelRank -Model $picked) -gt $start)
+        ResetsAt   = $(if ($null -eq $picked) { $resets } else { "" })
+        Candidates = @($candidates.ToArray())
+        Floor      = $Floor
+    }
+}
+
+function Get-TeamOkOutcome {
+    <# The outcome of a run that finished, as its report entry keeps it: with the model that
+       really ran, so a later inspection - in this cycle or another - knows its floor. The
+       queue's schema has no field for it; `outcome` is free text and travels with the task. #>
+    param([string]$Model = "")
+    if (Test-TeamModelId -Model $Model) { return "tamam (model $Model)" }
+    return "tamam"
+}
+
+function Get-TeamWorkerModel {
+    <# The model the task's last FINISHED worker run really used ("" when no entry says: a
+       run from before the policy - Get-TeamInspectionFloor then takes the configured worker
+       model). The reader of Get-TeamOkOutcome. #>
+    param($Task)
+    $model = ""
+    foreach ($report in @(Get-TeamProperty -InputObject $Task -Name "reports" -Default @())) {
+        if ([string](Get-TeamProperty -InputObject $report -Name "role" -Default "") -ne "worker") { continue }
+        $outcome = [string](Get-TeamProperty -InputObject $report -Name "outcome" -Default "")
+        if ($outcome -cmatch '^tamam \(model ([A-Za-z0-9._-]+)\)$' -and (Test-TeamModelId -Model $Matches[1])) { $model = $Matches[1] }
+    }
+    return $model
+}
+
+function Get-TeamInspectionFloor {
+    <# The model an inspection of this task is never started below, and never takes a verdict
+       below: the one the worker's run really used; when no entry says (a worker that finished
+       before the policy, a task queued by hand), the model the setting gives the worker -
+       an unknown is not "any model will do". Recorded says which of the two it is. #>
+    param($Task, [Parameter(Mandatory = $true)]$Setting)
+    $recorded = Get-TeamWorkerModel -Task $Task
+    if ($recorded) { return [pscustomobject]@{ Model = $recorded; Recorded = $true } }
+    return [pscustomobject]@{ Model = [string]$Setting.roles.worker; Recorded = $false }
 }
 
 function Get-TeamRoleTools {
@@ -710,7 +1108,14 @@ function New-TeamApiStore {
     if (-not (Test-Path -LiteralPath $TokenFile)) { throw "the queue token file does not exist: $TokenFile" }
     $token = [System.IO.File]::ReadAllText($TokenFile, [System.Text.Encoding]::UTF8).Trim()
     if (-not $token) { throw "the queue token file is empty: $TokenFile" }
-    return [pscustomobject]@{ Base = $Url.TrimEnd("/"); Token = $token; Baseline = @{} }
+    return [pscustomobject]@{
+        Base     = $Url.TrimEnd("/")
+        Token    = $token
+        Baseline = @{}
+        # The ids Save-TeamQueueApi -SkipStale was refused (409), AS THEY HAPPEN: a caller that
+        # catches a later task's error in the same save still learns of them.
+        Refused  = New-Object System.Collections.ArrayList
+    }
 }
 
 function Invoke-TeamApi {
@@ -726,24 +1131,42 @@ function Invoke-TeamApi {
     return (Invoke-JsonUtf8 -Uri ($Store.Base + $Path) -Method $Method -Headers @{ Authorization = ("Bearer " + $Store.Token) } -Body $json)
 }
 
-function Read-TeamQueueApi {
-    <# The whole queue, and a note of each task as it was read. #>
+function Get-TeamQueueApi {
+    <# The whole queue as the store has it now. Nothing is noted: a caller that may still refuse
+       what it read (a queue that breaks the protocol) keeps the versions it was working from. #>
     param([Parameter(Mandatory = $true)]$Store)
-    $queue = Invoke-TeamApi -Store $Store -Method "GET" -Path "/v1/team/queue"
+    return (Invoke-TeamApi -Store $Store -Method "GET" -Path "/v1/team/queue")
+}
+
+function Set-TeamQueueBaseline {
+    <# Notes each task of a queue as it was read: the version a later write is made from. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Queue)
     $Store.Baseline.Clear()
-    foreach ($task in (Get-TeamTasks -Queue $queue)) {
+    foreach ($task in (Get-TeamTasks -Queue $Queue)) {
         $Store.Baseline[[string]$task.id] = [pscustomobject]@{
             Updated = [string]$task.updated_at
             Json    = (ConvertTo-Json -InputObject $task -Depth 12 -Compress)
         }
     }
+}
+
+function Read-TeamQueueApi {
+    <# The whole queue, and a note of each task as it was read. #>
+    param([Parameter(Mandatory = $true)]$Store)
+    $queue = Get-TeamQueueApi -Store $Store
+    Set-TeamQueueBaseline -Store $Store -Queue $queue
     return $queue
 }
 
 function Save-TeamQueueApi {
     <# Writes back the tasks that changed (or are new), each with the version it was read at.
-       A stale write throws: the queue moved under us and the cycle must not overwrite it. #>
-    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Queue)
+       A stale write throws: the queue moved under us and the cycle must not overwrite it.
+       With -SkipStale a stale write (409) is that ONE task's: it is left as the store has it,
+       the other tasks are still written, and the ids that were left are returned - somebody
+       else decided about that task while we worked, and their word stands. Without the switch
+       nothing is returned. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Queue, [switch]$SkipStale)
+    $stale = New-Object System.Collections.ArrayList
     foreach ($task in (Get-TeamTasks -Queue $Queue)) {
         $id = [string]$task.id
         $json = ConvertTo-Json -InputObject $task -Depth 12 -Compress
@@ -752,9 +1175,32 @@ function Save-TeamQueueApi {
         $expected = $null
         if ($null -ne $known) { $expected = $known.Updated }
         $body = [ordered]@{ task = $task; expected_updated_at = $expected }
-        [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/tasks/$id" -Body $body)
+        try { [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/tasks/$id" -Body $body) }
+        catch {
+            if ($SkipStale -and ([string]$_.Exception.Message) -match '^HTTP 409 ') {
+                [void]$stale.Add($id)
+                [void]$Store.Refused.Add($id)
+                # Noted as "nothing new to write", so the same refused write is not sent again by
+                # every later save of the pass; the version stays the stale one, so a further
+                # change of ours to this task is refused as well, until the queue is read again.
+                $Store.Baseline[$id] = [pscustomobject]@{ Updated = $expected; Json = $json }
+                continue
+            }
+            throw
+        }
         $Store.Baseline[$id] = [pscustomobject]@{ Updated = [string]$task.updated_at; Json = $json }
     }
+    if ($SkipStale) { return @($stale.ToArray()) }
+}
+
+function Set-TeamTaskWritten {
+    <# Notes a task's present content as "nothing new to write" WITHOUT touching its version:
+       for a copy the caller put back after the store refused its write. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Task)
+    $id = [string]$Task.id
+    $known = $Store.Baseline[$id]
+    $version = if ($null -ne $known) { $known.Updated } else { $null }
+    $Store.Baseline[$id] = [pscustomobject]@{ Updated = $version; Json = (ConvertTo-Json -InputObject $Task -Depth 12 -Compress) }
 }
 
 function Get-TeamLockApi {
@@ -784,6 +1230,23 @@ function Send-TeamReportApi {
     <# The report as text, so the Onay Merkezi on the Cloud Core can show it. #>
     param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
     [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/reports" -Body ([ordered]@{ name = $Name; text = $Text }))
+}
+
+function Send-TeamProposalApi {
+    <# One file of team/proposals/ as text, so the Onay Merkezi's "Detay" has it (ADR-0236). #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
+    [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/proposals" -Body ([ordered]@{ name = $Name; text = $Text }))
+}
+
+function Get-TeamModelsApi {
+    <# The model setting from the team store (ADR-0214 addendum 7). $null when this Cloud Core
+       does not have the route yet (404): the caller then reads the local file, then the defaults. #>
+    param([Parameter(Mandatory = $true)]$Store)
+    try { return (Invoke-TeamApi -Store $Store -Method "GET" -Path "/v1/team/queue/models") }
+    catch {
+        if ($_.Exception.Message -match '^HTTP 404 ') { return $null }
+        throw
+    }
 }
 
 function Save-TeamStatusApi {
