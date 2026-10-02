@@ -14,6 +14,9 @@ PostgreSQL in ``tests/integration/test_team_trials_postgres.py``.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -273,6 +276,54 @@ def test_olmadi_records_the_verdict_and_opens_exactly_one_fix_task(both, engine)
     assert "MAIL -> ofis" in fix["goal"]
     assert team_store.task_problems(fix) == []
     assert [e.event_type for e in _events(engine)] == [trials.EVENT_TRIAL_FAILED]
+
+
+_WINDOWS_POWERSHELL = (
+    Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    / "System32"
+    / "WindowsPowerShell"
+    / "v1.0"
+    / "powershell.exe"
+)
+POWERSHELL = str(_WINDOWS_POWERSHELL) if _WINDOWS_POWERSHELL.is_file() else shutil.which("pwsh")
+
+
+def test_the_fix_task_waits_for_the_leads_split_and_is_never_run_without_an_area(both, tmp_path):
+    """Regression (inspector, d20261003): an ``approved`` task with no area and no ``proposal``
+    is moved to ``assigned`` by the cycle and breaks the queue for every later cycle
+    (``team-feed.tests.ps1``). The fix task carries the trial as its proposal (prose: the split
+    card prints it whole, whichever store keeps the queue), and the cycle's OWN functions -
+    ``scripts/lib/TeamQueue.ps1`` - judge it a split candidate that is not run."""
+    client, store = both
+    body = {"task_id": "uzak-hesap", "trial_id": "ofis-hesap", "verdict": "olmadi", "said": "yok"}
+    assert client.post(DECISION, json=body).status_code == 200
+    fix = _tasks(store)["fix-uzak-hesap-1"]
+    assert fix["area"] == []
+    assert "Ofis bilgisayarımdan hesap makinesini aç" in fix["proposal"]
+    assert SHA in fix["proposal"]
+    assert not fix["proposal"].startswith("team/")  # prose, not a file the cycle cannot find
+    if POWERSHELL is None:
+        pytest.skip("no PowerShell: the cycle's half is not run here")
+    task_file = tmp_path / "fix.json"
+    task_file.write_bytes(json.dumps(fix, ensure_ascii=False).encode("utf-8"))
+    script = (
+        f". '{REPO / 'scripts' / 'lib' / 'TeamQueue.ps1'}'; "
+        f"$t = [System.IO.File]::ReadAllText('{task_file}', [System.Text.Encoding]::UTF8)"
+        " | ConvertFrom-Json; "
+        "Write-Output ('split=' + (Test-TeamSplitCandidate -Task $t)); "
+        "Write-Output ('next=' + (Get-TeamNextRole -Task $t).Kind)"
+    )
+    done = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "split=True" in done.stdout, done.stdout + done.stderr
+    assert "next=rest" in done.stdout, done.stdout + done.stderr
 
 
 def test_a_second_decision_on_the_same_trial_is_409_and_opens_nothing(both, engine):

@@ -8,8 +8,9 @@ plain sentence, is still valid in the queue; it has no id to decide on and is no
 "Oldu" records the verdict and nothing more: PROVEN_REAL is the lead's to write, quoting the
 owner, so the task's state is left as it is and, when no trial is left open and none failed,
 its ``reason`` says the owner tried and the lead writes the row. "Olmadı" records the verdict
-and opens a fix task (``approved``, the trial and the owner's words quoted, no area - the
-lead's split gives it one). The decision is a ledger event recorded before the queue is
+and opens a fix task (``approved``, the trial and the owner's words quoted, no area, the same
+text as its prose ``proposal`` - a split candidate, so the lead's split gives it an area and the
+cycle never runs it without one). The decision is a ledger event recorded before the queue is
 written, and it is refused on the file store while a cycle holds the queue, exactly as
 ``approvals.decide`` is; on the database store it is taken while a cycle runs (every write is
 conditional on the version read).
@@ -112,6 +113,11 @@ def _fix_task(
         "created_at": at,
         "updated_at": at,
         "goal": goal,
+        # A split candidate (TeamQueue.ps1 Test-TeamSplitCandidate): approved, no area, and a
+        # proposal. Without one the cycle moves the task to "assigned" with no area and refuses
+        # the queue in every later cycle. Prose, not a team/proposals path: the split card
+        # prints it whole, and on the Cloud Core there is no file for the lead's run to read.
+        "proposal": goal,
         "reason": FIX_REASON,
     }
 

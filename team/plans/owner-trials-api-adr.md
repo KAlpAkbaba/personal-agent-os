@@ -27,6 +27,20 @@ Proposal: team/proposals/2026-10-01-deneme-listesi.md (owner approved 2026-10-01
   original's `roadmap_row` and budget, title `Düzelt: <sentence>`, the goal quoting the
   sentence, machine, expectation, the owner's words and the released sha. The original task
   is written first (its conditional write is the race guard), then the fix task.
+- The fix task's `proposal` is the same text as its goal, as prose (inspector return,
+  d20261003). Without a proposal an approved task with no area is not a split candidate
+  (`Test-TeamSplitCandidate`): the cycle moves it to `assigned` and `Test-TeamQueue` then
+  refuses the queue in every later cycle. Prose, not a `team/proposals/` path: the split card
+  prints it whole, and on the Cloud Core no file exists for the lead's run to read - so no
+  one has to write a proposal file. A unit test runs the cycle's own `TeamQueue.ps1` on the
+  task the route made (split candidate, next = rest).
+
+## Open risks
+- The ledger event is recorded before the queue write (as in `approvals.decide`): a
+  `stale_write` leaves a `team.trial.*` event for a decision that never landed. The
+  response is 409 and the owner retries; the orphan event names the `updated_at` it read.
+- "olmadi" makes two writes that are not one transaction (the task, then the fix task): a
+  failure between them leaves the verdict recorded with no fix task.
 
 ## For the lead at merge
 - Vocabulary: add `team.trial.passed` and `team.trial.failed` (`trials.EVENT_TRIAL_PASSED`,

@@ -183,6 +183,8 @@ def test_trials_are_listed_and_decided_while_a_cycle_holds_the_lock_on_postgres(
     assert (fix["state"], fix["area"], fix["reason"]) == ("approved", [], "alan: lead belirler")
     assert '"Ofis bilgisayarımdan hesap makinesini aç"' in fix["goal"]
     assert '"ofiste açılmadı"' in fix["goal"] and SHA in fix["goal"]
+    # A split candidate, not a worker's task without an area (the cycle's own rule).
+    assert fix["proposal"] == fix["goal"]
     assert task_problems(fix) == []
     assert not [t for t in client.get(APPROVALS).json()["trials"] if t["task_id"] == task_id]
     lock = store.read_lock()
