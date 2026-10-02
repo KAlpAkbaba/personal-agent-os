@@ -15,63 +15,51 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (2026-10-02 13:02 UTC, api-green), LKG `f91ad1e3`, pin = RELEASE,
-reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`d71a0bac`; 14 699 birim,
-2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
-**DÖRDÜNCÜ ENTEGRASYON HAZIRLANDI (lead, 2026-10-02 16:40): dal `gate/d20261002-4` (worktree `.claude/worktrees/gate7`) = lead
-dalı + `area-widen-rules` (ADR-0253) + `model-policy-api` (ADR-0214 ek 14) + lead'in bağlaması: `test_team_state.py`'nin iki
-düzenlemesi, `team-area.tests.ps1` CI dosyasına eklendi, QUALIFICATION 41.7'ye izlenebilir kanıt adı, korunan yollara dokuz
-giriş (liste kendisi, `.claude/hooks`, `.claude/settings*.json`, her `CLAUDE.md`, `PROJECT_CONSTITUTION.md`,
-`docs/DEVELOPMENT_POLICY.md`, `.git`, her `.gitignore`, `release-cloud-core.ps1`; kapı/CI/cycle.ps1/TeamQueue.ps1 BİLEREK
-korunmadı). ÖN KONTROL İKİ KIRMIZI YAKALADI (CI listesi, 41.7) - ikisi de kapandı. Compose/migration YOK → kapı yeşilse
-ONAYSIZ yayınlanır. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
-limitleri 'şu tarih itibarıyla' gösterilir" notu. KAPI ana kopyada bu dalın ucunda DETACHED koşar; günlük
-`scratchpad/gate/gate-<sha>.log`. Yeşilse main `--no-ff` → it → ön kontrol → yayın → pin → doğrula → `released` → Stage 45.**
-**17:25 KAPISI (`8425c6d9`) KIRMIZIYDI ve 3,5 SAAT sürdü (lead 21:05'te durdurdu); üç adım: (1) GERÇEK - `installer-strictmode`:
-`scripts/lib/TeamArea.ps1`'de yedi çıplak `.Count` (denetleyici o paketi koşmamıştı, lead'in ön kontrolü de) → `@( ).Count`,
-paket 24/0; (2) TEST YARIŞI - `test_mobile_push::test_the_announcer_fires…`: uygulamanın kendi 5 sn'lik duyuru döngüsü testin
-taramasından önce işi alıyordu; modül tek başına, yüksüz de düşüyordu (lead yeniden üretti) → test döngüyü durdurur, cihazı
-önce kaydeder, kendi işini READY yapar: 4/4 geçti; (3) YÜK - `SceneUnityProductionTests` Unity'de 600 sn'yi aştı (13 dk;
-öğleden sonraki kapıda Agent testlerinin TAMAMI 2 dk 40 sn). O saatlerde makinede kapı + üç denetleyici + sahip derlemini
-60+ dk koşturan bir çalışan vardı: birim paketi 56 dk yerine 2 sa 02 dk sürdü. ALTI AJAN + KAPI BU MAKİNEYE SIĞMIYOR:
-`cycle-seat-pool`'un çalışma zamanı ayarı gelince kapı koşarken koltuk sayısı düşürülecek (lead kararı, sahibe söylendi).
-AYRICA: döngü 6 saati geçince kilit "bayat" sayılıyor (`TeamLockStaleHours = 6`, yalnız `acquired_at`'e bakar): 20:05'ten
-beri Ofis "0/6, çalışmıyor" gösterdi ve başka bir makine kilidi DEVRALABİLİRDİ - kart `team-lock-heartbeat`.**
-**16:48 DENETİM SONUÇLARI: `cycle-seat-pool` GERİ DÖNDÜ (gerçek kusur: başlatılamayan bir iş, sırada iş varken döngüyü
-bitiriyordu; çalışanda - sahibin önceliği, onaylanınca BEKLETMEDEN ayrı kapı). `cycle-auto-integrate` beşinci denetimde
-onaylandı, lead bu tura ekledi ve GERİ ÇIKARDI: birleşik ağaçta paketin ön koşusu yük altında 77 geçti / 1 KALDI ("a process
-the lead's run leaves behind is stopped BEFORE its diff is read": geride kalan süreç YAZDI). Neden (lead'in okuması):
-`New-TeamRunJob` koşu BAŞLADIKTAN SONRA iş nesnesine alıyor; yük altında koşu, atamadan önce çocuğunu başlatıyor ya da
-bitiyor (`Held=false`), çocuk hiçbir iş nesnesinde değil. İş bulguyla çalışana döndü; lead'in bağlaması (ADR-0254 metni,
-kapı adımı, CI satırı) `lead/auto-integrate-wiring` @ `742d4f51` dalında SAKLI, yeniden kullanılacak. ADR-0254'ün açık
-kararları için beş kart kuyrukta: `integrate-own-lock`, `gate-own-database`, `gate-parallel-suites`,
-`integrate-skips-visible`, `run-liveness-visible` (sahip: "takılmalar var mı öğrenelim" - koşuların süre sınırı YOK ve
-çıktı ancak koşu bitince okunuyor; bugün takılan bir koşu görünmezdi).**
-**YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
-`f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
-Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:
-araştırma kuralının anahtarı api'ye iletiliyor ve KAPALI (`printenv` -> `false`); temporal kabı Docker init altında
-(ADR-0252). TEMPORAL HOST ADIMI YAPILDI 13:03:44-13:03:51 UTC (7 sn): `HostConfig.Init` true, host'ta 0 zombi, sağlık ok.
-Host snapshot 13:05 UTC'de yenilendi.**
-**DÖNGÜ: `d20261002`, 14:05'te başladı (pid 36220), 6/6; 15:51'de ikinci tur. Fable'ın haftalık limiti 2026-10-05 16:00
-UTC'ye kadar DOLU; koşular Opus 5.5'te. DENETİMDE: `model-policy-api`, `cycle-auto-integrate`, `cycle-seat-pool`,
-`web-voice-session-storm-flake`, `local-embedder-lru-lock`. `area-widen-rules` MERGED (integrate/d20261002). SIRADAKİ
-ENTEGRASYON (dördüncü): `integrate/d20261002`'de birleşenler + lead dalındaki kayıtlar; `cycle-seat-pool` onaylanırsa
-ÖNCELİKLİ (sahip: "sürekli tur bekliyoruz?") - yayından sonra döngü `team/stop.flag` ile yeni koda alınır.**
-**BUGÜN KUYRUĞA EKLENEN (lead): `misheard-ledger-store` yeniden açıldı (dal `b9415e90`, lead dalı üstünde; alan +2 sağlık
-testi; tek eksik 24 saatlik süpürme döngüsü); `measure-recordings-api` aynı `main.py` yüzünden `approved`'a geri alındı.
-Yedi yeni kart: `stt-engine-on-turn-audit`, `pack-question-button`, `webtask-write-ceiling-retention`,
-`cloud-search-engines-probe`, `stt-corpus-layer2-remeasure`, `feeder-own-lock` (cycle-seat-pool'u bekler),
-`office-stable-seats` (sahibin gözlemi: biri bitince çalışanlar koltuk değiştiriyor GİBİ görünüyor, sırada bekleyen iş
-uyarı işaretiyle çiziliyor; cycle-seat-pool'u bekler). Dört onaylı fikir ROADMAP "Approved ideas" tablosunda.**
-**SAHİBİ BEKLEYEN (hepsi deneme/karar, acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 43.1 ("Bugün nasılsın" de: denetim
-satırında katman `semantic`); 43.2 (bir düzeltme öğret: "ona X deme, Y de"); STT ölçümü için yirmi cümle (ölçüm kaydı
-fikri bunu sayfaya getiriyor). 42.1 GÖRÜLDÜ: sahip 2026-10-02'de Ofis'te "Çalışan 4" ve "Çalışan 5"i ekran görüntüsüyle
-gösterdi (yenilemeden önce eski sayfa kodu "worker" yazıyordu).**
-**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez (`feeder-own-lock`). (2) kapı ~90 dk ve tek sıra
-("koruyucu testler iş dalında" bunu hedefliyor). (3) döngü, turdaki en uzun koşu bitene kadar boş koltukları doldurmaz
-(`cycle-seat-pool` denetimde). (4) `LocalEmbedder` önbelleği kilitsiz (düzeltmesi denetimde). (5) tarayıcı görev zinciri
-üretimde ulaşılamaz (PR-D). (6) Ofis koltukları koşu bitince yeniden numaralanıyor (`office-stable-seats`).**
+**ÜRETİM: main `86e6fde9b64682885591dfe0ad7b365285a79cc9` (2026-10-02 20:55 UTC, api-blue), LKG `f60e02e4`, pin = RELEASE,
+reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 39/39 (`c18dacd7`; 14 806 birim, 156
+entegrasyon, 2 162 web). QUALIFICATION Stage 45. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**KAPIDA (lead, 2026-10-03 00:30): BEŞİNCİ ENTEGRASYON, dal `gate/d20261003-1` (worktree `.claude/worktrees/gate8`) = lead dalı +
+`cycle-seat-pool` @ `9ed17633` (ADR-0214 ek 15: döngü artık HAVUZ - koltuk boşalınca dolar, koltuklar role göre, her dolumda
+depo ve `team/cycle-settings.json` okunur, `-MaxHours 4` sonra döngü kendini güncel betiğe bırakır) + `web-voice-session-storm-flake`
+(ADR-0251 ek 1). SAHİP 2026-10-02 gece: "Geceyi bekleme, kapı yeşilse hemen devreye al." SIRA: kapı ana kopyada DETACHED →
+yeşilse main `--no-ff` → it → yayın → pin → doğrula → `team/stop.flag` YAZ (eski döngü yeni koşu başlatmaz, koşuları bitince
+biter) → bir sonraki tick HAVUZU başlatır (zamanlanmış görev DEĞİŞMEDİ: `-MaxParallel 6` artık ALTI ÇALIŞAN koltuğu + 2
+denetleyici + 1 entegratör + araştırmacı + lead = en çok 11 koşu; sahibin isteği. Kapı yanında yavaşlarsa `team/cycle-settings.json`
+yazılır) → Ofis'te "bir çalışan bitince koltuğu hemen doluyor" görülünce QUALIFICATION'a PROVEN_REAL → Stage 46.
+`misheard-ledger-store` lead'in alan hatasıyla durmuştu (alan listesinde 0064 adı kalmıştı): alan düzeltildi, lead'in ELLE
+başlattığı denetim sürüyor (rapor `team/reports/d20261002/misheard-ledger-store-inspector-2.md`); onaylanırsa lead elle
+birleştirir. Yeni kartlar: `cycle-pool-test-barriers`, `voice-gone-is-terminal`.**
+**YAYINDA (bugün dört yayın): `e5c4d1f3` 4 çalışan koltuğu, döngü kuyruğu her turda okur; `f91ad1e3` ADR-0224 katman 2 üretimde,
+düzeltmeler hafızaya; `f60e02e4` iki onaylı compose değişikliği (araştırma kuralı anahtarı KAPALI iletiliyor, temporal Docker
+init altında - host adımı yapıldı); `86e6fde9` alan genişletme kuralları (ADR-0253, kablosuz) + model politikası Cloud Core'da
+(ADR-0214 ek 14: `GET/PUT /v1/team/queue/models`, sunucu yerel `team/models.json` ile AYNI ayarı veriyor).**
+**DÖNGÜ: `d20261002`, 14:05'te başladı (pid 36220, eski kodla). 6 saati geçtiği için Ofis 20:05'ten beri "0/6, çalışmıyor"
+gösteriyor - YANLIŞ (kilit yalnız `acquired_at`'e bakıyor): kart `team-lock-heartbeat` (yalnız sunucu, öncelikli). Fable ana
+hesapta 2026-10-05 16:00 UTC'ye kadar DOLU.**
+**SAHİBİN BU AKŞAMKİ KARARLARI (ayrıntı: hafıza `owner-decisions-2026-10-02-accounts-test-slots`): (1) İKİ EK CLAUDE HESABI
+BAĞLANDI (sahip giriş yaptı 21:55): `%USERPROFILE%\.claude-hesap2` (team planı, bir şirket kuruluşu) ve `.claude-hesap3` (pro).
+Lead ölçtü: Opus 5.5 üçünde de çalışıyor; Fable HİÇBİRİNDE yok (ek hesaplarda `credits_required` - kredi satın almak sahibin).
+Kartlar `account-pool-cycle` (hesap model düşürmeden ÖNCE denenir; sıra hesap-1, -2, -3), `account-pool-visible`. (2) SAHİBİN
+FİKRİ - test sırası ONAY / BEKLE: kart `test-slots` (bağımlılığı yok). (3) test sırası + `cycle-seat-pool` yayına girince
+çalışan koltuğu İKİ artırılır, ölçülür. (4) sahip artık oyun oynamayacak; o gece VR oyunu vardı (17:25 kapısının Unity hatası).**
+**GEÇİCİ KLASÖR: kullanıcının TEMP'inde 2 671 896 öğe vardı (ses derlemi harness'inin dört `mkdtemp`'i, hiç silinmiyordu) -
+testler bekliyordu, birim adımı 1 sa 48 dk. Sahip lead'in betiğiyle (`scratchpad/clean-test-temp.ps1`, yalnız dört önek, 24 sa'ten
+eski) 2 312 840 klasörü sildi (0 hata, 24 dk). Kalıcı düzeltme kartı `corpus-temp-dirs-leak` (ÖNCELİKLİ). Sonraki kapının süresi
+bunun ölçümüdür - QUALIFICATION 45.5'e yazılacak.**
+**İŞTE / SIRADA: `cycle-seat-pool` geri döndü (başlatılamayan iş döngüyü bitiriyordu) - sahibin önceliği, onaylanınca AYRI kapı;
+`cycle-auto-integrate` geri döndü (iş nesnesine başladıktan sonra alınıyor; lead'in bağlaması `lead/auto-integrate-wiring` @
+`742d4f51` dalında saklı); `understanding-rules-read-lemmas`, `execution-call-site-routines`, `narrative-model-wiring` 20:53'te
+denetimden döndü; `misheard-ledger-store` yazılıyor. Bugün lead'in kestiği kartlar: stt-engine-on-turn-audit, pack-question-button,
+webtask-write-ceiling-retention, cloud-search-engines-probe, stt-corpus-layer2-remeasure, feeder-own-lock, office-stable-seats,
+office-panel-plain-turkish, run-liveness-visible, team-status-bounds, area-widen-cycle-wiring, integrate-own-lock,
+gate-own-database, gate-parallel-suites, integrate-skips-visible, team-lock-heartbeat, test-slots, account-pool-cycle,
+account-pool-visible, corpus-temp-dirs-leak.**
+**SAHİBİ BEKLEYEN (acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 43.1 ("Bugün nasılsın" - denetim satırında katman `semantic`);
+43.2 (bir düzeltme öğret); STT ölçümü için yirmi cümle (ölçüm kaydı sayfası gelince).**
+**BİLİNEN AÇIKLAR: (1) besleyici döngü koşarken kart kesmez (`feeder-own-lock`). (2) döngü turdaki en uzun koşuyu bekler
+(`cycle-seat-pool`). (3) Ofis 6 saatten sonra döngüyü ölü gösterir ve başka makine kilidi devralabilir (`team-lock-heartbeat`).
+(4) koşuların süre sınırı yok ve takıldığı görünmez (`run-liveness-visible`). (5) kapı tek sıra, ~1,5-2 sa (`gate-parallel-suites`,
+`gate-own-database`). (6) tarayıcı görev zinciri üretimde ulaşılamaz (PR-D).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,
