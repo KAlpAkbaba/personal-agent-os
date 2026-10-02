@@ -280,6 +280,32 @@ def test_a_sentence_that_says_dont_is_read_as_heard():
     assert resolved == intents_module._resolve_intent_rules(said)
 
 
+@pytest.mark.parametrize(
+    ("said", "never"),
+    [
+        ("Ekranları kapatma ışıkları söndürün", Intent.DISPLAY_OFF),
+        ("Ekranları kapatma ama ışıkları söndürün", Intent.DISPLAY_OFF),
+        ("Gözünü kapatma ekranları kapatın", Intent.EYE_DISABLE),
+        ("Alarmı kurma hatırlatma kurun", Intent.ALARM_CREATE),
+        ("Not defterini kapatma hesap makinesini kapatın", Intent.APP_CLOSE),
+        (
+            "Kendi kendini geliştirmeyi duraklatma ama araştırmayı duraklatın",
+            Intent.EVOLUTION_PAUSE,
+        ),
+    ],
+)
+def test_a_dont_without_punctuation_still_says_dont(said, never):
+    """Chrome Web Speech writes no punctuation (ADR-0173): a bare negative of a known verb
+    before another word is "don't" unless that word proves it the verbal noun, so the polite
+    clause beside it gets no reading (inspector-2, finding 1). Red when the guard rests on
+    punctuation."""
+    assert layer_one.lemma_reading(said) is None, said
+    resolved = resolve_intent(said)
+    assert resolved == intents_module._resolve_intent_rules(said), said
+    assert resolved.route_repair is None, said
+    assert resolved.intent is not never or resolved.confidence < SUFFIX_DROPPED, said
+
+
 def test_a_verbal_noun_is_not_a_negative():
     """ "Araştırma" the noun is spelled like "don't research"; it is a known noun."""
     reading = layer_one.lemma_reading("Araştırma raporunu gösterin.")

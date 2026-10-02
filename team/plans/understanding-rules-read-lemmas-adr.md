@@ -23,7 +23,10 @@ the second pass (decision 2's owned-sentence rule) in ONE process on the committ
 (`intents.py` sha256 `d9c42028…`, `normalize.py` `3f582858…`): **2754 / 2754** (2756 tests
 passed, 0 failed, 22 min 24 s on a busy machine). The STT numbers above did not move with the
 second pass. About 300 of the owner sentences carry a polite form layer 1 now reads; none
-changed its route.
+changed its route. Third pass (the "don't" guard without punctuation, the two-ways test), on
+main 65cd94ff merged in, `normalize.py` sha256 `b50c7ed7…`, `intents.py` unchanged `d9c42028…`:
+Owner Utterance Suite **2754 / 2754** (2756 passed, 0 failed, 20 min 20 s, TMP/TEMP on an empty
+E: folder); STT report unchanged (98/106 = 0.9245, polite 29/29, fused 24/29, 0 wrong-device).
 
 **Decision.**
 
@@ -70,12 +73,26 @@ changed its route.
    words layer 1 knows (a stem, a stem with its suffix chain, or one of the closed `_WORDS`).
    Never: a token that is itself a known word ("bugün", "bugünün", "masaüstünde"); a verb as the
    first half ("silver" is not sil + ver); a negative form as a half; a half under two letters;
-   a second split; a token that divides two ways.
+   a second split; a token that divides two ways ("masaüstümüziki" is masaüstü + müziki and
+   masaüstümüz + iki: left whole - held by `test_a_token_that_divides_two_ways_is_left_whole`,
+   added in the third pass after inspector-2 found the claim untested).
 4. **A negative never becomes its positive.** The grammar has no negative chain, so "kapatma" and
    "unutma" keep their surface (unchanged). New, and explicit: `lemma_reading` returns None for a
    sentence that carries a negative imperative of a known verb (`_says_dont`), so a polite clause
-   beside a "don't" is not turned into the action. The bare form before another word is the verbal
-   noun ("indirme klasörünü gösterin") and does not count.
+   beside a "don't" is not turned into the action. **Corrected in the third pass:** the bare form
+   ("kapatma") is ALSO the verbal noun, and the first build counted it as "don't" only at the end
+   of a clause or before punctuation - but Chrome Web Speech (ADR-0173) writes no punctuation, so
+   "Ekranları kapatma ışıkları söndürün" read as `display_off` at 0.9 (inspector-2: 9 of 25
+   unpunctuated probes flipped, acting at HIGH). Now a bare negative before another word says
+   "don't" UNLESS that word proves it the verbal noun: the next word, with nothing between them, is
+   a compound head (`normalize._is_compound_head`) - a known noun, not a verb, whose EVERY reading
+   carries a possessive ("indirme klasörünü gösterin": klasör + poss3sg/poss2sg + acc). "ışıkları",
+   "ama", "hatırlatma", "kurun", a bare noun, a word layer 1 does not know - none proves it, so
+   the sentence gets no reading and is resolved as heard. Erring this way costs only the reading
+   (the surface tables still run); the corpora did not move (STT 98/106 unchanged; owner corpus
+   below). The sentences of the finding are router tests (`test_a_dont_without_punctuation_still_says_dont`).
+   Not closed here, and not new: their BARE twins ("Ekranları kapatma ışıkları söndür") are
+   resolved by the surface tables as on main.
 5. **Mail and calendar.** The older repairs never route into `mail_*` / `calendar_*` (B45/B46).
    This reading is narrower, not wider, about ACTIONS - "Gönderir misin?", "Gönderin." after a
    read-back are still not a send, and a sentence a mail/calendar table already owns is never

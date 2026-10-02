@@ -564,10 +564,34 @@ _IMPERATIVE_CHAINS: Final[frozenset[tuple[str, ...]]] = frozenset(
 _QUESTION_CHAINS: Final[frozenset[tuple[str, ...]]] = frozenset({("aor",), ("pot", "aor")})
 
 
+def _readings(token: str, kind: str) -> list[tuple[str, ...]]:
+    """Every suffix chain that explains the token on a known stem of the kind (every cut)."""
+    endings, attach = (
+        (_VERB_ENDINGS, _attach_verb) if kind == VERB else (_NOUN_ENDINGS, _attach_noun)
+    )
+    found: list[tuple[str, ...]] = []
+    for cut in range(len(token) - 1, 0, -1):
+        stem = token[:cut]
+        if _is_known_stem(stem, kind):
+            found += [c for c in endings.get(token[cut:], ()) if attach(stem, c) == token]
+    return found
+
+
+def _is_compound_head(word: str) -> bool:
+    """The word proves the bare negative before it a verbal noun ("indirme klasörünü"): a known
+    noun whose EVERY reading carries a possessive. "ışıkları", "ama", "kurun" prove nothing."""
+    probe = word.replace("'", "")
+    if probe in _ALL_VERBS or probe in _NOUN_STEMS or _readings(probe, VERB):
+        return False
+    chains = _readings(probe, NOUN)
+    return bool(chains) and all(any(s.startswith("poss") for s in c) for c in chains)
+
+
 def _says_dont(words: list[re.Match[str]], folded: list[str], text: str) -> bool:
     """THE negative-form guard of the reading: the sentence carries a negative imperative of a
-    known verb. The bare form ("kapatma") counts where a clause ends on it - a word follows
-    the verbal noun it is spelled like ("indirme klasörünü")."""
+    known verb. The bare form ("kapatma") is also the verbal noun, and is read as one only
+    where the next word, with nothing between them, is a compound head (:func:`_is_compound_head`):
+    speech-to-text writes no comma, so "kapatma ışıkları söndürün" says "don't"."""
     for index, token in enumerate(folded):
         if not is_negative(token):
             continue
@@ -575,6 +599,8 @@ def _says_dont(words: list[re.Match[str]], folded: list[str], text: str) -> bool
             return True
         if text[words[index].end() : words[index + 1].start()].strip():
             return True  # punctuation closes the clause: "kapatma, ..."
+        if not _is_compound_head(folded[index + 1]):
+            return True
     return False
 
 

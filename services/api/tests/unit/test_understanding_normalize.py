@@ -281,6 +281,39 @@ def test_lemma_reading_of_a_sentence_that_says_dont_is_none():
     assert reading is not None and reading.dropped == (("gösterin", "göster"),)
 
 
+@pytest.mark.parametrize(
+    "said",
+    [
+        "Ekranları kapatma ışıkları söndürün",  # the next word is no compound head
+        "Ekranları kapatma ama sesi açın",  # a conjunction
+        "Alarmı kurma hatırlatma kurun",
+        "Sesi açın ekranları kapatma",  # the last word
+    ],
+)
+def test_a_bare_negative_says_dont_without_punctuation(said):
+    """Speech-to-text writes no comma: the bare negative is the verbal noun only when the next
+    word is provably a compound head (a known noun whose every reading carries a possessive)."""
+    assert norm.lemma_reading(said) is None
+
+
+def test_the_compound_head_is_proven_only_when_every_reading_is_possessive():
+    assert norm._is_compound_head("klasörünü")  # klasör + poss + acc, both ways
+    assert not norm._is_compound_head("ekranları")  # pl + acc reads too
+    assert not norm._is_compound_head("ekran")  # a bare noun
+    assert not norm._is_compound_head("ama")  # not a noun this module knows
+    assert not norm._is_compound_head("kurun")  # a verb
+
+
+def test_a_token_that_divides_two_ways_is_left_whole():
+    """ADR decision 3: at most one split, and only one way. "masaüstümüziki" is masaüstü +
+    müziki and masaüstümüz + iki; layer 1 cannot tell which, so it guesses neither."""
+    assert norm._known("masaüstü") and norm._known("müziki")
+    assert norm._known("masaüstümüz") and norm._known("iki")
+    n = normalize("masaüstümüziki")
+    assert n.tokens == ("masaüstümüziki",) and n.applied_splits == ()
+    assert norm.lemma_reading("Masaüstümüziki açın.").splits == ()
+
+
 # ------------------------------------------------------------------ the protocol file
 
 
