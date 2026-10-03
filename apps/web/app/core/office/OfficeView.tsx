@@ -8,6 +8,7 @@ import Link from "next/link";
 import OfficePanel from "./OfficePanel";
 import OfficeScene from "./OfficeScene";
 import type { OfficeView as Office } from "./officeApi";
+import { energyOf } from "./officeEnergy";
 import { buildOffice, buildPanel } from "./officeModel";
 
 export default function OfficeView({
@@ -25,6 +26,7 @@ export default function OfficeView({
 }) {
   const office = buildOffice(view);
   const bar = office.topBar;
+  const energy = energyOf(view);
   return (
     <div className="office" data-office="root">
       <div className="office-topbar" data-office="topbar">
@@ -49,6 +51,22 @@ export default function OfficeView({
           onSelect={onSelect}
         />
         <OfficePanel panel={selected ? buildPanel(view, selected) : null} />
+      </div>
+      <div className="office-energy" data-office="energy" data-level={energy.level}>
+        <div className="office-energy-meter">
+          <span className="office-energy-text">{energy.text}</span>
+          <span
+            className="office-energy-track"
+            role="meter"
+            aria-label="Enerji: kullanım hakkının kalanı"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            {...(energy.percent !== null ? { "aria-valuenow": energy.percent } : {})}
+          >
+            <span className="office-energy-fill" style={{ width: `${energy.percent ?? 0}%` }} />
+          </span>
+        </div>
+        <span className="office-energy-working">{energy.working}</span>
       </div>
       <section className="office-approvals" data-office="approvals">
         <h2>Onay Merkezi bekleyenleri</h2>

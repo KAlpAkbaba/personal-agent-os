@@ -21302,3 +21302,35 @@ partial-lock mutants that no test held deterministically; now both are RED with 
 open note is carded: `OpenAIEmbedder` keeps the same unlocked LRU (`openai-embedder-lru-lock`). The same integration
 carries ADR-0214 addendum 16 (the cycle's runs have no background commands), which is on the lead branch already and is
 in service from the cycle's next start.
+
+## ADR-0259 — Ofis bir oda olur: amber ve lacivert robotlar, sahip bir insan, altta enerji çubuğu
+
+**Tarih.** 2026-10-03. **Karar veren.** Sahip istedi ("Bizim arayüzü ajanlardan bağımsız bir şekilde bu hale
+getirebilir misin", piksel ofis örneği; "Ofis ortamı bu görseldeki karakterlere yakın olabilir", ekran yüzlü amber
+ve lacivert robotlar), lead uyguladı (`lead/office-room`). Ajanların koşusundan bağımsız: yalnız web kabuğu.
+
+**Ne değişti.**
+
+- `officeSprites.ts` (küçük piksel kişiler) kalktı; yerine `officeRobots.tsx`: her koltuk rolüne göre bir karakter
+  çizer (`characterOf`): çalışanlar ve araştırmacı **amber** (inşa edenler), lead / entegratör / denetleyici
+  **lacivert** (karar verenler), lead'in anteninde altın ışık; **sahip bir insan** (ten ve saç, ekran yüz yok).
+  Her robotun yüzü koyu bir ekran, gözleri beyaz.
+- Üç duruş üç ayrı çizim: çalışan robot masada yazar (iki kol karesi sırayla, göz kırpar, ekran parlar), bekleyen
+  oturur, işi geri dönen masanın yanında ayakta durur ve başının üstünde **"!"** balonu yanıp söner.
+- Oda: üstte duvar şeridi (raf, pano, saksı), karo zemin, altta kanepe ve su sebili. Mobilya `.office-decor`
+  katmanında mutlak konumlu: hiçbir zaman bir ızgara hücresi ya da koltuk değildir, koltuklardan sonra gelir.
+- Odanın altında **enerji çubuğu** (`officeEnergy.ts`): "Enerji %N" = döngünün son bildirdiği kullanım
+  penceresinin kalanı (`cycle.limits.all.used_pct`, ADR-0214 ek 14), yanında "Çalışan ajanlar r/c". Alan yoksa
+  "Enerji bilinmiyor" ve boş çubuk - asla uydurma dolu çubuk. Düzeyler: >%30 yeşil, ≤%30 amber, %0 boş.
+- Renkler `.office` üzerinde değişken; oda kendi açık zeminini boyar, Kokpit'in koyu zemininde de aynı okunur.
+  Hareket tercihi "azaltılmış" ise hiçbir şey kıpırdamaz.
+
+**Testler.** `apps/web/tests/office/robots.test.tsx` (8): karakter tablosu, amber/lacivert, sahip insan, üç duruş
+üç çizim, mobilya koltuk değil, enerji değeri / bilinmiyor / dört düzeyin sınırları. Eski ofis testleri (55)
+değişmeden yeşil: koltukların sınıfları ve `data-*` öznitelikleri korundu.
+Mutasyon KIRMIZI (yedekten geri yüklendi, sha256 eşit): lead amber çizilir → 1 kırmızı; "!" balonu çizilmez →
+1 kırmızı; düşük düzey sınırı `<= 30` → `< 30` → 1 kırmızı. Web: tsc temiz, oxlint yeni uyarı yok, vitest
+126 dosya / 2172 test yeşil.
+
+**Telefon.** Ofis'in dışarıdan telefondan açılması ayrı iş: web kabuğunun Cloud Core'da barındırılması
+(sahip "Sunucuda barındır" seçti, `lead/web-on-cloud-core`). Bu karar yalnız görünüş.
