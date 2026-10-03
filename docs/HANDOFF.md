@@ -18,10 +18,15 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 **ÜRETİM: main `661a5efe4a4989a0996fb3264302264c8c977bfa` (2026-10-03 01:14 UTC = 04:14 yerel, api-green), LKG `e9f8c2d6`,
 pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5b39ec`, 65 dk). QUALIFICATION Stage 48. Ana kopya
 `team/nightly/lead` üzerinde (= main + yayın kaydı).**
-**KAPIDA (lead, 2026-10-03 11:45 yerel): SEKİZİNCİ ENTEGRASYON yeniden, dal `gate/d20261003-4` (worktree `.claude/worktrees/gate11`)
+**SIRADA (lead, 2026-10-03 12:00 yerel): DOKUZUNCU ENTEGRASYON hazırlanıyor, dal `gate/d20261003-5` (worktree `.claude/worktrees/gate12`)
+= sekizincinin aday commit'i `fda57727` + `integrate/d20261003` (döngünün onaylı 15 işi) + `lead/auto-integrate-wiring` (ADR-0260)
++ `lead/web-on-cloud-core` (ADR-0270: web kabuğu Cloud Core'da, telefon tailnet HTTPS; compose değişikliği SAHİP ONAYLI). Taslaklar
+numaralandı: ADR-0261..0271, ADR-0214 ek 17-18, ADR-0241 ek 1, ADR-0254 ek 1. Sekizincinin kapısı yeşil olunca bu dal kapıya girer.
+Yayından sonra host adımları: yeniden pin, `sudo bash scripts/cloud/enable-web-tailnet-https.sh` (çıkış 3 = sahibin HTTPS adımı eksik).**
+**KAPIDA (lead, 2026-10-03 11:33 yerel): SEKİZİNCİ ENTEGRASYON yeniden, dal `gate/d20261003-4` (worktree `.claude/worktrees/gate11`)
 = `execution-call-site-routines` (ADR-0257) + `owner-trials-api` (ADR-0258) + lead dalının bellek önlemleri + **Ofis bir oda olur**
 (`lead/office-room`, ADR-0259: sahibin isteği, amber/lacivert robotlar, sahip insan, enerji çubuğu). Ön kontrol 1763/1763.
-Yeşilse HEMEN yayın (sahibin kuralı). 11:30'da `test-slots` koşusu kural gelmeden 33 sn önce başlamıştı ve yine tüm birim
+Yeşilse HEMEN yayın (sahibin kuralı). 11:25'te `test-slots` koşusu kural gelmeden 33 sn önce başlamıştı ve yine tüm birim
 paketini (iki kez) koşturuyordu - lead durdurdu, iş `assigned`e döndü, yeni kuralla yeniden başlar.**
 **DÖNGÜ `d20261003` (pid 42348) 04:16 yerelde yeni kodla başladı: koşularda arka plan komutu YOK, tek komut 1 saate kadar
 (ADR-0214 ek 16). 04:15'e kadar ekip DURMUŞTU: önceki döngü bittiği halde 02:00 zamanlayıcı süreci, bir ajanın bıraktığı
