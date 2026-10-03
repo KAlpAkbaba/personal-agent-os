@@ -138,6 +138,7 @@ from app.selfmodel.routes import router as selfmodel_router
 from app.state.routes import router as state_router
 from app.team.allowlist_routes import router as team_allowlist_router
 from app.team.routes import router as team_router
+from app.team.routes_board import router as team_board_router
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
@@ -952,6 +953,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(team_router)
     # The Onay Merkezi's allow-list editor (GET/POST/DELETE /v1/team/allowlist).
     app.include_router(team_allowlist_router)
+    # the team board (ADR team-board): short Turkish notes between the seats of a cycle
+    app.include_router(team_board_router)
     # The misheard notebook: the owner reads, answers and forgets the sentences that were
     # not understood (GET/POST/DELETE /v1/voice/misheard).
     app.include_router(voice_misheard_router)

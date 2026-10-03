@@ -294,14 +294,14 @@ def test_the_board_needs_the_owner_session(engine) -> None:
     assert anonymous.post(NOTES, json=_note()).status_code == 401
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ALAN_ISTEGI: app/main.py includes routes_board.router (outside this task's area); "
-    "the lead removes this marker in the commit that wires it",
-)
 def test_the_real_application_serves_the_board() -> None:
-    paths = {getattr(route, "path", "") for route in create_app(Settings(_env_file=None)).routes}
-    assert NOTES in paths
+    # The real application object, not a test app with the router added by hand: the board is
+    # served (401 without the owner's session), where an unknown path is 404. This FastAPI keeps
+    # included routers as nested objects, so app.routes does not list their paths.
+    client = TestClient(create_app(Settings(_env_file=None)))
+    assert client.get(NOTES).status_code == 401
+    assert client.post(NOTES, json=_note()).status_code == 401
+    assert client.get("/v1/team/board/no-such-path").status_code == 404
 
 
 # ------------------------------------------------------------------ the other half: TeamBoard.ps1
