@@ -72,7 +72,7 @@ describe("who sits at a seat", () => {
 describe("what a character shows", () => {
   it("a returned task: standing beside the desk with a '!' bubble; a working one types; a waiting one sits", () => {
     const html = render();
-    const returned = seatHtml(html, "inspector");
+    const returned = seatHtml(html, "worker-4");
     expect(returned).toContain('class="office-warning"');
     expect(returned).toMatch(/<text[^>]*>!<\/text>/);
     const working = seatHtml(html, "worker-1");

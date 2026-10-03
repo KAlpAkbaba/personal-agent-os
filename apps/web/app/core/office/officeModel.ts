@@ -161,7 +161,11 @@ function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now
   const known = seatName(agent.seat);
   const name = known ?? agent.seat;
   const owner = agent.seat === "owner";
-  const state: SeatState = owner ? "waiting" : agent.state;
+  // Only a worker's seat shows a returned task: the inspector (or another non-worker seat) whose
+  // last task came back is the one that SENT it back - the worker fixes it (the owner, 2026-10-03:
+  // "denetleyici neden hala ünlemde?"). Its panel still names the task it sent back.
+  const sentBack = agent.state === "returned" && !WORKER_SEAT.test(agent.seat);
+  const state: SeatState = owner || sentBack ? "waiting" : agent.state;
   const runs = state === "working" ? severalRuns(agent).length : 0;
   return {
     seat: agent.seat,
