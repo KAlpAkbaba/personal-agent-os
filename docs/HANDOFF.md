@@ -15,26 +15,27 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `65cd94fffcaaa1028cdfc751729a9238b69102b9` (2026-10-02 22:14 UTC = 3 Ekim 01:14 yerel, api-green), LKG `86e6fde9`,
-pin = RELEASE, reconcile OK, şema `0064_memory_vocabulary_class`. Kapı 39/39 (`1fec640b`, 66 dk; 14 806 birim 29 dk 42 sn, 156
-entegrasyon, 2 164 web, team-cycle 208). QUALIFICATION Stage 46. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**ÜRETİM: main `e9f8c2d6034346651b9d456f491d8bae2cc93164` (2026-10-02 23:32 UTC = 3 Ekim 02:32 yerel, api-blue), LKG `65cd94ff`,
+pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`9a88b3c8`, 69 dk). QUALIFICATION Stage 47. Ana kopya
+`team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
 **SAHİBİN KURALI (2026-10-03 00:07): "bundan sonra kapısı yeşil olanlar otomatik canlıya geçsin, beklemesinler" - denetimden geçen
-iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (stop.flag). Ek 9'un üç istisnası
-(compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor - sahibe söylendi, itiraz etmedi.**
-**HAVUZ DEVREYE ALINIYOR (lead, 01:15 yerel): `team/stop.flag` YAZILDI. Eski döngü `d20261002` (pid 36220, parti düzeni) tek koşusu
-(`measure-recordings-api` çalışanı, 23:44'ten beri) bitince kapanır ve bayrağı siler; zamanlanmış görevin sonraki tick'i (her
-30 dk) HAVUZU başlatır: `-MaxParallel 6` = 6 çalışan + 2 denetleyici + 1 entegratör + araştırmacı + lead. YAPILACAK: yeni döngü
-başlayınca durum belgesinde bir çalışan koltuğunun başka çalışan koşarken dolduğunu gör → 46.3'ü PROVEN_REAL yap. Kapı yanında
-yavaşlarsa `team/cycle-settings.json` (her dolumda okunur).**
-**KAPIDA (lead, 2026-10-03 01:40 yerel): ALTINCI ENTEGRASYON, dal `gate/d20261003-2` (worktree `.claude/worktrees/gate9`) = lead dalı +
-`misheard-ledger-store` @ `90063e75` (ADR-0254; migration 0065 tek CREATE TABLE - genişleme, kural gereği onaysız yayınlanır; lead'in
-elle başlattığı denetim onayladı) + `narrative-model-wiring` @ `e71b9e14` (ADR-0255; ayar KAPALI, compose satırı YOK) + yeni host
-snapshot (2026-10-02 22:19 UTC). Koruyucu testler 1762 yeşil. Yeşilse: main `--no-ff` → it → yayın (migration 0065 uygulanır) → pin →
-doğrula → `released` → Stage 47. `execution-call-site-routines` onaylanmıştı ama TURA ALINMADI: kapatma ayarı yok ve yayınlanınca
-çalışan rutinlerin `browser_action`'ını buluta seçip orada düşürürdü - `routines_execution_rule_enabled` (varsayılan KAPALI) için
-çalışana döndü (alanına `config.py` eklendi). `understanding-rules-read-lemmas` ikinci dönüşte durmuştu, yeniden açıldı (sahibin
-1. önceliği). Yeni kartlar: `misheard-purge-start-bounded` (defterin yazan kartından ÖNCE), `narrative-timeout-class`.**
-**YAYINDA (2 Ekim'de dört, 3 Ekim 01:14'te beşinci yayın: `65cd94ff` döngü havuzu + bir web testi): `e5c4d1f3` 4 çalışan koltuğu, döngü kuyruğu her turda okur; `f91ad1e3` ADR-0224 katman 2 üretimde,
+iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (`team/stop.flag`). Ek 9'un üç istisnası
+(compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor.**
+**HAVUZ ÇALIŞIYOR (PROVEN_REAL, 47.4): döngü `d20261003` 23:00 UTC'de (02:00 yerel) havuz koduyla başladı (pid 46484): 6 çalışan +
+2 denetleyici aynı anda, biten koşunun koltuğu diğerleri sürerken doluyor. `-MaxHours 4`: döngü 4 saatte bir kendini güncel betiğe
+bırakır (kilit de böylece 6 saate yaklaşmaz). Kapı yanında yavaşlarsa `team/cycle-settings.json`.**
+**KAPIDA (lead, 03:05 yerel): YEDİNCİ ENTEGRASYON, dal `gate/d20261003-3` (worktree `.claude/worktrees/gate10`) = lead dalı (ADR-0214
+ek 16 dahil) + `local-embedder-lru-lock` (ADR-0256). Yeşilse onaysız yayın.**
+**03:00 yerel - ERKEN BİTEN KOŞULAR (ADR-0214 ek 16): havuzun ilk saatinde beş koşu "test arka planda koşuyor, bitince
+raporlarım" diyerek bitti; `claude -p` hiç uyandırılmaz, iş boş sayıldı (görevler yanlışlıkla durdu/döndü - lead üçünü sayılmadan
+geri koydu). DÜZELTME lead dalında (`Start-TeamRun`: `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `BASH_MAX_TIMEOUT_MS=3600000`;
+test kırmızı→yeşil; rol dosyalarında üç satır). Çalışan döngü eski fonksiyonları taşıdığı için `team/stop.flag` YAZILDI: döngü
+`d20261003` koşuları bitince kapanır, sonraki tick düzeltilmiş kodla başlar. Kapıya bir sonraki entegrasyonla girer
+(`local-embedder-lru-lock` ile birlikte).**
+**BU GECE YAYINLANAN (3 Ekim): 01:14 `65cd94ff` döngü havuzu; 02:32 `e9f8c2d6` defter deposu (tablo 0065, süpürme döngüsü sağlıkta:
+passes 1, failures 0) + anlatı modeli bağlantısı (ayar KAPALI). `execution-call-site-routines` kapatma ayarı için çalışanda;
+`understanding-rules-read-lemmas` (sahibin 1. önceliği) yeniden açıldı ve yazılıyor.**
+**YAYINDA (2 Ekim'de dört yayın): `e5c4d1f3` 4 çalışan koltuğu, döngü kuyruğu her turda okur; `f91ad1e3` ADR-0224 katman 2 üretimde,
 düzeltmeler hafızaya; `f60e02e4` iki onaylı compose değişikliği (araştırma kuralı anahtarı KAPALI iletiliyor, temporal Docker
 init altında - host adımı yapıldı); `86e6fde9` alan genişletme kuralları (ADR-0253, kablosuz) + model politikası Cloud Core'da
 (ADR-0214 ek 14: `GET/PUT /v1/team/queue/models`, sunucu yerel `team/models.json` ile AYNI ayarı veriyor).**

@@ -21197,3 +21197,108 @@ does not change. Of the four items the task left open: A (a timeout over the rea
 `chat_unavailable`) is card `narrative-timeout-class`; B (the compose line) is asked of the owner together with the
 decision to switch the narrator on, not before; C is card `narrative-failures-router`, already queued; D is not
 built until somebody needs the number.
+
+### ADR-0214 addendum 16 (2026-10-03): a run of the cycle has no background commands, and one foreground command may last an hour
+
+**What happened.** The first night of the pool (cycle `d20261003`), five of its first runs - two workers, two inspectors,
+one worker of a lead card - ended with a last message like "the full suite is running in the background; I'll report once
+it finishes" or "a background watcher will wake me when it finishes". A run of the cycle is `claude -p`: nothing wakes it,
+its last message IS its result. So the cycle read empty work: `cycle-auto-integrate` was stopped as "returned twice", an
+inspection was read as "no verdict" and returned an approved branch, and a worker's empty run went to inspection. The role
+files already said "wait for every command you started" (worker.md, inspector.md since 2026-10-02); the runs did not.
+
+**Decision.** The cycle takes the means away instead of asking again: `Start-TeamRun` (`scripts/lib/TeamRun.ps1`) sets, for
+every run it starts (the cycle's, the feeder's, the integrate step's), `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` - proven by
+the lead on claude 2.1.285: a Bash call with `run_in_background` is then refused ("An unexpected parameter
+`run_in_background` was provided"), where without it the command is started in the background - and
+`BASH_MAX_TIMEOUT_MS=3600000`, because a suite must now fit one foreground call and the tool cuts a call at ten minutes by
+default (measured both ways: "Command timed out after 10m 0s" by default; an eleven-minute command finished with the limit
+raised). A longer suite runs in slices; the role files say so in three lines each.
+
+**Evidence.** `scripts/tests/team-cycle.tests.ps1`, case "each role runs on the model the team's setting names for it": the
+fake claude records both variables of every run; RED without each line (0 passed, 1 failed, twice), GREEN with them. The
+real behaviour of the two switches: the lead's four probe runs above. The tasks hit that night were put back by the lead
+without counting the return (`cycle-auto-integrate`, `stt-engine-on-turn-audit`, `branch-guards-runner`).
+
+**Taking it into service.** A running cycle keeps the functions it loaded: `team/stop.flag` is written so the pool cycle
+`d20261003` ends when its runs do and the next tick starts the corrected code from the lead branch.
+
+## ADR-0256 — The local embedder's cache is locked; the model call stays outside the lock (2026-10-03)
+
+Task `local-embedder-lru-lock`, cut by the lead on 2026-10-02 from the inspection of ADR-0245: ADR-0224's semantic engine
+builds its index on a daemon thread through the memory runtime's embedder while request threads use the same object, and
+`LocalEmbedder`'s LRU of 512 entries was mutated without a lock. The worker's ADR is in Turkish, as written:
+
+**Bağlam.**
+
+ADR-0245 anlama motorunun dizinini açılışta bir daemon iş parçacığında kurar: ~1430 örnek cümle
+BELLEK ÇALIŞMA ZAMANININ embedder'ından geçer, aynı nesneyi istek iş parçacıkları da kullanır.
+`LocalEmbedder._cache` (512 girişlik LRU, `OrderedDict`) kilitsizdi. Bozan sıra tek ve dardır:
+bir iş parçacığı isabet eden girişi OKUR (`get`), yerini tazelemeden (`move_to_end`) önce başka
+bir iş parçacığı yeni bir metni yazıp EN ESKİ girişi atar - atılan giriş az önce okunansa
+tazeleme `KeyError` verir. Kurulum iş parçacığında bu, "motor yapılandırılmadı" demektir:
+yakalanır, süreç ömrünce öyle kalır, yalnızca günlükte görünür (denetleyici bulgusu 4,
+`understanding-engine-startup-inspector-1.md`). Ölçüm: kilitsiz kodda 8 iş parçacığı x 2000
+karışık embed (geçiş aralığı 1 µs) 10 koşunun 7'sinde `KeyError` ile bitti.
+
+**Karar.**
+
+1. **Bir `threading.Lock` önbelleği ve `calls` sayacını korur.** İki kısa bölüm: (a) arama +
+   isabetse yerini tazeleme, (b) yazma + sayaç + taşma varsa en eskiyi atma. Kopya
+   (`list(cached)`) kilidin dışındadır: saklanan vektör hiç değiştirilmez, her çağıran kendi
+   listesini alır.
+2. **Model çağrısı kilidin DIŞINDADIR.** Yavaş bir embedding başka hiçbir isteği bekletmez;
+   önbellekteki bir metin, başka bir iş parçacığı modelin içindeyken döner.
+3. **Aynı önbelleksiz metni aynı anda soran iki iş parçacığı ikisi de hesaplar.** Kabul edilen
+   bedel: aynı metin, aynı vektör, iki model çağrısı (`calls` iki artar), önbellekte TEK giriş.
+   İstek başına "uçuşta" tablosu (ikincisi birinciyi beklesin) yazılmadı: model metin başına
+   ~0,3 ms, çakışma seyrek, tablo yeni bir kilit sırası ve hata yolu demek.
+4. **Davranış aynı kalır:** boyut 512, atma sırası (en az son kullanılan), isabet/ıska anlamı,
+   `calls`'ın tek iş parçacığındaki değeri. `OpenAIEmbedder` bu görevde DEĞİŞMEDİ (aşağıda).
+
+**Maliyet (ev bilgisayarı, gerçek model `potion-multilingual-128M`, 2026-10-02).**
+
+Aynı süreçte, turlar sırayla (önce/sonra/önce/…), 15 tur x 2 koşu; makinede başka çalışanların
+test koşuları vardı, gürültü farktan büyük:
+
+| ölçü | önce (kilitsiz) | sonra (kilitli) | tur başına fark (medyan) |
+|---|---|---|---|
+| önbellekteki metin, `embed()` | 842 - 1200 ns | 1100 - 1471 ns | +233 … +299 ns |
+| önbelleksiz metin, `embed()` | 416 - 516 µs | 373 - 551 µs | +6 … +18 µs (gürültü içinde) |
+| dizin kurulumu, 1427 örnek | 407 - 749 ms | 442 - 668 ms | -16 … +18 ms (gürültü içinde) |
+
+Sakin makinede kilitsiz kod (ayrı süreç, iki koşu): önbellekte 762-771 ns, önbelleksiz
+266-276 µs, kurulum 417-447 ms. Okuma: kilit çağrı başına ~0,25 µs ekler; kurulumda bu
+1427 x 2 kilit ≈ 1 ms'nin altıdır ve ölçülemedi.
+
+**Kanıt.**
+
+`tests/unit/test_memory_local_embedder.py` (6 yeni test). Sıra zorlanır, uyku yoktur: kapılı
+sahte model B'yi model çağrısının içinde tutar; önbellek A'yı `move_to_end`'in TAM ÖNÜNDE
+(okuma yapıldı, tazeleme yapılmadı) ya da B'yi `popitem`'in önünde (yazdı, atmadı) tutar;
+kilidin gözlemcisi "bu iş parçacığı kilitte bekliyor"u olay yapar. Her kilit bölümünün
+bütünlüğü ayrı bir zorlanmış testle sabitlenir (denetleyici 2. tur bulgusu 1):
+
+- kilit yok (önceki kod) → üç zorlanmış test KIRMIZI, 2/2;
+- yalnız `get` kilitli, isabetin `move_to_end`'i dışarıda → "isabet ile tazeleme arası" KIRMIZI 3/3;
+- `popitem` kilidin dışında → "yazma ile atma arası" KIRMIZI 3/3 (`KeyError('metin 0')`);
+- model çağrısı kilidin içinde → "önbellekteki metin o sırada döner" ve "ikisi de hesaplar" KIRMIZI;
+- yazma yolundaki `move_to_end(key)` silindi → "iki kez hesaplanan metin en yeni giriş olur"
+  KIRMIZI 2/2. Satırın anlamı: aynı metni iki iş parçacığı hesapladıysa geç gelen yazma o
+  metnin en son kullanımıdır; yerinde bırakılsa ondan sonra kullanılan metinlerden önce atılırdı.
+
+**Bilinen sınırlar.**
+
+- `OpenAIEmbedder` aynı kilitsiz LRU kalıbını taşır (aynı dosya, `OpenAIEmbedder.embed`). Dizin kurulumu onu
+  hiç kullanmaz (ADR-0245 yalnız yerel sağlayıcıda kurar), ama istek iş parçacıkları paylaşır;
+  aynı pencere orada da vardır. Bu görevin kapsamı dışında bırakıldı - ayrı kart.
+- Kilit GIL'i paylaşmayı değiştirmez: kurulum yine olay döngüsüyle CPU için yarışır
+  (denetleyici bulgusu 3).
+- `LocalEmbedder` artık bir `Lock` taşıdığı için `copy.deepcopy` / pickle edilemez; depoda
+  bunu yapan kod yok.
+
+**At merge (the lead, integration d20261003, third).** Approved at the second inspection (the first returned two
+partial-lock mutants that no test held deterministically; now both are RED with forced interleavings). The inspector's
+open note is carded: `OpenAIEmbedder` keeps the same unlocked LRU (`openai-embedder-lru-lock`). The same integration
+carries ADR-0214 addendum 16 (the cycle's runs have no background commands), which is on the lead branch already and is
+in service from the cycle's next start.

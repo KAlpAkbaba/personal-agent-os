@@ -1655,6 +1655,16 @@ try {
         foreach ($call in $none.Calls) {
             Assert-Equal -Expected "stream-json" -Actual ([string]$call.output) -Because "the limit events are only in the stream"
             Assert-Equal -Expected "1" -Actual ([string]$call.no_fallback_env) -Because "the tool is told not to substitute the model itself"
+            # 2026-10-03: five runs of one night ended with "the suite is running in the background, I
+            # will report when it finishes" - a run of the cycle is never woken again, so the work was
+            # judged empty and tasks were returned and stopped for nothing. The tool's own switch
+            # removes the background parameter from the run's Bash tool (the lead proved it: the call
+            # is refused with "An unexpected parameter `run_in_background` was provided").
+            Assert-Equal -Expected "1" -Actual ([string]$call.no_background_env) -Because "a run of the cycle cannot start a background command it will never be told about"
+            # Without the background, a long suite must fit one foreground call: the tool cuts a call at
+            # ten minutes unless told otherwise (the lead measured both: 'Command timed out after 10m 0s'
+            # by default, an 11-minute command finished with the limit raised).
+            Assert-Equal -Expected "3600000" -Actual ([string]$call.bash_max_timeout_env) -Because "one foreground command may run for an hour"
             Assert-Equal -Expected $false -Actual ([bool]$call.fallback_flag) -Because "--fallback-model is never passed"
         }
     }
