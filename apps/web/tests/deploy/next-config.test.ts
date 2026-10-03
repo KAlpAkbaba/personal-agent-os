@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  *    (the routes manifest keeps it), which is why the image takes it as a build argument.
  */
 
-const KEYS = ["PAGENTOS_WEB_STANDALONE", "PAGENTOS_API_UPSTREAM"] as const;
+const KEYS = ["PAGENTOS_WEB_STANDALONE", "PAGENTOS_API_UPSTREAM", "PAGENTOS_WEB_DEV_ORIGINS"] as const;
 const saved: Record<string, string | undefined> = {};
 
 async function loadConfig() {
@@ -57,5 +57,12 @@ describe("next.config.ts", () => {
     process.env.PAGENTOS_WEB_STANDALONE = "true";
     const config = await loadConfig();
     expect(config.output).toBeUndefined();
+  });
+
+  it("lets the owner's phone load the dev server over the tailnet, plus any extra names given", async () => {
+    // Without this the phone got the page but not its scripts and hung at "Oturum kontrol ediliyor...".
+    expect((await loadConfig()).allowedDevOrigins).toEqual(["100.92.148.30", "mail", "*.ts.net"]);
+    process.env.PAGENTOS_WEB_DEV_ORIGINS = " phone.example , ,pc2";
+    expect((await loadConfig()).allowedDevOrigins).toEqual(["100.92.148.30", "mail", "*.ts.net", "phone.example", "pc2"]);
   });
 });

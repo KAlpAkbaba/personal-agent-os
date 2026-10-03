@@ -29,8 +29,26 @@ const upstream = process.env.PAGENTOS_API_UPSTREAM?.replace(/\/+$/, "");
  */
 const standalone = process.env.PAGENTOS_WEB_STANDALONE === "1";
 
+/**
+ * The dev server on the owner's PC is also opened from his phone over the tailnet
+ * (2026-10-03). Next blocks its dev scripts for any origin but localhost, and the page then
+ * hangs at "Oturum kontrol ediliyor..." with no error on screen. Allowed: the PC's tailnet
+ * address and its MagicDNS names, plus any extra names in PAGENTOS_WEB_DEV_ORIGINS
+ * (comma-separated). Development only: a production build ignores this setting.
+ */
+const devOrigins = [
+  "100.92.148.30",
+  "mail",
+  "*.ts.net",
+  ...(process.env.PAGENTOS_WEB_DEV_ORIGINS ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean),
+];
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  allowedDevOrigins: devOrigins,
   ...(standalone
     ? { output: "standalone" as const, outputFileTracingRoot: path.join(process.cwd(), "..", "..") }
     : {}),

@@ -80,7 +80,9 @@ def test_web_has_a_memory_limit_with_room_and_a_swap_cap() -> None:
     limit = _mem_bytes(web["mem_limit"])
     # Measured idle ~40 MiB, 95 MB peak RSS: 512 MiB is the budget, never more than 1 GiB on
     # a 7.7 GiB host that also runs the api, Postgres, Temporal, Redis and MinIO.
-    assert 256 * 1024**2 <= limit <= 1024**3, f"mem_limit {web['mem_limit']} is outside the measured budget"
+    assert 256 * 1024**2 <= limit <= 1024**3, (
+        f"mem_limit {web['mem_limit']} is outside the measured budget"
+    )
     assert _mem_bytes(web["memswap_limit"]) == limit, "swap must be capped to the same figure"
 
 
@@ -121,7 +123,9 @@ def test_the_dockerfile_and_the_compose_service_name_the_same_upstream_and_port(
     arg = re.search(r"^ARG PAGENTOS_API_UPSTREAM=(\S+)", docker, re.MULTILINE)
     assert arg is not None and arg.group(1) == web["build"]["args"]["PAGENTOS_API_UPSTREAM"]
     api_base = re.search(r"^ARG NEXT_PUBLIC_API_BASE=(\S+)", docker, re.MULTILINE)
-    assert api_base is not None and api_base.group(1) == web["build"]["args"]["NEXT_PUBLIC_API_BASE"]
+    assert (
+        api_base is not None and api_base.group(1) == web["build"]["args"]["NEXT_PUBLIC_API_BASE"]
+    )
     port = re.fullmatch(r"127\.0\.0\.1:(\d+):(\d+)", web["ports"][0])
     assert port is not None
     assert f"PORT={port.group(2)}" in docker
@@ -132,7 +136,9 @@ def test_the_tailnet_script_serves_the_port_the_compose_service_publishes() -> N
     """Contract halves read each other: change one port and this fails, not the phone."""
     port = re.fullmatch(r"127\.0\.0\.1:(\d+):(\d+)", _web()["ports"][0])
     assert port is not None and port.group(1) == port.group(2)
-    default = re.search(r"^port=\$\{PAGENTOS_WEB_PORT:-(\d+)\}", TAILNET.read_text("utf-8"), re.MULTILINE)
+    default = re.search(
+        r"^port=\$\{PAGENTOS_WEB_PORT:-(\d+)\}", TAILNET.read_text("utf-8"), re.MULTILINE
+    )
     assert default is not None and default.group(1) == port.group(1)
     assert 'target="http://127.0.0.1:$port"' in TAILNET.read_text("utf-8")
 
@@ -146,7 +152,9 @@ def test_web_holds_no_secret_in_the_compose_file() -> None:
         for key, value in mapping.items():
             assert not SECRET_WORDS.search(str(key)), f"{section}: {key} looks like a secret"
             assert "${" not in str(value), f"{section}: {key} is read from the host's secrets file"
-    assert not re.search(r"\$\{[A-Z_]+:\?", yaml.safe_dump(web)), "a required host secret is interpolated"
+    assert not re.search(r"\$\{[A-Z_]+:\?", yaml.safe_dump(web)), (
+        "a required host secret is interpolated"
+    )
 
 
 def test_nothing_waits_for_web_and_web_waits_for_nothing() -> None:
@@ -169,21 +177,37 @@ def test_the_image_runs_as_a_non_root_user_with_a_healthcheck_and_no_secret() ->
     assert "pnpm" not in final.replace("# ", ""), "the final stage carries the build tool"
     for line in docker.splitlines():
         if line.lstrip().startswith(("ARG ", "ENV ")):
-            assert not SECRET_WORDS.search(line.split("=", 1)[0]), f"a secret-looking variable: {line}"
+            assert not SECRET_WORDS.search(line.split("=", 1)[0]), (
+                f"a secret-looking variable: {line}"
+            )
     # Nothing is copied from the build context into the final stage except the traced output.
     assert re.findall(r"^COPY (?!--from=build)", final, re.MULTILINE) == []
 
 
 def test_the_build_context_is_an_allowlist_that_keeps_env_files_out() -> None:
-    ignore = [ln.strip() for ln in DOCKERIGNORE.read_text("utf-8").splitlines() if ln.strip() and not ln.startswith("#")]
-    assert ignore[0] == "*", "the context must start from 'nothing' and allow back what the build needs"
+    ignore = [
+        ln.strip()
+        for ln in DOCKERIGNORE.read_text("utf-8").splitlines()
+        if ln.strip() and not ln.startswith("#")
+    ]
+    assert ignore[0] == "*", (
+        "the context must start from 'nothing' and allow back what the build needs"
+    )
     assert "apps/web/**/.env" in ignore and "apps/web/**/.env.*" in ignore
     assert "apps/web/node_modules" in ignore and "apps/web/.next" in ignore
     allowed = {ln[1:] for ln in ignore if ln.startswith("!")}
-    assert allowed == {"pnpm-lock.yaml", "pnpm-workspace.yaml", "apps/web/**", "packages/protocol/realtime-session-contract.json"}
+    assert allowed == {
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "apps/web/**",
+        "packages/protocol/realtime-session-contract.json",
+    }
     # Every file the Dockerfile COPYs from the context is one the allowlist lets through.
     for source in re.findall(r"^COPY (?!--from)(\S+)", DOCKERFILE.read_text("utf-8"), re.MULTILINE):
-        assert any(source == a or (a.endswith("/**") and source.startswith(a[:-3])) for a in allowed) or source == "apps/web", source
+        assert (
+            any(source == a or (a.endswith("/**") and source.startswith(a[:-3])) for a in allowed)
+            or source == "apps/web"
+        ), source
     # The one import from outside the package really exists, so the build cannot lose it silently.
     assert (REPO / "packages" / "protocol" / "realtime-session-contract.json").is_file()
     assert "realtime-session-contract.json" in (
@@ -194,8 +218,7 @@ def test_the_build_context_is_an_allowlist_that_keeps_env_files_out() -> None:
 # ----------------------------------------------------------------------------- the release
 
 
-def test_the_release_brings_web_up_with_the_other_aux_workloads_and_never_inside_the_transaction() -> None:
-    text = RELEASE.read_text("utf-8")
+def test_the_release_brings_web_up_with_the_aux_workloads_never_inside_the_transaction() -> None:
     code = "\n".join(_script_lines(RELEASE))
     assert "--profile aux" in code, "the compose helper lost the aux profile"
     assert re.search(r"for svc in godseye web;", code), "web is not in the aux loop"
@@ -204,7 +227,11 @@ def test_the_release_brings_web_up_with_the_other_aux_workloads_and_never_inside
         "an aux workload is never waited on"
     )
     # Called exactly once, after the transaction's last line, and its failure is swallowed.
-    calls = [i for i, ln in enumerate(code.splitlines()) if re.fullmatch(r"aux_up( \|\| true)?", ln.strip())]
+    calls = [
+        i
+        for i, ln in enumerate(code.splitlines())
+        if re.fullmatch(r"aux_up( \|\| true)?", ln.strip())
+    ]
     assert len(calls) == 1
     lines = code.splitlines()
     assert lines[calls[0]].strip() == "aux_up || true"
