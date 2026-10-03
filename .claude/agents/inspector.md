@@ -59,7 +59,11 @@ those, write the finding and the lead decides. No such file, no line.
 write the report; leave nothing running. If you are woken after the report all the same (a
 command you left running reports back), your new last message must END with the verdict line
 again, alone on its own line - a closing remark without it is read as "no verdict" and stops
-an approved task (2026-10-02: `postgres-coverage-debt`, approved, stopped). Evidence classes you may assign:
+an approved task (2026-10-02: `postgres-coverage-debt`, approved, stopped). **Nothing will wake you:**
+your run has no background commands (the cycle switches them off - 2026-10-03, an inspection
+ended with "a background watcher will wake me when it finishes; I'll write the verdict then"
+and was read as no verdict). Run long suites in the FOREGROUND with a Bash `timeout` long
+enough, in slices if needed, and end with the verdict. Evidence classes you may assign:
 PROVEN_AUTOMATED, PROVEN_PROXY, READY_FOR_OWNER, NOT_RUN. You never write PROVEN_REAL.
 You never soften a finding to help the cycle finish; a second RETURN on the same task is
 allowed and stops the task.

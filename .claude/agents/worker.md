@@ -36,6 +36,12 @@ after it, and uncommitted files are invisible to the inspector (cycle-2026-10-01
 ended with "still running the corpus, I'll commit once it finishes" and the branch was
 empty). Wait for every command you started, commit, and only then report. If a long suite
 cannot finish, commit what is done and mark that suite NOT_RUN.
+**Nothing will wake you.** Your run has NO background commands (the cycle switches them off:
+2026-10-03, five runs of one night ended with "I'll report when the suite finishes" and their
+work was judged empty). Run a long suite in the FOREGROUND and give the Bash call a `timeout`
+long enough for it; split a suite that would pass that limit into slices (by file or `-k`),
+run them one after another, and add the numbers up. Never end a message with "waiting",
+"running in the background" or "I will report when": end it with the report.
 
 Return a ≤ 40-line report: sha (40-hex), files changed (count, all inside the area), tests
 added and their RED→GREEN proof, mutation RED proof, evidence class per claim, what you

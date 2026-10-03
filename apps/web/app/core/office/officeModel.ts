@@ -38,6 +38,36 @@ export const STATE_TR: Record<SeatState, string> = {
   returned: "döndü",
 };
 
+/**
+ * The queue's task states (the state enum of team/queue.schema.json, read by the test from
+ * that file) as the owner says them. The page has no type for a task state: it arrives as a
+ * plain string, so a state added to the queue without a phrase here fails model.test.ts.
+ */
+export const TASK_STATE_TR: Record<string, string> = {
+  proposed: "önerildi, henüz başlamadı",
+  awaiting_owner: "sahibin onayını bekliyor",
+  approved: "onaylandı, sırada",
+  assigned: "bir çalışana verildi, başlıyor",
+  in_progress: "yazılıyor",
+  inspecting: "denetleniyor",
+  returned: "denetleyici geri gönderdi; yeniden yazılacak",
+  stopped: "durdu: Hakim bakacak",
+  merged: "birleştirildi, yayın bekliyor",
+  awaiting_release: "yayın için sahibin onayını bekliyor",
+  released: "yayında",
+  awaiting_real_evidence: "yayında; gerçek kullanımda kanıt bekliyor",
+  done: "bitti",
+  rejected: "vazgeçildi",
+};
+
+/** The task's state in Turkish; a state this page does not know is shown as it is. */
+export function taskStateText(state: string): string {
+  return Object.hasOwn(TASK_STATE_TR, state) ? TASK_STATE_TR[state] : state;
+}
+
+/** A reason that starts with the lead's marker is technical text for the agents. */
+const LEAD_NOTE = /^\s*LEAD/;
+
 export type Pose = "typing" | "seated" | "standing";
 
 export type DrawnSeat = {
@@ -71,8 +101,20 @@ export type Panel = {
   stateText: string;
   /** Every live run of a seat that has more than one; the card below is the first one's. */
   runs: { title: string; since: string }[];
-  task: { title: string; state: string; goal: string; acceptance: string } | null;
+  /** The first view: title, Turkish state, since; the card text for the agents is under the fold. */
+  task: {
+    title: string;
+    stateText: string;
+    since: string | null;
+    goal: string;
+    acceptance: string;
+    evidence: string | null;
+  } | null;
+  /** A reason in the owner's language; a lead note goes to `agentNote`, under the fold. */
   reason: string | null;
+  agentNote: string | null;
+  /** The last report's outcome line. */
+  outcome: string | null;
   reportLines: string[];
   branch: string | null;
   sha: string | null;
@@ -163,6 +205,10 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
   const owner = agent.seat === "owner";
   const task: OfficeTask | undefined =
     !owner && agent.task_id ? view.tasks[agent.task_id] : undefined;
+  const reason = task?.reason || null;
+  const leadNote = reason !== null && LEAD_NOTE.test(reason);
+  // not in the contract's type yet: shown when the API sends it, never asked for
+  const evidence = (task as { evidence_expected?: unknown } | undefined)?.evidence_expected;
   return {
     seat: agent.seat,
     role: drawn.name,
@@ -172,9 +218,18 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
       since: clock(run.since),
     })),
     task: task
-      ? { title: task.title, state: task.state, goal: task.goal, acceptance: task.acceptance }
+      ? {
+          title: task.title,
+          stateText: taskStateText(task.state),
+          since: agent.since ? clock(agent.since) : null,
+          goal: task.goal,
+          acceptance: task.acceptance,
+          evidence: typeof evidence === "string" && evidence ? evidence : null,
+        }
       : null,
-    reason: task?.reason ?? null,
+    reason: leadNote ? null : reason,
+    agentNote: leadNote ? reason : null,
+    outcome: task?.report?.outcome || null,
     reportLines: (task?.report?.summary ?? []).slice(0, REPORT_LINE_CAP),
     branch: task?.branch ?? null,
     sha: task?.sha ? task.sha.slice(0, SHA_SHORT) : null,
