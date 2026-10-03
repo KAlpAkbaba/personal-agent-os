@@ -51,8 +51,28 @@ shows until they are applied). The card's "Sıralı plan %25" was an illustratio
 
 ## Consequences / open
 
-- **Production shows `null` for all three today:** the api image (`services/api/Dockerfile`,
-  context `services/api`) does not ship `docs/`. To light the strip on the Cloud Core, either COPY
-  the two files into the image (needs a build context that sees `docs/`) or mount them read-only
-  and set `app.state.progress_root`. Outside this card's area; the lead decides.
+- **Production (the inspector's return of 2026-10-03):** the api image (context `services/api`)
+  does not ship `docs/`. Decision: do NOT copy the documents into the image (a docs edit would then
+  need an image rebuild, and the build context would have to widen to the repository); instead the
+  root is `PAGENTOS_PROGRESS_ROOT` when set (`routes.py`, done in this change), and the production
+  compose mounts exactly the two files, read-only, from the release checkout the stack is built
+  from - so the strip reads the same release's documents. Proposed text for
+  `infra/docker/docker-compose.prod.yml` (outside this card's area; the lead applies it), in the
+  `api: &cloud-core` service - `api-blue` / `api-green` inherit both through `<<:`:
+
+  ```yaml
+      environment: &cloud-core-env
+        # office-progress: where the Ofis's İlerleme strip reads the roadmap and the v1.0 list.
+        PAGENTOS_PROGRESS_ROOT: /srv/pagentos/progress
+      volumes:
+        # office-progress: the two documents the strip counts, read-only, from the release checkout.
+        - ../../docs/ROADMAP.md:/srv/pagentos/progress/docs/ROADMAP.md:ro
+        - ../../docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:/srv/pagentos/progress/docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:ro
+  ```
+
+  `test_the_production_api_mounts_both_documents_read_only_under_that_root` is RED until it is
+  applied. A file bind mount follows the checkout's inode: the release script must not replace the
+  files by rename after the container starts, or the container keeps the old copy until restart
+  (a blue/green release restarts the colour anyway).
+
 - The strip changes with the documents: a release that edits the table changes the number.

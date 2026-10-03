@@ -217,3 +217,37 @@ def test_the_office_answer_with_no_documents_has_null_sections(owner, tmp_path):
     body = owner.get("/v1/team/office").json()
     assert body["progress"]["jarvis"] is None
     assert body["progress"]["v1"] is None
+
+
+# ------------------------------------------------------------------ where production reads it
+# The inspector's return of 2026-10-03: the api image ships neither document (its build context
+# is services/api) and no setting could point the root anywhere else, so the strip read
+# "okunamadı" three times on the Cloud Core. The root is now PAGENTOS_PROGRESS_ROOT when set, and
+# the production compose mounts exactly the two documents, read-only, under that root.
+
+
+def test_the_root_is_pagentos_progress_root_when_it_is_set(owner, tmp_path, monkeypatch):
+    mounted = tmp_path / "mounted"
+    (mounted / "docs" / "product").mkdir(parents=True)
+    (mounted / "docs" / "ROADMAP.md").write_text(JARVIS + ORDER, encoding="utf-8")
+    monkeypatch.setenv("PAGENTOS_PROGRESS_ROOT", str(mounted))
+    body = owner.get("/v1/team/office").json()
+    assert body["progress"]["jarvis"]["have"] == 1
+    assert body["progress"]["jarvis"]["rows"][0]["name"] == "Talks"
+    assert body["progress"]["v1"] is None  # not mounted there: null, not the tree's 750
+
+
+def test_the_production_api_mounts_both_documents_read_only_under_that_root():
+    import yaml
+
+    services = yaml.safe_load(
+        (REPO / "infra" / "docker" / "docker-compose.prod.yml").read_text("utf-8")
+    )["services"]
+    for name in ("api", "api-blue", "api-green"):
+        service = services[name]
+        root = service["environment"].get("PAGENTOS_PROGRESS_ROOT")
+        assert root, f"{name}: PAGENTOS_PROGRESS_ROOT is not set"
+        volumes = service.get("volumes", [])
+        for doc in (progress.ROADMAP, progress.MATRIX):
+            want = f"../../{doc.as_posix()}:{root.rstrip('/')}/{doc.as_posix()}:ro"
+            assert want in volumes, f"{name}: {want} is not mounted"

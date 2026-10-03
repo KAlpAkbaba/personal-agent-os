@@ -19,6 +19,7 @@ the files under ``app.state.team_root``.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -460,7 +461,13 @@ async def read_office(request: Request) -> dict[str, Any]:
 
 def _progress(request: Request) -> dict[str, Any]:
     """The İlerleme strip (office-progress): additive, so a page that predates it ignores it."""
-    root = getattr(request.app.state, "progress_root", None) or DEFAULT_PROGRESS_ROOT
+    # The api image ships neither document: production mounts the two, read-only, under
+    # PAGENTOS_PROGRESS_ROOT (infra/docker/docker-compose.prod.yml); a checkout reads its tree.
+    root = (
+        getattr(request.app.state, "progress_root", None)
+        or os.environ.get("PAGENTOS_PROGRESS_ROOT", "").strip()
+        or DEFAULT_PROGRESS_ROOT
+    )
     settings = getattr(request.app.state, "settings", None)
     release = (getattr(settings, "release", None) or "").strip()
-    return progress.progress(root, as_of=release or None)
+    return progress.progress(Path(root), as_of=release or None)
