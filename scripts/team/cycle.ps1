@@ -456,6 +456,16 @@ function Get-LimitsDocument {
     }
 }
 
+function Get-FreeWorkerSeat {
+    <# The seat a worker run starting now is given (office-stable-seats): the lowest number no
+       live worker run holds. The run keeps it until it ends, so the Ofis page does not move
+       the others when one finishes. #>
+    $held = @($script:liveRuns | Where-Object { $_.role -eq "worker" -and $null -ne $_.seat } | ForEach-Object { [int]$_.seat })
+    $seat = 1
+    while ($held -contains $seat) { $seat++ }
+    return $seat
+}
+
 function New-CycleStatus {
     param([bool]$Legacy = $false)
     $document = [ordered]@{
@@ -466,6 +476,8 @@ function New-CycleStatus {
         runs          = @($script:liveRuns | ForEach-Object {
                 $entry = [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at }
                 if (-not $Legacy) { $entry["model"] = $_.model }
+                # Not in the legacy form: a Cloud Core that refuses `model` refuses `seat` too.
+                if (-not $Legacy -and $null -ne $_.seat) { $entry["seat"] = [int]$_.seat }
                 $entry
             })
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
@@ -767,7 +779,8 @@ try {
             }
         }
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory
-        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp); model = $runModel }
+        $seat = if ($Role -eq "worker") { Get-FreeWorkerSeat } else { $null }
+        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $seat }
         [void]$script:liveRuns.Add($live)
         $loweredFrom = ""
         if ([bool]$Pick.Lowered) {

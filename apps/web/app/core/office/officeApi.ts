@@ -36,6 +36,11 @@ export type OfficeAgent = {
   since: string | null;
   /** Every live run of the seat in start order; the fields above are the first one's. */
   runs?: OfficeRun[];
+  /**
+   * A `waiting` worker seat whose task only waits for its next run (office-stable-seats):
+   * the task above is what sits there next. An older server sends none.
+   */
+  queued?: boolean;
 };
 
 export type OfficeTask = {

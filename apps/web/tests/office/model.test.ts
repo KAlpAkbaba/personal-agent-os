@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildOffice, buildPanel, selectSeat } from "../../app/core/office/officeModel";
-import { SEAT_ORDER, busyCycle, twoWorkers } from "./fixtures";
+import { SEAT_ORDER, busyCycle, queuedTask, twoWorkers } from "./fixtures";
 
 describe("the office model", () => {
   it("draws two working workers typing with their task titles and 2/6 in the top bar", () => {
@@ -233,5 +233,68 @@ describe("the seat panel", () => {
     expect(selectSeat(null, "lead")).toBe("lead");
     expect(selectSeat("lead", "worker-1")).toBe("worker-1");
     expect(selectSeat("lead", "lead")).toBeNull();
+  });
+});
+
+const drawn = (view: ReturnType<typeof twoWorkers>, seat: string) =>
+  buildOffice(view).seats.find((s) => s.seat === seat)!;
+
+describe("a task that waits for its next run (office-stable-seats)", () => {
+  it.each([
+    // one table, two states: a page that drew both the same could not pass both rows
+    {
+      seat: "worker-3",
+      pose: "seated",
+      warning: false,
+      queued: true,
+      label: "Sıradaki iş",
+      ariaLabel: "Çalışan 3, sırada",
+    },
+    {
+      seat: "inspector",
+      pose: "standing",
+      warning: true,
+      queued: false,
+      label: null,
+      ariaLabel: "Denetleyici, döndü",
+    },
+  ])("draws $seat as pose $pose, warning $warning", ({ seat, ...expected }) => {
+    const got = drawn(queuedTask(), seat);
+    expect({
+      pose: got.pose,
+      warning: got.warning,
+      queued: got.queued,
+      label: got.label,
+      ariaLabel: got.ariaLabel,
+    }).toEqual(expected);
+  });
+
+  it("says sırada in the panel of a queued seat and shows the task it waits with", () => {
+    const panel = buildPanel(queuedTask(), "worker-3")!;
+    expect(panel.stateText).toBe("sırada");
+    expect(panel.task?.goal).toBe("sıradaki hedef");
+  });
+
+  it("draws a waiting seat without queued exactly as before, and queued:false the same", () => {
+    const before = drawn(twoWorkers(), "worker-4");
+    expect(drawn(queuedTask(), "worker-4")).toEqual(before);
+    const explicit = twoWorkers();
+    explicit.agents = explicit.agents.map((a) =>
+      a.seat === "worker-4" ? { ...a, queued: false } : a,
+    );
+    expect(drawn(explicit, "worker-4")).toEqual(before);
+    expect([before.pose, before.warning, before.label, before.ariaLabel]).toEqual([
+      "seated",
+      false,
+      null,
+      "Çalışan 4, bekliyor",
+    ]);
+  });
+
+  it("reads an answer without the queued field (an older server) as today", () => {
+    const office = buildOffice(twoWorkers());
+    expect(office.seats.filter((s) => s.queued)).toEqual([]);
+    expect(office.seats.find((s) => s.seat === "inspector")!.warning).toBe(true);
+    expect(buildPanel(twoWorkers(), "worker-4")!.stateText).toBe("bekliyor");
   });
 });

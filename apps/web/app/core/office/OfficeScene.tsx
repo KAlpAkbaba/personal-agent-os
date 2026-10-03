@@ -3,7 +3,7 @@
  * Pure rendering of `DrawnSeat`s - selection and motion preference come in as props.
  */
 
-import type { DrawnSeat } from "./officeModel";
+import { QUEUED_TR, type DrawnSeat } from "./officeModel";
 import { ARMS_A, ARMS_B, DESK, SEATED, STANDING, WARNING, toRects } from "./officeSprites";
 
 function Pixels({ map, x, y }: { map: readonly string[]; x: number; y: number }) {
@@ -84,7 +84,12 @@ export default function OfficeScene({
             onClick={() => onSelect(seat.seat)}
           >
             {/* cut with an ellipsis at the cell's width; the title attribute keeps it whole */}
-            <span className="office-label" title={seat.label ?? undefined} aria-hidden="true">
+            <span
+              className="office-label"
+              title={seat.label ?? undefined}
+              aria-hidden="true"
+              {...(seat.queued ? { style: { color: "var(--muted)" } } : {})}
+            >
               {seat.label ?? " "}
             </span>
             <Figure seat={seat} reducedMotion={reducedMotion} />
@@ -98,6 +103,11 @@ export default function OfficeScene({
                 {seat.runCount !== null && (
                   <span className="office-run-count"> {seat.runCount}</span>
                 )}
+              </span>
+            )}
+            {seat.queued && (
+              <span className="office-badge-static" aria-hidden="true">
+                {QUEUED_TR}
               </span>
             )}
           </button>

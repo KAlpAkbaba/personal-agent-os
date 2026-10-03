@@ -7,16 +7,21 @@ string in the answer is one the queue or the status already carries.
 Seat rules (the contract the page is built against):
 
 * the seats are ``lead``, ``researcher``, ``integrator``, ``worker-1..N``, ``inspector``,
-  ``owner`` in that order, where N is four or the number of live worker runs, whichever is
-  larger: a run is never left without a seat;
-* a live run whose role is ``worker`` takes a worker seat of its own, in start order; EVERY live
-  run of another role sits on that role's one seat. A seat with a live run is ``working``; its
-  ``runs`` lists them in start order (``task_id``, ``task_title``, ``since``) and the seat's own
-  ``task_id`` / ``task_title`` / ``since`` are the first run's;
+  ``owner`` in that order, where N is the largest of four, the highest seat a live worker run
+  holds and the number of live worker runs: a run is never left without a seat;
+* a live run whose role is ``worker`` takes a worker seat of its own: ``worker-<seat>`` when its
+  status entry carries a ``seat`` (an int >= 1 no other run claims; the cycle keeps it for the
+  run's life, so the others do not move when one ends), else - no seat (a cycle older than
+  office-stable-seats), a bad one or a duplicate - the lowest free seat, in start order. EVERY
+  live run of another role sits on that role's one seat. A seat with a live run is ``working``;
+  its ``runs`` lists them in start order (``task_id``, ``task_title``, ``since``) and the seat's
+  own ``task_id`` / ``task_title`` / ``since`` are the first run's;
 * a seat with no live run has no ``runs`` and is ``returned`` when the newest task of that role
   is ``returned`` or ``stopped`` (the task is the seat's), else ``waiting``. "Newest task of a
-  role" is the task whose latest report by that role is the most recent; the worker seats with
-  no live run take the newest such worker tasks that are returned/stopped, newest first;
+  role" is the task whose latest report by that role is the most recent. The worker seats with
+  no live run take the worker tasks not running, newest first: the ``stopped`` ones first, as
+  ``returned`` (a person must act), then the ``returned`` / ``assigned`` ones as ``waiting``
+  with ``queued: true`` (they only wait for their next run);
 * the owner seat is always ``waiting`` with no task (the page shows the approvals on it).
 
 ``running_agents`` counts the live RUNS on the seats, not the seats that work (three inspector
@@ -54,6 +59,7 @@ MIN_WORKER_SEATS = 4
 _ROLE_SEATS = ("lead", "researcher", "integrator", "inspector")
 _FINISHED = ("released", "done")
 _RETURNED = ("returned", "stopped")
+_QUEUED = ("returned", "assigned")  # a worker task waiting for its next run
 
 
 def _usage_limit(status: dict[str, Any] | None) -> dict[str, Any]:
@@ -138,9 +144,29 @@ def _task_report(task: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _worker_seats(live_worker_runs: int) -> list[str]:
-    count = max(MIN_WORKER_SEATS, live_worker_runs)
-    return [f"worker-{n}" for n in range(1, count + 1)]
+def _valid_seat(value: Any) -> bool:
+    return type(value) is int and value >= 1  # not a bool, a float or a string
+
+
+def _place_workers(runs: list[dict[str, Any]]) -> tuple[list[str], dict[str, list[dict]]]:
+    """The worker seats and who sits on them: a run on the seat it carries, else the lowest free."""
+    claims: dict[int, int] = {}
+    for run in runs:
+        if _valid_seat(run.get("seat")):
+            claims[run["seat"]] = claims.get(run["seat"], 0) + 1
+    held = {n for n, times in claims.items() if times == 1}  # a seat claimed twice holds nobody
+    count = max(MIN_WORKER_SEATS, max(held, default=0), len(runs))
+    placed: dict[str, list[dict[str, Any]]] = {}
+    unseated = []
+    for run in runs:
+        if run.get("seat") in held and _valid_seat(run.get("seat")):
+            placed[f"worker-{run['seat']}"] = [run]
+        else:
+            unseated.append(run)
+    free = (n for n in range(1, count + 1) if n not in held)
+    for run, number in zip(unseated, free, strict=False):
+        placed[f"worker-{number}"] = [run]
+    return [f"worker-{n}" for n in range(1, count + 1)], placed
 
 
 def _seat(seat: str, role: str, state: str, task: dict[str, Any] | None, since: Any) -> dict:
@@ -198,23 +224,21 @@ def office_view(
     live = _is_live(lock, status, now)
     runs = _live_runs(status) if live and status else []
 
-    worker_seats = _worker_seats(sum(1 for r in runs if r.get("role") == "worker"))
-    placed: dict[str, list[dict[str, Any]]] = {}
-    workers = 0
+    worker_seats, placed = _place_workers([r for r in runs if r.get("role") == "worker"])
     for run in runs:
         role = str(run.get("role", ""))
-        if role == "worker":
-            placed[worker_seats[workers]] = [run]
-            workers += 1
-        elif role in _ROLE_SEATS:
+        if role in _ROLE_SEATS:
             placed.setdefault(role, []).append(run)
 
     running_agents = sum(len(seated) for seated in placed.values())
     running_ids = {str(r.get("task")) for r in runs}
-    returned_workers = [
-        t
-        for t in _newest_by_role(tasks, "worker")
-        if t.get("state") in _RETURNED and str(t.get("id")) not in running_ids
+    idle_workers = [
+        t for t in _newest_by_role(tasks, "worker") if str(t.get("id")) not in running_ids
+    ]
+    # A stopped task needs a person and is drawn first; a returned or assigned one only waits
+    # for its next run: the seat says what sits there next, not that something is wrong.
+    free_worker_tasks = [(t, "returned") for t in idle_workers if t.get("state") == "stopped"] + [
+        (t, "queued") for t in idle_workers if t.get("state") in _QUEUED
     ]
     free_worker_seats = [s for s in worker_seats if s not in placed]
     agents: list[dict[str, Any]] = []
@@ -226,9 +250,15 @@ def office_view(
             agents.append(_working_seat(seat, role, placed[seat], by_id))
         elif seat in worker_seats:
             index = free_worker_seats.index(seat)  # position among the seats nobody is working
-            task = returned_workers[index] if index < len(returned_workers) else None
-            state = "returned" if task is not None else "waiting"
-            agents.append(_seat(seat, role, state, task, task and task.get("updated_at")))
+            if index < len(free_worker_tasks):
+                task, kind = free_worker_tasks[index]
+                state = "returned" if kind == "returned" else "waiting"
+                agent = _seat(seat, role, state, task, task.get("updated_at"))
+                if kind == "queued":
+                    agent["queued"] = True
+                agents.append(agent)
+            else:
+                agents.append(_seat(seat, role, "waiting", None, None))
         else:
             newest = next(iter(_newest_by_role(tasks, role)), None)
             if newest is not None and newest.get("state") in _RETURNED:

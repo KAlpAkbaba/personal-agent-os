@@ -320,14 +320,170 @@ def test_returned_worker_tasks_fill_the_free_seats_up_to_the_fourth():
         for i, at in enumerate(stamps)
     ]
     view = _view(tasks, _status([("run-task", "worker")]))
-    assert [(s["state"], s["task_id"]) for s in _workers(view)] == [
-        ("working", "run-task"),
-        ("returned", "old-2"),
-        ("returned", "old-1"),
-        ("returned", "old-0"),
+    # office-stable-seats: a `returned` task only waits for its next run - `waiting`, queued
+    assert [(s["state"], s["task_id"], s.get("queued")) for s in _workers(view)] == [
+        ("working", "run-task", None),
+        ("waiting", "old-2", True),
+        ("waiting", "old-1", True),
+        ("waiting", "old-0", True),
     ]
     assert _seat(view, "worker-4")["runs"] == []
     assert view["cycle"]["running_agents"] == 1
+
+
+# ------------------------------------------------------------------ office-stable-seats
+
+
+def _seated(runs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A live status of worker runs; a run's seat is set unless it is ``None`` (then no key)."""
+    doc = _status([(task, "worker") for task, _ in runs])
+    for entry, (_, seat) in zip(doc["runs"], runs, strict=True):
+        if seat is not None:
+            entry["seat"] = seat
+    return doc
+
+
+def _placement(view):
+    return [(s["seat"], s["state"], s["task_id"]) for s in _workers(view)]
+
+
+def _strip_seats(doc):
+    return {**doc, "runs": [{k: v for k, v in r.items() if k != "seat"} for r in doc["runs"]]}
+
+
+def test_runs_on_seats_2_and_3_leave_worker_1_free():
+    # 2026-10-02 15:50: the run on Çalışan 1 ended; the other two stay where they sat.
+    tasks = [_task("b-task"), _task("c-task")]
+    view = _view(tasks, _seated([("b-task", 2), ("c-task", 3)]))
+    assert _placement(view) == [
+        ("worker-1", "waiting", None),
+        ("worker-2", "working", "b-task"),
+        ("worker-3", "working", "c-task"),
+        ("worker-4", "waiting", None),
+    ]
+    assert (view["cycle"]["running_agents"], view["cycle"]["capacity"]) == (2, 6)
+
+
+def test_a_run_on_seat_6_makes_six_worker_seats():
+    view = _view([_task("f-task")], _seated([("f-task", 6)]))
+    assert [s["seat"] for s in _workers(view)] == [
+        "worker-1",
+        "worker-2",
+        "worker-3",
+        "worker-4",
+        "worker-5",
+        "worker-6",
+    ]
+    assert _seat(view, "worker-6")["task_id"] == "f-task"
+    assert [s["state"] for s in _workers(view)] == ["waiting"] * 5 + ["working"]
+    assert _order(view) == ORDER
+    assert (view["cycle"]["running_agents"], view["cycle"]["capacity"]) == (1, 6)
+
+
+def test_mixed_seated_runs_keep_their_seats_and_unseated_ones_take_the_lowest_free_in_order():
+    runs = [("a-task", None), ("b-task", 2), ("c-task", None), ("d-task", 5)]
+    view = _view([_task(t) for t, _ in runs], _seated(runs))
+    assert _placement(view) == [
+        ("worker-1", "working", "a-task"),
+        ("worker-2", "working", "b-task"),
+        ("worker-3", "working", "c-task"),
+        ("worker-4", "waiting", None),
+        ("worker-5", "working", "d-task"),
+    ]
+
+
+_FELL_BACK = [("worker-1", "x-task"), ("worker-3", "b-task")]
+
+
+@pytest.mark.parametrize(
+    ("runs", "expected"),
+    [
+        # seat 3 claimed twice: neither claim holds; both take the lowest free seats in order
+        (
+            [("a-task", None), ("x-task", 3), ("b-task", 3)],
+            [("worker-1", "a-task"), ("worker-2", "x-task"), ("worker-3", "b-task")],
+        ),
+        ([("x-task", 0), ("b-task", 3)], _FELL_BACK),
+        ([("x-task", -2), ("b-task", 3)], _FELL_BACK),
+        ([("x-task", "2"), ("b-task", 3)], _FELL_BACK),
+        ([("x-task", 2.0), ("b-task", 3)], _FELL_BACK),
+        ([("x-task", True), ("b-task", 3)], _FELL_BACK),
+    ],
+    ids=["duplicate", "zero", "negative", "string", "float", "bool"],
+)
+def test_a_seat_that_is_not_a_positive_unique_integer_falls_back_and_no_run_is_lost(runs, expected):
+    view = _view([_task(t) for t, _ in runs], _seated(runs))
+    working = [(s["seat"], s["task_id"]) for s in _workers(view) if s["state"] == "working"]
+    assert working == expected
+    assert len(working) == len(runs)  # every live worker run is on a seat
+    assert len({s["seat"] for s in view["agents"]}) == len(view["agents"])
+
+
+@pytest.mark.parametrize(
+    "runs",
+    [
+        [("b-task", 2), ("c-task", 3)],
+        [("f-task", 6)],
+        [("a-task", None), ("b-task", 2), ("c-task", None), ("d-task", 5)],
+        [("a-task", 1), ("b-task", 1), ("c-task", 0), ("d-task", "4"), ("e-task", 9)],
+    ],
+)
+def test_running_agents_and_capacity_do_not_depend_on_the_seats(runs):
+    tasks = [_task(t) for t, _ in runs]
+    doc = _seated(runs)
+    doc["runs"].append({"task": "i-task", "role": "inspector", "started_at": doc["updated_at"]})
+    with_seats = _view(tasks, doc)["cycle"]
+    without = _view(tasks, _strip_seats(doc))["cycle"]
+    assert (with_seats["running_agents"], with_seats["capacity"]) == (
+        without["running_agents"],
+        without["capacity"],
+    )
+    assert with_seats["running_agents"] == len(runs) + 1
+
+
+def test_a_returned_worker_task_waiting_for_its_run_is_queued_not_returned():
+    tasks = [
+        _task("run-task"),
+        _task("wait-task", "returned", reports=[_report("worker", "2026-10-01T10:00:00Z")]),
+    ]
+    view = _view(tasks, _status([("run-task", "worker")]))
+    seat = _seat(view, "worker-2")
+    assert (seat["state"], seat["task_id"], seat["task_title"], seat.get("queued")) == (
+        "waiting",
+        "wait-task",
+        "Başlık wait-task",
+        True,
+    )
+    assert "queued" not in _seat(view, "worker-3")
+    assert "queued" not in _seat(view, "worker-1")
+
+
+def test_an_assigned_worker_task_waiting_for_its_run_is_queued_too():
+    tasks = [_task("next-task", "assigned", reports=[_report("worker")])]
+    seat = _seat(_view(tasks, _status([])), "worker-1")
+    assert (seat["state"], seat["task_id"], seat.get("queued")) == ("waiting", "next-task", True)
+
+
+def test_a_stopped_worker_task_is_still_returned_and_drawn_before_a_queued_one():
+    tasks = [
+        _task("run-task"),
+        _task("run-too", "in_progress"),
+        # the queued one is the NEWER report: the stopped one still comes first
+        _task("wait-task", "returned", reports=[_report("worker", "2026-10-01T11:00:00Z")]),
+        _task("stop-task", "stopped", reports=[_report("worker", "2026-10-01T09:00:00Z")]),
+    ]
+    view = _view(tasks, _status([("run-task", "worker"), ("run-too", "worker")]))
+    w3, w4 = _seat(view, "worker-3"), _seat(view, "worker-4")
+    assert (w3["state"], w3["task_id"], "queued" in w3) == ("returned", "stop-task", False)
+    assert (w4["state"], w4["task_id"], w4.get("queued")) == ("waiting", "wait-task", True)
+
+
+def test_a_task_that_is_running_is_never_also_shown_as_queued():
+    tasks = [_task("both-task", "returned", reports=[_report("worker")])]
+    view = _view(tasks, _status([("both-task", "worker")]))
+    shown = [s for s in view["agents"] if s["task_id"] == "both-task"]
+    assert [(s["seat"], s["state"]) for s in shown] == [("worker-1", "working")]
+    assert not any(s.get("queued") for s in view["agents"])
 
 
 # ------------------------------------------------------------------ the routes
@@ -418,6 +574,14 @@ def test_the_seats_a_cycle_posts_on_its_worker_runs_come_back_on_the_office(owne
     )
 
 
+@pytest.mark.parametrize("seat", ["2", 2.5, True])
+def test_a_seat_that_is_not_an_integer_is_refused_by_the_strict_route(owner, seat):
+    # The route is strict: only an integer reaches office_view's fallback (cycle.ps1 writes ints).
+    doc = _live_status([("b-task", "worker")])
+    doc["runs"][0]["seat"] = seat
+    assert owner.put(STATUS, json=doc).status_code == 422
+
+
 def test_a_status_with_an_unknown_key_or_a_wrong_type_is_a_422(owner):
     good = _live_status([("alpha-task", "worker")])
     assert owner.put(STATUS, json={**good, "surprise": 1}).status_code == 422
@@ -480,7 +644,8 @@ def test_a_returned_worker_task_is_shown_while_another_worker_runs():
         "run-task",
     )
     w2 = _seat(view, "worker-2")
-    assert (w2["state"], w2["task_id"]) == ("returned", "old-task")
+    # office-stable-seats: a `returned` task only waits for its next run - `waiting`, queued
+    assert (w2["state"], w2["task_id"], w2.get("queued")) == ("waiting", "old-task", True)
     assert _seat(view, "worker-3")["state"] == "waiting"
 
 
