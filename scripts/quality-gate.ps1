@@ -606,6 +606,15 @@ if (-not $Fast) {
     Assert-ExitCode "team-integrate tests"
   }
 
+  Invoke-Step "Agent team board client (PS5.1, fake board, no model)" {
+    # The team's board (the owner's idea, 2026-10-03): scripts/team/board.ps1 posts and reads
+    # notes against a fake board on 127.0.0.1; an unreachable board is a warning and exit 0.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-board.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-board tests"
+  }
+
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
     # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
     # fake docker, apt, systemctl and curl. Nothing here touches a host.
