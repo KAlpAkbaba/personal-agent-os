@@ -9,7 +9,9 @@
 
 # -E2E additionally runs the M1 device end-to-end test (opens/closes Notepad
 # in the interactive session; not suitable for headless CI).
-param([switch]$Fast, [switch]$E2E)
+# -GateSerial runs every step one after another, as before the suite group (gate-faster);
+# -GateMaxParallel sets the group's width (0 = the named default, GateSteps.ps1: 3).
+param([switch]$Fast, [switch]$E2E, [switch]$GateSerial, [int]$GateMaxParallel = 0)
 
 # "Continue", not "Stop": docker compose, alembic and next write progress to
 # stderr; under output redirection PS 5.1 would turn those lines into
@@ -18,6 +20,14 @@ param([switch]$Fast, [switch]$E2E)
 $ErrorActionPreference = "Continue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiRoot = Join-Path $repoRoot "services\api"
+$gateClock = [System.Diagnostics.Stopwatch]::StartNew()
+
+# gate-faster (team/plans/gate-faster-adr.md): the gate's own database and its suite group.
+# Both libraries only define functions and settings; neither changes this script's preferences.
+. (Join-Path $PSScriptRoot "lib\GateDatabase.ps1")
+. (Join-Path $PSScriptRoot "lib\GateSteps.ps1")
+$script:GateGroup = $null
+$script:GateRecording = $null
 
 function Resolve-Tool {
   param([string]$Name, [string[]]$Fallbacks)
@@ -41,6 +51,23 @@ $failed = $false
 
 function Invoke-Step {
   param([string]$Name, [scriptblock]$Action)
+  if ($null -ne $script:GateGroup) {
+    # Between Start-GateGroup and Complete-GateGroup a step is RECORDED, not run: its
+    # Invoke-GateSuite gives the script, its Assert-ExitCode the words of its FAILED line, and
+    # Complete-GateGroup runs it as a process of its own beside the others.
+    $script:GateRecording = [pscustomobject]@{ Script = ""; Lane = ""; What = "" }
+    try { & $Action | Out-Null } finally { $recorded = $script:GateRecording; $script:GateRecording = $null }
+    if ($recorded.Script -and $recorded.What) {
+      [void]$script:GateGroup.Add((New-GateStep -Name $Name -Script $recorded.Script -What $recorded.What -Lane $recorded.Lane))
+      return
+    }
+    Write-Host ""
+    Write-Host "=== $Name ===" -ForegroundColor Cyan
+    Write-Host "FAILED: a grouped step must call Invoke-GateSuite and Assert-ExitCode" -ForegroundColor Red
+    [void]$script:results.Add([pscustomobject]@{ Step = $Name; Result = "FAIL"; Seconds = 0 })
+    $script:failed = $true
+    return
+  }
   Write-Host ""
   Write-Host "=== $Name ===" -ForegroundColor Cyan
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -60,9 +87,106 @@ function Invoke-Step {
   if (-not $ok) { $script:failed = $true }
 }
 
+function Get-StepFailureText {
+  # The words after "FAILED: " - one function, so a grouped step and a sequential one fail in
+  # the same words (team-integrate and the lead read these lines).
+  param([string]$What, $Code, [switch]$TimedOut, [int]$DeadlineSeconds = 0)
+  if ($TimedOut) { return "$What $($script:GateStepTimeoutWord): did not end within $DeadlineSeconds s; killed with its process tree" }
+  return "$What exited with code $Code"
+}
+
 function Assert-ExitCode {
   param([string]$What)
-  if ($LASTEXITCODE -ne 0) { throw "$What exited with code $LASTEXITCODE" }
+  if ($null -ne $script:GateRecording) { $script:GateRecording.What = $What; return }
+  if ($LASTEXITCODE -ne 0) { throw (Get-StepFailureText -What $What -Code $LASTEXITCODE) }
+}
+
+function Invoke-GateSuite {
+  # A PowerShell suite of the gate: run here, now (sequential, -GateSerial, or outside a group),
+  # or - while Invoke-Step records a grouped step - remembered for the group. $Lane names what
+  # the suite shares with others of the same lane; a lane runs one suite at a time.
+  param([Parameter(Mandatory = $true)][string]$Path, [string]$Lane = "")
+  if ($null -ne $script:GateRecording) {
+    $script:GateRecording.Script = $Path
+    $script:GateRecording.Lane = $Lane
+    return
+  }
+  if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+  & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $Path
+}
+
+function Start-GateGroup {
+  # The Invoke-Step blocks from here to Complete-GateGroup run side by side (gate-faster):
+  # recorded first, then started together. -GateSerial: they run one by one, as before.
+  if ($GateSerial) { return }
+  $script:GateGroup = New-Object System.Collections.ArrayList
+}
+
+function Complete-GateGroup {
+  # Runs the recorded steps (scripts/lib/GateSteps.ps1), then reports each one as Invoke-Step
+  # would have: its own "=== name ===" section with its whole log (the failed steps first),
+  # its FAILED line in the same words, and its row of the table in the LISTED order.
+  if ($null -eq $script:GateGroup) { return }
+  $steps = @($script:GateGroup.ToArray())
+  $script:GateGroup = $null
+  if (@($steps).Count -eq 0) { return }
+  $width = if ($GateMaxParallel -gt 0) { $GateMaxParallel } else { $script:GateStepMaxParallel }
+  $lanes = @($steps | Where-Object { $_.Lane } | ForEach-Object { $_.Lane } | Select-Object -Unique)
+  $logRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("pagentos-gate-steps-" + $PID + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+  Write-Host ""
+  Write-Host ("suite group: {0} steps, at most {1} at once{2}" -f @($steps).Count, $width, $(if (@($lanes).Count) { "; one at a time in each lane: " + ($lanes -join ", ") } else { "" }))
+  $clock = [System.Diagnostics.Stopwatch]::StartNew()
+  $groupError = ""
+  $ran = @()
+  try { $ran = @(Invoke-GateStepGroup -Steps $steps -LogRoot $logRoot -MaxParallel $width -PowerShellPath $powershell5) }
+  catch { $groupError = $_.Exception.Message }
+  $clock.Stop()
+  if ($groupError) {
+    foreach ($s in $steps) {
+      Write-Host ""
+      Write-Host "=== $($s.Name) ===" -ForegroundColor Cyan
+      Write-Host "FAILED: $($s.What): the suite group did not run: $groupError" -ForegroundColor Red
+      [void]$script:results.Add([pscustomobject]@{ Step = $s.Name; Result = "FAIL"; Seconds = 0 })
+    }
+    $script:failed = $true
+    Remove-Item -LiteralPath $logRoot -Recurse -Force -ErrorAction SilentlyContinue
+    return
+  }
+  $own = ($ran | Measure-Object -Property Seconds -Sum).Sum
+  Write-Host ("suite group: {0} s wall; the steps' own seconds add up to {1} s" -f [math]::Round($clock.Elapsed.TotalSeconds), [math]::Round($own))
+  $encoding = [Console]::OutputEncoding
+  foreach ($r in (@($ran | Where-Object { $_.Outcome -ne "PASS" }) + @($ran | Where-Object { $_.Outcome -eq "PASS" }))) {
+    Write-Host ""
+    Write-Host "=== $($r.Name) ===" -ForegroundColor Cyan
+    $out = if (Test-Path -LiteralPath $r.StdoutPath) { [System.IO.File]::ReadAllText($r.StdoutPath, $encoding) } else { "" }
+    $err = if (Test-Path -LiteralPath $r.StderrPath) { [System.IO.File]::ReadAllText($r.StderrPath, $encoding) } else { "" }
+    if ($out.Trim()) { Write-Host $out.TrimEnd() }
+    if ($err.Trim()) { Write-Host "--- stderr ---"; Write-Host $err.TrimEnd() }
+    if ($r.Outcome -ne "PASS") {
+      $text = Get-StepFailureText -What $r.What -Code $r.ExitCode -TimedOut:($r.Outcome -eq $script:GateStepTimeoutWord) -DeadlineSeconds $r.Deadline
+      Write-Host "FAILED: $text" -ForegroundColor Red
+    }
+  }
+  foreach ($r in $ran) {
+    [void]$script:results.Add([pscustomobject]@{ Step = $r.Name; Result = $(if ($r.Outcome -eq "PASS") { "PASS" } else { "FAIL" }); Seconds = $r.Seconds })
+    if ($r.Outcome -ne "PASS") { $script:failed = $true }
+  }
+  Remove-Item -LiteralPath $logRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Write-GateSummary {
+  # The table, the wall time and the final word; returns the exit code.
+  param([double]$WallSeconds)
+  Write-Host ""
+  Write-Host "=== Quality gate summary ===" -ForegroundColor Cyan
+  $script:results | Format-Table -AutoSize | Out-String | Write-Host
+  Write-Host "gate wall time: $([math]::Round($WallSeconds)) s"
+  if ($script:failed) {
+    Write-Host "QUALITY GATE: FAIL" -ForegroundColor Red
+    return 1
+  }
+  Write-Host "QUALITY GATE: PASS" -ForegroundColor Green
+  return 0
 }
 
 function Find-Dotnet {
@@ -248,27 +372,103 @@ if (-not $Fast) {
     Assert-ExitCode "dev-up.ps1"
   }
 
-  Invoke-Step "Alembic upgrade head" {
-    Push-Location $apiRoot
-    try {
-      & $uv run alembic upgrade head
-      Assert-ExitCode "alembic upgrade"
-    } finally { Pop-Location }
+  # gate-own-database (ADR-0254 open decision 5, ruled (b); team/plans/gate-faster-adr.md): the
+  # two steps that touch PostgreSQL run against a database of the gate's own, made on the dev
+  # server at the first step's start and dropped in the finally, so an inspector's integration
+  # run on `pagentos` and this gate no longer reset one database under each other. The gate
+  # never connects to `pagentos`. The variable is the one the application's Settings read
+  # (tests/unit/test_gate_database_contract.py asks them); it is set for these steps'
+  # children only. A gate that is killed leaves its database behind: the next one's sweep
+  # drops gate databases older than 24 hours by the stamp in their names.
+  $script:GateDatabaseVariable = "PAGENTOS_DATABASE_URL"
+  $script:GateDatabase = Get-GateDatabaseName -RunId ("{0}_{1}" -f $PID, [guid]::NewGuid().ToString("N").Substring(0, 6)) -Now ([datetime]::UtcNow)
+  $script:GateDatabaseUrl = $null
+  $script:GateDatabaseCreated = $false
+  try {
+    Invoke-Step "Alembic upgrade head" {
+      [void](Invoke-GateDatabaseSweep -Now ([datetime]::UtcNow))
+      New-GateDatabase -Name $script:GateDatabase
+      $script:GateDatabaseCreated = $true
+      $script:GateDatabaseUrl = Get-GateDatabaseUrl -BaseUrl (Get-GateSettingsDatabaseUrl -Uv $uv -ApiRoot $apiRoot) -Name $script:GateDatabase
+      Push-Location $apiRoot
+      try {
+        Invoke-WithGateDatabase -Variable $script:GateDatabaseVariable -Value $script:GateDatabaseUrl -Action {
+          & $uv run alembic upgrade head
+          Assert-ExitCode "alembic upgrade"
+        }
+      } finally { Pop-Location }
+    }
+
+    Invoke-Step "API integration tests" {
+      if (-not $script:GateDatabaseUrl) { throw "no gate database: the step before this one did not make it" }
+      Write-Host "database: $($script:GateDatabase) (the gate's own; pagentos is not touched)"
+      Push-Location $apiRoot
+      try {
+        Invoke-WithGateDatabase -Variable $script:GateDatabaseVariable -Value $script:GateDatabaseUrl -Action {
+          & $uv run pytest tests/integration -q -m integration
+          Assert-ExitCode "pytest (integration)"
+        }
+      } finally { Pop-Location }
+    }
+  } finally {
+    if ($script:GateDatabaseCreated) {
+      Invoke-Step "Gate database dropped" {
+        Remove-GateDatabase -Name $script:GateDatabase
+      }
+    }
   }
 
-  Invoke-Step "API integration tests" {
-    Push-Location $apiRoot
-    try {
-      & $uv run pytest tests/integration -q -m integration
-      Assert-ExitCode "pytest (integration)"
-    } finally { Pop-Location }
+  # gate-parallel-suites (team/plans/gate-faster-adr.md): the PowerShell / bash suites from here
+  # to Complete-GateGroup share no fixed port, temp path, database, git worktree or desktop -
+  # the ADR gives the evidence per suite - and run side by side, each as its own process, at
+  # most -GateMaxParallel at once. The three that start the fake team API share one lane: one
+  # at a time, listed first because together they are the group's longest path. What shares
+  # something stays below the group, in the old order. -GateSerial runs it all one by one.
+  Start-GateGroup
+
+  Invoke-Step "Agent team integrate step (PS5.1 + git, fake gate, no model)" {
+    # ADR-0260: scripts/team/integrate.ps1 gates a merged integration branch and puts exactly
+    # the gated commit on main - against a sandbox repository, a fake gate, a fake lead and
+    # the fake team API. The step is on main and NOT scheduled; this suite is what keeps it
+    # honest until it is. About 25 minutes: the longest PowerShell step of the gate.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"
+    Invoke-GateSuite $script -Lane "fake-team-api"
+    Assert-ExitCode "team-integrate tests"
+  }
+
+  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
+    # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
+    # fake in place of the model and a git repository made for the test.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-cycle.tests.ps1"
+    Invoke-GateSuite $script -Lane "fake-team-api"
+    Assert-ExitCode "team-cycle tests"
+  }
+
+  Invoke-Step "Agent team roadmap feeder (PS5.1 + git, no model)" {
+    # ADR-0214 addendum 8: the feeder that cuts the roadmap's next items into cards when the
+    # worker seats would idle, and the judge of what the lead run wrote - against a fake.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-feed.tests.ps1"
+    Invoke-GateSuite $script -Lane "fake-team-api"
+    Assert-ExitCode "team-feed tests"
+  }
+
+  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" {
+    # M18.4 (spec §6): the idle colour is brought up on the new sha, verified, switched to,
+    # the old colour drained; rollback is the switch in reverse. Proven under a fake docker
+    # that knows the two colours and the edge; the first real handoff is the next release.
+    $script = Join-Path $repoRoot "scripts\tests\cloud-release-bluegreen.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "cloud release blue/green tests"
   }
 
   Invoke-Step "Script syntax (PowerShell 5.1)" {
     # A PowerShell 7-only construct is a parse error on the owner's 5.1 machine, so the script
     # dies on its first line. One such slip reached a credential-rotation script.
     $script = Join-Path $repoRoot "scripts\tests\script-syntax.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "script syntax tests"
   }
 
@@ -277,7 +477,7 @@ if (-not $Fast) {
     # line into machine-readable stdout and the wrapper parsed leniently. These drive a real
     # child through every contamination shape and assert no error path quotes the secret.
     $script = Join-Path $repoRoot "scripts\tests\machine-readable.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "machine-readable protocol tests"
   }
 
@@ -287,7 +487,7 @@ if (-not $Fast) {
     # ERROR_INVALID_COMMAND_LINE because PowerShell mangled an argument containing quotes.
     # These tests assert the exact argument shape and round-trip argv through a real child.
     $script = Join-Path $repoRoot "scripts\tests\installer-invocation.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "installer invocation tests"
   }
 
@@ -296,7 +496,7 @@ if (-not $Fast) {
     # empty collection, which unrolls to $null. These cover 0/1/many for every
     # collection-returning function and lint the pattern out of the installer scripts.
     $script = Join-Path $repoRoot "scripts\tests\installer-strictmode.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "installer strictmode tests"
   }
 
@@ -305,7 +505,7 @@ if (-not $Fast) {
     # left an asymmetric half-state. These drive the journaled engine through the incident
     # shape, every failure leg, and recovery from the exact partial state it left.
     $script = Join-Path $repoRoot "scripts\tests\installer-deploy.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "deployment transaction tests"
   }
 
@@ -314,7 +514,7 @@ if (-not $Fast) {
     # empty-DACL state a previous install left on the owner's machine, and proves the
     # installer recovers from it without weakening anything.
     $script = Join-Path $repoRoot "scripts\tests\installer-acl.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "installer ACL tests"
   }
 
@@ -323,7 +523,7 @@ if (-not $Fast) {
     # install tree, self-checks it in staging and after publish, and writes the companion's
     # worker configuration; these tests pin that transaction without touching an install.
     $script = Join-Path $repoRoot "scripts\tests\installer-browser.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "installer browser tests"
   }
 
@@ -334,7 +534,7 @@ if (-not $Fast) {
     # sandbox and pin the write, the read-back, the permissions and the revoke. The script
     # itself is parsed, never run: it closes and relaunches Chrome.
     $script = Join-Path $repoRoot "scripts\tests\owner-enrollment.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "owner enrollment record tests"
   }
 
@@ -343,7 +543,7 @@ if (-not $Fast) {
     # successful; these pin the journaled engine as the only deploy path, the evidence
     # block, and the fail-loud M13 support assertion.
     $script = Join-Path $repoRoot "scripts\tests\installer-evidence.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "installer evidence tests"
   }
 
@@ -354,8 +554,145 @@ if (-not $Fast) {
     # back. The suite is a gate now; the shape it uses is held by
     # services/api/tests/unit/test_device_identity_contract.py from the other side.
     $script = Join-Path $repoRoot "scripts\tests\agent-update.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Invoke-GateSuite $script
     Assert-ExitCode "agent staged-update tests"
+  }
+
+  Invoke-Step "Agent audit reader (PS5.1)" {
+    # The cloud driver reported "no command row found" while real commands succeeded:
+    # its verifier read the timestamp from `at`, a field the writer never emitted (`ts`).
+    # These pin the reader to the real schema and to identity-based correlation.
+    $script = Join-Path $repoRoot "scripts\tests\agent-audit.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "agent audit tests"
+  }
+
+  Invoke-Step "Owner explain harness (PS5.1)" {
+    # 2026-09-04: the M16 harness started the web shell without waiting and then required a
+    # session newer than its own start time; these pin readiness gating and correlation.
+    $script = Join-Path $repoRoot "scripts\tests\owner-explain.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "owner explain harness tests"
+  }
+
+  Invoke-Step "Cloud secret shipping (PS5.1)" {
+    # The owner's provider-credential path: DPAPI store -> Tailscale SSH stdin -> /opt/pagentos/.env.
+    # Proven with a real native fake ssh (5.1 native-argument quoting byte for byte, value
+    # only ever on stdin) and pinned to tr-TR for the Turkish-I case-folding bug that
+    # refused every secret name containing an I on the owner's machine.
+    $script = Join-Path $repoRoot "scripts\tests\cloud-secret.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "cloud secret tests"
+  }
+
+  Invoke-Step "Cloud Core release transaction (PS5.1 + Git Bash)" {
+    # ADR-0042: the host ran a copied tree from the first deployment, so a "restart" after
+    # installing a secret changed nothing. The release (git archive -> app.next -> validate
+    # -> swap -> build -> migrate -> recreate ONLY the api -> verify -> rollback on failure)
+    # is proven here with a real native fake ssh/scp and a fake docker under Git Bash.
+    $script = Join-Path $repoRoot "scripts\tests\cloud-release.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "cloud release tests"
+  }
+
+  Invoke-Step "Config swap transaction (PS5.1)" {
+    # A real broker switch died inside [IO.File]::Replace: PowerShell binds $null to a
+    # [string] parameter as an EMPTY string, which .NET refuses as a path. These reproduce
+    # it and prove the transactional replace: same-volume staging + real backup, stale
+    # staging files, existing backups, validation before going live, rollback, idempotence.
+    $script = Join-Path $repoRoot "scripts\tests\config-swap.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "config swap tests"
+  }
+
+  Invoke-Step "Provisioning + parameter collisions (PS5.1)" {
+    # A real provisioning run applied four billable resources and then died assigning the
+    # result over its own [switch]$Apply parameter - PowerShell variable names are
+    # case-insensitive - so it looked like it had stopped before applying. These drive
+    # provision.ps1 end to end through a fake tofu and lint every script for the class.
+    $script = Join-Path $repoRoot "scripts\tests\provision.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "provisioning tests"
+  }
+
+  Invoke-Step "Identity restoration (PS5.1 + real key)" {
+    # A real finalize run died calling ECDsa.ImportFromPem from Windows PowerShell 5.1,
+    # whose .NET Framework does not have it. These run AFTER the agent build: the real
+    # service exe performs a real loopback enrollment, and the `identity` verb must return
+    # the enrolled public key byte-for-byte - the property broker-registration restore
+    # depends on. Also proves the verb is load-only: asking never mints a key.
+    $script = Join-Path $repoRoot "scripts\tests\identity-restore.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "identity restoration tests"
+  }
+
+  Invoke-Step "Native signing trust step (PS5.1)" {
+    # B33 req 473: the owner's one elevated step imports ONLY the companion's self-signed
+    # public certificate into LocalMachine\TrustedPeople. Every check and store operation
+    # runs here against throwaway CURRENT-USER stores; no LocalMachine store is written.
+    $script = Join-Path $repoRoot "scripts\tests\native-signing-trust.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "native signing trust tests"
+  }
+
+  Invoke-Step "Agent team tick not held by orphans (PS5.1, no model)" {
+    # 2026-10-03: a `tail -f` an agent run left behind held the scheduled tick (Start-Process
+    # -Wait waits for every descendant) and no cycle ran for two hours. The tick waits for its
+    # script's own process and stops what is left in the job it owns - fakes in place of both.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-tick.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "team-tick tests"
+  }
+
+  Invoke-Step "Agent team area widening rules (PS5.1, no model)" {
+    # A fix outside a card's area: the request line of a report, the widen / wait / refuse
+    # judgement and the protected paths (scripts/lib/TeamArea.ps1) - functions only.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-area.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "team-area tests"
+  }
+
+  Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
+    # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
+    # fake docker, apt, systemctl and curl. Nothing here touches a host.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\maintenance-reboot.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "maintenance-reboot tests"
+  }
+
+  Invoke-Step "Cloud Core host snapshot (PS5.1 + bash, fakes; the real fixture)" {
+    # The read-only snapshot script, its allow-list of commands, the collector and the schema,
+    # against fakes; the fixture the fake hosts are built from was collected from the real host.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\host-snapshot.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "host-snapshot tests"
+  }
+
+  Invoke-Step "Web shell on the tailnet: HTTPS script (PS5.1 + bash, fake tailscale)" {
+    # The web shell runs on the Cloud Core (aux `web` service, loopback only); the phone reaches
+    # it over `tailscale serve` HTTPS. The script that sets that up, against a fake tailscale:
+    # the loopback target, idempotence, --off, and that `funnel` is never called. No tailnet.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\web-tailnet-https.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "web-tailnet-https tests"
+  }
+
+  Complete-GateGroup
+
+  # Below the group, one by one as before: what shares something with a grouped suite or with
+  # the desktop.
+  Invoke-Step "UTF-8 JSON decoding (PS5.1)" {
+    # A real qualification record showed Turkish letters as mojibake: 5.1 decoded a
+    # charset-less JSON body as Latin-1 while the database held correct UTF-8.
+    # Not grouped: its listener is on the FIXED port 127.0.0.1:18099.
+    $script = Join-Path $repoRoot "scripts\tests\utf8-json.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "utf8 json tests"
   }
 
   Invoke-Step "Recovery supervisor tests" {
@@ -385,181 +722,12 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
-  Invoke-Step "Agent audit reader (PS5.1)" {
-    # The cloud driver reported "no command row found" while real commands succeeded:
-    # its verifier read the timestamp from `at`, a field the writer never emitted (`ts`).
-    # These pin the reader to the real schema and to identity-based correlation.
-    $script = Join-Path $repoRoot "scripts\tests\agent-audit.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "agent audit tests"
-  }
-
-  Invoke-Step "Owner explain harness (PS5.1)" {
-    # 2026-09-04: the M16 harness started the web shell without waiting and then required a
-    # session newer than its own start time; these pin readiness gating and correlation.
-    $script = Join-Path $repoRoot "scripts\tests\owner-explain.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "owner explain harness tests"
-  }
-
-  Invoke-Step "Cloud secret shipping (PS5.1)" {
-    # The owner's provider-credential path: DPAPI store -> Tailscale SSH stdin -> /opt/pagentos/.env.
-    # Proven with a real native fake ssh (5.1 native-argument quoting byte for byte, value
-    # only ever on stdin) and pinned to tr-TR for the Turkish-I case-folding bug that
-    # refused every secret name containing an I on the owner's machine.
-    $script = Join-Path $repoRoot "scripts\tests\cloud-secret.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "cloud secret tests"
-  }
-
-  Invoke-Step "Cloud Core release transaction (PS5.1 + Git Bash)" {
-    # ADR-0042: the host ran a copied tree from the first deployment, so a "restart" after
-    # installing a secret changed nothing. The release (git archive -> app.next -> validate
-    # -> swap -> build -> migrate -> recreate ONLY the api -> verify -> rollback on failure)
-    # is proven here with a real native fake ssh/scp and a fake docker under Git Bash.
-    $script = Join-Path $repoRoot "scripts\tests\cloud-release.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "cloud release tests"
-  }
-
-  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" {
-    # M18.4 (spec §6): the idle colour is brought up on the new sha, verified, switched to,
-    # the old colour drained; rollback is the switch in reverse. Proven under a fake docker
-    # that knows the two colours and the edge; the first real handoff is the next release.
-    $script = Join-Path $repoRoot "scripts\tests\cloud-release-bluegreen.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "cloud release blue/green tests"
-  }
-
-  Invoke-Step "UTF-8 JSON decoding (PS5.1)" {
-    # A real qualification record showed Turkish letters as mojibake: 5.1 decoded a
-    # charset-less JSON body as Latin-1 while the database held correct UTF-8.
-    $script = Join-Path $repoRoot "scripts\tests\utf8-json.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "utf8 json tests"
-  }
-
-  Invoke-Step "Config swap transaction (PS5.1)" {
-    # A real broker switch died inside [IO.File]::Replace: PowerShell binds $null to a
-    # [string] parameter as an EMPTY string, which .NET refuses as a path. These reproduce
-    # it and prove the transactional replace: same-volume staging + real backup, stale
-    # staging files, existing backups, validation before going live, rollback, idempotence.
-    $script = Join-Path $repoRoot "scripts\tests\config-swap.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "config swap tests"
-  }
-
-  Invoke-Step "Provisioning + parameter collisions (PS5.1)" {
-    # A real provisioning run applied four billable resources and then died assigning the
-    # result over its own [switch]$Apply parameter - PowerShell variable names are
-    # case-insensitive - so it looked like it had stopped before applying. These drive
-    # provision.ps1 end to end through a fake tofu and lint every script for the class.
-    $script = Join-Path $repoRoot "scripts\tests\provision.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "provisioning tests"
-  }
-
-  Invoke-Step "Identity restoration (PS5.1 + real key)" {
-    # A real finalize run died calling ECDsa.ImportFromPem from Windows PowerShell 5.1,
-    # whose .NET Framework does not have it. These run AFTER the agent build: the real
-    # service exe performs a real loopback enrollment, and the `identity` verb must return
-    # the enrolled public key byte-for-byte - the property broker-registration restore
-    # depends on. Also proves the verb is load-only: asking never mints a key.
-    $script = Join-Path $repoRoot "scripts\tests\identity-restore.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "identity restoration tests"
-  }
-
-  Invoke-Step "Native signing trust step (PS5.1)" {
-    # B33 req 473: the owner's one elevated step imports ONLY the companion's self-signed
-    # public certificate into LocalMachine\TrustedPeople. Every check and store operation
-    # runs here against throwaway CURRENT-USER stores; no LocalMachine store is written.
-    $script = Join-Path $repoRoot "scripts\tests\native-signing-trust.tests.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "native signing trust tests"
-  }
-
   if ($E2E) {
+    # Opens Notepad on the owner's desktop: never beside another window-opening step.
     Invoke-Step "M1 device E2E (Notepad)" {
       & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\e2e-m1-device.ps1") -SkipBuild
       Assert-ExitCode "e2e-m1-device.ps1"
     }
-  }
-
-  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
-    # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
-    # fake in place of the model and a git repository made for the test.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-cycle.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "team-cycle tests"
-  }
-
-  Invoke-Step "Agent team roadmap feeder (PS5.1 + git, no model)" {
-    # ADR-0214 addendum 8: the feeder that cuts the roadmap's next items into cards when the
-    # worker seats would idle, and the judge of what the lead run wrote - against a fake.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-feed.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "team-feed tests"
-  }
-
-  Invoke-Step "Agent team tick not held by orphans (PS5.1, no model)" {
-    # 2026-10-03: a `tail -f` an agent run left behind held the scheduled tick (Start-Process
-    # -Wait waits for every descendant) and no cycle ran for two hours. The tick waits for its
-    # script's own process and stops what is left in the job it owns - fakes in place of both.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-tick.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "team-tick tests"
-  }
-
-  Invoke-Step "Agent team area widening rules (PS5.1, no model)" {
-    # A fix outside a card's area: the request line of a report, the widen / wait / refuse
-    # judgement and the protected paths (scripts/lib/TeamArea.ps1) - functions only.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-area.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "team-area tests"
-  }
-
-  Invoke-Step "Agent team integrate step (PS5.1 + git, fake gate, no model)" {
-    # ADR-0260: scripts/team/integrate.ps1 gates a merged integration branch and puts exactly
-    # the gated commit on main - against a sandbox repository, a fake gate, a fake lead and
-    # the fake team API. The step is on main and NOT scheduled; this suite is what keeps it
-    # honest until it is. About 25 minutes: the longest PowerShell step of the gate.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "team-integrate tests"
-  }
-
-  Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
-    # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
-    # fake docker, apt, systemctl and curl. Nothing here touches a host.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\maintenance-reboot.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "maintenance-reboot tests"
-  }
-
-  Invoke-Step "Cloud Core host snapshot (PS5.1 + bash, fakes; the real fixture)" {
-    # The read-only snapshot script, its allow-list of commands, the collector and the schema,
-    # against fakes; the fixture the fake hosts are built from was collected from the real host.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\host-snapshot.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "host-snapshot tests"
-  }
-
-  Invoke-Step "Web shell on the tailnet: HTTPS script (PS5.1 + bash, fake tailscale)" {
-    # The web shell runs on the Cloud Core (aux `web` service, loopback only); the phone reaches
-    # it over `tailscale serve` HTTPS. The script that sets that up, against a fake tailscale:
-    # the loopback target, idempotence, --off, and that `funnel` is never called. No tailnet.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\web-tailnet-https.tests.ps1"
-    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
-    Assert-ExitCode "web-tailnet-https tests"
   }
 
   Invoke-Step "Web shell build" {
@@ -594,13 +762,4 @@ if (-not $Fast) {
 
 # -------------------------------------------------------------------- summary
 
-Write-Host ""
-Write-Host "=== Quality gate summary ===" -ForegroundColor Cyan
-$results | Format-Table -AutoSize | Out-String | Write-Host
-
-if ($failed) {
-  Write-Host "QUALITY GATE: FAIL" -ForegroundColor Red
-  exit 1
-}
-Write-Host "QUALITY GATE: PASS" -ForegroundColor Green
-exit 0
+exit (Write-GateSummary -WallSeconds $gateClock.Elapsed.TotalSeconds)

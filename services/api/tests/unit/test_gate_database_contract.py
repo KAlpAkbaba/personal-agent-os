@@ -42,7 +42,10 @@ def _gate_text() -> str:
 
 def gate_variable(text: str) -> str:
     match = re.search(r'\$script:GateDatabaseVariable\s*=\s*"([A-Za-z_][A-Za-z0-9_]*)"', text)
-    assert match, "scripts/quality-gate.ps1 no longer names its database variable in $script:GateDatabaseVariable"
+    assert match, (
+        "scripts/quality-gate.ps1 no longer names its database variable "
+        "in $script:GateDatabaseVariable"
+    )
     return match.group(1)
 
 
@@ -59,7 +62,9 @@ def test_the_variable_the_gate_sets_is_the_one_settings_read_for_the_database(
     assert settings_database_url_from(variable, probe, monkeypatch) == probe
 
 
-def test_the_check_would_catch_a_variable_settings_do_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_check_would_catch_a_variable_settings_do_not_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The falsification: a misspelt variable leaves the setting at its default."""
     probe = "postgresql+psycopg://user@127.0.0.1:1/pagentos_gate_contract_probe"
     monkeypatch.delenv(gate_variable(_gate_text()), raising=False)

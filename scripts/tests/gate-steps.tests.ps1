@@ -155,7 +155,8 @@ Test-Case "1. three steps waiting on a file the test makes only after all three 
     if (-not $proc.WaitForExit(180000)) { throw "the group did not return after the release (hang guard)" }
     Assert-Equal 0 $endedBeforeRelease "no step ended before the release"
     Assert-Equal 3 $seen "all three 'started' markers were there before the test released any step"
-    $outcomes = @(ConvertFrom-Json ([System.IO.File]::ReadAllText($resultPath)))
+    # 5.1's ConvertFrom-Json hands a JSON array down the pipeline as ONE object: unroll it.
+    $outcomes = @((ConvertFrom-Json ([System.IO.File]::ReadAllText($resultPath))) | ForEach-Object { $_ })
     Assert-Equal "PASS,PASS,PASS" ($outcomes -join ",") "all three passed once released"
 }
 
