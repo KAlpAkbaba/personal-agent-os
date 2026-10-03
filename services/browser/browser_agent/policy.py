@@ -185,6 +185,33 @@ def classify_click(element: ResolvedElement) -> RiskClass:
     return RiskClass.REVERSIBLE_WRITE
 
 
+#: The writes contract v1.8 classifies, by their short name.
+WRITE_ACTIONS: frozenset[str] = frozenset({"fill", "select_option", "set_checked"})
+
+
+def classify_write(name: str, submits: bool, in_form: bool, action: str) -> RiskClass:
+    """Contract v1.8 §4a: what CHANGING an element is - typing into it, choosing in it,
+    ticking it - from its accessible name and its wiring, in the collector's terms.
+
+    The Cloud Core's ``app.webtask.risk.classify_step`` makes the same decision from the
+    observation; ``tests/unit/test_write_ceiling.py`` runs both on one table. A field's
+    role does not make a write reversible: a ``<select>`` that buys on change is named by
+    the page like any button.
+    """
+    if action not in WRITE_ACTIONS:
+        return RiskClass.HIGH_IMPACT  # a write this module does not know is not a safe one
+    if risk_markers.is_high_impact(name or ""):
+        return RiskClass.HIGH_IMPACT
+    if submits or risk_markers.is_external_communication(name or ""):
+        return RiskClass.EXTERNAL_COMMUNICATION
+    # Unnamed and wired: nothing says what it does, and where it sits says it may send.
+    # Not text entry - typing sends nothing; what sends the form is judged when pressed.
+    unnamed = not any(ch.isalnum() for ch in risk_markers.fold(name or ""))
+    if unnamed and (submits or in_form) and action != "fill":
+        return RiskClass.EXTERNAL_COMMUNICATION
+    return RiskClass.REVERSIBLE_WRITE
+
+
 def enforce(
     allowed_risk_classes: frozenset[RiskClass] | set[RiskClass],
     risk_class: RiskClass,
@@ -300,7 +327,9 @@ __all__ = [
     "RESEARCH_SESSION_CLASSES",
     "ResolvedElement",
     "RiskClass",
+    "WRITE_ACTIONS",
     "classify_click",
+    "classify_write",
     "enforce",
     "narrow_reopen",
     "parse_risk_classes",
