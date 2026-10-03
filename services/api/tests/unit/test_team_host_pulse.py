@@ -196,10 +196,39 @@ def test_temp_count_with_an_expired_budget_is_too_large_and_returns(tmp_path):
     assert got["Count"] < 300
 
 
-def test_a_too_large_temp_count_is_itself_a_failure(tmp_path):
-    got = _ps(tmp_path, CHECK, _pulse_inputs(temp=1000, too_large=True))
+def test_temp_count_on_a_missing_path_is_missing_not_thrown(tmp_path):
+    got = _ps(tmp_path, f"$out = Measure-TeamTempItems -Path '{tmp_path / 'no-such-temp'}'")
+    assert got == {"Count": 0, "TooLarge": False, "TopPrefix": "", "Missing": True}
+
+    inputs = _pulse_inputs()
+    inputs["temp"] = got
+    line = _ps(tmp_path, CHECK, inputs)
+    assert line["ok"] is True, line
+    assert line["line"] == "Makine: bellek %40, TEMP yok, C: 100 GB, E: 100 GB"
+
+
+def test_a_count_that_ran_out_of_time_under_the_maximum_does_not_fail(tmp_path):
+    # inspector 2026-10-03: a 2 s budget that stopped at 20 121 of 40 000 items failed the check
+    # and stopped every seat far below max_temp_items; out of time is shown, the maximum decides
+    got = _ps(tmp_path, CHECK, _pulse_inputs(temp=120_000, too_large=True))
+    assert got["ok"] is True, got
+    assert got["line"] == "Makine: bellek %40, TEMP 120000+, C: 100 GB, E: 100 GB"
+
+
+def test_a_count_that_ran_out_of_time_above_the_maximum_fails(tmp_path):
+    got = _ps(tmp_path, CHECK, _pulse_inputs(temp=500_001, too_large=True))
     assert got["ok"] is False
-    assert any("TEMP" in r for r in got["reasons"]), got
+    assert any("TEMP" in r and "500001+" in r for r in got["reasons"]), got
+
+
+def test_temp_count_counts_past_the_prefix_sample(tmp_path):
+    # the prefix is taken from the first -PrefixSample names only (that is what keeps the count
+    # fast enough for the 2 s budget to reach max_temp_items); the count itself goes on
+    folder = _temp_folder(tmp_path)
+    got = _ps(tmp_path, f"$out = Measure-TeamTempItems -Path '{folder}' -PrefixSample 10")
+    assert got["Count"] == 300
+    assert got["TooLarge"] is False
+    assert got["TopPrefix"] in ("corpus", "pytest")
 
 
 # (3) drives -------------------------------------------------------------------------------
@@ -211,6 +240,12 @@ def test_a_drive_below_twenty_gb_fails_naming_that_drive(tmp_path):
     assert len(got["reasons"]) == 1
     assert got["reasons"][0].startswith("C:"), got
     assert "C: 12 GB" in got["line"]
+
+
+def test_a_drive_exactly_at_twenty_gb_passes(tmp_path):
+    got = _ps(tmp_path, CHECK, _pulse_inputs(drives={"C": 20 * GB, "E": 300 * GB}))
+    assert got["ok"] is True, got
+    assert got["reasons"] == []
 
 
 def test_a_missing_drive_is_named_in_the_line_not_thrown(tmp_path):
@@ -304,6 +339,29 @@ def test_a_child_of_an_earlier_process_with_the_roots_pid_is_not_a_descendant(tm
         # an older process that held pid 100 before the run, and its child: pid reuse
         _proc(100, 4, "vrserver", created="2026-10-03T03:00:00Z"),
         _proc(150, 100, "vrcompositor", created="2026-10-03T03:00:01Z"),
+        _proc(101, 100, "tail"),
+    ]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
+
+
+def test_a_dead_roots_pid_reused_later_does_not_make_the_new_owners_children_orphans(tmp_path):
+    # inspector 2026-10-03: the root (pid 100) finished and died; the owner's Chrome started an
+    # hour later and got pid 100; its renderer was returned as an orphan to be closed
+    processes = [
+        _proc(101, 100, "tail"),  # the run's own leftover, created while the root lived
+        _proc(100, 4, "chrome", created="2026-10-03T06:00:00Z"),
+        _proc(300, 100, "chrome-renderer", created="2026-10-03T06:00:01Z"),
+        _proc(301, 300, "chrome-gpu", created="2026-10-03T06:00:02Z"),
+    ]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
+
+
+def test_a_finished_root_still_alive_keeps_its_children(tmp_path):
+    # the root's own process (created just before StartedAt was taken) is not a reuse
+    processes = [
+        _proc(100, 4, "claude", created="2026-10-03T04:59:59Z"),
         _proc(101, 100, "tail"),
     ]
     roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]

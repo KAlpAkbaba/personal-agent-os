@@ -10,7 +10,8 @@
         Get-TeamProcessSnapshot) are the only functions that touch the machine. Each takes its
         source as a parameter (a script block, or the folder) so a test injects it. They only
         read: the TEMP count is top level only, never recursive, never opens a file, and stops
-        when its time budget runs out (the count so far is kept; running out is the finding).
+        when its time budget runs out (the count so far is kept and shown as "<n>+"; only a
+        count above max_temp_items fails). A TEMP path that does not exist comes back Missing.
       * PURE functions (Get-TeamHostPulse, Get-TeamOrphanTree, Test-TeamHostPulse,
         Get-TeamPulseThresholds, Compare-TeamTempGrowth, Format-TeamPulseLine) do no I/O.
 
@@ -70,30 +71,31 @@ function Get-TeamHostMemory {
     return [pscustomobject]@{ FreeBytes = [int64]$free; TotalBytes = [int64]$total; FreePercent = $percent }
 }
 
-function Get-TeamTempPrefix {
-    # The leading run of letters before the first digit, underscore, dash or other non-letter.
-    param([string]$Name)
-    $match = [regex]::Match($Name, '^\p{L}+')
-    if ($match.Success) { return $match.Value }
-    return ''
-}
-
 function Measure-TeamTempItems {
-    param([string]$Path = $env:TEMP, [int]$BudgetMs = 2000)
+    # The prefix is taken from the first -PrefixSample names only: a per-name prefix costs ~8 us
+    # in PowerShell 5.1 (~114 000 names/s), a bare MoveNext ~2 us (~540 000/s, measured on the home
+    # PC 2026-10-03), so only a sampled prefix lets the 2 s budget reach max_temp_items. The clock
+    # is read every 256 names. A path that does not exist comes back Missing, Count 0.
+    param([string]$Path = $env:TEMP, [int]$BudgetMs = 2000, [int]$PrefixSample = 20000)
     Set-StrictMode -Version Latest
     $count = 0
     $tooLarge = $false
     $prefixes = @{}
+    if (-not [System.IO.Directory]::Exists($Path)) {
+        return [pscustomobject]@{ Count = 0; TooLarge = $false; TopPrefix = ''; Missing = $true }
+    }
+    $letters = [regex]'^\p{L}+'
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
     $entries = [System.IO.Directory]::EnumerateFileSystemEntries($Path).GetEnumerator()
     try {
-        while ($entries.MoveNext()) {
-            if ($clock.ElapsedMilliseconds -ge $BudgetMs) { $tooLarge = $true; break }
+        if ($BudgetMs -le 0) { $tooLarge = $entries.MoveNext() }
+        while (-not $tooLarge -and $entries.MoveNext()) {
             $count++
-            $prefix = Get-TeamTempPrefix ([System.IO.Path]::GetFileName($entries.Current))
-            if ($prefix) {
-                if ($prefixes.ContainsKey($prefix)) { $prefixes[$prefix]++ } else { $prefixes[$prefix] = 1 }
+            if ($count -le $PrefixSample) {
+                $prefix = $letters.Match([System.IO.Path]::GetFileName($entries.Current)).Value
+                if ($prefix) { $prefixes[$prefix] = 1 + [int]$prefixes[$prefix] }
             }
+            if (($count -band 255) -eq 0 -and $clock.ElapsedMilliseconds -ge $BudgetMs) { $tooLarge = $true }
         }
     } finally {
         $entries.Dispose()
@@ -103,7 +105,7 @@ function Measure-TeamTempItems {
     foreach ($key in @($prefixes.Keys | Sort-Object)) {
         if ($prefixes[$key] -gt $best) { $best = $prefixes[$key]; $top = $key }
     }
-    return [pscustomobject]@{ Count = $count; TooLarge = $tooLarge; TopPrefix = $top }
+    return [pscustomobject]@{ Count = $count; TooLarge = $tooLarge; TopPrefix = $top; Missing = $false }
 }
 
 function Get-TeamDriveFree {
@@ -151,17 +153,33 @@ function Get-TeamRunTree {
     # every descendant is created at or after the run started: a ParentProcessId can name a
     # pid that was reused, and a process older than the run is never the run's (pid-reuse guard).
     # The root pid itself is not returned. A process with no known CreationDate is skipped.
+    # The root is the one pid the walk starts from without seeing it alive, so it is the one a
+    # later process can take over after the root died: a live process holding the root's pid
+    # and created AFTER StartedAt is a reuser, and only the root's children created before the
+    # reuser count - everything created from then on under that pid is the reuser's (inspector
+    # 2026-10-03: the owner's Chrome took a finished run's pid and its renderer was returned).
+    # Every deeper node is a live process of the snapshot, so its own creation bounds its children.
     param([object[]]$Processes, $Root)
     $started = ConvertTo-TeamPulseUtc (Get-TeamPulseValue $Root 'StartedAt' $null)
     $rootPid = [int](Get-TeamPulseValue $Root 'Pid' 0)
     if ($null -eq $started -or $rootPid -le 0) { return }
+    $rootBefore = $null
+    foreach ($process in $Processes) {
+        if ([int](Get-TeamPulseValue $process 'ProcessId' 0) -ne $rootPid) { continue }
+        $holderCreated = ConvertTo-TeamPulseUtc (Get-TeamPulseValue $process 'CreationDate' $null)
+        if ($null -eq $holderCreated) { return }  # cannot tell the root from a reuser: close nothing
+        if ($holderCreated -gt $started -and ($null -eq $rootBefore -or $holderCreated -lt $rootBefore)) {
+            $rootBefore = $holderCreated
+        }
+    }
     $visited = @{ $rootPid = $true }
     $queue = New-Object System.Collections.Queue
-    $queue.Enqueue(@($rootPid, $started))
+    $queue.Enqueue(@($rootPid, $started, $rootBefore))
     while ($queue.Count -gt 0) {
         $node = $queue.Dequeue()
         $parentPid = [int]$node[0]
         $parentCreated = [datetime]$node[1]
+        $before = $node[2]
         foreach ($process in $Processes) {
             if ([int](Get-TeamPulseValue $process 'ParentProcessId' 0) -ne $parentPid) { continue }
             $childPid = [int](Get-TeamPulseValue $process 'ProcessId' 0)
@@ -169,9 +187,10 @@ function Get-TeamRunTree {
             $created = ConvertTo-TeamPulseUtc (Get-TeamPulseValue $process 'CreationDate' $null)
             if ($null -eq $created) { continue }
             if ($created -lt $parentCreated) { continue }
+            if ($null -ne $before -and $created -ge [datetime]$before) { continue }
             $visited[$childPid] = $true
             $process
-            $queue.Enqueue(@($childPid, $created))
+            $queue.Enqueue(@($childPid, $created, $null))
         }
     }
 }
@@ -228,6 +247,7 @@ function Get-TeamHostPulse {
         FreePercent   = [double](Get-TeamPulseValue $Memory 'FreePercent' 0)
         TempCount     = [int64](Get-TeamPulseValue $Temp 'Count' 0)
         TempTooLarge  = [bool](Get-TeamPulseValue $Temp 'TooLarge' $false)
+        TempMissing   = [bool](Get-TeamPulseValue $Temp 'Missing' $false)
         TempTopPrefix = [string](Get-TeamPulseValue $Temp 'TopPrefix' '')
         DriveFree     = $driveFree
         Orphans       = @(Get-TeamOrphanTree -Processes @($Processes) -RunRoots @($RunRoots))
@@ -282,10 +302,12 @@ function Test-TeamHostPulse {
 
     $prefix = ''
     if ($Pulse.TempTopPrefix) { $prefix = ', en sık önek ' + $Pulse.TempTopPrefix }
-    if ($Pulse.TempTooLarge) {
-        $reasons.Add('TEMP sayımı süreye sığmadı (' + $Pulse.TempCount + '+ öğe)' + $prefix)
-    } elseif ([int64]$Pulse.TempCount -gt [int64]$Thresholds.max_temp_items) {
-        $reasons.Add('TEMP ' + $Pulse.TempCount + ' öğe (sınır ' + $Thresholds.max_temp_items + ')' + $prefix)
+    # Only the maximum fails: a count that ran out of time under it is unknown, not bad (shown as
+    # "<n>+" in the line); one that ran out of time above it is already over.
+    if ([int64]$Pulse.TempCount -gt [int64]$Thresholds.max_temp_items) {
+        $more = ''
+        if ($Pulse.TempTooLarge) { $more = '+' }
+        $reasons.Add('TEMP ' + $Pulse.TempCount + $more + ' öğe (sınır ' + $Thresholds.max_temp_items + ')' + $prefix)
     }
 
     $minDriveBytes = [double]$Thresholds.min_drive_free_gb * 1GB
@@ -334,6 +356,7 @@ function Format-TeamPulseLine {
     Set-StrictMode -Version Latest
     $temp = [string]$Pulse.TempCount
     if ($Pulse.TempTooLarge) { $temp += '+' }
+    if ((Get-TeamPulseValue $Pulse 'TempMissing' $false)) { $temp = 'yok' }
     $line = 'Makine: bellek %' + (Format-TeamPulsePercent $Pulse.FreePercent) + ', TEMP ' + $temp
     foreach ($letter in $Pulse.DriveFree.Keys) {
         $free = $Pulse.DriveFree[$letter]

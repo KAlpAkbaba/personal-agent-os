@@ -32,9 +32,15 @@ level that made the unit step take 1 h 48 min; 20 GB is what one gate's build ou
 corpus run write; a growth of 100 000 a day reaches the 2.6 million level in under a month.
 
 - **Time-bounded count.** The TEMP count is top level only, never recursive, never opens a file,
-  and stops when `BudgetMs` runs out: `TooLarge` is then true, the count so far is kept, and
-  `TooLarge` itself fails the check (a count that cannot finish in 2 s is the finding). The line
-  shows it as `TEMP <n>+`.
+  and stops when `BudgetMs` runs out: `TooLarge` is then true and the count so far is kept; the
+  line shows it as `TEMP <n>+`. Only `Count > max_temp_items` fails - a count that ran out of time
+  under the maximum is unknown, not bad, and failing it stopped every seat at ~20 000 items in the
+  first version (inspector 2026-10-03). To make the budget reach the maximum, the prefix is taken
+  from the first `-PrefixSample` (20 000) names only and the clock is read every 256 names:
+  measured on the home PC 2026-10-03, 100 000 entries in 171-244 ms (~550 000/s, ~1.1 million in
+  the 2 s budget, twice `max_temp_items`); a per-name prefix ran at ~114 000/s and the first version
+  at ~10 000/s. A path that does not exist returns `Missing`, `Count 0`, and the line reads
+  `TEMP yok` (never thrown: the wiring card needs no try/catch around the reader).
 - **Orphans are a pid tree from recorded roots, never a name list.** `RunRoots` are the records the
   wiring card takes from `Start-TeamRun` (`Pid`, `TaskId`, `Finished`, `StartedAt`). An orphan is a
   live descendant (ParentProcessId walk, visited set so a stale a->b->a snapshot terminates) of a
@@ -45,6 +51,13 @@ corpus run write; a growth of 100 000 a day reaches the 2.6 million level in und
   A child is accepted only when created at or after its parent; the root's creation is taken as its
   `StartedAt`, so nothing created before the run started is ever the run's. A process without a
   CreationDate is skipped (never killed on a guess); a root without `StartedAt` yields nothing.
+  The root's own pid needs a second guard: it is the one pid the walk starts from without seeing
+  it alive, so after the root dies a LATER process can take it (inspector 2026-10-03: the owner's
+  Chrome got a finished run's pid an hour later and its renderer was returned). A live process
+  holding the root's pid and created after `StartedAt` is a reuser; only the root's children
+  created before the reuser count. A holder without a CreationDate yields nothing. This is why
+  `StartedAt` must be taken at or after the root process's creation (a `StartedAt` taken before
+  it makes the live root read as a reuser and fails safe: nothing is closed).
 - **Orphans never fail the check** - they are closed, not waited on - but the line names them:
   ` - biten koşudan kalan süreç: 2 (tail, grep)`.
 - **Line**: `Makine: bellek %<n>, TEMP <n>, C: <n> GB, E: <n> GB` (percent and drive GB rounded
