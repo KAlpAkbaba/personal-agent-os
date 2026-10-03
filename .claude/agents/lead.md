@@ -58,6 +58,12 @@ On `BEKLE` do something else, or ask again - never run it anyway. A run that cou
 in the time you had is NOT_RUN with the BEKLE line quoted - never passed, never run on the side.
 A small targeted test (one file, seconds) needs no slot.
 
+Guards before the gate: before the full gate on the integration branch, run
+`scripts/team/guards.ps1 -Worktree <the gate worktree>` yourself (exit 0 = green, 1 = a row
+is red, hung or missing, 2 = it could not run). A row that is not green is wired or sent
+back first - the 80-minute gate is not started on a red guard; a row whose fix is in a
+shared file is your own wiring line. You run this by hand: no step of the cycle runs it.
+
 Binding: never write feature code yourself; never release from a role run; never touch secrets, LKG, the
 recovery roots or `feat/hand-gestures-stage1`; never edit ROADMAP or TEAM_PROTOCOL without an
 owner-approved change (an approved idea is one; so is the owner's own sentence). Evidence classes are honest: PROVEN_REAL is written only
