@@ -18,7 +18,7 @@ export const REPORT_LINE_CAP = 40;
 export const SHA_SHORT = 12;
 
 const SEAT_NAME_TR = new Map<SeatId, string>([
-  ["lead", "Hakim"],
+  ["lead", "Proje Yöneticisi"],
   ["researcher", "Araştırmacı"],
   ["integrator", "Entegratör"],
   ["inspector", "Denetleyici"],
@@ -51,7 +51,7 @@ export const TASK_STATE_TR: Record<string, string> = {
   in_progress: "yazılıyor",
   inspecting: "denetleniyor",
   returned: "denetleyici geri gönderdi; yeniden yazılacak",
-  stopped: "durdu: Hakim bakacak",
+  stopped: "durdu: Proje Yöneticisi bakacak",
   merged: "birleştirildi, yayın bekliyor",
   awaiting_release: "yayın için sahibin onayını bekliyor",
   released: "yayında",
