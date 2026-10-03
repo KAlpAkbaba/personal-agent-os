@@ -37,6 +37,17 @@
     the lead on the model `team/models.json` names for it, and treats the subscription's
     usage limit as the cycle does: wait it out when the tool says when it lifts, else stop.
 
+    BESIDE A RUNNING CYCLE (API mode only, ADR-0214 addendum - feeder-own-lock): when the team
+    lock is held by a LIVE cycle of THIS machine, the feeder does not stop and does not touch
+    that lock. It takes its own (a machine-local file, -FeederLockPath; a second feeder that
+    finds it held exits 3), runs the lead in a throwaway worktree of the checkout's HEAD (what
+    the cycle writes into the checkout meanwhile is not the run's; what the run writes where it
+    works is judged by rule 5 as ever), writes no idea row and commits nothing, reads the queue
+    AGAIN before it writes and judges the feed against that, writes ONLY the new tasks - each as
+    a conditional create; a 409 drops that card and the cards that depend on it - and writes its
+    report to the file only (the Onay Merkezi keeps showing the cycle's). With the files (no
+    -QueueUrl) there is one writer, the lock's holder: a live cycle's lock stops it, as before.
+
     It writes `team/reports/feed-<date>.md` in Turkish, one section per lead run it started.
     When nothing was started - the seats are full, the stop flag, a lock somebody holds - it
     says so on standard output and writes and posts NO report: the Onay Merkezi shows the
@@ -84,7 +95,10 @@ param(
     # The Cloud Core's queue (ADR-0222), as in the cycle. -QueueToken is the PATH of the file
     # that holds the token, never the token.
     [string]$QueueUrl = "",
-    [string]$QueueToken = ""
+    [string]$QueueToken = "",
+    # The feeder's own lock, taken beside a running cycle: a file outside the repository.
+    # Empty is $env:LOCALAPPDATA\PagentOS\team-feeder.lock. The tests name their own.
+    [string]$FeederLockPath = ""
 )
 
 Set-StrictMode -Version Latest
@@ -182,7 +196,9 @@ function Save-FeedReport {
     foreach ($note in @($script:notes.ToArray())) { [void]$section.Add("- $note") }
     $text = $text.TrimEnd() + "`n" + ((@($section.ToArray())) -join "`n") + "`n"
     [System.IO.File]::WriteAllText($reportPath, $text, $utf8)
-    if ($useApi) {
+    # Beside a running cycle the report is the file's only: the Onay Merkezi shows the newest
+    # report, and that stays the cycle's. The cards themselves are in the queue.
+    if ($useApi -and -not $script:lockFree) {
         try { Send-TeamReportApi -Store $apiStore -Name "$feedId.md" -Text $text }
         catch { Write-Host "the report was not posted to the queue store: $($_.Exception.Message)" }
     }
@@ -226,12 +242,24 @@ if ($decision.Kind -eq "ours") {
         $decision = [pscustomobject]@{ MayRun = $true; Kind = "dead"; Holder = $decision.Holder; Since = $decision.Since }
     }
 }
-if (-not $decision.MayRun) {
+# A live cycle of THIS machine, and the store is the Cloud Core's: the feeder works beside it,
+# under its own lock (the store makes every task write conditional). With the files there is
+# one writer, the lock's holder; another machine's cycle is not serialised by a local lock.
+# A live FEEDER of ours (cycle feed-<date>) is not a cycle: it never took the feeder's own lock,
+# so a second lead run beside it would cut the same rows again - it stops as before.
+$holderCycle = if ($null -ne $lock) { [string](Get-TeamProperty -InputObject $lock -Name "cycle_id" -Default "") } else { "" }
+$lockFree = ($useApi -and $decision.Kind -eq "ours" -and $holderCycle -notlike "feed-*")
+if (-not $decision.MayRun -and -not $lockFree) {
     # Said, not reported: the lock is a cycle's, every 30 minutes while it runs, and the report
     # the Onay Merkezi shows must stay that cycle's.
     Write-Host "  the lock is held by $($decision.Holder) ($($decision.Since)); the feeder started nothing"
     if ($DryRun) { exit 0 }
     exit 3
+}
+$ownLockPath = $FeederLockPath
+if (-not $ownLockPath) {
+    $localRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+    $ownLockPath = Join-Path $localRoot "PagentOS\team-feeder.lock"
 }
 
 # ------------------------------------------------------------------ what the run is asked for
@@ -239,7 +267,12 @@ $roadmapText = [System.IO.File]::ReadAllText($roadmapPath, [System.Text.Encoding
 $ideas = @(Get-TeamApprovedIdeasMissing -Queue $queue -RoadmapText $roadmapText)
 $ideaBlock = ""
 $branch = ""
-if (@($ideas).Count -gt 0) {
+if (@($ideas).Count -gt 0 -and $lockFree) {
+    # A commit in the checkout a running cycle works from is not made without its lock: the next
+    # feed between cycles asks for the row again.
+    $ideaBlock = "döngü çalışıyor"
+}
+elseif (@($ideas).Count -gt 0) {
     # The row is committed on the branch the checkout is on: the lead's. Never main, never a
     # detached HEAD; and never over somebody's uncommitted edit of the roadmap.
     $head = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("rev-parse", "--abbrev-ref", "HEAD")
@@ -263,6 +296,10 @@ if (@($ideas).Count -eq 0 -or $ideaBlock) { $exclude += "Edit" }
 
 if ($DryRun) {
     Write-Host "  $runnableCount runnable task(s), the seats are $MinRunnable"
+    if ($lockFree) {
+        Write-Host "  the lock is held by a live cycle of this machine ($($decision.Holder), $($decision.Since)): the lock-free path -"
+        Write-Host "  the feeder's own lock ($ownLockPath), the lead in a throwaway worktree, the queue read again, new tasks created one by one, the report to the file only; the cycle's lock is not taken"
+    }
     Write-Host "  would start ONE lead run (model: $(if ($leadModel) { $leadModel } else { 'the tool default' }); without $($exclude -join ', ')) for at most $MaxNew card(s) in $feedRelative"
     if (@($ideas).Count -gt 0 -and -not $ideaBlock) { Write-Host "  would ask for the 'Approved ideas' row of: $pendingIds (committed on $branch)" }
     elseif (@($ideas).Count -gt 0) { Write-Host "  would NOT ask for the 'Approved ideas' row of: $pendingIds ($ideaBlock)" }
@@ -270,7 +307,17 @@ if ($DryRun) {
     exit 0
 }
 
-if ($useApi) {
+$ownLock = $null
+if ($lockFree) {
+    # The cycle's lock is never taken, released or written on this path.
+    $ownLock = Enter-TeamFeederLock -Path $ownLockPath -Machine $Machine -Now $started
+    if (-not $ownLock.Acquired) {
+        # Said, not reported: another feeder of this machine is cutting cards right now.
+        Write-Host "  the feeder's own lock is held ($($ownLock.Why)): another feeder is cutting cards; this one started nothing"
+        exit 3
+    }
+}
+elseif ($useApi) {
     $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $feedId -TakeoverDead ($decision.Kind -eq "dead")
     if (-not [bool]$taken.acquired) {
         # The other machine took it between our read and our write. Said, not reported, as above.
@@ -280,10 +327,17 @@ if ($useApi) {
 }
 else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $feedId -Now $started) }
 
+$exitCode = 0
+$runRoot = $repoRoot
+$worktree = ""
 try {
     Add-FeedNote -Text "çalıştırılabilir iş: $runnableCount (koltuk: $MinRunnable) - lead roadmap'ten kart kesecek"
     if ($decision.Kind -eq "stale") { Add-FeedNote -Text "bayat kilit devralındı: $($decision.Holder), $($decision.Since)" }
     if ($decision.Kind -eq "dead") { Add-FeedNote -Text "bu makinenin ölmüş bir koşusunun kilidi devralındı ($($decision.Since))" }
+    if ($lockFree) {
+        Add-FeedNote -Text "kilitsiz yol: kilit bu makinenin çalışan döngüsünde ($($decision.Holder), $($decision.Since)); besleyici kendi kilidiyle çalışıyor, döngünün kilidine dokunulmadı"
+        if ($ownLock.TookOver) { Add-FeedNote -Text "besleyici kilidi devralındı: $($ownLock.TookOver)" }
+    }
     if (@($ideas).Count -gt 0 -and $ideaBlock) {
         Add-FeedNote -Text "onaylanan fikir satırı bu koşuda yazılmadı ($pendingIds): $ideaBlock"
         $ideas = @()
@@ -294,10 +348,20 @@ try {
     }
     $card = New-TeamFeedCard -Queue $queue -RoadmapText $roadmapText -FeedFile $feedRelative -MaxNew $MaxNew -Date $day -Ideas $ideas
 
+    # Beside a running cycle the lead works in a throwaway worktree of HEAD: what the cycle
+    # writes into the checkout meanwhile (its reports, splits, proposals) is not the run's, and
+    # what the run writes where it works is judged exactly as in the checkout.
+    if ($lockFree) {
+        $worktree = New-TeamFeedWorktree -RepoRoot $repoRoot -Name "$feedId-$number-$PID"
+        $runRoot = $worktree
+    }
+    $runFeedPath = Join-Path $runRoot ($feedRelative -replace '/', '\')
+    $runRoadmapPath = Join-Path $runRoot "docs\ROADMAP.md"
+
     # What the checkout looks like before the run, and the roadmap's own bytes: what the run
     # changed is the difference, and the roadmap can be put back exactly.
-    $roadmapBytes = [System.IO.File]::ReadAllBytes($roadmapPath)
-    $before = Get-TeamFeedSnapshot -RepoRoot $repoRoot
+    $roadmapBytes = [System.IO.File]::ReadAllBytes($runRoadmapPath)
+    $before = Get-TeamFeedSnapshot -RepoRoot $runRoot
 
     # ---------------------------------------------------------------- the lead run
     $outputs = New-Object System.Collections.ArrayList
@@ -325,7 +389,7 @@ try {
             if ($pick.Lowered) { Add-FeedNote -Text "model düşürüldü: $leadModel -> $runModel (limit)" }
         }
         $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $RunMaxUsd -Model $runModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $exclude
-        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $repoRoot
+        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $runRoot
         $deadline = if ($RunMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
         $finished = Wait-TeamRun -Run $run -Deadline $deadline
         $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model $runModel
@@ -362,8 +426,8 @@ try {
     }
 
     # ---------------------------------------------------------------- what the run changed
-    $after = Get-TeamFeedSnapshot -RepoRoot $repoRoot
-    $nowBytes = [System.IO.File]::ReadAllBytes($roadmapPath)
+    $after = Get-TeamFeedSnapshot -RepoRoot $runRoot
+    $nowBytes = [System.IO.File]::ReadAllBytes($runRoadmapPath)
     $roadmapChanged = ([System.Convert]::ToBase64String($roadmapBytes) -cne [System.Convert]::ToBase64String($nowBytes))
     # The run's raw output goes to files only now: written earlier, they would be files "the
     # run changed".
@@ -394,7 +458,7 @@ try {
         # Nothing of this run is used. The roadmap is the one file this script knows byte for
         # byte, so it is put back; any other file is left as it is found and named above.
         if ($roadmapChanged) {
-            [System.IO.File]::WriteAllBytes($roadmapPath, $roadmapBytes)
+            [System.IO.File]::WriteAllBytes($runRoadmapPath, $roadmapBytes)
             Add-FeedNote -Text "$roadmapRelative koşudan önceki haline geri konuldu"
         }
         foreach ($reason in @($refused.ToArray())) { Add-FeedNote -Text "reddedildi: $reason" }
@@ -402,7 +466,11 @@ try {
     }
     else {
         # -------------------------------------------------------------- the feed file
-        $read = Read-TeamSplitFile -Path $feedPath
+        $read = Read-TeamSplitFile -Path $runFeedPath
+        if ($lockFree -and (Test-Path -LiteralPath $runFeedPath)) {
+            # The file is kept where the between-cycles feed keeps it; the worktree goes.
+            [System.IO.File]::Copy($runFeedPath, $feedPath, $true)
+        }
         $why = @()
         $made = @()
         $rows = @(Get-TeamRoadmapRows -Text $roadmapText)
@@ -410,12 +478,35 @@ try {
         else {
             $feed = @(@($read.Split) | Where-Object { $null -ne $_ })
             $why = @(Test-TeamFeed -Feed $feed -Queue $queue -RoadmapRows $rows -MaxNew $MaxNew)
+            if (@($why).Count -eq 0 -and @($feed).Count -gt 0 -and $lockFree) {
+                # The run took minutes, and the cycle, the lead and the owner wrote meanwhile: the
+                # feed is judged again against the queue as it is NOW. An id somebody created in
+                # the meantime is theirs - that card and its dependants are dropped, the rest is
+                # judged whole.
+                $fresh = $null
+                try { $fresh = Get-TeamQueueApi -Store $apiStore }
+                catch {
+                    Add-FeedNote -Text ("kuyruk deposu yeniden okunamadı: " + (([string]$_.Exception.Message) -replace '\s+', ' ').Trim())
+                    Add-FeedNote -Text "kuyruğa hiçbir şey yazılmadı; besleme dosyası diskte kaldı: $feedRelative"
+                    $exitCode = 1
+                }
+                if ($null -ne $fresh) {
+                    $kept = Select-TeamFeedFresh -Feed $feed -Before $queue -Fresh $fresh
+                    foreach ($gone in @($kept.Dropped)) { Add-FeedNote -Text "yazılmadı: $($gone.Id) - $($gone.Why)" }
+                    $feed = @($kept.Feed)
+                    $queue = $fresh
+                    $why = @(Test-TeamFeed -Feed $feed -Queue $queue -RoadmapRows $rows -MaxNew $MaxNew)
+                }
+                else { $feed = @() }
+            }
             if (@($why).Count -eq 0 -and @($feed).Count -gt 0) {
                 $made = @(ConvertTo-TeamFeedTasks -Feed $feed -RoadmapRows $rows -Date $day -MaxUsd $RunMaxUsd)
                 $trial = [pscustomobject]@{ version = 1; tasks = @(@(Get-TeamTasks -Queue $queue) + @($made | ForEach-Object { $_.Task })) }
                 $why = @(Test-TeamQueue -Queue $trial)
             }
-            elseif (@($why).Count -eq 0) { Add-FeedNote -Text "lead kart kesmedi: $feedRelative boş liste" }
+            elseif (@($why).Count -eq 0 -and $exitCode -eq 0) {
+                Add-FeedNote -Text $(if (@(@($read.Split) | Where-Object { $null -ne $_ }).Count -eq 0) { "lead kart kesmedi: $feedRelative boş liste" } else { "kuyruğa yazılacak kart kalmadı: $feedRelative" })
+            }
         }
         if (@($why).Count -gt 0) {
             Add-FeedNote -Text ("reddedildi: ${feedRelative}: " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
@@ -429,8 +520,20 @@ try {
                 if (-not (Test-Path -LiteralPath $proposalFolder)) { [void](New-Item -ItemType Directory -Force -Path $proposalFolder) }
                 [System.IO.File]::WriteAllText($proposalPath, [string]$entry.ProposalText, $utf8)
             }
-            Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + @($made | ForEach-Object { $_.Task }))
-            Save-FeedQueue -Document $queue
+            if ($lockFree) {
+                # ONLY the new tasks, each as its own create; a task the store has is never sent.
+                $saved = Save-TeamFeedCreates -Store $apiStore -Tasks @($made | ForEach-Object { $_.Task })
+                foreach ($gone in @($saved.Dropped)) { Add-FeedNote -Text "yazılmadı: $($gone.Id) - $($gone.Why)" }
+                if ($saved.Failed) {
+                    Add-FeedNote -Text "kuyruk deposu yazmayı kesti: $($saved.Failed); besleme dosyası diskte kaldı: $feedRelative"
+                    $exitCode = 1
+                }
+                $made = @($made | Where-Object { @($saved.Written) -contains [string]$_.Task.id })
+            }
+            else {
+                Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + @($made | ForEach-Object { $_.Task }))
+                Save-FeedQueue -Document $queue
+            }
             foreach ($entry in $made) {
                 $task = $entry.Task
                 if ($entry.Kind -eq "owner") { Add-FeedNote -Text "sahibe soruldu (awaiting_owner): $($task.id) — $($task.title): $($task.reason)" }
@@ -465,10 +568,17 @@ try {
     Write-Host "feed $feedId ended; report: $reportPath"
 }
 finally {
-    if ($useApi) {
+    if ($lockFree) {
+        # The worktree first (the run is over and judged), then the feeder's own lock.
+        $left = Remove-TeamFeedWorktree -RepoRoot $repoRoot -Path $worktree
+        if ($left) { Write-Host "  $left" }
+        $left = Exit-TeamFeederLock -Lock $ownLock
+        if ($left) { Write-Host "  $left" }
+    }
+    elseif ($useApi) {
         try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $feedId }
         catch { Write-Host "the lock was not released in the queue store: $($_.Exception.Message)" }
     }
     else { Write-TeamJson -Path $lockPath -Document (New-TeamLockReleased) }
 }
-exit 0
+exit $exitCode
