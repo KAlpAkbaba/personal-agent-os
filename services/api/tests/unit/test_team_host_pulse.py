@@ -383,6 +383,21 @@ def test_a_reused_root_pid_whose_reuser_already_exited_hands_over_nothing_of_the
     assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
 
 
+def test_a_root_pid_reused_between_the_roots_exit_and_finished_at_is_bounded_by_the_holder(
+    tmp_path,
+):
+    # inspector 2026-10-03 (second return): the root died, a launcher took pid 100 at 05:29:58 and
+    # started the owner's Chrome at 05:29:59, and FinishedAt was only taken at 05:30. FinishedAt
+    # does not separate them; only the live holder of pid 100 does.
+    processes = [
+        _proc(101, 100, "tail"),  # the run's own leftover, created while the root lived
+        _proc(100, 4, "launcher", created="2026-10-03T05:29:58Z"),
+        _proc(301, 100, "chrome", created="2026-10-03T05:29:59Z"),
+    ]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
+    assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
+
+
 def test_a_finished_root_without_finished_at_closes_nothing(tmp_path):
     # in doubt a process is the owner's: without the run's end there is no bound on a reuser
     processes = [_proc(101, 100, "tail"), _proc(102, 101, "grep")]
