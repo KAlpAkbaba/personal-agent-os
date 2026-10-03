@@ -18,11 +18,11 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 **ÜRETİM: main `e6682a61688d7c4531f5a0ff19de91fd3e780d9d` (2026-10-03 13:22 UTC = 16:22 yerel, api-blue), LKG `661a5efe`,
 pin = RELEASE (lead pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`22d90798`, 96 dk: 15 294 birim, 178
 entegrasyon). QUALIFICATION Stage 49. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
-**KAPIDA (Danışman, 2026-10-03 ~17:35 yerel): ONUNCU ENTEGRASYON = yalnız lead dalı (`team/nightly/lead` HEAD): 'Hakim' ->
-'Proje Yöneticisi' (sahip: en kısa zamanda canlıda görmek istiyor), her koşunun TEMP'i E:'de (ADR-0214 ek 19), Proje Yöneticisi ofis
-ajanı / sohbet lead'i Danışman + kart boyu kuralı (ek 20), kayıtlar. Kapı ana kopyada lead HEAD'inde koşuyor - KAPI BİTENE KADAR lead
-dalına commit YOK. Yeşilse hemen yayın + pin. integrate/d20261003 (fbb4cba7: döngünün onaylı 9 işi + branch-guards-runner +
-model-policy-office-ui) bir SONRAKİ entegrasyon.**
+**KAPIDA (Danışman, 2026-10-03 17:40 yerel): ONUNCU ENTEGRASYON = yalnız lead dalı HEAD: 'Hakim' -> 'Proje Yöneticisi', 'Sahip' -> 'CTO',
+OFİS CANLANDI (ADR-0272: duygular, yeni işe yürüme, teknoloji ofisi - sahibin isteği), her koşunun TEMP'i E:'de (ADR-0214 ek 19), Proje
+Yöneticisi ofis ajanı / sohbet lead'i Danışman + kart boyu kuralı (ek 20). İlk kapı (ffa1e4fe) 13. dakikada durduruldu ve ofisle
+birlikte yeniden başladı. KAPI BİTENE KADAR lead dalına commit YOK. Yeşilse hemen yayın + pin. integrate/d20261003 (fbb4cba7) bir
+SONRAKİ entegrasyon.**
 **KUYRUK BİRLEŞTİRİLDİ (ek 20): 17 başlamamış kart -> 8 (team-engine ÖNCELİKLİ, project-manager-seat ÖNCELİKLİ, team-board-talk,
 office-talk-visible, gate-faster, memory-safe-runs, account-pool, run-liveness-visible-all). DİKKAT: 28 kaydın Türkçesi BOM'suz .ps1
 yüzünden bozulmuştu ("YÃ¶neticisi"), onarıldı (scratchpad fix_mojibake.ps1); Türkçe metinli .ps1'e BOM koy.**

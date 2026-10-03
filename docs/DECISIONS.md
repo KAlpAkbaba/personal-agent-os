@@ -22867,3 +22867,28 @@ danışmanlık vermen için sana yazarım."
   `team-board-talk`, `office-talk-visible`, `gate-faster`, `memory-safe-runs`, `account-pool`,
   `run-liveness-visible-all`); each retired card is `done` with the reason "BİRLEŞTİRİLDİ -> <card>"
   (the queue schema has no cancelled state).
+
+## ADR-0272 — The Ofis comes alive: characters with moods, a walk-in on a new task, a tech office; the owner's seat is the CTO (2026-10-03)
+
+**The owner, 2026-10-03.** "Karakterler güzel olmuş ama ofis ortamını da güzel yap; karakterler yeni iş
+alacağı zaman hareket etsinler, başarısız işlerde sinirlensinler, yorulsunlar, duyguları olsun ... daha
+güzel teknoloji bir ofis yap bu arkadaşlara, motive olsunlar." And: "Sahip adını CTO olarak değiştir."
+
+**Decision.** `officeMood.ts` (pure, the clock passed in): `moodOf(agent, task, now)` - working under
+45 minutes `focused`, from 45 minutes `tired`; the seat's task `stopped` or its last report
+"başarısız…" `angry`; sent back by the inspector `sad`; waiting `relaxed`; the owner's seat `happy`.
+`arrivals(previous, next)` lists the seats working on a task they did not have in the previous answer
+(the first answer moves nobody); the page keeps the previous answer and passes the list for 2.6 s.
+`buildOffice(view, now)` puts the mood on each drawn seat (`data-mood`). The faces differ by mood
+(slanted brows and a red screen with steam; half-shut eyes and a drop of sweat with slower hands; a
+frown and a tear; smiling shut eyes and a mug of tea); a walking character slides in to its desk. The
+room: a night-city window, a wall screen with moving bars, a server rack with blinking LEDs, a neon
+strip, a grid floor, a second desk screen and a desk light strip, a coffee machine, a cleaning robot.
+Every motion stops under prefers-reduced-motion; no image, font or library was added. The owner's
+seat is called `CTO`.
+
+**Tests.** `apps/web/tests/office/mood.test.tsx` (11): the mood table and its bounds, `buildOffice`
+with a given clock, each mood's drawing, the tired seat's slower hands, the walk-in list and the
+walk never under reduced motion, the room's pieces (none a seat), the CTO name. Mutation RED: the
+tired bound `>=` -> `>`; a stopped task not angry; nobody walks; walking under reduced motion.
+Office tests 87/87, tsc clean.
