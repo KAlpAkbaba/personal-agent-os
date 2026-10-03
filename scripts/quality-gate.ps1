@@ -432,7 +432,7 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
-  Invoke-Step "Browser agent lint + tests" {
+  Invoke-Step "Browser agent lint + tests" -Kinds heavy {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\browser")
     try {
@@ -485,7 +485,7 @@ if (-not $Fast) {
     Assert-ExitCode "cloud release tests"
   }
 
-  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" {
+  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" -Kinds heavy {
     # M18.4 (spec §6): the idle colour is brought up on the new sha, verified, switched to,
     # the old colour drained; rollback is the switch in reverse. Proven under a fake docker
     # that knows the two colours and the edge; the first real handoff is the next release.
@@ -549,7 +549,7 @@ if (-not $Fast) {
     }
   }
 
-  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
+  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" -Kinds heavy {
     # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
     # fake in place of the model and a git repository made for the test.
     if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }

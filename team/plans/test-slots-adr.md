@@ -28,7 +28,7 @@ ran_s, exit) so the numbers below can be decided from data.
 |---|---|---|---|
 | `database` | 1 | anything that migrates, resets or writes the dev stack's shared PostgreSQL: the api integration suite, a hand-run alembic, the gate's dev-up + alembic | one shared database: a second writer pulls the floor from under the first |
 | `desktop` | 1 | the foreground window or the GPU: the operator lab, the Unity scene tests, a headed browser, the M1 E2E | one foreground, one GPU: two steal focus from each other and both fail |
-| `heavy` | 3 | many cores for minutes: the whole api unit suite, the owner utterance corpus, the web build + suite, the dotnet build + test, the integration suite, a PowerShell suite over two minutes | three whole-suite runs fit on 28 threads; the fourth is where the 3.5-hour gate came from |
+| `heavy` | 3 | many cores for minutes: the whole api unit suite, the owner utterance corpus, the web build + suite, the dotnet build + test, the integration suite, a suite over two minutes in the gate of 2026-10-03 (team-cycle 820 s, cloud-release-bluegreen 481 s, the browser agent 213 s) | three whole-suite runs fit on 28 threads; the fourth is where the 3.5-hour gate came from |
 
 A request may need several kinds (the integration suite: `database,heavy`) and gets all or none.
 Kinds are counted in the table's order. A waiter that could be granted now has its kinds kept for
