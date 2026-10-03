@@ -67,6 +67,12 @@ nothing is ever killed or refused for being long. The log and the inspector's re
 miss is seen. The killed wrapper's own command is not followed: if a tool kills only the wrapper,
 its child may run on after the slot is freed (the slot follows the wrapper by design).
 
+It separates the MACHINE's shared things, not a worktree's files: two runs of the same suite in
+ONE worktree still collide (measured 2026-10-03: the worker's demonstration run beside the gate
+in the same tree made `test_contract_falsification.py` fail in the gate - the test hides
+`packages/protocol/realtime-session-contract.json` for a moment and the other run read it then).
+`heavy` 3 lets two such runs start together; a second run in the same tree is the caller's mistake.
+
 Not touched: `scripts/team/cycle.ps1` and the status document (showing "test sırası bekliyor" on
 the Ofis page is the next card, after run-liveness-visible), services/api, the dev stack.
 
