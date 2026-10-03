@@ -50,14 +50,14 @@ export default function OfficePage() {
   const reducedMotion = useReducedMotion();
   // the seats that just took a new task walk in to their desks for a moment
   const [arriving, setArriving] = useState<string[]>([]);
-  const previous = useRef<Office | null>(null);
+  const lastAnswer = useRef<Office | null>(null);
 
   useEffect(() => {
     const poller = createOfficePoller({
       fetch: fetchOffice,
       onData: (next) => {
-        const walked = arrivals(previous.current, next);
-        previous.current = next;
+        const walked = arrivals(lastAnswer.current, next);
+        lastAnswer.current = next;
         if (walked.length > 0) {
           setArriving(walked);
           window.setTimeout(() => setArriving([]), 2600);
