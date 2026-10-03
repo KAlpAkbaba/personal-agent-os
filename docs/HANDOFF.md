@@ -23,6 +23,11 @@ pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5
 `tail -f` + `grep` yüzünden kapanmadı, zamanlayıcı her turu atladı - lead ikisini durdurdu, görevi elle başlattı. Kalıcı
 düzeltme kartı `tick-not-held-by-orphans` (ÖNCELİKLİ). DİKKAT: Ofis "0/6" ya da durum belgesi eski pid gösterirse önce
 `Get-ScheduledTaskInfo` (LastTaskResult 0x800710E0 = önceki tur hâlâ açık) ve yetim süreçlere bak.**
+**KAPIDA (lead, 04:35 yerel): SEKİZİNCİ ENTEGRASYON, dal `gate/d20261003-4` (worktree `.claude/worktrees/gate11`) =
+`execution-call-site-routines` @ `a54f8f54` (ADR-0257; `routines_execution_rule_enabled` KAPALI - lead'in hükmü, denetleyici
+PostgreSQL'de doğruladı) + `owner-trials-api` @ `7897acfa` (ADR-0258; bağlama işleri kart `owner-trials-wiring`). Yeşilse onaysız
+yayın. Ayrıca: `understanding-rules-read-lemmas` yeniden açıldı (yeni, küçük, gerçek bulgu), `measure-recordings-api` alanı iki
+sağlık testiyle genişletilip denetime gönderildi, `stt-corpus-layer2-remeasure`'ın erken biten koşusu sayılmadan geri verildi.**
 **SAHİBİN KURALI (2026-10-03 00:07): "bundan sonra kapısı yeşil olanlar otomatik canlıya geçsin, beklemesinler" - denetimden geçen
 iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (`team/stop.flag`). Ek 9'un üç istisnası
 (compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor.**

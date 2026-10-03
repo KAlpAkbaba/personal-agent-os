@@ -21302,3 +21302,166 @@ partial-lock mutants that no test held deterministically; now both are RED with 
 open note is carded: `OpenAIEmbedder` keeps the same unlocked LRU (`openai-embedder-lru-lock`). The same integration
 carries ADR-0214 addendum 16 (the cycle's runs have no background commands), which is on the lead branch already and is
 in service from the cycle's next start.
+
+## ADR-0257 — A routine's browser action asks the execution_target rule; the shared device port does not - behind a setting that is OFF (2026-10-03)
+
+Task: `execution-call-site-routines` (roadmap 2b, ADR-0213 rule row 1, ADR-0220). 2026-10-02.
+
+Context: `app.routines.target.choose_routine_target` had no caller. A routine's `browser_action`
+was sent by `BrokerDeviceAction` to whatever `select_device` picked - the healthiest machine.
+
+Decision:
+1. `ActionDispatcher._browser_action` sends through `BrokerDeviceAction.scheduled()`, a view of
+   the port (like `bound_to`'s). On that view a `browser.<op>` of `BROWSER_ACTION_ALLOWLIST` asks
+   `select_routine_device` (`choose_routine_target` over the same registry snapshot, with the
+   operation as `capabilities` and the payload's `url`), then `wiring.device_for`: the cloud
+   device, or `NoCapableDeviceError` -> the existing failed `DeviceRunResult("no_capable_device")`
+   whose message ends with the decision's reason (`... (no_target_available)`), which is the text
+   the routine's failure notification already carries. A refusal never reaches `_select_for`.
+2. Every other capability on that view (`app.launch`, `desktop.*`) keeps `_select_for`: the rule
+   is not asked, no execution row is written.
+3. `selection_for` on the view asks the same rule through a pure twin (`probe_routine_device`:
+   `rule.decide` over `wiring.device_for`'s availability test) because `wiring.choose` writes and
+   commits ledger rows and a probe is not a run. One parametrized test holds probe == run.
+4. The ledger rows are the record, not the decision (`ledger_required=False`, as the research
+   start): a ledger that will not write is logged and the action is still sent.
+5. **Behind a setting, OFF by default** (lead ruling 2026-10-03):
+   `routines_execution_rule_enabled: bool = False` (`PAGENTOS_ROUTINES_EXECUTION_RULE_ENABLED`),
+   read by `ActionDispatcher._browser_action` at each firing. OFF: the dispatcher calls the
+   plain port exactly as main does (`self._device_action.run(...)`, same arguments) - the
+   machine `_select_for` picks, and the rule writes no row, not even a probe's. ON: points 1-4.
+   No compose line: turning it on is its own owner decision, after the cloud worker can keep a
+   session across firings (next section). Tests through the object `create_app` builds (the
+   routine dispatcher over `app.state.device_action`), off and on, unit and dev-stack
+   PostgreSQL. `get_settings` is `lru_cache`d: the value is the process's at start.
+
+**Where the build departs from the card - the lead decides each.**
+- **The card put the check in `_select_for` for every caller, by capability. Not built that way.**
+  `BrokerDeviceAction` is ONE object (`app/main.py:289`) held by the wake sequence, the operator,
+  the mission, the voice path, the toast ladder and artifact open. The cloud worker advertises
+  `browser.media_play`, `browser.session_open`, `browser.navigate`: a capability-only check sends
+  the wake alarm's music and the operator's "ofiste şunu aç" to the cloud, or refuses them
+  (`forced_target_not_allowed`). So the rule is asked only by the scheduled view, and only the
+  routine dispatcher takes that view. `test_the_shared_port_itself_does_not_ask_the_rule` holds it.
+- **`media_playback` does not ask the rule.** It opens a VISIBLE `isolated` window for an owner who
+  is to hear it; the cloud worker refuses every profile but `research`
+  (`browser_agent/cloud/policy.py`) and has no display or speaker. Under the rule every
+  `media_playback` routine would fail for ever. If the owner wants row 1 to cover it, it is one
+  line (`_media_playback` takes the same view) and the feature is then dead until a cloud audio
+  path exists. OPEN - an owner/lead decision.
+- **Deny-listed site: the rule's own answer is the cloud, and a routine inherits it** (the card's
+  acceptance line "a deny-listed url -> refused deny_listed_site" is WITHDRAWN by the lead,
+  2026-10-03). The deny-list is the machines' allow-list concern, not the cloud's: ADR-0213's
+  table says "acting on a deny-listed site -> refused; reading is not refused", and the addendum
+  and `wiring.choose` force `acting=False` for every scheduled job, so
+  `test_execution_wiring.py::test_the_routine_adapter_is_read_only_and_cloud_only` (outside the
+  area) asserts a deny-listed url is SELECTED cloud. A scheduled routine reading a deny-listed
+  site is therefore sent to the cloud worker (no owner session there; READ+NAVIGATE policy).
+  Built: the mapping (a refusal the rule RETURNS - payment, ask_owner, or a future deny-list
+  refusal - is the same failed result with its reason, never sent), tested with a stubbed
+  decision, and a test pinning the real answer (selected cloud). Whether scheduled reads of such
+  sites should be refused is a rule question the lead cards separately (`app/execution/`).
+
+Consequences (not softened; every one below holds with the setting ON - OFF, nothing changes):
+- A scheduled browser action runs in the cloud or fails. Cloud offline, revoked, not advertising
+  the operation or denied it by policy -> `no_capable_device`, with a machine online and able.
+- A routine that names a machine for a browser action is refused (`forced_target_not_allowed`),
+  even with that machine and the cloud both up. No routine field names a device today (nothing
+  calls `scheduled(targets=...)`); the refusal is what any future one gets. The word "bulutta" is
+  the cloud.
+- A routine `browser_action` that ACTS (`click`, `fill`, `upload`) is sent to the cloud as a read
+  (the rule never sees `acting`); the cloud worker's READ+NAVIGATE session policy is what refuses
+  it. A routine that used to click on a home machine no longer does.
+  A machine word beside the cloud word (`("bulutta", "ev")`, either order) is the machine word:
+  refused, on the run and on the probe.
+- **A `selected` ledger row is not proof the action ran.** The cloud worker requires a `session_id`
+  on every operation but `browser.worker_status` (`browser_agent/worker.py::_require_session_id`,
+  lines 1131-1149: a payload without one is `validation_error`), and every operation other than
+  `session_open` must name a session already open ON THAT WORKER (`unknown session`). The routine
+  dispatcher sends ONE operation per firing and opens no session, so a `browser_action` that
+  carries no `session_id`, or names one opened on a machine, is selected for the cloud, written
+  `execution.selected target=cloud`, and then FAILS on the worker. The row records where the rule
+  sent the operation, nothing more; whether it ran is the firing's own outcome (`DispatchOutcome`,
+  the device command's result). So the card's PROVEN_REAL criterion ("the first routine whose
+  ledger row says target=cloud") is not sufficient: PROVEN_REAL needs that row AND a succeeded
+  command result from the cloud device for the same firing. Until a routine can open a cloud
+  session (one action = one operation today), the only `browser_action` that can succeed there
+  is `session_open` itself. Before turning the setting on: count production routines whose
+  action kind is `browser_action` - each one that works today through a machine's session stops
+  working.
+- Whether production's cloud worker advertises `browser.navigate` today is UNVERIFIED (the last
+  host snapshot predates the 2026-10-02 release and holds no device capabilities). If it does
+  not, every routine `browser_action` fails `no_capable_device` with the setting on.
+- **READY_FOR_OWNER, not part of the merge:** the first production evidence needs the setting
+  ON (an owner decision, after the cloud worker keeps a session across firings) and is a firing
+  whose ledger row says `execution.selected target=cloud` AND whose cloud device command
+  succeeded. The merge itself changes nothing in production (the setting is off).
+
+**At merge (the lead, integration d20261003, fourth).** The second inspection approved the code and showed that, live,
+the rule would send a routine's `browser_action` - which works today through a machine's session - to the cloud worker,
+where every operation needs a session opened there and one operation per firing can only open one: the owner's working
+routines would fail. The lead ruled the switch: `routines_execution_rule_enabled`, default OFF; the third inspection
+confirmed off = the main's routing on PostgreSQL (`test_routines_execution_target_postgres.py`, 4 passed on a scratch
+database). The acceptance line "a deny-listed url is refused" was withdrawn for this card: the rule's own answer for a
+deny-listed site is the cloud (the allow-list is the machines'), and the question is the lead's to card. Switching it on
+is the owner's decision, after the cloud worker can keep a session across firings - and it needs a compose line then.
+
+## ADR-0258 — The owner's trials - the third gate on the server side (2026-10-03)
+
+Status: accepted (worker, cycle d20261003; the lead numbers it at merge)
+Proposal: team/proposals/2026-10-01-deneme-listesi.md (owner approved 2026-10-01)
+
+**Decision.**
+- `owner_trials` items become objects `{id, sentence, machine, expect, verdict, said, at}`
+  (`verdict` null | "oldu" | "olmadi"; `said`, `at` null until decided). The old plain-string
+  form stays valid. Both schema copies hold it as `$defs/owner_trial` WITHOUT a `type`
+  keyword: `required` / `properties` / `additionalProperties` apply to an object only, so a
+  string passes and an object is fully checked - no `anyOf`, which neither validator
+  (store.py, test_team_queue_schema.py) knows. Cost: a number or null item is not refused by
+  the schema; `trials.trial_objects` ignores anything that is not an object.
+- `GET /v1/team/approvals` gains `trials`: `[{task_id, title, sha, trial}]` for every
+  object trial with `verdict` null on a task in `released` / `awaiting_real_evidence`.
+  Old string trials are not listed (no id to decide on); the lead converts them.
+- `POST /v1/team/trials/decision {task_id, trial_id, verdict, said}` (owner session):
+  `said` is required for "olmadi" (422 `said_required`), at most 500 characters; a decided
+  trial is 409 `already_decided`; unknown task / trial 404; a task not in the two states 409
+  `not_on_trial`. Same lock rule as the approvals (refused on the file store while a cycle
+  runs; taken on the database store), same write lock, ledger event first.
+- "oldu" records verdict, words, time; the state is never changed and PROVEN_REAL is never
+  claimed. When no trial is left open and all said "oldu", `reason` =
+  `sahip denedi: oldu (<at>) - PROVEN_REAL satırını lead yazar`.
+- "olmadi" opens `fix-<task_id>-<n>` (first free n; the task id is shortened so the whole
+  fits 64 characters) in `approved` with `area: []`, `reason: "alan: lead belirler"`, the
+  original's `roadmap_row` and budget, title `Düzelt: <sentence>`, the goal quoting the
+  sentence, machine, expectation, the owner's words and the released sha. The original task
+  is written first (its conditional write is the race guard), then the fix task.
+- The fix task's `proposal` is the same text as its goal, as prose (inspector return,
+  d20261003). Without a proposal an approved task with no area is not a split candidate
+  (`Test-TeamSplitCandidate`): the cycle moves it to `assigned` and `Test-TeamQueue` then
+  refuses the queue in every later cycle. Prose, not a `team/proposals/` path: the split card
+  prints it whole, and on the Cloud Core no file exists for the lead's run to read - so no
+  one has to write a proposal file. A unit test runs the cycle's own `TeamQueue.ps1` on the
+  task the route made (split candidate, next = rest).
+
+**Open risks.**
+- The ledger event is recorded before the queue write (as in `approvals.decide`): a
+  `stale_write` leaves a `team.trial.*` event for a decision that never landed. The
+  response is 409 and the owner retries; the orphan event names the `updated_at` it read.
+- "olmadi" makes two writes that are not one transaction (the task, then the fix task): a
+  failure between them leaves the verdict recorded with no fix task.
+
+**For the lead at merge.**
+- Vocabulary: add `team.trial.passed` and `team.trial.failed` (`trials.EVENT_TRIAL_PASSED`,
+  `trials.EVENT_TRIAL_FAILED`); the tests monkeypatch them until then.
+- Inspector role text: READY_FOR_OWNER lines become `owner_trials` objects.
+- Release step: a released task with open trials -> `awaiting_real_evidence` (the route
+  accepts decisions in both states, so the order does not matter).
+- `scripts/lib/TeamRun.ps1:443` (cycle report "Sahibin gerçek cihazda deneyecekleri") still
+  reads the items as strings; it must read `.sentence` / `.machine` / `.expect` of an object.
+- Enter 38.3-38.5 as the first open trials.
+
+**At merge (the lead, integration d20261003, fourth).** Approved at the second inspection. The API and the schema are
+merged; the merge work the card named is carded as `owner-trials-wiring` (the cycle report's reading of a trial object -
+`TeamRun.ps1` - the vocabulary constants, the inspector's role text, the release step that sends a released task with open
+trials to `awaiting_real_evidence`, and 38.3-38.5 as the first open trials). Until then no task carries a trial object, so
+nothing reads the new shape; the page is `owner-trials-page`.
