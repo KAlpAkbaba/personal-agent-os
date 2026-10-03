@@ -22814,3 +22814,32 @@ for ever after the task ended.
 - `gate.py`, `risk.py`, `loop.py` unchanged (the Decision already carries the ceiling).
 - Unreachable in production until PR-D gives `start_task_db` a caller and the home PC's
   agent is updated to a worker serving v1.8 (an owner-visible agent update, not this card).
+
+### ADR-0214 addendum 19 (2026-10-03): each run of the cycle has its own temp folder on the data drive, removed when the run ends
+
+**Why.** C: (the system drive) filled to zero at about 12:00 on 2026-10-03: the gate's unit run
+failed with `OSError(28, 'No space left on device')` and Docker's engine stopped (its disk image
+lives on C:). The day before, `%TEMP%` held 2.67 million leaked test folders. The owner,
+2026-10-03: "Eğer bu ajanlar C'nin altında çalışıyorsa bunları E'nin altına da alabiliriz; biraz
+yavaşlasa da disk sorunumuzu tamamen çözecektir." The agents' worktrees are on E: already; what
+they write on C: is the temp folders of the tests they start.
+
+**Decision.** `team/cycle-settings.json` gets `run_temp_root` (an absolute path; this machine:
+`E:\AI\tmp-team`). For every run the cycle starts, `Start-TeamRun` creates
+`<run_temp_root>\<task>-<role>-<8 hex>` and sets the run's `TEMP`, `TMP` and `TMPDIR` to it; when
+the run is over (`Complete-RoleRun`, after `Wait-TeamRun`) `Remove-TeamRunTemp` deletes the
+folder - best effort: a file still held open stays, and a folder with a link inside is left
+whole (a recursive delete would follow the link). No key, a relative path or an unreadable file:
+the machine's TEMP, as before; the seat settings are read as before (`Read-TeamCycleSettings`
+ignores the new key).
+
+**Not here.** The lead's gate keeps the machine's TEMP on C:: measured the same day, Unity's
+player build in `SceneUnityProductionTests` fails with TEMP on E: ("Fatal error", 12 errors) and
+passes in 56 s with TEMP on C:. An agent that runs that one test gets the same failure; it is a
+Unity-licensed-editor test the gate runs, not an agent's routine check.
+
+**Tests.** `team-cycle.tests.ps1`, "each run gets its own temp folder under run_temp_root, removed
+when the run ends": both runs' TEMP and TMP are their own folder under the root, named by task and
+role, and gone after the run although the fake left a file in it; without the key the machine's
+TEMP. Mutation RED: the removal call taken out -> red; TEMP not set -> red (restored from backup
+copies, sha256 equal).

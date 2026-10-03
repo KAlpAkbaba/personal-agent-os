@@ -308,7 +308,8 @@ function Start-TeamRun {
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$Prompt,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [string]$TempDirectory = ""
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FilePath
@@ -335,6 +336,14 @@ function Start-TeamRun {
     # ten minutes by default (measured: 'Command timed out after 10m 0s'; an 11-minute command
     # finished with this limit). An hour; a longer suite runs in slices.
     $psi.EnvironmentVariables["BASH_MAX_TIMEOUT_MS"] = "3600000"
+    # The run's own temp folder (team/cycle-settings.json 'run_temp_root', owner 2026-10-03): the
+    # tests a run starts write their temp folders there, on the data drive, and the folder goes
+    # when the run ends (Remove-TeamRunTemp) - C: filled to zero at 12:00 that day, and %TEMP%
+    # held 2.67 million leaked folders the day before. Unset: the machine's TEMP, as before.
+    if ($TempDirectory) {
+        [void](New-Item -ItemType Directory -Force -Path $TempDirectory)
+        foreach ($name in @("TEMP", "TMP", "TMPDIR")) { $psi.EnvironmentVariables[$name] = $TempDirectory }
+    }
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
@@ -347,6 +356,19 @@ function Start-TeamRun {
         StdErr  = $stderr
         Started = [datetime]::UtcNow
     }
+}
+
+function Remove-TeamRunTemp {
+    <#
+    .SYNOPSIS
+        Remove a finished run's temp folder. Best effort: a file still held open stays, and a
+        folder with a link inside is left whole (a recursive delete would follow it).
+    #>
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+    $links = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue)
+    if (@($links).Count -gt 0) { return }
+    try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop } catch { }
 }
 
 function Stop-TeamProcessTree {
