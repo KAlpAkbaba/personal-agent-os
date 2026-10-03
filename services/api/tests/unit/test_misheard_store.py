@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import io
 import logging
+import threading
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -200,6 +201,49 @@ def test_a_database_fault_never_reaches_the_caller(
     assert _count(db) == 1
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"reason": ["no_intent"]},
+        {"mode": {"paid": 1}},
+        {"heard_at": "yesterday"},
+        {"now": 0},
+    ],
+    ids=["unhashable-reason", "unhashable-mode", "heard_at-text", "now-zero"],
+)
+def test_a_callers_type_error_is_a_refusal_and_the_transaction_carries_on(
+    db: Session, overrides: dict[str, object]
+) -> None:
+    """misheard-purge-start-bounded (inspector 2, finding 2): "never raises" holds for the
+    caller's types too - None like every other refusal, nothing written."""
+    assert _record(db, **overrides) is None
+    assert _count(db) == 0
+    # The statement after it succeeds on the caller's transaction.
+    assert db.execute(select(1)).scalar_one() == 1
+    assert _record(db) is not None
+    assert _count(db) == 1
+
+
+def test_a_purge_that_raises_inside_record_does_not_reach_the_caller(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The purge record() runs after its write is its own business: a fault there is logged
+    by its type and the row is still written (inspector 2, finding 3)."""
+
+    def broken(*args: object, **kwargs: object) -> int:
+        raise RuntimeError(f"DELETE ... {MARKER}")
+
+    with monkeypatch.context() as patch, structlog.testing.capture_logs() as events:
+        patch.setattr(service, "purge", broken)
+        row = _record(db)
+    assert row is not None
+    assert [r.sentence for r in db.execute(select(MisheardUtterance)).scalars()] == [SENTENCE]
+    faults = [event for event in events if event["event"] == "misheard_purge_failed"]
+    assert [(fault["error"], fault["trigger"]) for fault in faults] == [("RuntimeError", "record")]
+    assert MARKER not in repr(events)
+    assert db.execute(select(1)).scalar_one() == 1
+
+
 def test_a_200_character_tool_is_stored_as_64(db: Session) -> None:
     row = _record(db, reason="tool_failed", tool="t" * 200)
     assert row is not None
@@ -328,6 +372,18 @@ def test_a_row_is_listed_on_day_30_and_purged_on_day_31(db: Session) -> None:
     assert service.purge(db, day_31) == 1
     assert _count(db) == 0
     assert service.list_items(db, day_31) == []
+
+
+def test_purge_removes_a_row_at_its_exact_expiry_instant_and_not_a_microsecond_before(
+    db: Session,
+) -> None:
+    """``expires_at <= now`` (inspector 2, finding 3: ``<`` survived every test)."""
+    _record(db)
+    expiry = HEARD + timedelta(days=30)
+    assert service.purge(db, expiry - timedelta(microseconds=1)) == 0
+    assert _count(db) == 1
+    assert service.purge(db, expiry) == 1
+    assert _count(db) == 0
 
 
 def test_list_items_never_returns_an_expired_row_even_when_purge_did_not_run(
@@ -488,6 +544,57 @@ async def test_a_purge_pass_that_fails_does_not_end_the_loop() -> None:
         await loop.stop()
 
 
+def _blocking_scope(entered: threading.Event, release: threading.Event):
+    """A pass that holds until the test lets it go - a row another transaction has locked."""
+
+    @contextlib.contextmanager
+    def scope() -> Iterator[_NoRows]:
+        entered.set()
+        release.wait(30)  # a hang guard; the test always releases
+        yield _NoRows()
+
+    return scope
+
+
+async def test_start_returns_before_the_first_pass_has_run() -> None:
+    """misheard-purge-start-bounded (inspector 2, finding 1): start() only creates the task,
+    like every other loop of the lifespan; the first pass is the task's first iteration. A
+    pass held by a lock must not hold the application's start."""
+    entered, release = threading.Event(), threading.Event()
+    loop = service.PurgeLoop(_blocking_scope(entered, release))
+    try:
+        async with asyncio.timeout(5):  # a hang guard: the old start() waits for the pass
+            await loop.start()
+        assert loop.running is True
+        assert loop.passes == 0
+        await _until(entered.is_set)  # the first pass DOES start, inside the task
+        assert loop.passes == 0
+        release.set()
+        await _until(lambda: loop.passes == 1)
+        assert loop.health_check()["passes"] == 1
+    finally:
+        release.set()
+        await loop.stop()
+
+
+async def test_stop_during_a_blocked_pass_returns_at_once_and_leaves_no_task() -> None:
+    entered, release = threading.Event(), threading.Event()
+    loop = service.PurgeLoop(_blocking_scope(entered, release))
+    try:
+        async with asyncio.timeout(5):
+            await loop.start()
+        await _until(entered.is_set)
+        task = loop._task
+        async with asyncio.timeout(5):  # a hang guard: stop() must not wait for the pass
+            await loop.stop()
+        assert loop._task is None
+        assert loop.running is False
+        assert task is not None and task.done()
+        assert loop.health_check()["status"] == "skipped"
+    finally:
+        release.set()
+
+
 HEALTH_KEYS = {
     "status",
     "running",
@@ -525,6 +632,7 @@ async def test_a_started_purge_loop_answers_ok_and_one_that_is_behind_is_reporte
     loop = service.PurgeLoop(_scope(db), clock=lambda: moment[0])
     await loop.start()
     try:
+        await _until(lambda: loop.passes >= 1)  # the first pass is the task's
         health = loop.health_check()
         assert set(health) == HEALTH_KEYS
         assert health["status"] == "ok"

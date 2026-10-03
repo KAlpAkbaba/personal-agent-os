@@ -11,6 +11,9 @@ own calls to the dev stack's PostgreSQL after ``alembic upgrade head``.
 
 from __future__ import annotations
 
+import contextlib
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -20,6 +23,7 @@ import pytest
 import structlog
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +31,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.db import build_engine, build_session_factory
+from app.main import create_app
 from app.voice.misheard import service
 from app.voice.misheard.models import MisheardUtterance
 from tests.integration.conftest import owner_client
@@ -321,3 +326,127 @@ def test_downgrade_drops_the_table_and_upgrade_recreates_it(
         assert _count(session) == 0  # the sentences went with the table
         assert _record(session) is not None
         session.commit()
+
+
+# ------------------------------------------------------------------- a bounded purge pass
+# misheard-purge-start-bounded (inspector 2, finding 1): an expired row another transaction
+# holds must neither keep the application from starting nor keep a pass waiting for ever.
+
+#: The application is up well inside this; it was not within 8 s while the pass waited.
+LIFESPAN_DEADLINE_S = 2.0
+
+
+def _expired_row(factory: sessionmaker[Session]) -> uuid.UUID:
+    heard = datetime.now(UTC) - timedelta(days=31)
+    with factory() as session:
+        row = _record(session, heard_at=heard, now=heard)
+        assert row is not None
+        session.commit()
+        return row.id
+
+
+def _until(condition, what: str) -> None:
+    """A hang guard, not the claim."""
+    deadline = time.monotonic() + 30
+    while not condition():
+        assert time.monotonic() < deadline, what
+        time.sleep(0.02)
+
+
+def test_a_locked_expired_row_does_not_hold_the_real_applications_start(
+    factory: sessionmaker[Session], settings: Settings
+) -> None:
+    row_id = _expired_row(factory)
+    engine = build_engine(settings.database_url)
+    locker = engine.connect()
+    locker.execute(sql_text(f"SELECT id FROM {TABLE} WHERE id = :id FOR UPDATE"), {"id": row_id})
+    app = create_app(settings)
+    client = TestClient(app)
+    up = threading.Event()
+    outcome: dict[str, object] = {}
+
+    def enter() -> None:
+        started = time.monotonic()
+        try:
+            client.__enter__()
+            outcome["seconds"] = time.monotonic() - started
+        except BaseException as error:  # noqa: BLE001 - reported by the test thread
+            outcome["error"] = error
+        finally:
+            up.set()
+
+    starter = threading.Thread(target=enter, daemon=True)
+    starter.start()
+    try:
+        came_up = up.wait(LIFESPAN_DEADLINE_S)
+        if not came_up:
+            locker.rollback()  # let the old start finish, to say how long it took
+            up.wait(60)
+        assert "error" not in outcome, outcome
+        assert came_up, (
+            f"the application was not up within {LIFESPAN_DEADLINE_S} s with an expired row "
+            f"locked; it came up {outcome.get('seconds')} s after the start, once the lock "
+            "was released"
+        )
+        purge = app.state.misheard_purge
+        assert purge.running is True
+        # The first pass meets the lock, gives up after its lock_timeout, and says so.
+        _until(lambda: purge.health_check()["failures"] >= 1, "the pass never gave up")
+        check = client.get("/v1/system/health").json()["checks"]["misheard_purge"]
+        assert (check["failures"], check["passes"]) == (1, 0), check
+        assert check["last_error"] == "OperationalError", check
+        assert check["required"] is False and check["running"] is True
+        with factory() as session:
+            assert _count(session) == 1  # the row lives one pass longer...
+            assert service.list_items(session, datetime.now(UTC)) == []  # ...never listed
+
+        # The lock is gone: the next pass - the loop's own function, its clock injected -
+        # removes the row.
+        locker.rollback()
+        purge._clock = lambda: datetime.now(UTC) + timedelta(days=1)
+        assert purge.purge_once() == 1
+        health = purge.health_check()
+        assert (health["passes"], health["failures"], health["last_error"]) == (1, 1, None)
+        with factory() as session:
+            assert _count(session) == 0
+    finally:
+        locker.rollback()
+        locker.close()
+        up.wait(60)
+        if "seconds" in outcome:
+            client.__exit__(None, None, None)
+        engine.dispose()
+
+
+def test_the_purge_pass_sets_its_lock_timeout_for_its_own_transaction_only(
+    factory: sessionmaker[Session], settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _expired_row(factory)
+    engine = build_engine(settings.database_url)
+    try:
+        with engine.connect() as connection:
+            before = connection.exec_driver_sql("SHOW lock_timeout").scalar_one()
+            connection.commit()
+            during: list[str] = []
+            real_purge = service.purge
+
+            def spy(db: Session, now: datetime) -> int:
+                during.append(db.execute(sql_text("SHOW lock_timeout")).scalar_one())
+                return real_purge(db, now)
+
+            @contextlib.contextmanager
+            def scope() -> Iterator[Session]:
+                with Session(bind=connection) as session:
+                    yield session
+
+            monkeypatch.setattr(service, "purge", spy)
+            loop = service.PurgeLoop(scope)
+            assert loop.purge_once() == 1
+            after = connection.exec_driver_sql("SHOW lock_timeout").scalar_one()
+            connection.commit()
+    finally:
+        engine.dispose()
+    # The pass was bounded, and the bound ended with its transaction.
+    assert during == [f"{service.PURGE_LOCK_TIMEOUT_S}s"]
+    assert before != during[0]
+    assert after == before
