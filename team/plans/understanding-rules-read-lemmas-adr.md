@@ -91,6 +91,15 @@ E: folder); STT report unchanged (98/106 = 0.9245, polite 29/29, fused 24/29, 0 
    the sentence gets no reading and is resolved as heard. Erring this way costs only the reading
    (the surface tables still run); the corpora did not move (STT 98/106 unchanged; owner corpus
    below). The sentences of the finding are router tests (`test_a_dont_without_punctuation_still_says_dont`).
+   **Fourth pass (inspector, third pass's finding 1):** a compound head after the negative is not
+   proof when the word BEFORE it is the negative's own accusative object: "Ekranı kapatma sesini
+   kapatın" read as `display_off` 0.9 ("sesini" is all-possessive). The guard now also says
+   "don't" when the word right before the bare negative (no punctuation between) can be an
+   accusative object (`normalize._is_accusative_object`: a known noun with any reading ending in
+   acc - "ekranı" is acc or poss3sg, no telling, so it counts - or a closed pronoun object,
+   "bunu", "onları"). This also refuses "ekranı kapatma düğmesine bas" (the verbal noun with its
+   object): the conservative side, it loses only the reading. Corpora unchanged (STT 98/106,
+   owner 2754/2754).
    Not closed here, and not new: their BARE twins ("Ekranları kapatma ışıkları söndür") are
    resolved by the surface tables as on main.
 5. **Mail and calendar.** The older repairs never route into `mail_*` / `calendar_*` (B45/B46).

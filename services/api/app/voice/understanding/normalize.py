@@ -587,11 +587,29 @@ def _is_compound_head(word: str) -> bool:
     return bool(chains) and all(any(s.startswith("poss") for s in c) for c in chains)
 
 
+#: The pronoun objects a verb takes ("bunu kapatma"): closed, and not nouns of this module.
+_PRONOUN_OBJECTS: Final[frozenset[str]] = frozenset(
+    {"bunu", "şunu", "onu", "bunları", "şunları", "onları", "beni", "seni", "bizi", "sizi"}
+)
+
+
+def _is_accusative_object(word: str) -> bool:
+    """The word can be the accusative object of the verb after it: "ekranı" (acc, or poss -
+    no telling, so it counts), "bunu". A negative after its own object is "don't", whatever
+    follows it: "Ekranı kapatma sesini kapatın" (inspector-1, third pass)."""
+    probe = word.replace("'", "")
+    if probe in _PRONOUN_OBJECTS:
+        return True
+    return any(c and c[-1] == "acc" for c in _readings(probe, NOUN))
+
+
 def _says_dont(words: list[re.Match[str]], folded: list[str], text: str) -> bool:
     """THE negative-form guard of the reading: the sentence carries a negative imperative of a
     known verb. The bare form ("kapatma") is also the verbal noun, and is read as one only
-    where the next word, with nothing between them, is a compound head (:func:`_is_compound_head`):
-    speech-to-text writes no comma, so "kapatma ışıkları söndürün" says "don't"."""
+    where the next word, with nothing between them, is a compound head (:func:`_is_compound_head`)
+    and the word before it, if any in the same clause, is no accusative object
+    (:func:`_is_accusative_object`): speech-to-text writes no comma, so "kapatma ışıkları
+    söndürün" and "ekranı kapatma sesini kapatın" say "don't"."""
     for index, token in enumerate(folded):
         if not is_negative(token):
             continue
@@ -601,6 +619,12 @@ def _says_dont(words: list[re.Match[str]], folded: list[str], text: str) -> bool
             return True  # punctuation closes the clause: "kapatma, ..."
         if not _is_compound_head(folded[index + 1]):
             return True
+        if (
+            index > 0
+            and not text[words[index - 1].end() : words[index].start()].strip()
+            and _is_accusative_object(folded[index - 1])
+        ):
+            return True  # its own object before it: "ekranı kapatma" is never a noun phrase
     return False
 
 

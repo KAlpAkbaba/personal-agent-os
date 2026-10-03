@@ -292,6 +292,11 @@ def test_a_sentence_that_says_dont_is_read_as_heard():
             "Kendi kendini geliştirmeyi duraklatma ama araştırmayı duraklatın",
             Intent.EVOLUTION_PAUSE,
         ),
+        # a possessive head after the negative's own accusative object proves nothing
+        # (inspector-1, third pass): "Ekranı kapatma" can only be "don't close the screen".
+        ("Ekranı kapatma sesini kapatın", Intent.DISPLAY_OFF),
+        ("Ekranı kapatma sesini açın", Intent.DISPLAY_WAKE),
+        ("Bunu kapatma sesini kapatın", Intent.DISPLAY_OFF),
     ],
 )
 def test_a_dont_without_punctuation_still_says_dont(said, never):

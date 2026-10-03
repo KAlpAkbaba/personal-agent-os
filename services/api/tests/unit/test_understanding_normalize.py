@@ -288,6 +288,9 @@ def test_lemma_reading_of_a_sentence_that_says_dont_is_none():
         "Ekranları kapatma ama sesi açın",  # a conjunction
         "Alarmı kurma hatırlatma kurun",
         "Sesi açın ekranları kapatma",  # the last word
+        "Ekranı kapatma sesini kapatın",  # an accusative object before it: the verb's own
+        "Ekranları kapatma klasörünü gösterin",
+        "Bunu kapatma sesini açın",
     ],
 )
 def test_a_bare_negative_says_dont_without_punctuation(said):
@@ -302,6 +305,16 @@ def test_the_compound_head_is_proven_only_when_every_reading_is_possessive():
     assert not norm._is_compound_head("ekran")  # a bare noun
     assert not norm._is_compound_head("ama")  # not a noun this module knows
     assert not norm._is_compound_head("kurun")  # a verb
+
+
+def test_an_accusative_object_is_read_before_a_negative():
+    assert norm._is_accusative_object("ekranı")  # ekran + acc (or poss): either way an object
+    assert norm._is_accusative_object("ekranları")
+    assert norm._is_accusative_object("bunu")  # a pronoun object
+    assert not norm._is_accusative_object("ekran")
+    assert not norm._is_accusative_object("ama")
+    # nothing precedes "İndirme": the verbal noun still reads
+    assert norm.lemma_reading("İndirme klasörünü gösterin.") is not None
 
 
 def test_a_token_that_divides_two_ways_is_left_whole():
