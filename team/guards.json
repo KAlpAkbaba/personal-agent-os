@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "guards": [
+    {
+      "id": "owner-error-language",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_owner_error_language.py",
+      "label": "Türkçe hata cümlesi eksik"
+    },
+    {
+      "id": "ci-covers-every-suite",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_ci_covers_every_suite.py",
+      "label": "yeni test dosyası kapıya bağlı değil"
+    },
+    {
+      "id": "postgres-coverage-ratchet",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_postgres_coverage_ratchet.py",
+      "label": "tablo gerçek PostgreSQL üzerinde sınanmamış"
+    },
+    {
+      "id": "host-snapshot-schema",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_host_snapshot_schema.py",
+      "label": "ev sahibi görüntüsü şemayla uyuşmuyor"
+    },
+    {
+      "id": "script-syntax",
+      "kind": "powershell",
+      "path": "scripts/tests/script-syntax.tests.ps1",
+      "label": "PowerShell 5.1 sözdizimi hatası"
+    },
+    {
+      "id": "installer-strictmode",
+      "kind": "powershell",
+      "path": "scripts/tests/installer-strictmode.tests.ps1",
+      "label": "katı kipte patlayan PowerShell"
+    }
+  ]
+}

@@ -49,6 +49,11 @@ export default function OfficeScene({
               {seat.name}
               {seat.badge !== null && <span className="office-count"> · {seat.badge} onay</span>}
             </span>
+            {seat.lowered && (
+              <span className="office-lowered" aria-hidden="true">
+                {seat.lowered}
+              </span>
+            )}
             {seat.state === "working" && (reducedMotion || seat.runCount !== null) && (
               <span className="office-badge-static" aria-hidden="true">
                 çalışıyor

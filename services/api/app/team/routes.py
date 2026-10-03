@@ -10,7 +10,8 @@ the cycle reads it, the Ofis page writes it; ``models_setting`` holds its rules.
 
 Queue: the cycle's own surface (pilot-02). GET the whole queue; PUT one task by id with the
 ``updated_at`` the writer last saw (409 when it is stale); POST the lock (acquire / release,
-the six-hour staleness rule), the cycle report as text and a proposal's text (what the Onay
+the six-hour staleness rule counted from the holder's last status - the store reads it beside
+the lock), the cycle report as text and a proposal's text (what the Onay
 Merkezi shows for the idea that names it). All of it under the owner session,
 over whichever store ``app.state.team_store`` is: the database on the Cloud Core, otherwise
 the files under ``app.state.team_root``.
@@ -19,11 +20,13 @@ the files under ``app.state.team_root``.
 from __future__ import annotations
 
 import asyncio
+import math
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.identity.dependencies import require_owner_session
 from app.ledger import service as ledger_service
@@ -75,7 +78,7 @@ async def list_approvals(request: Request) -> dict[str, Any]:
             "trials": trials.list_open(queue),
             "cycle_report": store.newest_report(),
             # For information; whether a decision is taken now is ``decisions_open``.
-            "cycle_running": team_store.lock_is_running(lock, at),
+            "cycle_running": team_store.lock_is_running(lock, at, store.read_status()),
             "decisions_open": approvals.decisions_open(store, lock, at),
         }
 
@@ -323,29 +326,48 @@ class _Strict(BaseModel):
 
 
 _Role = Literal["lead", "researcher", "integrator", "worker", "inspector"]
+MODEL_ID_MAX = 64
 #: A model id as a run names it. Not held to the three ids: the status is what the cycle SAW
 #: (the tool may have run another model), and a refused heartbeat blanks the whole Ofis page.
-_ModelId = Annotated[str, Field(max_length=64)]
+_ModelId = Annotated[str, Field(max_length=MODEL_ID_MAX)]
+#: Every timestamp of the status is held to the width of ``team_state.updated_at``
+#: (VARCHAR(32)): longer was a 200 on SQLite and the file store and a 500 on PostgreSQL.
+STAMP_MAX = 32
+_Stamp = Annotated[str, Field(max_length=STAMP_MAX)]
+#: The tool's own percentage, or null: nobody computes or estimates one.
+_Percent = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
+_Usd = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+#: The status' own refusals (team-status-bounds): {detail: {code, message, problems}}. A code
+#: is never renamed - the cycle's client may compare it. Any other broken field keeps the
+#: framework's 422.
+STATUS_REFUSALS = {
+    "status_stamp_too_long": f"durum belgesinde bir zaman damgası {STAMP_MAX} karakteri aşıyor",
+    "status_model_id_too_long": f"durumda bir model kimliği {MODEL_ID_MAX} karakteri aşıyor",
+    "status_used_pct_invalid": "kullanım yüzdesi (used_pct) 0 ile 100 arası sonlu bir sayı olmalı",
+    "status_estimated_usd_invalid": (
+        "tahmini maliyet (estimated_usd) sıfır ya da pozitif sonlu bir sayı olmalı"
+    ),
+}
 
 
 class _Run(_Strict):
     task: str
     role: _Role
-    started_at: str
+    started_at: _Stamp
     #: The model the run was started on. An older cycle sends none.
     model: _ModelId | None = None
 
 
 class _UsageLimit(_Strict):
     state: Literal["ok", "waiting", "stopped"]
-    resets_at: str | None = None
+    resets_at: _Stamp | None = None
 
 
 class _LimitWindow(_Strict):
     state: Literal["ok", "limited"]
-    resets_at: str | None = None
-    #: The tool's own number, or null: nobody computes or estimates a percentage.
-    used_pct: float | None = Field(default=None, allow_inf_nan=False)
+    resets_at: _Stamp | None = None
+    used_pct: _Percent | None = None
 
 
 class _Lowered(_Strict):
@@ -353,7 +375,7 @@ class _Lowered(_Strict):
     role: _Role
     from_: _ModelId = Field(alias="from")
     to: _ModelId
-    at: str
+    at: _Stamp
 
 
 class _Limits(_Strict):
@@ -370,14 +392,50 @@ class StatusRequest(_Strict):
     cycle_id: str
     machine: str
     pid: int
-    started_at: str
+    started_at: _Stamp
     runs: list[_Run]
-    estimated_usd: float
+    estimated_usd: _Usd
     usage_limit: _UsageLimit
     #: ADR-0214 addendum 7. Optional: a cycle older than the model policy sends neither this
     #: nor a run's ``model``, and is still accepted.
     limits: _Limits | None = None
-    updated_at: str
+    updated_at: _Stamp
+
+
+def _status_refusal(error: ValidationError) -> HTTPException | None:
+    """The first broken bound as the route's own refusal; None when no bound is broken."""
+    for item in error.errors(include_url=False):
+        names = [step for step in item["loc"] if isinstance(step, str)]
+        name = names[-1] if names else ""
+        code = None
+        if name == "used_pct":
+            code = "status_used_pct_invalid"
+        elif name == "estimated_usd":
+            code = "status_estimated_usd_invalid"
+        elif item["type"] == "string_too_long":
+            width = (item.get("ctx") or {}).get("max_length")
+            code = {
+                STAMP_MAX: "status_stamp_too_long",
+                MODEL_ID_MAX: "status_model_id_too_long",
+            }.get(width)
+        if code:
+            where = ".".join(str(step) for step in item["loc"])
+            return HTTPException(
+                422,
+                {"code": code, "message": f"{STATUS_REFUSALS[code]}: {where}", "problems": [where]},
+            )
+    return None
+
+
+def _json_safe(value: Any) -> Any:
+    """A refusal echoes the input; 1e999 or NaN in it would make the refusal itself a 500."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 @router.get("/v1/team/queue/status")
@@ -386,10 +444,22 @@ async def read_status(request: Request) -> dict[str, Any]:
 
 
 @router.put("/v1/team/queue/status")
-async def put_status(body: StatusRequest, request: Request) -> dict[str, Any]:
+async def put_status(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    # Validated here, not by the signature: a broken bound is answered with its own code.
+    try:
+        status = StatusRequest.model_validate(body)
+    except ValidationError as error:
+        refusal = _status_refusal(error)
+        if refusal is not None:
+            raise refusal from None
+        errors = [
+            {**item, "loc": ("body", *item["loc"]), "input": _json_safe(item.get("input"))}
+            for item in error.errors(include_url=False)
+        ]
+        raise RequestValidationError(errors) from None
     store = _store(request)
     # Kept as it was sent: what the cycle left out is not stored as null.
-    document = body.model_dump(by_alias=True, exclude_unset=True)
+    document = status.model_dump(by_alias=True, exclude_unset=True)
     try:
         await asyncio.to_thread(store.put_status, document)
     except OSError as error:

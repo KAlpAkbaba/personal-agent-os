@@ -578,6 +578,12 @@ export class VoiceSessionController {
   private closing = false;
   /** This controller asked the server to end the session; a later 410 is our own doing. */
   private closedByUs = false;
+  /**
+   * The server answered 410 for this session: its last word. No network event takes the
+   * controller out of `closed` and nothing is sent to that session again. Not `closing`,
+   * which also makes `disconnect()` a no-op and would leave the microphone open.
+   */
+  private gone = false;
 
   // turn / speech tracking
   private ownerSpeaking = false;
@@ -803,6 +809,7 @@ export class VoiceSessionController {
     }
     this.closing = false;
     this.closedByUs = false;
+    this.gone = false;
     this.t0 = this.deps.now();
     this.metrics = { ...EMPTY_COUNTERS };
     this.turnJudgement = null;
@@ -2748,7 +2755,7 @@ export class VoiceSessionController {
   }
 
   private onNetworkLost(reason: string, at: number): void {
-    if (this.closing || !this.reporter) return;
+    if (this.closing || this.gone || !this.reporter) return;
     if (this.snapshot.state === "reconnecting") return;
     this.reporter.report({ kind: "network_lost", t_ms: at, turn: this.snapshot.turn, payload: { reason } });
     this.log(`network.lost:${reason}`);
@@ -2770,6 +2777,7 @@ export class VoiceSessionController {
    * a burst of concurrent attaches; §6 of the 2026-09-09 report calls for exactly one.
    */
   private reattachLoop(): Promise<void> {
+    if (this.gone) return Promise.resolve();
     if (this.reattachRun) return this.reattachRun;
     const run = this.runReattachLoop().finally(() => {
       this.reattachRun = null;
@@ -2786,6 +2794,7 @@ export class VoiceSessionController {
       this.setState("listening", "LISTENING");
     } catch (error) {
       if (error instanceof VoiceApiError && error.gone) {
+        this.markGone();
         this.fail("Oturum sunucuda kapanmış; yeniden bağlanılamaz.");
         this.patch({ state: "closed" });
         return;
@@ -2840,6 +2849,20 @@ export class VoiceSessionController {
     await this.reporter.flush();
   }
 
+  /**
+   * The server has declared this session gone (410), on whichever path heard it first.
+   * Terminal for the network handlers (ADR-0251 addendum 1): before this, a flap took a
+   * `closed` controller back to `reconnecting` and every return of the network cost one
+   * attach to the dead session. The reporter ends too - on the attach path it still held
+   * the queued `network_lost`, which would have been POSTed to the same dead session.
+   * Cleared by `connect()`: the terminal state is the old session's, not the page's.
+   */
+  private markGone(): void {
+    this.gone = true;
+    this.clearReattachTimer();
+    this.reporter?.end("gone");
+  }
+
   private clearReattachTimer(): void {
     if (this.reattachTimer !== null) {
       this.scheduler.clearTimeout(this.reattachTimer);
@@ -2864,6 +2887,7 @@ export class VoiceSessionController {
         if (!this.closedByUs) {
           this.fail("Oturum sunucuda kapanmış.", [], { viaReporter: false });
         }
+        this.markGone();
         this.teardownLeg("gone");
         this.patch({ state: "closed" });
         return;

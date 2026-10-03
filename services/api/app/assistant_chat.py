@@ -55,6 +55,10 @@ ERROR_CHAT_MODEL_RETIRED = "chat_model_retired"
 MAX_ABOUT_OWNER_CHARS: Final = 1200
 ERROR_CHAT_BUSY = "chat_busy"
 ERROR_CHAT_REFUSED = "chat_refused"
+#: ADR-0255 addendum: a transport TIMEOUT (connect, read, write, pool) is told apart from an
+#: unreachable model, so the narrative's note can say "too slow". The owner hears the same
+#: sentence; the name matches the note's own "timeout" reason.
+ERROR_CHAT_TIMEOUT = "timeout"
 
 SPEECH_NOT_CONFIGURED: Final = (
     "Sohbet için bir model anahtarı tanımlı değil efendim; komutlarınızı yine yaparım."
@@ -207,6 +211,9 @@ class AnthropicChatProvider:
         for attempt in (1, 2):
             try:
                 status, payload = self._send(url, headers, body, self._timeout_s)
+            except httpx.TimeoutException as exc:
+                logger.warning("assistant_chat_transport_timeout", detail=str(exc)[:200])
+                return ChatAnswer(SPEECH_FAILED, False, ERROR_CHAT_TIMEOUT, self._model)
             except httpx.HTTPError as exc:
                 logger.warning("assistant_chat_transport_failed", detail=str(exc)[:200])
                 return ChatAnswer(SPEECH_FAILED, False, ERROR_CHAT_UNAVAILABLE, self._model)
@@ -298,6 +305,7 @@ __all__ = [
     "ERROR_CHAT_BUSY",
     "ERROR_CHAT_MODEL_RETIRED",
     "ERROR_CHAT_REFUSED",
+    "ERROR_CHAT_TIMEOUT",
     "ERROR_CHAT_UNAVAILABLE",
     "MAX_TURNS",
     "MEMORY",

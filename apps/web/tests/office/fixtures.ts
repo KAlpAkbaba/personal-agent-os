@@ -132,6 +132,30 @@ function working(agent: OfficeAgent, titles: string[], firstMinute: number): Off
   return { ...agent, state: "working", ...runs[0], runs };
 }
 
+/**
+ * The model policy's answer (ADR-0214 addenda 7 and 14): the defaults as the setting, every
+ * seat with its role's model, the workers as the API names their role, limits unknown.
+ */
+export function modelPolicy(): OfficeView {
+  const view = twoWorkers();
+  const roles = {
+    lead: "claude-fable-5-1",
+    researcher: "claude-opus-5-5",
+    integrator: "claude-opus-5-5",
+    worker: "claude-opus-5-5",
+    inspector: "claude-fable-5-1",
+  } as const;
+  view.models = { roles: { ...roles }, fallback: true, updated_at: "2026-10-01T09:00:00Z" };
+  view.agents = view.agents.map((agent) => {
+    const role = agent.seat.startsWith("worker-") ? "worker" : agent.seat;
+    const model = role in roles ? roles[role as keyof typeof roles] : null;
+    return { ...agent, role, model };
+  });
+  const unknown = { state: "ok" as const, resets_at: null, used_pct: null };
+  view.cycle.limits = { fable: { ...unknown }, all: { ...unknown }, fallback: true, lowered: [] };
+  return view;
+}
+
 /** A cycle with `workers` worker runs and `inspections` inspector runs, as the API sends it. */
 export function busyCycle(workers: number, inspections: number): OfficeView {
   const view = twoWorkers();
