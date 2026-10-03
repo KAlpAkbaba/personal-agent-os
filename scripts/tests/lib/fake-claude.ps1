@@ -16,7 +16,9 @@
       slow       the run sleeps for longer than the cycle lets it
       split      the lead's split run writes two sound tasks to the file its card names;
                  split-overlap / split-shared / split-missing write one task that breaks the
-                 rule named, any other scenario writes no file (cycle-lead-run)
+                 rule named, any other scenario writes no file (cycle-lead-run); a lead card
+                 that names a duty_file is the duty run whatever the scenario (pm-duty-stopped:
+                 PAGENTOS_FAKE_CLAUDE_DUTY_JSON is the file it writes, _DUTY_CARD where its card goes)
       limited    the FIRST worker run of a task answers with the subscription's usage-limit
                  error (reset time 200 s in the past); every later run is as approve
 
@@ -266,6 +268,22 @@ switch ($role) {
         Send-Result -Text "1 öneri yazıldı: team/proposals/2026-09-30-anlati.md" -Cost $cost
     }
     "lead" {
+        # The Proje Yöneticisi's duty run for stopped tasks (pm-duty-stopped), whatever the scenario:
+        # its card names a duty_file. PAGENTOS_FAKE_CLAUDE_DUTY_CARD: the card is appended to that
+        # file; PAGENTOS_FAKE_CLAUDE_DUTY_JSON: the decision file's text, written as it is - unset,
+        # no file is written, as a run that failed to decide.
+        if ($card -match '(?m)^- duty_file: (\S+)') {
+            $dutyTarget = Join-Path $here ($Matches[1] -replace "/", "\")
+            if ([string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_CARD) { Add-SharedLine -Path ([string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_CARD) -Line $card }
+            $dutyText = [string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_JSON
+            if ($dutyText) {
+                $folder = Split-Path -Parent $dutyTarget
+                if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+                [System.IO.File]::WriteAllText($dutyTarget, $dutyText, (New-Object System.Text.UTF8Encoding($false)))
+                Send-Result -Text "duty written: $dutyTarget" -Cost $cost
+            }
+            Send-Result -Text "I wrote no decision." -Cost $cost
+        }
         # The split run (cycle-lead-run): writes the file the card names, in the shape the
         # scenario asks for. Any other scenario writes nothing, as a lead that failed would.
         $target = ""
