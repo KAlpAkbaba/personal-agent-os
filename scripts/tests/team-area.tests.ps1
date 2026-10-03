@@ -18,10 +18,10 @@
       protected   a path nobody widens into: every entry of the constant, one case each,
                   and TeamQueue.ps1's shared files read from ITS text (two lists, one rule);
       cap         two widenings per task, twenty-five entries per area;
-      idempotent  the same resolution applied twice changes nothing the second time;
-      d20261001   the two stopped tasks of that cycle, as fixtures;
       second-return  the `onceki_bulgular:` line and whether a second RETURN stops the
-                  task (parse, stop, readers, d20261002 fixtures, drift against TeamQueue.ps1).
+                  task (parse, stop, readers, d20261002 fixtures, drift against TeamQueue.ps1);
+      idempotent  the same resolution applied twice changes nothing the second time;
+      d20261001   the two stopped tasks of that cycle, as fixtures.
 
     Run: powershell -NoProfile -File scripts\tests\team-area.tests.ps1
 #>
@@ -671,75 +671,6 @@ Test-Case "cap: a 26-entry result is refused, a 25-entry result is not" {
     Assert-Equal -Expected "widen" -Actual $inside.Decision -Because "files already inside the area are not counted twice: $($inside.Why)"
 }
 
-# -------------------------------------------------------------------------- idempotent
-
-Test-Case "idempotent: a widening applied twice equals the first result" {
-    $task = New-Task -Id "card-one" -Area @("src/a.py") -DependsOn @("earlier")
-    $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @($intents, $gateway)
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "bir kez" -Now $now)
-    $first = Get-TaskShape -Task $task
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "bir kez" -Now $now.AddMinutes(7))
-    Assert-Equal -Expected $first -Actual (Get-TaskShape -Task $task) -Because "area, depends_on, area_widenings and area_history are those of the first run"
-    Assert-Equal -Expected 1 -Actual ([int]$task.area_widenings) -Because "counted once"
-    Assert-Equal -Expected 1 -Actual @($task.area_history).Count -Because "recorded once"
-    Assert-List -Expected @("src/a.py", $intents, $gateway) -Actual $task.area -Because "added once"
-}
-
-Test-Case "idempotent: a wait applied twice equals the first result" {
-    $task = New-Task -Id "card-one" -Area @("src/a.py")
-    $holder = New-Task -Id "voice-card" -State "approved" -Area @($intents)
-    $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task, $holder)) -Files @($intents)
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "worker" -Why "bekle" -Now $now)
-    $first = Get-TaskShape -Task $task
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "worker" -Why "bekle" -Now $now.AddMinutes(7))
-    Assert-Equal -Expected $first -Actual (Get-TaskShape -Task $task) -Because "area, depends_on, area_widenings and area_history are those of the first run"
-    Assert-List -Expected @("voice-card") -Actual $task.depends_on -Because "one dependency"
-    Assert-Equal -Expected 1 -Actual @($task.area_history).Count -Because "recorded once"
-}
-
-Test-Case "idempotent: a task read from JSON is widened and written back as the queue's shapes" {
-    $json = '{"id":"card-one","state":"returned","area":["src/a.py"],"depends_on":[]}'
-    $task = ConvertFrom-Json -InputObject $json
-    $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @($intents)
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "x" -Now $now)
-    $back = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $task -Depth 6)
-    Assert-List -Expected @("src/a.py", $intents) -Actual $back.area -Because "the area is an array of strings"
-    Assert-Equal -Expected 1 -Actual ([int]$back.area_widenings) -Because "the count is a number"
-    Assert-List -Expected @($intents) -Actual @($back.area_history)[0].files -Because "the record keeps its files"
-}
-
-# --------------------------------------------------------------------------- d20261001
-
-# narrative-failures-only-model stopped after two returns with one finding: the fix is in
-# app/voice/intents, outside the card's area (team/proposals/2026-10-02-alan-disi-geri-verme.md).
-$narrativeArea = @("services/api/app/narrative", "services/api/tests/unit/test_narrative_failures.py")
-
-Test-Case "d20261001: narrative-failures-only-model asks for intents.py and nobody holds it - widen" {
-    $task = New-Task -Id "narrative-failures-only-model" -State "inspecting" -Area $narrativeArea
-    $queue = New-Queue -Tasks @($task, (New-Task -Id "execution-call-site-research" -State "stopped" -Area @("services/api/app/gateway")), (New-Task -Id "office-page" -State "merged" -Area @("apps/web/src/office")))
-    $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [$intents]")) -Role "inspector"
-    $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files $asked.Files
-    Assert-Equal -Expected "widen" -Actual $resolution.Decision -Because $resolution.Why
-    Assert-List -Expected @($intents) -Actual $resolution.Add -Because "the one file"
-    Assert-Equal -Expected $false -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "this return would not have been one of the two"
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "düzeltme app/voice/intents içinde, alan dışı" -Now $now)
-    Assert-List -Expected (@($narrativeArea) + @($intents)) -Actual $task.area -Because "the second round can do the real work"
-}
-
-Test-Case "d20261001: the same request while an approved card holds intents.py - wait on that card" {
-    $task = New-Task -Id "narrative-failures-only-model" -State "inspecting" -Area $narrativeArea
-    $holder = New-Task -Id "answer-mode-intent-precision" -State "approved" -Area @($intents, "services/api/tests/unit/test_intents.py")
-    $queue = New-Queue -Tasks @($holder, $task)
-    $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [$intents]")) -Role "inspector"
-    $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files $asked.Files
-    Assert-Equal -Expected "wait" -Actual $resolution.Decision -Because $resolution.Why
-    Assert-List -Expected @("answer-mode-intent-precision") -Actual $resolution.DependsOn -Because "the card that holds the file"
-    Assert-Equal -Expected $false -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "not one of the two rights"
-    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "intents.py başka kartta" -Now $now)
-    Assert-List -Expected $narrativeArea -Actual $task.area -Because "the area is unchanged"
-    Assert-List -Expected @("answer-mode-intent-precision") -Actual $task.depends_on -Because "behind that card"
-}
-
 # ----------------------------------------------------------------------- second-return
 #
 # The second half of ADR-0253's principle (team/proposals/2026-10-03-ikinci-donus-yeni-bulgu.md):
@@ -923,6 +854,75 @@ Test-Case "second-return drift: the stop reason starts with TeamQueue.ps1's RETU
     $old = Get-TeamStateAfterInspection -Task $before -Verdict "RETURN"
     Assert-Equal -Expected "stopped" -Actual $old.State -Because "Get-TeamStateAfterInspection itself is unchanged: two returns stop"
     Assert-Equal -Expected $today -Actual $old.Reason -Because "with its own text"
+}
+
+# -------------------------------------------------------------------------- idempotent
+
+Test-Case "idempotent: a widening applied twice equals the first result" {
+    $task = New-Task -Id "card-one" -Area @("src/a.py") -DependsOn @("earlier")
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @($intents, $gateway)
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "bir kez" -Now $now)
+    $first = Get-TaskShape -Task $task
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "bir kez" -Now $now.AddMinutes(7))
+    Assert-Equal -Expected $first -Actual (Get-TaskShape -Task $task) -Because "area, depends_on, area_widenings and area_history are those of the first run"
+    Assert-Equal -Expected 1 -Actual ([int]$task.area_widenings) -Because "counted once"
+    Assert-Equal -Expected 1 -Actual @($task.area_history).Count -Because "recorded once"
+    Assert-List -Expected @("src/a.py", $intents, $gateway) -Actual $task.area -Because "added once"
+}
+
+Test-Case "idempotent: a wait applied twice equals the first result" {
+    $task = New-Task -Id "card-one" -Area @("src/a.py")
+    $holder = New-Task -Id "voice-card" -State "approved" -Area @($intents)
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task, $holder)) -Files @($intents)
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "worker" -Why "bekle" -Now $now)
+    $first = Get-TaskShape -Task $task
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "worker" -Why "bekle" -Now $now.AddMinutes(7))
+    Assert-Equal -Expected $first -Actual (Get-TaskShape -Task $task) -Because "area, depends_on, area_widenings and area_history are those of the first run"
+    Assert-List -Expected @("voice-card") -Actual $task.depends_on -Because "one dependency"
+    Assert-Equal -Expected 1 -Actual @($task.area_history).Count -Because "recorded once"
+}
+
+Test-Case "idempotent: a task read from JSON is widened and written back as the queue's shapes" {
+    $json = '{"id":"card-one","state":"returned","area":["src/a.py"],"depends_on":[]}'
+    $task = ConvertFrom-Json -InputObject $json
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @($intents)
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "x" -Now $now)
+    $back = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $task -Depth 6)
+    Assert-List -Expected @("src/a.py", $intents) -Actual $back.area -Because "the area is an array of strings"
+    Assert-Equal -Expected 1 -Actual ([int]$back.area_widenings) -Because "the count is a number"
+    Assert-List -Expected @($intents) -Actual @($back.area_history)[0].files -Because "the record keeps its files"
+}
+
+# --------------------------------------------------------------------------- d20261001
+
+# narrative-failures-only-model stopped after two returns with one finding: the fix is in
+# app/voice/intents, outside the card's area (team/proposals/2026-10-02-alan-disi-geri-verme.md).
+$narrativeArea = @("services/api/app/narrative", "services/api/tests/unit/test_narrative_failures.py")
+
+Test-Case "d20261001: narrative-failures-only-model asks for intents.py and nobody holds it - widen" {
+    $task = New-Task -Id "narrative-failures-only-model" -State "inspecting" -Area $narrativeArea
+    $queue = New-Queue -Tasks @($task, (New-Task -Id "execution-call-site-research" -State "stopped" -Area @("services/api/app/gateway")), (New-Task -Id "office-page" -State "merged" -Area @("apps/web/src/office")))
+    $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [$intents]")) -Role "inspector"
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files $asked.Files
+    Assert-Equal -Expected "widen" -Actual $resolution.Decision -Because $resolution.Why
+    Assert-List -Expected @($intents) -Actual $resolution.Add -Because "the one file"
+    Assert-Equal -Expected $false -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "this return would not have been one of the two"
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "düzeltme app/voice/intents içinde, alan dışı" -Now $now)
+    Assert-List -Expected (@($narrativeArea) + @($intents)) -Actual $task.area -Because "the second round can do the real work"
+}
+
+Test-Case "d20261001: the same request while an approved card holds intents.py - wait on that card" {
+    $task = New-Task -Id "narrative-failures-only-model" -State "inspecting" -Area $narrativeArea
+    $holder = New-Task -Id "answer-mode-intent-precision" -State "approved" -Area @($intents, "services/api/tests/unit/test_intents.py")
+    $queue = New-Queue -Tasks @($holder, $task)
+    $asked = Get-TeamAreaRequest -Report (New-InspectorReport -Lines @("alan_disi: [$intents]")) -Role "inspector"
+    $resolution = Resolve-TeamAreaRequest -Task $task -Queue $queue -Files $asked.Files
+    Assert-Equal -Expected "wait" -Actual $resolution.Decision -Because $resolution.Why
+    Assert-List -Expected @("answer-mode-intent-precision") -Actual $resolution.DependsOn -Because "the card that holds the file"
+    Assert-Equal -Expected $false -Actual (Test-TeamAreaReturnCounts -Resolution $resolution) -Because "not one of the two rights"
+    [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "intents.py başka kartta" -Now $now)
+    Assert-List -Expected $narrativeArea -Actual $task.area -Because "the area is unchanged"
+    Assert-List -Expected @("answer-mode-intent-precision") -Actual $task.depends_on -Because "behind that card"
 }
 
 # -------------------------------------------------------------------------------- gate
