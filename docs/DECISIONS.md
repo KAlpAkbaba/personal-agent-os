@@ -22843,3 +22843,27 @@ when the run ends": both runs' TEMP and TMP are their own folder under the root,
 role, and gone after the run although the fake left a file in it; without the key the machine's
 TEMP. Mutation RED: the removal call taken out -> red; TEMP not set -> red (restored from backup
 copies, sha256 equal).
+
+### ADR-0214 addendum 20 (2026-10-03): the Proje Yöneticisi is an office agent, the chat lead is the Danışman; a card is the largest coherent piece
+
+**The owner, 2026-10-03.** "Hakim adını Proje Yöneticisi olarak değiştirelim." "Proje Yöneticisi de
+içeride çalışan agentlardan biri olsun, çünkü senin işin bölünebiliyor; onun görevi projeyi sadece
+yönetmek ve doğru gittiğini sürdürmek; senin görevin danışman olsun - danışman olarak bir ofise destek
+vermen ofis mantığına da uyuyor." "Küçük ama benzer işleri birleştirsin; işi çok bölmektense tek
+ajana daha sürdürülebilir yaptırsın." And: "farklı bir şey olursa düzeltmeler için, proje yöneticine
+danışmanlık vermen için sana yazarım."
+
+**Decision.**
+- The seat and the role are called **Proje Yöneticisi** (Ofis label, the stopped-task phrase
+  "durdu: Proje Yöneticisi bakacak", the panel heading, `lead.md`, TEAM_PROTOCOL, ROADMAP).
+- The Proje Yöneticisi becomes an agent INSIDE the office (card `project-manager-seat`, with
+  `team-engine` for the continuous loop it needs): it grooms the queue, unblocks stopped work,
+  answers the board's questions, chairs the 12:00 meeting. The chat session is the **Danışman**:
+  the owner's conversation, architecture and security second opinion, machine incidents, and -
+  until `cycle-auto-release` is proven - releases, host writes and the recovery pin.
+- **Card size:** a card is the largest coherent piece one agent can finish in one run; work on the
+  same subject or the same files is one card with sections. `lead.md` carries the rule. Applied the
+  same day: seventeen approved, not-started cards became eight (`team-engine`, `project-manager-seat`,
+  `team-board-talk`, `office-talk-visible`, `gate-faster`, `memory-safe-runs`, `account-pool`,
+  `run-liveness-visible-all`); each retired card is `done` with the reason "BİRLEŞTİRİLDİ -> <card>"
+  (the queue schema has no cancelled state).
