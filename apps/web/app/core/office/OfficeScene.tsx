@@ -12,11 +12,14 @@ export default function OfficeScene({
   selected,
   reducedMotion,
   onSelect,
+  arriving = [],
 }: {
   seats: DrawnSeat[];
   selected: string | null;
   reducedMotion: boolean;
   onSelect: (seat: string) => void;
+  /** Seats that just took a new task: their characters walk in (officeMood.arrivals). */
+  arriving?: string[];
 }) {
   return (
     <div className="office-scroll" data-office="scene">
@@ -30,6 +33,7 @@ export default function OfficeScene({
             aria-pressed={selected === seat.seat}
             aria-label={seat.ariaLabel}
             data-state={seat.state}
+            data-mood={seat.mood}
             data-warning={seat.warning}
             {...(seat.badge !== null ? { "data-count": seat.badge } : {})}
             onClick={() => onSelect(seat.seat)}
@@ -44,6 +48,8 @@ export default function OfficeScene({
               pose={seat.pose}
               warning={seat.warning}
               animated={seat.pose === "typing" && !reducedMotion}
+              mood={seat.mood}
+              arriving={!reducedMotion && arriving.includes(seat.seat)}
             />
             <span className="office-name" aria-hidden="true">
               {seat.name}

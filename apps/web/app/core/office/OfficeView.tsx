@@ -17,12 +17,14 @@ export default function OfficeView({
   offline,
   reducedMotion,
   onSelect,
+  arriving = [],
 }: {
   view: Office;
   selected: string | null;
   offline: boolean;
   reducedMotion: boolean;
   onSelect: (seat: string) => void;
+  arriving?: string[];
 }) {
   const office = buildOffice(view);
   const bar = office.topBar;
@@ -49,6 +51,7 @@ export default function OfficeView({
           selected={selected}
           reducedMotion={reducedMotion}
           onSelect={onSelect}
+          arriving={arriving}
         />
         <OfficePanel panel={selected ? buildPanel(view, selected) : null} />
       </div>

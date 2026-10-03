@@ -132,7 +132,7 @@ describe("the seats the API sends", () => {
       "Çalışan 3",
       "Çalışan 4",
       "Denetleyici",
-      "Sahip",
+      "CTO",
     ]);
     expect(buildOffice(twoWorkers()).seats.find((s) => s.seat === "worker-4")!.ariaLabel).toBe(
       "Çalışan 4, bekliyor",
