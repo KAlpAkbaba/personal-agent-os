@@ -498,21 +498,9 @@ for ($i = 0; $i -lt $Rest.Length; $i++) {
     if ($Rest[$i] -eq "--allowedTools") { $tools = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--model") { $model = $Rest[$i + 1] }
 }
-$card = [Console]::In.ReadToEnd()
-$here = (Get-Location).ProviderPath
-$utf8 = New-Object System.Text.UTF8Encoding($false)
-if ($env:PAGENTOS_FAKE_CLAUDE_LOG) {
-    $entry = [pscustomobject]@{ role = [System.IO.Path]::GetFileNameWithoutExtension($roleFile); cwd = $here; tools = $tools; model = $model }
-    Add-Content -LiteralPath $env:PAGENTOS_FAKE_CLAUDE_LOG -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
-}
-if ($env:PAGENTOS_FAKE_LEAD_CARD) { [System.IO.File]::WriteAllText($env:PAGENTOS_FAKE_LEAD_CARD, $card, $utf8) }
-# The model policy: a run started on a model the test named as limited answers the line the real
-# tool answered on 2026-10-02 (no rate_limit_event; the result starts with "duration_api_ms") and does nothing else.
-$limitedModels = @(([string]$env:PAGENTOS_FAKE_LEAD_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($model -and $limitedModels -contains $model) {
-    [Console]::Out.Write('{"duration_api_ms":0,"total_cost_usd":0,"modelUsage":{},"terminal_reason":"api_error","is_error":true,"num_turns":1,"subtype":"success","api_error_status":429,"api_error":"model_requires_usage_credits","result":"You''re out of usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.","type":"result","duration_ms":640}')
-    exit 1
-}
+# What the run leaves behind is started FIRST, before its input is read - as the real tool starts
+# its hooks and servers. A command that is let run before it is in its job (created running, or
+# resumed before the assignment) starts it outside the job, fed or not.
 if ($env:PAGENTOS_FAKE_LEAD_LEAVES) {
     # A run that ends while something it started is still going ("tests are running in the background;
     # I will write the report when they finish"). 'escaped' is started by the WMI service: it is no
@@ -541,6 +529,23 @@ if ($env:PAGENTOS_FAKE_LEAD_LEAVES) {
         $until = [datetime]::UtcNow.AddSeconds(40)
         while (-not (Test-Path -LiteralPath ($env:PAGENTOS_FAKE_LEAD_RELEASES + ".passed")) -and [datetime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 20 }
     }
+}
+# A run that never reads its input and never ends: the step's cap is what ends it, prompt unread.
+if ($env:PAGENTOS_FAKE_LEAD_NO_READ -eq "1") { Start-Sleep -Seconds 120 }
+$card = [Console]::In.ReadToEnd()
+$here = (Get-Location).ProviderPath
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+if ($env:PAGENTOS_FAKE_CLAUDE_LOG) {
+    $entry = [pscustomobject]@{ role = [System.IO.Path]::GetFileNameWithoutExtension($roleFile); cwd = $here; tools = $tools; model = $model }
+    Add-Content -LiteralPath $env:PAGENTOS_FAKE_CLAUDE_LOG -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
+}
+if ($env:PAGENTOS_FAKE_LEAD_CARD) { [System.IO.File]::WriteAllText($env:PAGENTOS_FAKE_LEAD_CARD, $card, $utf8) }
+# The model policy: a run started on a model the test named as limited answers the line the real
+# tool answered on 2026-10-02 (no rate_limit_event; the result starts with "duration_api_ms") and does nothing else.
+$limitedModels = @(([string]$env:PAGENTOS_FAKE_LEAD_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($model -and $limitedModels -contains $model) {
+    [Console]::Out.Write('{"duration_api_ms":0,"total_cost_usd":0,"modelUsage":{},"terminal_reason":"api_error","is_error":true,"num_turns":1,"subtype":"success","api_error_status":429,"api_error":"model_requires_usage_credits","result":"You''re out of usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.","type":"result","duration_ms":640}')
+    exit 1
 }
 # A run that never ends by itself: the step's cap is what ends it.
 if ($env:PAGENTOS_FAKE_LEAD_HANG -eq "1") { Start-Sleep -Seconds 120 }
@@ -695,7 +700,10 @@ function Invoke-Integrate {
         # -ToolsFromPath passes NO -UvPath and NO -PnpmPath: the step finds them itself, on a PATH that begins with -PathPrefix.
         [switch]$ToolsFromPath, [string]$PathPrefix = "",
         # The caps as the call gives them ("" = none given: the step's own defaults), and a gate script other than the fake.
-        [string]$Caps = "-GateMinutes 3 -LeadMinutes 3", [string]$GateScript = ""
+        [string]$Caps = "-GateMinutes 3 -LeadMinutes 3", [string]$GateScript = "",
+        # > 0: the step's output goes to a FILE and its exit is waited for this long at most. A command
+        # the step leaked inherits the step's handles; on a pipe the read would wait for it for ever.
+        [int]$BoundSeconds = 0
     )
     $tools = "$Root-tools"
     $leadScript = if ($Lead -eq "stand-in") { Join-Path $tools "lead-stand-in.ps1" } else { Join-Path $Root "scripts\tests\lib\fake-claude.ps1" }
@@ -715,9 +723,27 @@ function Invoke-Integrate {
         $(if ($ToolsFromPath) { "" } else { " -UvPath '" + (Join-Path $tools "uv.cmd") + "' -PnpmPath '" + (Join-Path $tools "pnpm.cmd") + "'" }) +
         " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','$leadScript'" +
         $(if ($QueueUrl) { " -QueueUrl '$QueueUrl' -QueueToken '$QueueTokenFile'" } else { "" }) +
-        $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" }) + "; exit `$LASTEXITCODE"
-        $result = Invoke-NativeProcess -FilePath $powershell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command) `
-            -WorkingDirectory $Root -TimeoutSeconds 600
+        $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" })
+        if ($BoundSeconds -gt 0) {
+            $outFile = Join-Path $tools "step-output.txt"
+            $start = New-Object System.Diagnostics.ProcessStartInfo
+            $start.FileName = $powershell
+            $start.Arguments = ConvertTo-NativeArgumentLine -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ($command + " *> '$outFile'; exit `$LASTEXITCODE"))
+            $start.WorkingDirectory = $Root
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $step = [System.Diagnostics.Process]::Start($start)
+            if (-not $step.WaitForExit($BoundSeconds * 1000)) {
+                try { $step.Kill() } catch { }
+                throw "the step did not end within $BoundSeconds s"
+            }
+            $said = if (Test-Path -LiteralPath $outFile) { Get-Content -LiteralPath $outFile -Raw } else { "" }
+            $result = [pscustomobject]@{ ExitCode = $step.ExitCode; StdOut = [string]$said; StdErr = "" }
+        }
+        else {
+            $result = Invoke-NativeProcess -FilePath $powershell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ($command + "; exit `$LASTEXITCODE")) `
+                -WorkingDirectory $Root -TimeoutSeconds 600
+        }
     }
     finally {
         $env:PATH = $pathBefore
@@ -845,6 +871,29 @@ function Get-LeftBehindProcess {
     $id = 0
     if (-not [int]::TryParse(([System.IO.File]::ReadAllText($Left.Started)).Trim(), [ref]$id)) { return $null }
     return (Get-Process -Id $id -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match "powershell" })
+}
+
+function Get-StandInProcess {
+    <#
+        The lead's command of one sandbox while it lives, found by its command line (the stand-in's
+        path is the sandbox's own): a command that never ran one instruction wrote no pid anywhere.
+    #>
+    param([string]$Root)
+    $standIn = Join-Path "$Root-tools" "lead-stand-in.ps1"
+    return @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe'" |
+            Where-Object { ([string]$_.CommandLine).IndexOf($standIn, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 })
+}
+
+function Wait-StandInGone {
+    <# Waits for the sandbox's lead command to be gone, $Seconds at most; returns what is still there. #>
+    param([string]$Root, [int]$Seconds = 15)
+    $until = [datetime]::UtcNow.AddSeconds($Seconds)
+    do {
+        $alive = @(Get-StandInProcess -Root $Root)
+        if (@($alive).Count -eq 0) { return @() }
+        Start-Sleep -Milliseconds 200
+    } while ([datetime]::UtcNow -lt $until)
+    return $alive
 }
 
 function Test-OnBranch {
@@ -1275,32 +1324,44 @@ try {
     # The run was started and only THEN put into its job (2026-10-02, at the merge: 1 of 78 under
     # load - the process WROTE). A process started in between is in no job; a run that has ended by
     # then cannot be assigned at all. The step is held at that very moment, so the window is hit
-    # in every run, not in one of 78.
+    # in every run, not in one of 78. The stand-in starts the process BEFORE it reads its input, so
+    # a command let run before the assignment - created running, or resumed early and not fed -
+    # starts it outside the job: only a command that has run nothing when it is assigned passes.
     foreach ($heldBy in @("lead", "ended")) {
         $moment = if ($heldBy -eq "lead") { "the run still alive when the step goes on" } else { "the run already ended when the step goes on" }
         Test-Case "the lead's run is inside its job BEFORE it can start anything: a process it starts while the step is held before the assignment is stopped with it and never writes ($moment)" {
             $root = New-Sandbox -Work $one
             $left = New-LeftBehind -Root $root -Target "src/a/late.txt" -How "child" -On "add" -HeldBy $heldBy
             try {
-                $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment $left.Environment -PathPrefix (Get-GitShimFolder)
+                $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment $left.Environment -PathPrefix (Get-GitShimFolder) -BoundSeconds 300
                 Assert-True -Condition (Test-Path -LiteralPath $left.Started) -Because "the run did start a process (else this case proves nothing): $($run.Output)"
                 Assert-True -Condition (-not (Test-Path -LiteralPath $left.Written)) -Because "${moment}: the process was in the run's job from its first moment and was stopped before the step read the diff - it never wrote"
                 Assert-True -Condition ($null -eq (Get-LeftBehindProcess -Left $left)) -Because "it is gone"
+                Assert-Equal -Expected 0 -Actual @(Wait-StandInGone -Root $root).Count -Because "and so is the run's own command"
                 Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
                 foreach ($revision in @("main", "integrate/c1")) { Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision $revision -File "src/a/late.txt")) -Because "a file the diff check never saw is not on $revision" }
                 Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the run itself kept the rule: the task goes on"
                 Assert-True -Condition ($run.Report -match "arkasında \d+ süreç bıraktı") -Because "the report says the run left something going, and that it was stopped: $($run.Report)"
                 Assert-True -Condition ($run.Report -notmatch "tutulamadı") -Because "the run was held: $($run.Report)"
             }
-            finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+            finally {
+                Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue
+                Get-StandInProcess -Root $root | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            }
         }
     }
 
-    Test-Case "a run that cannot be put into a job is refused BEFORE the lead's command starts: no run, no attempt, the report says it, and the next step goes on" {
+    Test-Case "a run that cannot be put into a job is refused BEFORE the lead's command starts: no run, no attempt, the command is ended as it was created, the report says it, and the next step goes on" {
         $root = New-Sandbox -Work $one
         $mainBefore = Get-Sha -Root $root -Revision "main"
         $tipBefore = Get-Sha -Root $root -Revision "integrate/c1"
-        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment @{ PAGENTOS_TEAM_INTEGRATE_JOB_FAILS = "1" }
+        try {
+            # Bounded: a refused command left suspended holds the step's handles, and a read of a pipe would wait for it.
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment @{ PAGENTOS_TEAM_INTEGRATE_JOB_FAILS = "1" } -BoundSeconds 180
+            $leaked = @(Wait-StandInGone -Root $root -Seconds 15)
+            Assert-Equal -Expected 0 -Actual @($leaked).Count -Because "the refused command is gone, not left suspended (pids: $(@($leaked | ForEach-Object { $_.ProcessId }) -join ','))"
+        }
+        finally { Get-StandInProcess -Root $root | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }
         Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
         Assert-Equal -Expected 0 -Actual @($run.LeadCalls).Count -Because "the lead's command never ran one instruction: it logged nothing"
         Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "no gate"
@@ -1375,6 +1436,29 @@ try {
             Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock was released"
         }
         finally { Get-LeftBehindProcess -Left $left | Stop-Process -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case "a lead run that never reads its input is cut at -LeadMinutes all the same: a prompt larger than the pipe does not hold the step" {
+        # 2 MB for the lead at merge: far more than an anonymous pipe holds, so the write of the prompt cannot finish.
+        $padding = @(1..20000 | ForEach-Object { "- " + ("~" * 98) })
+        $big = @([pscustomobject]@{ cycle = "c1"; role = "inspector"; at = "2026-10-01T03:00:00Z"; file = ""; cost_usd = 0; outcome = "tamam"; summary = @(@("For the lead at merge: number the ADR") + $padding) })
+        $root = New-Sandbox -Work @(@{ Id = "task-one"; Area = "src/a"; Reports = $big })
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        try {
+            $began = [datetime]::UtcNow
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -Environment @{ PAGENTOS_FAKE_LEAD_NO_READ = "1" } -Caps "-GateMinutes 3 -LeadMinutes 0.2" -BoundSeconds 180
+            $took = ([datetime]::UtcNow - $began).TotalSeconds
+            Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+            Assert-True -Condition ($took -lt 100) -Because "the step ended at the cap, not at the stand-in's own 120 s ($([int]$took) s)"
+            Assert-Equal -Expected 0 -Actual @($run.LeadCalls).Count -Because "the command never read its input (else this case proves nothing)"
+            Assert-Equal -Expected 0 -Actual @(Wait-StandInGone -Root $root).Count -Because "the command was stopped at the cap"
+            $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+            Assert-True -Condition ($task.reason -match "süre doldu") -Because "the reason says the cap: $($task.reason)"
+            Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "no gate"
+            Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+            Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock was released"
+        }
+        finally { Get-StandInProcess -Root $root | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }
     }
 
     # ------------------------------------------------------------------ the model policy (TEAM_PROTOCOL 9a, ADR-0214 addenda 7, 10, 13)

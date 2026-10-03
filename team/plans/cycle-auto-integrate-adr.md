@@ -253,6 +253,16 @@ production, the recovery supervisor or the last-known-good record (a test reads 
       new start has NOT been run by this task.
     - Not closed here: the job has no kill-on-close limit, so a step that is itself killed
       mid-run leaves the lead's run going (as before this round).
+    - **Seventh round (tests only; the library is unchanged).** The sixth inspection found the
+      held cases passing with `CREATE_SUSPENDED = 0`: the stand-in read its input before it
+      started anything, so the cases pinned "not fed early", not "created suspended". The
+      stand-in now starts what it leaves behind BEFORE it reads its input (as the real tool
+      starts hooks); the held cases are RED with the command created running and with it
+      resumed before the assignment unfed. The refusal case asserts the refused command's
+      process is gone (found by its command line, 15 s at most) and runs the step with its
+      output in a file under a bound, so a command left suspended FAILS it instead of hanging
+      the suite on the inherited pipe. A new case: a command that never reads a 2 MB prompt is
+      cut at `-LeadMinutes` (RED with the prompt written on the step's own thread).
 
 ## Open decisions for the lead (not built by this task)
 
