@@ -142,7 +142,11 @@ def test_a_note_missing_a_field_is_a_422(store: board.Board) -> None:
 
 
 def test_a_token_shaped_text_is_refused_and_not_stored(store: board.Board) -> None:
-    for text in (f"anahtar {TOKEN_SHAPED}", "sk-" + "a" * 24, "-----BEGIN RSA PRIVATE KEY-----"):
+    for text in (
+        f"anahtar {TOKEN_SHAPED}",
+        "sk-" + "a" * 24,
+        "-----BEGIN RSA " + "PRIVATE KEY-----",
+    ):
         refused = _refused(lambda t=text: store.post(_note(text=t), now=NOW))
         assert (refused.status, refused.code) == (422, "secret_like")
         assert TOKEN_SHAPED not in str(refused.detail())  # the refusal does not echo it
