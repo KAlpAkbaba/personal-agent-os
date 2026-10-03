@@ -18,13 +18,11 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 **ÜRETİM: main `e6682a61688d7c4531f5a0ff19de91fd3e780d9d` (2026-10-03 13:22 UTC = 16:22 yerel, api-blue), LKG `661a5efe`,
 pin = RELEASE (lead pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`22d90798`, 96 dk: 15 294 birim, 178
 entegrasyon). QUALIFICATION Stage 49. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
-**SAHİBİN ADIMI (49.3, READY_FOR_OWNER): Tailscale yönetim konsolunda MagicDNS + "Enable HTTPS". Sonra lead:
-`ssh root@100.90.158.26 "cd /opt/pagentos/app && bash scripts/cloud/enable-web-tailnet-https.sh && bash scripts/cloud/enable-web-tailnet-https.sh --status"`
-ve `https://pagentos-core.<tailnet>.ts.net` adresini sahibe verir. Web kabuğu sunucuda koşuyor (`pagentos-prod-web`, yalnız
-loopback :3000). Ev PC'sindeki dev kabuğu telefondan `http://100.92.148.30:3000` ile açılıyor (allowedDevOrigins).**
-**HAZIR, KAPI BEKLİYOR: `lead/agent-temp-on-e` @ `afd161a8` (ADR-0214 ek 19): her döngü koşusunun TEMP'i
-`E:\AI\tmp-team\<iş>-<rol>-<8hex>`, koşu bitince silinir (`run_temp_root` cycle-settings.json'da). Kapı C: TEMP'te kalır (Unity
-E: TEMP'te derlenmiyor - ölçüldü). Bir sonraki entegrasyonla.**
+**TELEFON (49.3, PROVEN_REAL): web kabuğu sunucuda, tailnet HTTPS: https://pagentos-core.tail0e6789.ts.net (yalnız tailnet;
+`tailscale serve` -> 127.0.0.1:3000; geri almak: `enable-web-tailnet-https.sh --off`). Ev PC dev kabuğu da telefondan
+`http://100.92.148.30:3000` (allowedDevOrigins). Sahip yeni adrese bir kez giriş yapar (oturum adres başına).**
+**LEAD DALINDA (kapısız, team-cycle 214/214): `lead/agent-temp-on-e` (ADR-0214 ek 19): her döngü koşusunun TEMP'i
+`E:\AI\tmp-team\<iş>-<rol>-<8hex>`, koşu bitince silinir. Bir sonraki döngü başlangıcında devrede; main'e bir sonraki entegrasyonla.**
 **DİSK (2026-10-03): C: ~12:00'de SIFIRA indi (kapı `OSError(28)`, Docker motoru durdu - lead Docker Desktop'ı yeniden başlattı).
 C:'nin sahipleri ölçüldü: Program Files 112 GB, Docker 47 GB, pagefile+hiberfil 53 GB; OneDrive 222 GB'ın tamamı yalnız bulutta
 (diskte 0). AppData altında E:'ye junction ÇÖZÜLMÜYOR (STATUS_MOUNT_POINT_NOT_RESOLVED, Android ile ölçüldü, geri alındı);
