@@ -30,6 +30,7 @@ from app.artifacts.render_view_store import get_render_view_store
 from app.artifacts.routes import device_router as artifacts_device_router
 from app.artifacts.routes import router as artifacts_router
 from app.artifacts.runtime import ArtifactRuntime
+from app.assistant_chat import build_chat_provider
 from app.backup_health import backup_health
 from app.briefing.service import BriefingService
 from app.broker.routes import router as broker_router
@@ -49,6 +50,7 @@ from app.db import build_engine, build_session_factory
 from app.devices import authority as device_authority
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.devices.routes import router as devices_router
+from app.devices.service import list_device_views
 from app.devices.status import get_status_registry, lowest_idle_seconds
 from app.documents.mutations import MutationService
 from app.documents.routes import router as documents_router
@@ -110,7 +112,11 @@ from app.presence.routes import router as presence_router
 from app.release.routes import router as release_router
 from app.release.version import release_model
 from app.research import service as research_service
-from app.research.browser_gateway import UnwiredBrowserGateway
+from app.research.browser_gateway import (
+    PROFILE_RESEARCH,
+    DeviceBrowserGateway,
+    UnwiredBrowserGateway,
+)
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
 from app.research.routes import router as research_router
@@ -158,6 +164,9 @@ from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.routes import router as voice_router
 from app.voice.runtime import VoiceRuntime
 from app.voice.understanding.startup import configure_understanding
+from app.watch import runner as watch_runner_module
+from app.watch.reader import CloudReader
+from app.watch.routes import router as watch_router
 from app.weather.providers import build_weather_provider
 from app.weather.service import WeatherService
 from app.webpush.provider import HttpPushProvider
@@ -670,6 +679,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # when the application starts and one every 24 h, through the runtime the routes read
     # (app.state.artifacts, looked up at each pass).
     misheard_purge = misheard_service.PurgeLoop(lambda: app.state.artifacts.session())
+    # watch-engine: the watch runner reads due public pages on the CLOUD worker only (a
+    # scheduled job, ADR-0213) through the research gateway, and the readings' 30 days are
+    # kept by their own purge. Both through app.state.artifacts, looked up at each pass. The
+    # runner is OFF until browser-redirect-guard is released (``watch_runner_enabled``).
+    watch_reader = CloudReader(
+        views=lambda db: list_device_views(db, broker),
+        gateway_factory=lambda device_id, task_id: DeviceBrowserGateway(
+            DeviceCommandClient(dispatch_session_factory),
+            device_id=device_id,
+            task_id=task_id,
+            profile=PROFILE_RESEARCH,
+        ),
+    )
+    watch_runner = watch_runner_module.WatchRunner(
+        lambda: app.state.artifacts.session(),
+        watch_reader,
+        provider_factory=lambda: build_chat_provider(settings),
+        enabled=settings.watch_runner_enabled,
+        interval_s=settings.watch_runner_interval_s,
+    )
+    watch_purge = watch_runner_module.PurgeLoop(lambda: app.state.artifacts.session())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -714,6 +744,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The first pass is done when this returns (an application that serves has purged);
         # a pass that fails is logged by its error's type and never stops the start.
         await misheard_purge.start()
+        await watch_purge.start()
+        # Does nothing while ``watch_runner_enabled`` is off (the health check says skipped).
+        await watch_runner.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -745,6 +778,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
+            await watch_runner.stop()
+            await watch_purge.stop()
             await misheard_purge.stop()
             await retention_sweeper.stop()
             await embedded_worker.stop()
@@ -802,6 +837,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.briefing_announcer = briefing_announcer
     app.state.retention_sweeper = retention_sweeper
     app.state.misheard_purge = misheard_purge
+    app.state.watch_runner = watch_runner
+    app.state.watch_purge = watch_purge
     app.state.experience_scheduler = experience_scheduler
     app.state.mail_poller = mail_poller
     app.state.calendar_syncer = calendar_syncer
@@ -963,6 +1000,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # The misheard notebook: the owner reads, answers and forgets the sentences that were
     # not understood (GET/POST/DELETE /v1/voice/misheard).
     app.include_router(voice_misheard_router)
+    # watch-engine: the owner's watches (GET/POST/DELETE /v1/watches).
+    app.include_router(watch_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -1034,6 +1073,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The misheard notebook's 24-hour purge: advisory like the four above. A loop that
         # is behind is reported here and does not turn health red.
         checks["misheard_purge"] = misheard_purge.health_check()
+        # watch-engine: the runner ("skipped" while off) and the readings' 30-day purge.
+        checks["watch_runner"] = watch_runner.health_check()
+        checks["watch_purge"] = watch_purge.health_check()
         # B08 req 646/648/649/650: the safety net answers for itself. Both records have
         # been written for weeks and nothing read either of them; a backup nobody checks is
         # one you find out about on the day you need it.
