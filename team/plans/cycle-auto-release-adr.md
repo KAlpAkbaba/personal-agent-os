@@ -19,14 +19,12 @@ the lead ran preflight, release, the recovery pin and the checks by hand in a ch
    host's RELEASE and the sha. `Get-TeamReleaseDecision` stops on: a migration that is not
    expand-only, `infra/docker/docker-compose.prod.yml` or `infra/docker/edge/` changed, health
    not `ok`, a maintenance marker, a window within 30 min (or unreadable), an unreadable host or diff.
-4. Expand-only is read conservatively: only an ADDED version file is judged; the module minus
-   its `downgrade()` must hold no `drop_*(`, `rename_table`, `alter_column` with
-   `type_`/`nullable`/`new_column_name`, NOT NULL `add_column` without `server_default`, or SQL
-   that deletes/updates/truncates/drops/renames - inside `ALTER TABLE` any `DROP` or `RENAME`
-   (PostgreSQL makes `COLUMN` optional). A changed, deleted or unreadable migration stops; an
-   `execute()`/`exec_driver_sql()` whose argument is not a string literal (a variable, an
-   f-string, a file read) is unreadable. Today two existing versions (0018, 0023) use an f-string
-   execute; both drop a constraint, so stopping on them is right.
+4. Expand-only is an ALLOW-list of alembic calls (see the addendum below): only an ADDED
+   version file is judged, and its `upgrade()` may hold ONLY bare `op.create_table`,
+   `op.create_index`, `op.add_column` (nullable=True or a server_default, no primary key) and
+   `op.create_foreign_key` whose source table the same upgrade creates. Everything else - any
+   `op.execute` (even `SELECT 1`), raw SQL, another op, an ORM write, a helper, a loop, a
+   variable, an f-string - is not expand-only. A changed, deleted or unreadable migration stops.
 5. Release from a clean detached worktree `.claude/worktrees/release/<sha12>` (never the main
    checkout): `release-cloud-core.ps1 -BlueGreen -Preflight`, then `-BlueGreen`, then over ssh
    `install-recovery-supervisor.sh <40-hex>`, then the probe until RELEASE == APPROVED_SHA ==
@@ -57,12 +55,16 @@ added); counting the maintenance window on the home PC's clock (two clocks for o
 - Exit codes: 0 released/nothing; 2 protocol; 3 lock; 5 stopped by a rule; 6 failed (marker);
   7 preflight failed; 12 unexpected/queue write.
 
-**Addendum (inspector return 2, 2026-10-03): SQL ALTER is judged by an ALLOW-list.** A
-deny-list kept missing PostgreSQL forms where a keyword is optional (`ALTER TABLE t ALTER c
-TYPE`, `SET NOT NULL`, `ADD c int NOT NULL`, `ALTER TYPE e RENAME VALUE`). Now every ALTER in an
-execute()'s literal SQL must be one of: `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c <type>`
-(NOT NULL / PRIMARY KEY only with DEFAULT; no constraint, reference or generated column) or
-`ALTER TYPE e ADD VALUE ...`. Anything else stops - in doubt, not expand-only. Found on the way:
-on a tr-TR machine (the owner's PC) `(?i)` folds 'I' to dotless 'ı', so upper-case `DROP
-INDEX/CONSTRAINT/VIEW` slipped the deny-list; it now matches CultureInvariant, and the
-allow-list upper-cases invariantly and matches case-sensitively.
+**Addendum (Proje Yöneticisi, 2026-10-03 21:00): expand-only is an ALLOW-list of alembic
+calls; no raw SQL is safe.** Three inspector returns each found one more SQL form a deny-list
+let through (optional keywords in `ALTER TABLE`, `UPDATE ONLY`, `MERGE ... DELETE`, `DROP
+FUNCTION/SEQUENCE/TRIGGER/MATERIALIZED VIEW`, an ORM write with no execute at all, tr-TR's
+dotless i). A deny-list never ends; the owner's rule (ADR-0214 addendum 9) is that an
+irreversible migration is not released by itself. So the SQL parsing was removed: a migration
+is expand-only only when `upgrade()` consists solely of the four allowed calls above, their
+arguments call only schema builders (`sa.<Name>()`, `sa.func.<name>()`, `postgresql.<Name>()`,
+`op.f()`, `.with_variant()`), and the module around it holds only imports (op/sa bound the
+usual way), constants, docstrings and the two defs; `downgrade()` is not read. Anything else -
+including every `op.execute` - stops and leaves the release to the Danışman/owner. The real
+0065 migration passes. Cost: a hand-written-SQL migration (an extension, a `CREATE INDEX
+CONCURRENTLY`) is always released by a person; that is the intended trade.

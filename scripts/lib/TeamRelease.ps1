@@ -437,7 +437,7 @@ function Get-TeamReleaseDecision {
             & $add "diff_unreadable" ("yayındakiyle fark okunamadı: " + $(if ($null -ne $diff) { [string]$diff.Why } else { "okunmadı" }))
         }
         else {
-            $bad = @()
+            $bad = @(@($diff.Migrations) | Where-Object { $null -ne $_ -and -not [bool]$_.ExpandOnly })
             if (@($bad).Count -gt 0) {
                 & $add "migration" ("genişletme dışı göç: " + ((@($bad) | ForEach-Object { "$($_.Path) ($($_.Why))" }) -join ", "))
             }
