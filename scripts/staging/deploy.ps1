@@ -82,7 +82,8 @@ New-Item -ItemType Directory -Force $tree | Out-Null
 $tarFile = Join-Path $WorkRoot "$tag.tar"
 & git -C $repoRoot archive --format=tar -o $tarFile $full
 if ($LASTEXITCODE -ne 0) { Write-Host "STAGING DEPLOY FAILED: git archive exited $LASTEXITCODE"; exit 1 }
-& tar -xf $tarFile -C $tree
+# Windows' own bsdtar: a GNU tar from Git on PATH reads "E:\..." as a remote host.
+& (Join-Path $env:SystemRoot "System32\tar.exe") -xf $tarFile -C $tree
 $tarRc = $LASTEXITCODE
 Remove-Item -Force $tarFile
 if ($tarRc -ne 0) { Write-Host "STAGING DEPLOY FAILED: could not unpack the tree"; exit 1 }
