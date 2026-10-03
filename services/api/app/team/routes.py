@@ -10,7 +10,8 @@ the cycle reads it, the Ofis page writes it; ``models_setting`` holds its rules.
 
 Queue: the cycle's own surface (pilot-02). GET the whole queue; PUT one task by id with the
 ``updated_at`` the writer last saw (409 when it is stale); POST the lock (acquire / release,
-the six-hour staleness rule), the cycle report as text and a proposal's text (what the Onay
+the six-hour staleness rule counted from the holder's last status - the store reads it beside
+the lock), the cycle report as text and a proposal's text (what the Onay
 Merkezi shows for the idea that names it). All of it under the owner session,
 over whichever store ``app.state.team_store`` is: the database on the Cloud Core, otherwise
 the files under ``app.state.team_root``.
@@ -73,7 +74,7 @@ async def list_approvals(request: Request) -> dict[str, Any]:
             "approvals": approvals.list_pending(queue, root, store),
             "cycle_report": store.newest_report(),
             # For information; whether a decision is taken now is ``decisions_open``.
-            "cycle_running": team_store.lock_is_running(lock, at),
+            "cycle_running": team_store.lock_is_running(lock, at, store.read_status()),
             "decisions_open": approvals.decisions_open(store, lock, at),
         }
 
