@@ -32,6 +32,7 @@ from typing import Any, Protocol
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.identity.tokens import OWNER_CREDENTIAL_PREFIX, SESSION_TOKEN_PREFIX
 from app.memory.policy import find_secret
 from app.team.models import TeamStateRow
 
@@ -56,6 +57,20 @@ _TASK = re.compile(TASK_PATTERN)
 _NOTE_ID = re.compile(r"^n-\d{8}T\d{12}Z-[0-9a-f]{8}$")
 #: Rate check, write and prune are one step: two posts at once may not both take the last slot.
 _WRITE_LOCK = threading.Lock()
+#: This system's own credentials, which the memory scanner does not know: the team token is a
+#: session token, and every seat reads every note. The prefix alone, named in prose, passes.
+OWN_TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("pagentos_session_token", re.compile(rf"{SESSION_TOKEN_PREFIX}[A-Za-z0-9_-]{{16,}}")),
+    ("pagentos_owner_credential", re.compile(rf"{OWNER_CREDENTIAL_PREFIX}[A-Za-z0-9_-]{{16,}}")),
+)
+
+
+def find_note_secret(text: str) -> str | None:
+    """The NAME of the first credential pattern the text matches (never the match), or None."""
+    for name, pattern in OWN_TOKEN_PATTERNS:
+        if pattern.search(text):
+            return name
+    return find_secret(text)
 
 
 class Refused(Exception):
@@ -140,7 +155,7 @@ def check_note(body: Any) -> None:
     problems = _shape_problems(body)
     if problems:
         raise Refused(422, "invalid", problems)
-    secret = find_secret(body["text"])
+    secret = find_note_secret(body["text"])
     if secret is not None:
         raise Refused(
             422,

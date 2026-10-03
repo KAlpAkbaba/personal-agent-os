@@ -36,6 +36,10 @@ NOTES = "/v1/team/board/notes"
 NOW = datetime(2026, 10, 3, 9, 0, 0, tzinfo=UTC)
 #: A GitHub token's shape, built so that this file holds none.
 TOKEN_SHAPED = "ghp" + "_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+#: This system's own session token (the team token) and owner credential, built the same way:
+#: ``app/identity/tokens.py`` prefix + ``secrets.token_urlsafe(32)`` (43 characters).
+SESSION_SHAPED = "pagentos" + "_st_" + "Zq3-Xv9_Lm2Pk7Rt5Wn8Yb4Hc6Jd1Fg0Ks2Qw3Ee4Rr5T"
+OWNER_SHAPED = "pagentos" + "_ok_" + "Ab1_Cd2-Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv1Wx2Yz3Ab4C"
 
 
 def _note(**fields: object) -> dict[str, object]:
@@ -145,6 +149,18 @@ def test_a_token_shaped_text_is_refused_and_not_stored(store: board.Board) -> No
     assert store.read(now=NOW) == []
 
 
+def test_this_systems_own_tokens_are_refused_and_not_stored(store: board.Board) -> None:
+    # The team token IS a session token: a note carrying it would hand it to every seat.
+    for token in (SESSION_SHAPED, OWNER_SHAPED):
+        refused = _refused(lambda t=token: store.post(_note(text=f"ekip anahtarı: {t}"), now=NOW))
+        assert (refused.status, refused.code) == (422, "secret_like")
+        assert token not in str(refused.detail())
+    assert store.read(now=NOW) == []
+    # naming the prefix in prose is not a token
+    store.post(_note(text="pagentos_st_ önekli belirteçler panoya yazılmaz."), now=NOW)
+    assert len(store.read(now=NOW)) == 1
+
+
 def test_the_twenty_first_note_of_a_task_in_an_hour_is_a_429(store: board.Board) -> None:
     for minute in range(20):
         store.post(_note(text=f"not {minute}"), now=NOW + timedelta(minutes=minute))
@@ -240,6 +256,8 @@ def test_the_routes_post_and_read_through_the_team_store(client: TestClient, eng
         (_note(seat="stranger"), 422),
         (_note(kind="emir"), 422),
         (_note(text=f"token {TOKEN_SHAPED}"), 422),
+        (_note(text=f"ekip anahtarı {SESSION_SHAPED}"), 422),
+        (_note(text=f"sahip anahtarı {OWNER_SHAPED}"), 422),
         ([1, 2], 422),
         ("metin", 422),
     ],

@@ -24,8 +24,10 @@ about to use the dev stack, or that the lead already decided the question it is 
    ADR-0214 addendum 4): text 1..280 characters, no U+0000; seat
    `lead|researcher|integrator|inspector[-1..9]|worker-1..9`; `to` = `herkes` or a seat; kind
    `bilgi|soru|fikir|cevap`; task = a queue task id; `reply_to` = a note on the board; no
-   extra field (422). Token-shaped text (the patterns of `app.memory.policy.SECRET_PATTERNS`)
-   is refused with `secret_like` and NOT stored; the refusal names the pattern, never echoes
+   extra field (422). Token-shaped text (the patterns of `app.memory.policy.SECRET_PATTERNS`,
+   plus this system's own `pagentos_st_` session token - which the team token is - and
+   `pagentos_ok_` owner credential, prefix + 16 or more token characters; the inspector
+   found the scanner missed both) is refused with `secret_like` and NOT stored; the refusal names the pattern, never echoes
    the text (422). More than 20 notes for one task in one hour: 429.
 4. **Pruning on write, never a sweep:** every post keeps the newest 500 notes of the last 7
    days. The prune is a pure function and a fixed point (a second prune drops nothing). Every
