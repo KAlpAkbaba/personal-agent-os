@@ -92,7 +92,8 @@
     in place of the model: -ClaudePath powershell.exe -ClaudePrefixArguments -File,fake.ps1
 
 .EXAMPLE
-    .\scripts\team\cycle.ps1 -CycleId pilot-01 -Research
+    .\scripts\team\cycle.ps1 -CycleId pilot-01
+    (the researcher runs beside the tasks; -NoResearch for a cycle without it)
 #>
 [CmdletBinding()]
 param(
@@ -121,7 +122,11 @@ param(
     [string]$Model = "",
     [string]$Machine = $env:COMPUTERNAME,
     [string]$Base = "main",
+    # The researcher runs in EVERY cycle, queue full or not (owner, 2026-10-01; ADR-0214
+    # addendum 5), in its own seat beside the tasks' runs. -NoResearch turns it off; -Research
+    # is accepted and changes nothing, so a task registered with it keeps working.
     [switch]$Research,
+    [switch]$NoResearch,
     # The continuous cycle (owner, 2026-10-01: "sürekli, kontrollü"): the scheduled task starts a
     # cycle every half hour, so what broke or finished at noon reaches the others at noon. With
     # -DailyId every one of a day's cycles shares ONE id ("dYYYYMMDD") and so ONE integration
@@ -161,7 +166,7 @@ if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
 if ($MaxInspectors -lt 1 -or $MaxIntegrators -lt 1) { throw "-MaxInspectors and -MaxIntegrators are at least 1" }
 if ($MaxHours -lt 0 -or $RefillSeconds -lt 1 -or $PollMilliseconds -lt 10) { throw "-MaxHours is 0 or more, -RefillSeconds at least 1, -PollMilliseconds at least 10" }
 # A parameter is never assigned over (provision.tests.ps1 holds every script to it).
-$runResearch = [bool]$Research -or [bool]$ResearchOnly
+$runResearch = (-not $NoResearch) -or [bool]$ResearchOnly
 # The researcher's last finished run, on this machine: the throttle of -ResearchEveryHours.
 $researchMarker = Join-Path $TeamRoot "research-last.txt"
 if ($runResearch -and -not $ResearchOnly -and $ResearchEveryHours -gt 0 -and (Test-Path -LiteralPath $researchMarker)) {
@@ -1241,7 +1246,10 @@ try {
         param($Started, $Done)
         if ((Resume-OwnRun -Started $Started -Done $Done -Key "cycle/researcher") -ne "over") { return }
         $script:researchPending = $false
-        if (-not $Done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($Done.Outcome)" }
+        # A limited run is nobody's failure (the rule of every run): the limit has its own line,
+        # and no finished-run marker is written, so the next cycle runs the researcher again.
+        if ($Done.UsageLimited) { }
+        elseif (-not $Done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($Done.Outcome)" }
         else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
         Add-ResearchProposals
     }

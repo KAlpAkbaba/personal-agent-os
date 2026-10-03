@@ -951,6 +951,7 @@ Test-Case "without -Register nothing is registered, and the script says so" {
     Assert-True -Condition ($result.StdOut -match "NOT registered") -Because $result.StdOut
     Assert-True -Condition ($result.StdOut -match "02:00 Europe/Istanbul") -Because "the hour is the protocol's"
     Assert-True -Condition ($result.StdOut -match "-MaxUsd 12\.5 ") -Because "the cap travels, with a point: $($result.StdOut)"
+    Assert-True -Condition ($result.StdOut -notmatch "-Research(\s|`"|$)") -Because "research is the cycle's default; the task does not need to ask for it: $($result.StdOut)"
     Assert-True -Condition ($null -eq (Get-ScheduledTask -TaskName $probeName -ErrorAction SilentlyContinue)) -Because "the Task Scheduler was not touched"
 }
 
@@ -1055,7 +1056,10 @@ function Invoke-Cycle {
         [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL",
         [string[]]$Brief = @(), [switch]$ResearchOnly, [string]$QueueUrl = "", [string]$QueueTokenFile = "",
         # The script's own defaults (no money cap, no time cap) instead of the harness's caps.
-        [switch]$NoCaps, [string]$ExtraArguments = ""
+        [switch]$NoCaps, [string]$ExtraArguments = "",
+        # Research is on by default (ADR-0214 addendum 5): the harness passes -NoResearch unless a
+        # test asks for the researcher (-Research, -ResearchOnly) or for the script's own default.
+        [switch]$DefaultResearch
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
@@ -1072,6 +1076,7 @@ function Invoke-Cycle {
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
             (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'" + $(if ($Research) { " -Research" } else { "" }) +
             $(if ($ResearchOnly) { " -ResearchOnly" } else { "" }) +
+            $(if (-not ($Research -or $ResearchOnly -or $DefaultResearch)) { " -NoResearch" } else { "" }) +
             $(if ($QueueUrl) { " -QueueUrl '$QueueUrl' -QueueToken '$QueueTokenFile'" } else { "" }) +
             $(if (@($Brief).Count -gt 0) { " -ResearchBrief " + ((@($Brief) | ForEach-Object { "'" + $_ + "'" }) -join ",") } else { "" }) +
             "; exit `$LASTEXITCODE")
@@ -3173,6 +3178,90 @@ try {
         Assert-Equal -Expected 1 -Actual @($ideas).Count -Because "the researcher's proposal is queued for the owner: $($run.Report)"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt")) -Because "and its finished run is recorded"
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    Test-Case "research is on by default: a cycle started with no research flag runs the researcher, even with an empty queue, and its idea waits for the owner" {
+        # The owner, 2026-10-01 (ADR-0214 addendum 5): the researcher runs in EVERY cycle. It used
+        # to run only with -Research.
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -DefaultResearch
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "researcher" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "no flag, no task: the researcher still ran"
+        $ideas = @(Get-TeamTasks -Queue $run.Queue | Where-Object { $_.state -eq "awaiting_owner" })
+        Assert-Equal -Expected "team/proposals/2026-09-30-anlati.md" -Actual (@($ideas | ForEach-Object { $_.proposal }) -join ",") -Because "its proposal is queued for the owner: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "(?m)^- cycle / researcher: ") -Because "its run is in the report's run list: $($run.Report)"
+        $status = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected 0 -Actual @($status.runs).Count -Because "and its live status entry is gone after it"
+    }
+
+    Test-Case "research is on by default: -NoResearch runs none, and -Research is still accepted" {
+        $root = New-Sandbox -Tasks @()
+        $off = Invoke-Cycle -Root $root -Scenario "approve" -DefaultResearch -ExtraArguments "-NoResearch"
+        Assert-Equal -Expected 0 -Actual $off.ExitCode -Because ($off.StdOut + $off.StdErr)
+        Assert-True -Condition ($off.Report -and -not $off.StdErr.Trim()) -Because "the cycle ran (an unknown parameter would end it before its report): $($off.StdErr)"
+        Assert-Equal -Expected 0 -Actual @($off.Calls).Count -Because "-NoResearch: nobody was started"
+        Assert-Equal -Expected 0 -Actual @(Get-TeamTasks -Queue $off.Queue).Count -Because "and nothing was queued"
+        $on = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2" -Research
+        Assert-Equal -Expected "researcher" -Actual (@($on.Calls | ForEach-Object { $_.role }) -join ",") -Because "the registered nightly task's -Research still works: $($on.StdOut + $on.StdErr)"
+    }
+
+    Test-Case "research is on by default: with two approved tasks and two worker seats the researcher and BOTH workers are in flight together" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        # The workers' snapshots carry the claim: each is taken inside a worker run and names the
+        # researcher still in flight (nobody waited for it) beside the OTHER worker (it took no
+        # worker seat). The researcher's own snapshot, a second after its start, is not asserted:
+        # on a loaded PC the workers' worktrees take longer than that (a stopwatch, not a claim).
+        # The durations are generous so that every run is still in flight when the others take
+        # their snapshots.
+        $hooks = Get-PoolHooks -Root $root -Seconds "researcher:*=20,worker:*=10"
+        $hooks["PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS"] = 5
+        Use-FakeHooks -Environment $hooks -Body { $script:threeRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -DefaultResearch }
+        $run = $script:threeRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        foreach ($name in @("worker-task-one", "worker-task-two")) {
+            Assert-Equal -Expected "cycle:researcher,task-one:worker,task-two:worker" -Actual (Get-SnapshotRuns -Folder (Join-Path $root "snapshots") -Name $name) `
+                -Because "a snapshot taken inside the $name run names all three: the researcher took no worker seat and nobody waited for it"
+        }
+        $entry = @((Read-TeamJson -Path (Join-Path $root "snapshots\worker-task-one.json")).runs | Where-Object { $_.role -eq "researcher" })[0]
+        Assert-Equal -Expected "cycle" -Actual ([string]$entry.task) -Because "the Ofis page's researcher seat reads {task: cycle, role: researcher}"
+        Assert-True -Condition ([string]$entry.started_at -match '^\d{4}-') -Because "with when it started"
+        Assert-Equal -Expected "merged,merged" -Actual (@("task-one", "task-two" | ForEach-Object { (Get-TaskById -Queue $run.Queue -Id $_).state }) -join ",") -Because $run.Report
+        Assert-Equal -Expected 1 -Actual @(Get-TeamTasks -Queue $run.Queue | Where-Object { $_.state -eq "awaiting_owner" }).Count -Because "and its idea waits for the owner"
+    }
+
+    Test-Case "research is on by default: in API mode the store receives the new proposal's name and text, once" {
+        $api = Start-FakeApi -Tasks @()
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -DefaultResearch -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $posts = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match 'POST /v1/team/queue/proposals' })
+        Assert-Equal -Expected 1 -Actual @($posts).Count -Because "one new proposal, one post: $($posts -join ' | ')"
+        $state = Get-FakeApiState -Api $api
+        $name = "2026-09-30-anlati.md"
+        Assert-Equal -Expected $name -Actual (@($state.proposals.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -Because "by its file name"
+        $onDisk = [System.IO.File]::ReadAllText((Join-Path $root "team\proposals\$name"), [System.Text.Encoding]::UTF8)
+        Assert-Equal -Expected $onDisk -Actual ([string]$state.proposals.$name) -Because "with the file's text"
+        Assert-Equal -Expected "awaiting_owner" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because "the idea waits for the owner in the store"
+    }
+
+    Test-Case "research is on by default: a researcher at the usage limit is not a failed cycle - a limited run in the list, no finished-run marker" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = "$fable,$opus,$sonnet"; PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES = "researcher" } -Body {
+            $script:limitedResearch = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -DefaultResearch -ExtraArguments '-WaitForUsageLimit:$false'
+        }
+        $run = $script:limitedResearch
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition (@($run.Calls | Where-Object { $_.role -eq "researcher" }).Count -ge 1) -Because "the researcher was started"
+        Assert-True -Condition ($run.Report -match "(?m)^- cycle / researcher: [^\r\n]*Max kullanım limiti") -Because "its run is in the run list as limited: $($run.Report)"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt"))) -Because "a limited run is not a finished one: the next cycle runs it again"
+        # The rule of every run (no model left, -WaitForUsageLimit off): the cycle starts nothing
+        # new and says how to continue - the limit's line, not a failure of the researcher.
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; .*aynı -CycleId ile yeniden başlat") -Because "the limit's own stop line: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "araştırmacı: başarısız") -Because "the limit is not the researcher's failure: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-True -Condition (@("approved", "assigned", "inspecting", "merged") -contains [string]$task.state) -Because "the task is where its own runs left it, never stopped for the researcher's limit: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0)) -Because "and nobody's failure"
     }
 
     function Set-WorktreeBlocked {
