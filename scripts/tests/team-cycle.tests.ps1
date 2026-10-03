@@ -757,7 +757,8 @@ $realSonnetEvent = '{"type":"rate_limit_event","rate_limit_info":{"status":"allo
 # The real result line does not start with {"type" - the reader must not look for it there.
 function New-ResultLine {
     param([string]$Text = "ok", [bool]$IsError = $false, [string]$Ran = "claude-fable-5-1", [string]$Extra = "")
-    $escaped = $Text.Replace('\', '\\').Replace('"', '\"')
+    # One line, as the real tool prints it: a newline in the text is the two characters \n.
+    $escaped = $Text.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n')
     return ('{"duration_api_ms":2301,"is_error":' + $IsError.ToString().ToLowerInvariant() + ',"num_turns":1,"result":"' + $escaped +
         '","subtype":"success","total_cost_usd":0.0141,"type":"result"' + $Extra +
         ',"modelUsage":{"claude-haiku-4-5-20251001":{"costUSD":0.0003},"' + $Ran + '":{"costUSD":0.0138}}}')
@@ -847,9 +848,11 @@ Test-Case "model policy: the worker's real model is read back from its report en
     Assert-Equal -Expected "" -Actual (Get-TeamWorkerModel -Task $task) -Because "no report, no floor"
     $entry = { param($Role, $Outcome) [pscustomobject]@{ cycle = "c1"; role = $Role; at = "2026-10-01T09:00:00Z"; file = "f"; outcome = $Outcome; summary = @() } }
     $task.reports = @((& $entry "worker" (Get-TeamOkOutcome -Model $fable)), (& $entry "inspector" (Get-TeamOkOutcome -Model $sonnet)), (& $entry "worker" "başarısız: Max kullanım limiti"))
-    Assert-Equal -Expected $fable -Actual (Get-TeamWorkerModel -Task $task) -Because "the last worker run that finished, not the inspector's and not a failed one"
+    Assert-Equal -Expected $fable -Actual (Get-TeamWorkerModel -Task $task) -Because "the worker run that finished, not the inspector's and not a failed one"
     $task.reports = @($task.reports) + (& $entry "worker" (Get-TeamOkOutcome -Model $opus))
-    Assert-Equal -Expected $opus -Actual (Get-TeamWorkerModel -Task $task) -Because "the newest finished worker run"
+    Assert-Equal -Expected $fable -Actual (Get-TeamWorkerModel -Task $task) -Because "the STRONGEST finished worker run, not the newest: Fable wrote most of the branch before the rework on Opus (ADR-0214 addendum 10)"
+    $task.reports = @((& $entry "worker" (Get-TeamOkOutcome -Model $sonnet)), (& $entry "worker" (Get-TeamOkOutcome -Model $opus)))
+    Assert-Equal -Expected $opus -Actual (Get-TeamWorkerModel -Task $task) -Because "a stronger rework raises the floor"
     $task.reports = @((& $entry "worker" "tamam"), (& $entry "worker" "tamam (model claude-haiku-4-5-20251001)"))
     Assert-Equal -Expected "" -Actual (Get-TeamWorkerModel -Task $task) -Because "a run from before the policy, or a model outside the chain, names no model"
     Assert-Equal -Expected "tamam" -Actual (Get-TeamOkOutcome -Model "") -Because "no model known, the outcome is as before"
@@ -860,6 +863,15 @@ Test-Case "model policy: the worker's real model is read back from its report en
     $task.reports = @((& $entry "worker" (Get-TeamOkOutcome -Model $fable)))
     $floor = Get-TeamInspectionFloor -Task $task -Setting $setting
     Assert-Equal -Expected "$fable/True" -Actual "$($floor.Model)/$($floor.Recorded)" -Because "a recorded model wins over the setting"
+    # ADR-0214 addendum 10: the floor is the strongest of ALL finished worker runs; an entry
+    # without a model counts as the configured worker model.
+    $task.reports = @((& $entry "worker" (Get-TeamOkOutcome -Model $fable)), (& $entry "worker" (Get-TeamOkOutcome -Model $sonnet)))
+    $floor = Get-TeamInspectionFloor -Task $task -Setting $setting
+    Assert-Equal -Expected "$fable/True" -Actual "$($floor.Model)/$($floor.Recorded)" -Because "worked on Fable, reworked on Sonnet: the floor stays Fable"
+    $opusWorker = (Read-TeamModelSetting -Document ([pscustomobject]@{ roles = [pscustomobject]@{ worker = $opus; inspector = $fable } })).Setting
+    $task.reports = @((& $entry "worker" "tamam"), (& $entry "worker" (Get-TeamOkOutcome -Model $sonnet)))
+    $floor = Get-TeamInspectionFloor -Task $task -Setting $opusWorker
+    Assert-Equal -Expected "$opus/False" -Actual "$($floor.Model)/$($floor.Recorded)" -Because "a plain 'tamam' counts as the configured worker model (Opus), stronger than the recorded Sonnet"
 }
 
 Test-Case "model policy: the real stream is read line by line - the result, the model that really ran, the two percentages and their reset" {
@@ -934,6 +946,40 @@ Test-Case "model policy: a rejected event gives the limit's type and its reset a
     }
     $fine = Read-TeamRunResult -StdOut (@((New-RejectedEvent -Type "seven_day_opus"), $realSonnetEvent, (New-ResultLine -Ran $sonnet)) -join "`n") -ExitCode 0 -Model $sonnet
     Assert-Equal -Expected $false -Actual ([bool]$fine.UsageLimited) -Because "a run that finished is not limited, whatever an earlier event said"
+}
+
+Test-Case "model policy: the limit is read only from the tool's own error shape - a failed run that merely QUOTES the limit words is a plain failure" {
+    $dot = [string][char]0x00B7
+    # A long report (a test's output, a report about limits) with the words in its middle.
+    $report = "Report: why 'usage limit reached' in a failed run is not the limit`n`nThe suite printed:`n  FAIL: expected 'Claude AI usage limit reached' to be read as the limit`n  You've hit your Opus limit $dot resets 8:40pm`n`nverdict: the run failed"
+    $quoted = Read-TeamRunResult -StdOut (@($realSonnetEvent, (New-ResultLine -Text $report -IsError $true -Ran $opus)) -join "`n") -ExitCode 1 -Model $opus
+    Assert-True -Condition (-not $quoted.Ok) -Because "it failed"
+    Assert-True -Condition ([bool]$quoted.ResultLine) -Because "the result document was read (the test is about ITS text, not about a missing document)"
+    Assert-Equal -Expected $false -Actual ([bool]$quoted.UsageLimited) -Because "the limit words in the middle of a longer text are not the tool's limit"
+    Assert-Equal -Expected "" -Actual $quoted.LimitScope -Because "nothing is closed"
+    Assert-True -Condition ($quoted.Why -ne "Max kullanım limiti") -Because "its own reason: $($quoted.Why)"
+    $notError = Read-TeamRunResult -StdOut (New-ResultLine -Text "You've hit your Opus limit $dot resets 8:40pm" -IsError $false -Ran $opus) -ExitCode 1 -Model $opus
+    Assert-Equal -Expected $false -Actual ([bool]$notError.UsageLimited) -Because "a result that is not an error is not the tool's limit error"
+    $stderrMiddle = Read-TeamRunResult -StdOut "" -ExitCode 1 -StdErr "Error: the fixture's usage limit reached text did not parse`nlog: You've hit your Opus limit`n" -Model $opus
+    Assert-Equal -Expected $false -Actual ([bool]$stderrMiddle.UsageLimited) -Because "stderr's later lines are not its first"
+    $prose = Read-TeamRunResult -StdOut "I looked at the usage limit reached message and gave up." -ExitCode 1 -Model $opus
+    Assert-Equal -Expected $false -Actual ([bool]$prose.UsageLimited) -Because "prose with no result document is not the tool's limit shape"
+    # The tool's real shapes are still the limit.
+    $stderrFirst = Read-TeamRunResult -StdOut "" -ExitCode 1 -StdErr "You've hit your Fable limit $dot resets 8:40pm`n" -Model $fable
+    Assert-True -Condition ([bool]$stderrFirst.UsageLimited) -Because "stderr's first line is the tool's sentence"
+    Assert-Equal -Expected $fable -Actual $stderrFirst.LimitedModel -Because "and names the model"
+    $old = Read-TeamRunResult -StdOut '{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1791216000","total_cost_usd":0}' -ExitCode 1 -Model $opus
+    Assert-True -Condition ([bool]$old.UsageLimited) -Because "the old single-document shape"
+    Assert-Equal -Expected "2026-10-05T16:00:00Z" -Actual $old.ResetsAt -Because "with its epoch"
+    $extra = Read-TeamRunResult -StdOut (New-ResultLine -Text "You're out of extra usage $dot resets 8:40pm" -IsError $true) -ExitCode 1 -Model $opus
+    Assert-True -Condition ([bool]$extra.UsageLimited) -Because "'out of extra usage' at the start"
+    $padded = Read-TeamRunResult -StdOut (New-ResultLine -Text "  You've hit your session limit $dot resets 8:40pm" -IsError $true) -ExitCode 1 -Model $opus
+    Assert-Equal -Expected "all" -Actual $padded.LimitScope -Because "leading blanks are not text before the sentence"
+    # A blank line before the sentence is not text before it either (the inspector's probe,
+    # 2026-10-03: the old reader caught this shape, the anchored one missed it).
+    $blankLine = Read-TeamRunResult -StdOut (New-ResultLine -Text "`r`n  `nYou've hit your Opus limit $dot resets 8:40pm" -IsError $true -Ran $opus) -ExitCode 1 -Model $opus
+    Assert-True -Condition ([bool]$blankLine.UsageLimited) -Because "an error result whose text starts with blank lines, then the tool's sentence, is the limit"
+    Assert-Equal -Expected $opus -Actual $blankLine.LimitedModel -Because "and names the model"
 }
 
 Write-Host ""
@@ -1907,6 +1953,50 @@ try {
         Assert-Equal -Expected "inspecting" -Actual (Get-TaskById -Queue $swap.Queue -Id "task-one").state -Because "an APPROVE the tool ran on Sonnet is not an approval of an Opus-configured worker's task: $($swap.Report)"
         Assert-True -Condition ($swap.Report -match "hüküm alınmadı") -Because $swap.Report
         Assert-True -Condition (@($swap.Calls | Where-Object { $_.model -eq $sonnet }).Count -eq 0) -Because "and no inspector run was STARTED on Sonnet either: $(Get-CallModels -Calls $swap.Calls)"
+    }
+
+    Test-Case "the inspector's floor is the STRONGEST worker run of the task, not the last: worked on Fable, reworked on Sonnet - no inspection on Sonnet (ADR-0214 addendum 10)" {
+        # The inspection of model-policy-cycle: a Fable worker run, returned, reworked on Sonnet
+        # (lowered by the chain) was inspected on Sonnet and merged.
+        $worked = [pscustomobject]@{ cycle = "c0"; role = "worker"; at = "2026-10-01T09:00:00Z"; file = "team/reports/c0/task-one-worker-1.md"; cost_usd = 0.25; outcome = "tamam (model $fable)"; summary = @("sha: see the branch") }
+        $reworked = [pscustomobject]@{ cycle = "c0"; role = "worker"; at = "2026-10-01T11:00:00Z"; file = "team/reports/c0/task-one-worker-2.md"; cost_usd = 0.25; outcome = "tamam (model $sonnet)"; summary = @("sha: see the branch") }
+        $task = New-Task -Id "task-one" -State "inspecting"
+        $task.reports = @($worked, $reworked)
+        $root = New-Sandbox -Tasks @($task)
+        $until = Get-TeamTimestamp -Now ([datetime]::UtcNow.AddHours(1))
+        $closed = '{"until":"' + $until + '","type":"seven_day","seen_at":"2026-10-01T09:30:00Z"}'
+        Set-SandboxFile -Root $root -Name "limits.json" -Json ('{"models":{"' + $fable + '":' + $closed + ',"' + $opus + '":' + $closed + '},"windows":{}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "Fable and Opus limited: no inspector run on Sonnet: $(Get-CallModels -Calls $run.Calls)"
+        Assert-Equal -Expected "inspecting" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the inspection waits: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "denetim bekliyor: task-one[^\r\n]*işçi $fable[^\r\n]*daha zayıf modelde denetlenmez") -Because "the report says the inspection waits for Fable: $($run.Report)"
+
+        # Fable open (Opus limited): the inspection runs on Fable.
+        $open = New-Task -Id "task-one" -State "inspecting"
+        $open.reports = @($worked, $reworked)
+        $openRoot = New-Sandbox -Tasks @($open)
+        Set-SandboxFile -Root $openRoot -Name "limits.json" -Json ('{"models":{"' + $opus + '":' + $closed + '},"windows":{}}')
+        $ran = Invoke-Cycle -Root $openRoot -Scenario "approve" -NoCaps -ExtraArguments $noWait
+        Assert-Equal -Expected "inspector=$fable" -Actual (Get-CallModels -Calls $ran.Calls) -Because "inspected on Fable: $($ran.StdOut + $ran.StdErr)"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $ran.Queue -Id "task-one").state -Because $ran.Report
+    }
+
+    Test-Case "a failed run whose long report merely QUOTES 'usage limit reached' is a plain failure: no model is barred and nothing is lowered" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES = "worker" } -Body { $script:quoteRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $run = $script:quoteRun
+        Assert-True -Condition (@($run.Calls).Count -ge 1) -Because "the worker ran: $($run.StdOut + $run.StdErr)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_.model -ne $opus }).Count -Because "every run on the configured Opus - nothing lowered: $(Get-CallModels -Calls $run.Calls)"
+        Assert-True -Condition ($run.Report -notmatch "model düşürüldü") -Because "no lowering line: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "Max kullanım limiti") -Because "not read as the limit: $($run.Report)"
+        Assert-True -Condition ([int](Get-TeamProperty -InputObject (Get-TaskById -Queue $run.Queue -Id "task-one") -Name "failed_runs" -Default 0) -ge 1) -Because "it is the task's failure"
+        $limitsFile = Join-Path $root "team\limits.json"
+        if (Test-Path -LiteralPath $limitsFile) {
+            $kept = Read-TeamJson -Path $limitsFile
+            Assert-True -Condition ($null -eq $kept.models.PSObject.Properties[$opus]) -Because "Opus is not barred: $($kept | ConvertTo-Json -Depth 6 -Compress)"
+        }
+        $status = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected 0 -Actual @($status.limits.lowered).Count -Because "nothing lowered in the status"
     }
 
     Test-Case "a session limit closes every model: no lowered run is started, the status says 'all' is limited, and the existing stop line follows" {
