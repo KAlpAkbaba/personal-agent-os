@@ -975,6 +975,11 @@ Test-Case "model policy: the limit is read only from the tool's own error shape 
     Assert-True -Condition ([bool]$extra.UsageLimited) -Because "'out of extra usage' at the start"
     $padded = Read-TeamRunResult -StdOut (New-ResultLine -Text "  You've hit your session limit $dot resets 8:40pm" -IsError $true) -ExitCode 1 -Model $opus
     Assert-Equal -Expected "all" -Actual $padded.LimitScope -Because "leading blanks are not text before the sentence"
+    # A blank line before the sentence is not text before it either (the inspector's probe,
+    # 2026-10-03: the old reader caught this shape, the anchored one missed it).
+    $blankLine = Read-TeamRunResult -StdOut (New-ResultLine -Text "`r`n  `nYou've hit your Opus limit $dot resets 8:40pm" -IsError $true -Ran $opus) -ExitCode 1 -Model $opus
+    Assert-True -Condition ([bool]$blankLine.UsageLimited) -Because "an error result whose text starts with blank lines, then the tool's sentence, is the limit"
+    Assert-Equal -Expected $opus -Actual $blankLine.LimitedModel -Because "and names the model"
 }
 
 Write-Host ""

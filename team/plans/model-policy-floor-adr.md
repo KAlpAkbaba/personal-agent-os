@@ -16,8 +16,8 @@ the task lowered with 'model düşürüldü'.
    configured worker model, as before. When no model at least that strong is open, the
    inspection waits, as before.
 2. The limit is read only from the tool's own error shape: a `rate_limit_event` with status
-   `rejected`; an error result (`is_error: true`) whose text's FIRST line starts (leading blanks
-   allowed) with the tool's limit sentence (`You've hit your … limit`, `You're out of extra
+   `rejected`; an error result (`is_error: true`) whose text's first non-blank line starts (leading
+   blanks and blank lines allowed, as for stderr) with the tool's limit sentence (`You've hit your … limit`, `You're out of extra
    usage / usage credits`, `[Claude AI ]usage limit reached`); or stderr's first line being it.
    A result that is not an error, prose with no result document, and the words anywhere later
    in a text are a plain failure. The reset epoch and the limit's scope are read from that

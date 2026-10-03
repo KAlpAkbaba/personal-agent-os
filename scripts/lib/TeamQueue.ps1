@@ -831,7 +831,7 @@ function Read-TeamRunResult {
         # output, a report about limits) is a plain failure - its model is not barred.
         $sentencePattern = "(?i)^\s*(You.ve hit your (\w+ ){0,3}limit|You.re out of (extra usage|usage credits)|(Claude AI )?usage limit reached)"
         $sentence = ""
-        $firstSaid = [string](@($said -split "`r?`n")[0])
+        $firstSaid = [string](@(([string]$said).TrimStart() -split "`r?`n")[0])
         $firstErr = [string](@(([string]$StdErr).TrimStart() -split "`r?`n")[0])
         if ($firstSaid -match $sentencePattern) { $sentence = $firstSaid }
         elseif ($firstErr -match $sentencePattern) { $sentence = $firstErr }
