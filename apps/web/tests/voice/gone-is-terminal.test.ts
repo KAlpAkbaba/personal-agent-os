@@ -48,7 +48,15 @@ async function answered(): Promise<void> {
 
 async function setup() {
   const core = new FakeCloudCore({ transport: "webrtc" });
+  // While `held` is set, an attach reaches the server (recorded, answered) but its answer
+  // waits for `release()`; it does not count as open, so `answered()` does not wait for it.
+  let held: Array<() => void> | null = null;
   const fetcher: Fetcher = (path, init = {}) => {
+    if (held && path.endsWith("/attach")) {
+      const answer = core.fetcher(path, init);
+      const queue = held;
+      return new Promise<void>((resolve) => queue.push(resolve)).then(() => answer);
+    }
     wire.open += 1;
     const response = core.fetcher(path, init);
     const done = (): void => {
@@ -87,6 +95,16 @@ async function setup() {
     requests: () => core.requests.length,
     log: () => core.requests.map((r) => `${r.method} ${r.path.split("/").slice(-1)[0]}`),
     attaches: () => core.requests.filter((r) => r.path.endsWith("/attach")).length,
+    holdAttaches(): void {
+      held = [];
+    },
+    async releaseAttaches(): Promise<void> {
+      const queue = held ?? [];
+      held = null;
+      for (const resolve of queue) resolve();
+      await settle();
+      await answered();
+    },
     speak(at: number): void {
       transports[transports.length - 1].emit({ type: "response_done", at });
     },
@@ -164,6 +182,32 @@ describe("a session the server has declared gone stays gone", () => {
       ["closed", 3],
     ]);
     expect(t.attaches()).toBe(1);
+    expect(t.scheduler.pendingTimers).toBe(0);
+  });
+
+  it("a 410 on /events while an attach is in flight: the attach's 503 schedules no second attach", async () => {
+    // The third way in: the reporter hears the 410 first, the reconnect series' attach on
+    // the wire then fails with something else, and its retry timer must not reach the
+    // session the server has declared gone (the `gone` guard in `reattachLoop()`).
+    const t = await setup();
+    t.core.failNext("/attach", 503);
+    t.holdAttaches();
+    t.network.set(false);
+    await answered();
+    expect(t.state()).toBe("reconnecting");
+    t.network.set(true);
+    await answered();
+    expect(t.attaches()).toBe(1); // on the wire; its 503 is held
+
+    t.core.closed = "expired";
+    t.scheduler.advance(250); // the flush timer: /events answers 410
+    await settle();
+    await answered();
+    expect(t.state()).toBe("closed");
+
+    await t.releaseAttaches(); // the attach fails with 503: a retry timer is armed
+    await drain(t.scheduler); // ... and fires
+    expect([t.state(), t.attaches()]).toEqual(["closed", 1]);
     expect(t.scheduler.pendingTimers).toBe(0);
   });
 
