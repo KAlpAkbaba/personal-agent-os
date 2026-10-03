@@ -84,7 +84,7 @@ The pinned code has **no revision argument anywhere**:
 
 - `freyatts/pipeline.py:143-144` — `hf_hub_download(model_id_or_path, "config.json")` /
   `hf_hub_download(model_id_or_path, "model.safetensors")`: no `revision=`.
-- `freyatts/vae.py:23` — `hf_hub_download("openbmb/VoxCPM2", "audiovae.pth", token=token or os.environ.get("HF_TOKEN"))`:
+- `freyatts/vae.py:17` — `hf_hub_download("openbmb/VoxCPM2", "audiovae.pth", token=token or os.environ.get("HF_TOKEN"))`:
   repo hard-coded, no `revision=`.
 - `pipeline.py:159` — `from_pretrained` **always** calls `load_audio_vae(device)`, even for a local directory.
 
@@ -103,14 +103,14 @@ online it silently takes whatever `main` is. Therefore — binding for the measu
    used at all.
 2. **Synthesis step:** never call `FreyaTTS.from_pretrained` or `freyatts.vae.load_audio_vae`. Build the
    pipeline through its constructor `FreyaTTS(model, vae, char_to_id, device="cpu")` (`pipeline.py:119`),
-   doing by hand exactly what `pipeline.py:146-157` and `vae.py:24-32` do, but from the verified local paths:
+   doing by hand exactly what `pipeline.py:146-157` and `vae.py:18-26` do, but from the verified local paths:
    `FreyaDiT(vocab, d, depth, heads, ff)` from `config.json`, `load_state_dict(safetensors.torch.load_file(path), strict=True)`;
    `AudioVAEV2(AudioVAEConfigV2())`, `torch.load(path, map_location="cpu", weights_only=True)`,
    `load_state_dict(ckpt.get("state_dict", ckpt), strict=False)` — and **assert the returned
-   `missing_keys` / `unexpected_keys` are both empty** (upstream uses `strict=False` at `vae.py:27`, which would
+   `missing_keys` / `unexpected_keys` are both empty** (upstream uses `strict=False` at `vae.py:21`, which would
    hide a wrong file). Then `.float().eval()`, `requires_grad=False`.
 3. Still set `HF_HUB_OFFLINE=1` and run with `--network none` (§5) so any forgotten hub call fails loudly
-   instead of downloading. Do not pass `HF_TOKEN` into the container (`vae.py:23` reads it).
+   instead of downloading. Do not pass `HF_TOKEN` into the container (`vae.py:17` reads it).
 
 Nothing is downloaded at synthesis time: proven by construction (no hub call on the path above) and enforced
 twice (offline env + no network).
@@ -203,8 +203,24 @@ voxcpm==2.0.3 --hash=sha256:24da58a30d094a9e9a7ead450ae9cffda0d31eaeba620b61ad99
 The hashes are for **Linux x86_64 / CPython 3.12 only**; they will not install on Windows (different wheels) —
 the measurement runs in the container on both machines (home PC through Docker Desktop/WSL2).
 
-**Image: BUILT** on the home PC, 2026-10-03, from exactly this lock and this Dockerfile body (source copied with
-`git archive 146d36c1…`):
+**Image: BUILT ONCE, NOW CORRUPT — NOT USABLE, NOT EVIDENCE.** It was built on the home PC, 2026-10-03, from
+exactly this lock and this Dockerfile body (source copied with `git archive 146d36c1…`). The inspector found the
+stored image broken afterwards (almost certainly from C: reaching 0 MB during the build): `/etc/passwd` is 0 bytes
+(839 bytes in the base image at the pinned digest), so `docker run` without `--user` fails with "unable to find
+user freya"; run as root, `import torch` fails because `typing_extensions.py` is 0 bytes; 8 039 files in the
+image are 0 bytes. The `IMPORT_OK` line below was true at build time and is false now.
+
+**Binding for the measure card:** (1) `docker image rm pagentos-freya-measure:plan` and `docker builder prune -f`
+(the cache holds the same broken layers) — check `df -h /c` first and keep ≥ 20 GB free; (2) rebuild from
+scratch with `docker build --no-cache` from the lock and Dockerfile below; (3) prove the image with a
+**`docker run`**, never with the build log: `docker run --rm --network none pagentos-freya-measure:<tag> python -c
+"<the IMPORT_OK line below>"` must print `IMPORT_OK 2.11.0+cpu False …` as user `freya`, and
+`docker run --rm --user 0 --entrypoint sh pagentos-freya-measure:<tag> -c 'wc -c /etc/passwd; find / -xdev -type f -size 0 | wc -l'`
+must show `/etc/passwd` non-empty, and the zero-byte count must be of the same order as the same command on the
+pinned base image (a count in the thousands is the corruption). Record the new image id and size from those
+runs; the id and size below are history only.
+
+Dockerfile body (unchanged; this is what the measure card rebuilds):
 
 ```dockerfile
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
@@ -220,15 +236,18 @@ WORKDIR /opt/freyatts
 RUN python -c "import torch, freyatts, freyatts.vae, voxcpm.modules.audiovae as a; print('IMPORT_OK', torch.__version__, torch.cuda.is_available(), torch.get_num_threads(), a.AudioVAEV2.__name__)"
 ```
 
-- Build log, smoke line: `IMPORT_OK 2.11.0+cpu False 4 AudioVAE` (torch CPU build, no CUDA, 4 threads, the
-  whole voxcpm import chain loads with transformers 5.18.0).
-- Local image id `sha256:15013c5ca5d8f32f4c6909ebe8bc29dadea830662e96aede3a4bef468b4a21c0`, tag
-  `pagentos-freya-measure:plan` (not pushed anywhere). **Measured size: 2.25 GB** on disk (`docker image ls`),
-  490 388 482 bytes content (`docker image inspect .Size`). Weights not inside (mounted, §5).
+- History (build time only, no longer true of the stored image): build-log smoke line
+  `IMPORT_OK 2.11.0+cpu False 4 AudioVAE` (torch CPU build, no CUDA, 4 threads, the whole voxcpm import chain
+  loaded with transformers 5.18.0) — this shows the lock resolves and imports, not that any stored image works.
+- History: local image id `sha256:15013c5ca5d8f32f4c6909ebe8bc29dadea830662e96aede3a4bef468b4a21c0`, tag
+  `pagentos-freya-measure:plan` (not pushed anywhere) — **the corrupt one; delete it, do not use it**. Size
+  then: 2.25 GB on disk (`docker image ls`), 490 388 482 bytes content (`docker image inspect .Size`); the
+  rebuilt image's size is to be measured again. Weights not inside (mounted, §5).
 - Wheel download inside the base image: 343 MB.
 - **Disk warning for the measure card:** C: had 15 GB free before this build and ran to 0 MB transiently during
   it (Docker's WSL disk lives on C:); afterwards 12-13 GB free and the Docker engine stopped answering. Measure
-  `df -h /c` first; remove `pagentos-freya-measure:plan` and its build cache when done.
+  `df -h /c` first; remove `pagentos-freya-measure:plan` and its build cache before the rebuild (above) and the
+  rebuilt image when done.
 
 ## 4. How synthesis is called (pinned commit)
 
@@ -246,7 +265,7 @@ RUN python -c "import torch, freyatts, freyatts.vae, voxcpm.modules.audiovae as 
   also Leyla. Deterministic per text.
 - Steps: 32 Euler steps by default (`model.py:236-238`); keep 32 for the measurement (the card numbers use it).
 - Precision: fp32 on CPU — the DiT stays in its loaded dtype (safetensors fp32 per card "fp32" figures), VAE is
-  forced `.float()` (`vae.py:29`); device `"cpu"` passed to the constructor (`pipeline.py:119`). No autocast.
+  forced `.float()` (`vae.py:23`); device `"cpu"` passed to the constructor (`pipeline.py:119`). No autocast.
 - Threads: the code never sets them (no `set_num_threads` / `OMP_NUM_THREADS` anywhere in the repo). Set
   `torch.set_num_threads(N)` at start **and** `OMP_NUM_THREADS=N`, and limit the container with `--cpus N`;
   record N with every number (Cloud Core CPX32: N=4; home PC: report N=4 and N=8 so the two machines compare).
@@ -274,7 +293,7 @@ RUN python -c "import torch, freyatts, freyatts.vae, voxcpm.modules.audiovae as 
   - `model.safetensors` — **safetensors**, loaded with `safetensors.torch.load_file` (`pipeline.py:137,156`):
     no code execution on load (header length read: 19 368 bytes of JSON, then raw tensors).
   - `audiovae.pth` — **NOT safetensors**: a torch zip archive containing `vae/data.pkl` (a pickle). Loaded with
-    `torch.load(path, map_location="cpu", weights_only=True)` (`vae.py:26`), i.e. torch's restricted unpickler
+    `torch.load(path, map_location="cpu", weights_only=True)` (`vae.py:20`), i.e. torch's restricted unpickler
     that only rebuilds tensors and primitive containers. Risk: a malicious pickle executing code if the
     restricted unpickler has a bypass (it had one in torch ≤ 2.5.1, CVE-2025-32434; we run 2.11.0).
     Mitigations, all required: (1) the file is accepted only if its sha256 equals
