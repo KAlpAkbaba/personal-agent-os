@@ -15,22 +15,19 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `e6682a61688d7c4531f5a0ff19de91fd3e780d9d` (2026-10-03 13:22 UTC = 16:22 yerel, api-blue), LKG `661a5efe`,
-pin = RELEASE (lead pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`22d90798`, 96 dk: 15 294 birim, 178
-entegrasyon). QUALIFICATION Stage 49. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
-**KAPIDA (Danışman, 2026-10-03 17:40 yerel): ONUNCU ENTEGRASYON = yalnız lead dalı HEAD: 'Hakim' -> 'Proje Yöneticisi', 'Sahip' -> 'CTO',
-OFİS CANLANDI (ADR-0272: duygular, yeni işe yürüme, teknoloji ofisi - sahibin isteği), her koşunun TEMP'i E:'de (ADR-0214 ek 19), Proje
-Yöneticisi ofis ajanı / sohbet lead'i Danışman + kart boyu kuralı (ek 20). İlk kapı (ffa1e4fe) 13. dakikada durduruldu ve ofisle
-birlikte yeniden başladı. KAPI BİTENE KADAR lead dalına commit YOK. Yeşilse hemen yayın + pin. integrate/d20261003 (fbb4cba7) bir
-SONRAKİ entegrasyon.**
+**ÜRETİM: main `a5e68d92d9271ececec51da01b713e43a394e28c` (2026-10-03 16:12 UTC = 19:12 yerel, api-green), LKG `e6682a61`,
+pin = RELEASE (Danışman pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`7a6531ef`). QUALIFICATION Stage 50.
+Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK. SIRADAKİ entegrasyon: integrate/d20261003
+(döngünün onaylı işleri + branch-guards-runner + model-policy-office-ui).**
+**DEV KABUĞU: ev PC'sindeki `next dev` (:3000) ana kopyanın dal değişimlerinde bozulabiliyor (telefonda 'Oturum kontrol ediliyor'
+takılı, web.err.log'da 'Blocked cross-origin'). Yeniden başlatma: süreç ağacını durdur, `scripts/voice/start-web-voice.ps1 -PnpmPath
+C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd` Start-Process ile, çıktılar %LOCALAPPDATA%/PagentOS/web-shell. Kalıcı adres sunucudaki.**
 **KUYRUK BİRLEŞTİRİLDİ (ek 20): 17 başlamamış kart -> 8 (team-engine ÖNCELİKLİ, project-manager-seat ÖNCELİKLİ, team-board-talk,
 office-talk-visible, gate-faster, memory-safe-runs, account-pool, run-liveness-visible-all). DİKKAT: 28 kaydın Türkçesi BOM'suz .ps1
 yüzünden bozulmuştu ("YÃ¶neticisi"), onarıldı (scratchpad fix_mojibake.ps1); Türkçe metinli .ps1'e BOM koy.**
 **TELEFON (49.3, PROVEN_REAL): web kabuğu sunucuda, tailnet HTTPS: https://pagentos-core.tail0e6789.ts.net (yalnız tailnet;
 `tailscale serve` -> 127.0.0.1:3000; geri almak: `enable-web-tailnet-https.sh --off`). Ev PC dev kabuğu da telefondan
 `http://100.92.148.30:3000` (allowedDevOrigins). Sahip yeni adrese bir kez giriş yapar (oturum adres başına).**
-**LEAD DALINDA (kapısız, team-cycle 214/214): `lead/agent-temp-on-e` (ADR-0214 ek 19): her döngü koşusunun TEMP'i
-`E:\AI\tmp-team\<iş>-<rol>-<8hex>`, koşu bitince silinir. Bir sonraki döngü başlangıcında devrede; main'e bir sonraki entegrasyonla.**
 **DİSK (2026-10-03): C: ~12:00'de SIFIRA indi (kapı `OSError(28)`, Docker motoru durdu - lead Docker Desktop'ı yeniden başlattı).
 C:'nin sahipleri ölçüldü: Program Files 112 GB, Docker 47 GB, pagefile+hiberfil 53 GB; OneDrive 222 GB'ın tamamı yalnız bulutta
 (diskte 0). AppData altında E:'ye junction ÇÖZÜLMÜYOR (STATUS_MOUNT_POINT_NOT_RESOLVED, Android ile ölçüldü, geri alındı);
