@@ -17,7 +17,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 
 **ÜRETİM: main `661a5efe4a4989a0996fb3264302264c8c977bfa` (2026-10-03 01:14 UTC = 04:14 yerel, api-green), LKG `e9f8c2d6`,
 pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5b39ec`, 65 dk). QUALIFICATION Stage 48. Ana kopya
-`team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+`team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**KAPIDA (lead, 2026-10-03 11:45 yerel): SEKİZİNCİ ENTEGRASYON yeniden, dal `gate/d20261003-4` (worktree `.claude/worktrees/gate11`)
+= `execution-call-site-routines` (ADR-0257) + `owner-trials-api` (ADR-0258) + lead dalının bellek önlemleri + **Ofis bir oda olur**
+(`lead/office-room`, ADR-0259: sahibin isteği, amber/lacivert robotlar, sahip insan, enerji çubuğu). Ön kontrol 1763/1763.
+Yeşilse HEMEN yayın (sahibin kuralı). 11:30'da `test-slots` koşusu kural gelmeden 33 sn önce başlamıştı ve yine tüm birim
+paketini (iki kez) koşturuyordu - lead durdurdu, iş `assigned`e döndü, yeni kuralla yeniden başlar.**
 **DÖNGÜ `d20261003` (pid 42348) 04:16 yerelde yeni kodla başladı: koşularda arka plan komutu YOK, tek komut 1 saate kadar
 (ADR-0214 ek 16). 04:15'e kadar ekip DURMUŞTU: önceki döngü bittiği halde 02:00 zamanlayıcı süreci, bir ajanın bıraktığı
 `tail -f` + `grep` yüzünden kapanmadı, zamanlayıcı her turu atladı - lead ikisini durdurdu, görevi elle başlattı. Kalıcı
@@ -29,8 +34,7 @@ PS paketlerinde `OutOfMemoryException`, `git: Out of memory`, pnpm 0xC0000409. 1
 paketi (tek `pytest tests/unit` süreci) 14 GB'a çıkmış ve büyüyordu - lead durdurdu (boş bellek 17,6 -> 28 GB). Önlemler: (1) web
 kabuğu oturumdan BAĞIMSIZ yeniden başlatıldı (günlük `%LOCALAPPDATA%/PagentOS/web-shell`); (2) `team/cycle-settings.json`: 3 çalışan +
 2 denetleyici (GEÇİCİ - bellek önlemi gelene kadar; sahip daha çok çalışan istiyor); (3) worker.md / inspector.md: ajanlar TÜM birim
-paketini kendileri koşturmaz, kapı koşturur. Kartlar: `run-memory-cap`, `unit-suite-memory`. Sekizinci entegrasyonun kapısı yeniden
-koşacak (`gate/d20261003-4`: `execution-call-site-routines` + `owner-trials-api`).**
+paketini kendileri koşturmaz, kapı koşturur. Kartlar: `run-memory-cap`, `unit-suite-memory`.**
 **SAHİBİN KURALI (2026-10-03 00:07): "bundan sonra kapısı yeşil olanlar otomatik canlıya geçsin, beklemesinler" - denetimden geçen
 iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (`team/stop.flag`). Ek 9'un üç istisnası
 (compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor.**
