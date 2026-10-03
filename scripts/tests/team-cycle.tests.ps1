@@ -1202,6 +1202,28 @@ try {
         Assert-True -Condition ($run.Report -match "YAYIN: ship-one") -Because "the release that waits is named"
     }
 
+    Test-Case "a trial object is one Turkish line with its sentence, machine and state, and the old string still prints" {
+        $try = New-Task -Id "try-one" -State "awaiting_real_evidence"
+        $trial = [pscustomobject]@{
+            id = "ses-saat"; sentence = "Saat kaç?"; machine = "ev PC"; expect = "saati Türkçe söyler"
+            verdict = $null; said = $null; at = $null
+        }
+        $try | Add-Member -NotePropertyName owner_trials -NotePropertyValue @($trial, "Telefonda Ofis'i aç")
+        $root = New-Sandbox -Tasks @($try)
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-True -Condition ($run.Report -match "- try-one: ""Saat kaç\?"" — makine: ev PC — beklenen: saati Türkçe söyler — durum: denenmedi") -Because $run.Report
+        Assert-True -Condition ($run.Report.Contains("- try-one: Telefonda Ofis'i aç")) -Because "the old string form prints as before: $($run.Report)"
+        Assert-True -Condition (-not $run.Report.Contains("@{")) -Because "no raw PowerShell object: $($run.Report)"
+    }
+
+    Test-Case "a decided trial names its verdict in Turkish" {
+        $passed = [pscustomobject]@{ id = "a"; sentence = "S"; machine = "M"; expect = "E"; verdict = "oldu"; said = $null; at = "2026-10-03T00:00:00Z" }
+        $failed = [pscustomobject]@{ id = "b"; sentence = "S"; machine = "M"; expect = "E"; verdict = "olmadi"; said = "ses yok"; at = "2026-10-03T00:00:00Z" }
+        $rows = @((Format-TeamOwnerTrial -TaskId "t" -Trial $passed), (Format-TeamOwnerTrial -TaskId "t" -Trial $failed))
+        Assert-Equal -Expected 't: "S" — makine: M — beklenen: E — durum: oldu' -Actual $rows[0] -Because "oldu"
+        Assert-Equal -Expected 't: "S" — makine: M — beklenen: E — durum: olmadı (ses yok)' -Actual $rows[1] -Because "olmadı with the owner's words"
+    }
+
     Test-Case "a release the owner approved is told apart from one that waits, and still starts nobody" {
         $approved = New-Task -Id "ship-two" -State "awaiting_release"
         $approved | Add-Member -NotePropertyName release_approved -NotePropertyValue $true

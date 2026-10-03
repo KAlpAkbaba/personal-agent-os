@@ -18,6 +18,7 @@ conditional on the version read).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -52,6 +53,53 @@ def trial_objects(task: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(found, list):
         return []
     return [t for t in found if isinstance(t, dict)]
+
+
+def released_state(task: dict[str, Any]) -> str:
+    """The state a task being marked released goes to: ``awaiting_real_evidence`` while one of
+    its trials is not "oldu" (an old plain sentence counts as open), else ``released``. Pure:
+    the lead's release step calls it and writes the state itself."""
+    found = task.get("owner_trials")
+    trials = found if isinstance(found, list) else []
+    if any(not (isinstance(t, dict) and t.get("verdict") == PASSED) for t in trials):
+        return "awaiting_real_evidence"
+    return "released"
+
+
+#: The inspector's fixed trial form (.claude/agents/inspector.md): four ``key: value`` lines.
+TRIAL_KEYS = {"deneme": "id", "cumle": "sentence", "makine": "machine", "beklenen": "expect"}
+SENTENCE_MAX_CHARS = 300
+_TRIAL_LINE = re.compile(r"^\s*(deneme|cumle|makine|beklenen):[ \t]*(.*?)\s*$")
+_TRIAL_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def _trial_from(fields: dict[str, str]) -> dict[str, Any] | None:
+    if set(fields) != set(TRIAL_KEYS.values()) or not all(fields.values()):
+        return None
+    if not _TRIAL_ID.match(fields["id"]) or len(fields["sentence"]) > SENTENCE_MAX_CHARS:
+        return None
+    return {**fields, "verdict": None, "said": None, "at": None}
+
+
+def parse_inspector_trials(report: str) -> list[dict[str, Any]]:
+    """Every whole trial block of an inspector's report as an ``owner_trials`` object, in
+    order. A block opens at its ``deneme:`` line; one with a line missing, empty or out of
+    bounds is skipped - never guessed, never raised."""
+    blocks: list[dict[str, str] | None] = []
+    for line in str(report).splitlines():
+        match = _TRIAL_LINE.match(line)
+        if match is None:
+            continue
+        key, value = TRIAL_KEYS[match.group(1)], match.group(2)
+        if key == "id":
+            blocks.append({})
+        elif not blocks or blocks[-1] is None:
+            continue
+        elif key in blocks[-1]:  # a line written twice: the block is not whole
+            blocks[-1] = None
+            continue
+        blocks[-1][key] = value
+    return [t for b in blocks if b is not None and (t := _trial_from(b)) is not None]
 
 
 def list_open(queue: dict[str, Any]) -> list[dict[str, Any]]:
