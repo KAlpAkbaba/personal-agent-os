@@ -379,15 +379,15 @@ _ENTITIES: Final[dict[str, tuple[str | None, str | None]]] = {
 #: sentence exactly, which is the trial's own shape (the wrong thing, with full confidence) -
 #: except the fused time, which is now the right intent with a time the alarm tool cannot
 #: read ("yedibuçukta": the tool parses the sentence as heard, not the router's reading).
+#: 2026-10-03 (step 2, no confident wrong reading): 103 of 106 = 97.2 %, invented suffix
+#: 21/21, fused 26/29 - the target is MET. Five wrong readings left this table: an invented
+#: ending is read as the word it is ("Notü" -> "not"), and two rules claiming the same words
+#: once a word is repaired ask between them. The fused time stays: the router's reading is
+#: right (now MEDIUM, a repaired word), the alarm tool's time parser is not this card's.
 KNOWN_GAPS: Final[dict[str, str]] = {
     "stt.derived.c.collision.alarm_create.fused": "wrong_reading",
     "stt.derived.am.1.fused": "not_understood",
-    "stt.derived.selfdev.fix.canonical.fused": "wrong_reading",
-    "stt.derived.selfdev.fix.canonical.invented_suffix": "wrong_reading",
-    "stt.derived.op.app.1.invented_suffix": "wrong_reading",
-    "stt.derived.op.app.8.invented_suffix": "wrong_reading",
     "stt.derived.mc.search.1.fused": "not_understood",
-    "stt.derived.creative.redraw.canonical.fused": "wrong_reading",
 }
 
 
