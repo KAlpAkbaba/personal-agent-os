@@ -361,3 +361,18 @@ def test_a_decision_during_a_seven_hour_cycle_that_shows_life_says_the_cycle_run
     )
     assert answer.status_code == 200, answer.text
     assert answer.json()["cycle_running"] is True
+
+
+@pytest.mark.parametrize(
+    ("status_age", "running"),
+    [(TWO_MINUTES, True), (timedelta(hours=HOURS, minutes=1), False)],
+    ids=["shows-life", "silent"],
+)
+def test_the_listing_never_says_running_and_open_on_the_file_store(owner, status_age, running):
+    """``decisions_open`` reads the lock as ``cycle_running`` does: on the file store a seven-hour
+    cycle that shows life closes the gates; the database store keeps them open (per-task writes)."""
+    _cycle_running_for_seven_hours(owner, status_age=status_age)
+    listing = owner.get("/v1/team/approvals").json()
+    is_db = owner.app.state.team_store.kind == "db"
+    assert listing["cycle_running"] is running
+    assert listing["decisions_open"] is (is_db or not running)

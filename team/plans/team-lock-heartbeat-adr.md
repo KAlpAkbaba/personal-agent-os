@@ -51,15 +51,14 @@ false, kind: held, holder: <machine>` while the holder's status is younger than 
 cycle_id, pid, takeover_dead false - over the file store, SQLite and the dev stack's
 PostgreSQL). The same machine with another pid is told `ours`, not acquired.
 
-## Not fixed here
+- The third reader, `approvals.py` (added to the area by the Proje Yöneticisi, 2026-10-03
+  21:10), passes the status too: `decide` (its `cycle_running` answer), `decisions_open` (the
+  file store closes the gates while a cycle that shows life holds the queue - the listing never
+  says `cycle_running: true` and `decisions_open: true` on the file store) and the unused helper
+  `cycle_running(team_root)`. Before, past six hours the decision answered `cycle_running: false`
+  ("bir sonraki döngüde uygulanır") while the cycle ran.
 
-- The third reader, `approvals.decide` (`services/api/app/team/approvals.py:245`), still calls
-  `lock_is_running(lock, at)` without the status: past six hours the decision answers
-  `cycle_running: false` ("bir sonraki döngüde uygulanır") while the cycle runs. The file is
-  outside this card's area; the red test
-  `test_a_decision_during_a_seven_hour_cycle_that_shows_life_says_the_cycle_runs` is committed
-  and the one-line fix is `lock_is_running(lock, at, store.read_status())` there (lines 93 and
-  115 are file-store paths, file mode below).
+## Not fixed here
 
 - File mode (`team/lock.json`, no server): the client decides alone from `acquired_at`, so a
   file-mode cycle older than six hours can still be taken over. Follow-up (after
