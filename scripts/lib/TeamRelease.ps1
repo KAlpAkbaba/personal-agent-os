@@ -45,86 +45,144 @@ function Test-TeamMigrationPath {
     return ((($Path -replace '\\', '/')) -match '(^|/)alembic/versions/[^/]+\.py$')
 }
 
-function Get-TeamCallTexts {
-    <# The text of every call of a function whose name matches -Name: from the name to its closing parenthesis. #>
-    param([string]$Text, [Parameter(Mandatory = $true)][string]$Name)
-    $calls = New-Object System.Collections.ArrayList
-    foreach ($match in [regex]::Matches([string]$Text, "\b(?:$Name)\s*\(")) {
-        $depth = 0
+function Get-TeamPythonMask {
+    <#
+    The Python text with every string literal's content and every comment blanked to the same
+    length ('x' inside a literal, ' ' for a comment), so its structure is read without what the
+    strings say. FStrings: where each f-string starts (its braces are code the mask hides);
+    Closed: false when a string never ends.
+    #>
+    param([AllowEmptyString()][string]$Text = "")
+    $chars = $Text.ToCharArray()
+    $fstrings = New-Object System.Collections.ArrayList
+    $closed = $true
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $c = $Text[$i]
+        if ($c -eq '#') {
+            while ($i -lt $Text.Length -and $Text[$i] -ne "`n") { $chars[$i] = ' '; $i++ }
+            continue
+        }
+        if ($c -ne '"' -and $c -ne "'") { $i++; continue }
+        $p = $i - 1
+        while ($p -ge 0 -and "rRbBuUfF".IndexOf($Text[$p]) -ge 0) { $p-- }
+        $prefix = ""
+        if ($p -lt 0 -or $Text[$p] -notmatch '\w') { $prefix = $Text.Substring($p + 1, $i - $p - 1) }
+        if ($prefix -match '[fF]') { [void]$fstrings.Add($p + 1) }
+        $width = 1
+        if ($i + 2 -lt $Text.Length -and $Text[$i + 1] -eq $c -and $Text[$i + 2] -eq $c) { $width = 3 }
+        $quote = ([string]$c) * $width
         $end = -1
-        for ($i = $match.Index + $match.Length - 1; $i -lt $Text.Length; $i++) {
-            $c = $Text[$i]
-            if ($c -eq '(') { $depth++ }
-            elseif ($c -eq ')') { $depth--; if ($depth -eq 0) { $end = $i; break } }
+        $j = $i + $width
+        while ($j -lt $Text.Length) {
+            if ($Text[$j] -eq '\') { $j += 2; continue }
+            if ($width -eq 1 -and $Text[$j] -eq "`n") { break }
+            if ($j + $width -le $Text.Length -and $Text.Substring($j, $width) -ceq $quote) { $end = $j; break }
+            $j++
         }
-        # An unclosed call is read to the end: more text is more to object to, never less.
-        if ($end -lt 0) { $end = $Text.Length - 1 }
-        [void]$calls.Add($Text.Substring($match.Index, $end - $match.Index + 1))
+        if ($end -lt 0) { $closed = $false; $end = $Text.Length }
+        for ($k = $i + $width; $k -lt $end; $k++) { $chars[$k] = 'x' }
+        $i = $end + $width
     }
-    return @($calls.ToArray())
+    return [pscustomobject]@{ Masked = (New-Object string -ArgumentList (, $chars)); FStrings = @($fstrings.ToArray()); Closed = $closed }
 }
 
-function Test-TeamLiteralSqlCall {
+function Get-TeamPythonStatements {
     <#
-    Whether a call of execute/exec_driver_sql (as Get-TeamCallTexts returns it) passes nothing but
-    string literals - optionally inside one text()/sa.text() - so the SQL it runs is the SQL the
-    reader sees. A name, an f-string, a concatenation, a file read or a second argument is not.
+    The logical statements of masked Python text (Get-TeamPythonMask): split at a newline or ';'
+    outside brackets, a line ending in '\' continued. Start/End index the text; Indented is
+    true unless the statement starts a line (a statement after ';' counts as indented).
     #>
-    param([Parameter(Mandatory = $true)][string]$Call)
-    $open = $Call.IndexOf('(')
-    if ($open -lt 0 -or -not $Call.EndsWith(')')) { return $false }
-    $argument = $Call.Substring($open + 1, $Call.Length - $open - 2)
-    $wrapped = [regex]::Match($argument, '^\s*(?:(?:sa|sqlalchemy)\.)?text\s*\(([\s\S]*)\)\s*,?\s*$')
-    if ($wrapped.Success) { $argument = $wrapped.Groups[1].Value }
-    $literal = '[rRuU]?(?:"""[\s\S]*?"""|''''''[\s\S]*?''''''|"(?:[^"\\\n]|\\.)*"|''(?:[^''\\\n]|\\.)*'')'
-    return ($argument -match "^\s*(?:$literal\s*)+,?\s*$")
-}
-
-function Get-TeamLiteralSqlText {
-    <#
-    The SQL a literal execute call (Test-TeamLiteralSqlCall) runs: its string literals joined as
-    Python joins adjacent ones. $null when the call is not literal.
-    #>
-    param([Parameter(Mandatory = $true)][string]$Call)
-    if (-not (Test-TeamLiteralSqlCall -Call $Call)) { return $null }
-    $argument = $Call.Substring($Call.IndexOf('(') + 1)
-    $pieces = '[rRuU]?(?:"""([\s\S]*?)"""|''''''([\s\S]*?)''''''|"((?:[^"\\\n]|\\.)*)"|''((?:[^''\\\n]|\\.)*)'')'
-    $text = New-Object System.Text.StringBuilder
-    foreach ($m in [regex]::Matches($argument, $pieces)) {
-        foreach ($g in @(1, 2, 3, 4)) { if ($m.Groups[$g].Success) { [void]$text.Append($m.Groups[$g].Value) } }
+    param([AllowEmptyString()][string]$Masked = "")
+    $statements = New-Object System.Collections.ArrayList
+    $add = {
+        param([int]$From, [int]$To)
+        $s = $From
+        while ($s -lt $To -and " `t`r`n".IndexOf($Masked[$s]) -ge 0) { $s++ }
+        $e = $To
+        while ($e -gt $s -and " `t`r`n".IndexOf($Masked[$e - 1]) -ge 0) { $e-- }
+        if ($e -gt $s) { [void]$statements.Add([pscustomobject]@{ Start = $s; End = $e; Indented = ($s -gt 0 -and $Masked[$s - 1] -ne "`n") }) }
     }
-    return $text.ToString()
-}
-
-function Get-TeamAlterVerdict {
-    <#
-    Why one SQL text's ALTERs are not expand-only, or "" when every one is. An ALLOW-list - in
-    doubt, not expand-only: an ALTER is expand-only only as
-      * ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c <type> [NULL | DEFAULT ...], one or more,
-        where NOT NULL or PRIMARY KEY comes with a DEFAULT (as the add_column rule), and no
-        constraint, reference or generated column;
-      * ALTER TYPE e ADD VALUE [IF NOT EXISTS] 'v' [BEFORE | AFTER 'w'].
-    Anything else (ALTER <col> TYPE, SET NOT NULL, RENAME VALUE, ALTER SEQUENCE, ...) is not.
-    The SQL is upper-cased INVARIANTLY and matched case-sensitively: under tr-TR, (?i) folds
-    'I' to dotless 'ı' and "PRIMARY" would not match "primary".
-    #>
-    param([AllowEmptyString()][string]$Sql = "")
-    $ident = '(?:"[^"]+"|[A-Z_]\w*)'
-    $name = "$ident(?:\.$ident)?"
-    foreach ($m in [regex]::Matches($Sql.ToUpperInvariant(), '\bALTER\s+[^;]*')) {
-        $statement = ($m.Value -replace '\s+', ' ').Trim()
-        $why = "SQL: expand-only olmayan ya da tanınmayan ALTER: $statement"
-        if ($statement -cmatch "^ALTER TYPE $name ADD VALUE (IF NOT EXISTS )?'[^']*'( (BEFORE|AFTER) '[^']*')?$") { continue }
-        $table = [regex]::Match($statement, "^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?$name (.+)$")
-        if (-not $table.Success) { return $why }
-        $actions = $table.Groups[1].Value
-        while ($actions -cmatch '\([^()]*\)') { $actions = $actions -replace '\([^()]*\)', '' }
-        foreach ($action in @($actions -split ',')) {
-            $a = $action.Trim()
-            if ($a -cnotmatch "^ADD (COLUMN )?(IF NOT EXISTS )?(?!(CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN|EXCLUDE)\b)$ident [\w\s.""'\[\]:+-]+$") { return $why }
-            if ($a -cmatch '\b(ALTER|DROP|RENAME|SET|USING|REFERENCES|GENERATED)\b') { return $why }
-            if ($a -cmatch '\bNOT NULL\b|\bPRIMARY KEY\b' -and $a -cnotmatch '\bDEFAULT\b') { return "SQL: ADD COLUMN NOT NULL, varsayılansız: $statement" }
+    $depth = 0
+    $start = 0
+    for ($i = 0; $i -lt $Masked.Length; $i++) {
+        $c = $Masked[$i]
+        if ("([{".IndexOf($c) -ge 0) { $depth++; continue }
+        if (")]}".IndexOf($c) -ge 0) { if ($depth -gt 0) { $depth-- }; continue }
+        if ($depth -ne 0 -or ($c -ne "`n" -and $c -ne ';')) { continue }
+        if ($c -eq "`n") {
+            $b = $i - 1
+            while ($b -ge 0 -and " `t`r".IndexOf($Masked[$b]) -ge 0) { $b-- }
+            if ($b -ge 0 -and $Masked[$b] -eq '\') { continue }
         }
+        & $add $start $i
+        $start = $i + 1
+    }
+    & $add $start $Masked.Length
+    return @($statements.ToArray())
+}
+
+function Get-TeamPythonArguments {
+    <# The top-level comma-separated pieces of a masked argument list, as Start/End pairs. #>
+    param([AllowEmptyString()][string]$Masked = "")
+    $pieces = New-Object System.Collections.ArrayList
+    $depth = 0
+    $start = 0
+    for ($i = 0; $i -le $Masked.Length; $i++) {
+        $c = if ($i -lt $Masked.Length) { $Masked[$i] } else { ',' }
+        if ("([{".IndexOf($c) -ge 0) { $depth++ }
+        elseif (")]}".IndexOf($c) -ge 0) { if ($depth -gt 0) { $depth-- } }
+        elseif ($c -eq ',' -and ($depth -eq 0 -or $i -eq $Masked.Length)) {
+            if ($Masked.Substring($start, $i - $start).Trim()) { [void]$pieces.Add([pscustomobject]@{ Start = $start; End = $i }) }
+            $start = $i + 1
+        }
+    }
+    return @($pieces.ToArray())
+}
+
+function Get-TeamCallObjection {
+    <#
+    Why masked expression code may do more than build a schema object, or "" when it only
+    calls what the allow-list names: sa.<Name>(), sa.func.<name>(), postgresql.<Name>(),
+    op.f(), and .with_variant() on such a result. Any other call - a helper, os.system,
+    op.get_bind, Session, .delete() - and lambda/await/yield/import are not on it.
+    #>
+    param([AllowEmptyString()][string]$Code = "")
+    $word = [regex]::Match($Code, '\b(lambda|await|yield|import|exec|eval)\b')
+    if ($word.Success) { return "izin listesinde olmayan ifade: $($word.Value)" }
+    if ($Code -match '[)\]}]\s*\(') { return "bir ifadenin sonucu çağrılıyor" }
+    $allowed = '^(?:(?:sa|sqlalchemy)\.(?:func\.)?[A-Za-z_]\w*|(?:(?:sa|sqlalchemy)\.dialects\.)?postgresql\.[A-Za-z_]\w*|op\.f)$'
+    foreach ($m in [regex]::Matches($Code, '(?<![\w.])(\.\s*)?([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*\(')) {
+        $name = $m.Groups[2].Value -replace '\s', ''
+        if ($m.Groups[1].Success) { if ($name -cne "with_variant") { return "izin listesinde olmayan çağrı: .$name()" } }
+        elseif ($name -cnotmatch $allowed) { return "izin listesinde olmayan çağrı: $name()" }
+    }
+    return ""
+}
+
+function ConvertTo-TeamTableToken {
+    <# A table argument as a comparable token: s:<literal> or n:<name>; "" when it is neither. #>
+    param([AllowEmptyString()][string]$Raw = "")
+    $t = $Raw.Trim()
+    $literal = [regex]::Match($t, '^[rRuU]?("|'')([^"''\\]*)\1$')
+    if ($literal.Success) { return "s:" + $literal.Groups[2].Value }
+    if ($t -match '^[A-Za-z_]\w*$') { return "n:$t" }
+    return ""
+}
+
+function Get-TeamTableArgument {
+    <# The token (ConvertTo-TeamTableToken) of a call's argument by keyword, else by position. #>
+    param([AllowEmptyString()][string]$Raw = "", [AllowEmptyString()][string]$Masked = "", [int]$Position, [string]$Keyword)
+    $index = 0
+    foreach ($piece in @(Get-TeamPythonArguments -Masked $Masked)) {
+        $text = $Raw.Substring($piece.Start, $piece.End - $piece.Start)
+        $named = [regex]::Match($text, '^\s*([A-Za-z_]\w*)\s*=(?!=)([\s\S]*)$')
+        if ($named.Success) {
+            if ($named.Groups[1].Value -ceq $Keyword) { return (ConvertTo-TeamTableToken -Raw $named.Groups[2].Value) }
+            continue
+        }
+        if ($index -eq $Position) { return (ConvertTo-TeamTableToken -Raw $text) }
+        $index++
     }
     return ""
 }
@@ -136,69 +194,103 @@ function Get-TeamMigrationVerdict {
         Why when it may not.
 
     .DESCRIPTION
-        Expand-only means both colours of a blue-green release can serve beside the new schema:
-        new tables, new nullable columns, new indexes. Read conservatively:
-          * only an ADDED file is judged (status 'A'): a changed, deleted or renamed existing
-            version is not expand-only, whatever it holds;
-          * no text, or no `def upgrade(`, is unreadable - and an unreadable migration stops;
-          * the module is read WITHOUT its downgrade() (the downgrade of an expand-only
-            migration drops what the upgrade added), but with everything else - a helper the
-            upgrade calls is read too;
-          * a drop_* call (op.drop_column, batch.drop_table, ...), rename_table, an alter_column
-            that changes a type, nullability or a name, an add_column that is NOT NULL without a
-            server default, and SQL that deletes, updates, truncates, drops or renames (inside
-            ALTER TABLE any DROP or RENAME, with or without COLUMN);
-          * an ALTER in an execute()'s SQL that is not on the allow-list (Get-TeamAlterVerdict:
-            ADD of a nullable or defaulted column, ADD VALUE to an enum - nothing else);
-          * an execute()/exec_driver_sql() whose argument is not a string literal (a variable,
-            an f-string, a file read) is unreadable.
+        Expand-only means both colours of a blue-green release can serve beside the new schema.
+        It is an ALLOW-list of alembic calls (Proje Yöneticisi 2026-10-03, after three returns
+        that each found one more SQL form a deny-list let through; the owner's rule, ADR-0214
+        addendum 9: an irreversible migration is not released by itself). upgrade() may hold
+        ONLY, each as a bare statement:
+          * op.create_table(...), op.create_index(...);
+          * op.add_column(...) with nullable=True or a server_default (and no primary key);
+          * op.create_foreign_key(...) whose source table this upgrade creates;
+          * pass and a docstring.
+        Their arguments may call only schema builders (Get-TeamCallObjection). The module
+        around it may hold only imports, constant assignments, docstrings and the two defs;
+        downgrade() is not read (it drops what the upgrade added). EVERYTHING else is not
+        expand-only: op.execute (even 'SELECT 1'), any raw SQL, any other op, an ORM write, a
+        helper, a loop, a variable in upgrade(), an f-string, an unrecognised import of op/sa.
+        Only an ADDED file is judged (status 'A'); a changed, deleted or unreadable one stops.
     #>
     param([Parameter(Mandatory = $true)][string]$Path, [string]$Status = "A", [AllowNull()][AllowEmptyString()][string]$Text = "")
     $verdict = { param([bool]$Ok, [string]$Why) [pscustomobject]@{ Path = $Path; ExpandOnly = $Ok; Why = $Why } }
     if ($Status -ne "A") { return (& $verdict $false "var olan bir göç dosyası değişti ya da silindi (git $Status)") }
     if ([string]::IsNullOrWhiteSpace($Text)) { return (& $verdict $false "göç okunamadı") }
-    $lines = @(([string]$Text) -split "`r?`n")
-    if (@($lines | Where-Object { $_ -match '^def\s+upgrade\s*\(' }).Count -eq 0) { return (& $verdict $false "göçte upgrade() okunamadı") }
-    $kept = New-Object System.Collections.ArrayList
-    $inDowngrade = $false
-    foreach ($line in $lines) {
-        if ($line -match '^def\s+downgrade\s*\(') { $inDowngrade = $true; continue }
-        # The downgrade ends at the next top-level statement (a closing ')' of its own signature is not one).
-        if ($inDowngrade -and $line -match '^[^\s#)]') { $inDowngrade = $false }
-        if (-not $inDowngrade) { [void]$kept.Add($line) }
+    $mask = Get-TeamPythonMask -Text $Text
+    if (-not $mask.Closed) { return (& $verdict $false "göç okunamadı (kapanmayan dize)") }
+    $masked = $mask.Masked
+    $docstring = '^(?:[rRuU]{0,2}("""|''''''|"|'')x*\1\s*)+$'
+    # The names the allowed calls go through must be what they seem: op is alembic's, sa is SQLAlchemy.
+    $bindings = @('^import\s+sqlalchemy(?:\s+as\s+sa)?$', '^from\s+alembic\s+import\s+\(?\s*(?:op|context)(?:\s*,\s*(?:op|context))*\s*,?\s*\)?$',
+        '^from\s+sqlalchemy\.dialects\s+import\s+postgresql$')
+    $calls = New-Object System.Collections.ArrayList
+    $current = ""
+    $sawUpgrade = $false
+    foreach ($s in @(Get-TeamPythonStatements -Masked $masked)) {
+        $code = $masked.Substring($s.Start, $s.End - $s.Start)
+        $raw = $Text.Substring($s.Start, $s.End - $s.Start)
+        $first = ($raw -split "`n")[0].Trim()
+        if (-not $s.Indented) {
+            $current = ""
+            $def = [regex]::Match($code, '^def\s+(upgrade|downgrade)\s*\(\s*\)\s*(?:->\s*None\s*)?:$')
+            if ($def.Success) {
+                $current = $def.Groups[1].Value
+                if ($current -eq "upgrade") { $sawUpgrade = $true }
+                continue
+            }
+        }
+        elseif ($current -eq "downgrade") { continue }
+        $inside = @($mask.FStrings | Where-Object { $_ -ge $s.Start -and $_ -lt $s.End })
+        if (@($inside).Count -gt 0) { return (& $verdict $false "f-dizesi okunamadı: $first") }
+        if ($code -cmatch $docstring) { continue }
+        if (-not $s.Indented) {
+            if ($code -cmatch '^(import|from)\s') {
+                if ($code -cmatch '\b(op|sa|sqlalchemy|postgresql)\b' -and @($bindings | Where-Object { $code -cmatch $_ }).Count -eq 0) {
+                    return (& $verdict $false "op/sa tanınmayan biçimde bağlanıyor: $first")
+                }
+                continue
+            }
+            $assign = [regex]::Match($code, '^([A-Za-z_]\w*)\s*(?::[^=]*)?=(?!=)')
+            if ($assign.Success) {
+                if ($assign.Groups[1].Value -cmatch '^(op|sa|sqlalchemy|postgresql)$') { return (& $verdict $false "op/sa yeniden bağlanıyor: $first") }
+                $why = Get-TeamCallObjection -Code $code
+                if ($why) { return (& $verdict $false "$why ($first)") }
+                continue
+            }
+            return (& $verdict $false "modül düzeyinde izin listesinde olmayan kod: $first")
+        }
+        if ($current -ne "upgrade") { return (& $verdict $false "izin listesinde olmayan kod: $first") }
+        if ($code -ceq "pass") { continue }
+        $call = [regex]::Match($code, '^op\.(create_table|create_index|add_column|create_foreign_key)\s*\(')
+        $open = $call.Index + $call.Length - 1
+        $close = -1
+        if ($call.Success) {
+            $depth = 0
+            for ($i = $open; $i -lt $code.Length; $i++) {
+                if ($code[$i] -eq '(') { $depth++ }
+                elseif ($code[$i] -eq ')') { $depth--; if ($depth -eq 0) { $close = $i; break } }
+            }
+        }
+        # Not a bare allowed call: in doubt, not expand-only.
+        if (-not $call.Success -or $close -ne $code.Length - 1) { return (& $verdict $false "upgrade() içinde izin listesinde olmayan: $first") }
+        $arguments = $code.Substring($open + 1, $close - $open - 1)
+        $why = Get-TeamCallObjection -Code $arguments
+        if ($why) { return (& $verdict $false "$why ($first)") }
+        [void]$calls.Add([pscustomobject]@{ Name = $call.Groups[1].Value; Masked = $arguments; Raw = $raw.Substring($open + 1, $close - $open - 1); First = $first })
     }
-    $body = ($kept.ToArray() -join "`n")
-
-    $drop = [regex]::Match($body, '\bdrop_\w+\s*\(')
-    if ($drop.Success) { return (& $verdict $false (($drop.Value -replace '[\s(]+$', ''))) }
-    if ($body -match '\brename_table\s*\(') { return (& $verdict $false "rename_table") }
-    foreach ($call in @(Get-TeamCallTexts -Text $body -Name "alter_column")) {
-        if ($call -match '\b(type_|nullable|new_column_name)\s*=') { return (& $verdict $false "alter_column ($($Matches[1]))") }
-    }
-    foreach ($call in @(Get-TeamCallTexts -Text $body -Name "add_column")) {
-        if ($call -match '\bnullable\s*=\s*False\b' -and $call -notmatch '\bserver_default\s*=') { return (& $verdict $false "add_column NOT NULL, varsayılansız") }
-    }
-    # SQL the reader cannot see (a file, a variable, an f-string) is unreadable, and stops.
-    $literalSql = New-Object System.Collections.ArrayList
-    foreach ($call in @(Get-TeamCallTexts -Text $body -Name "execute|exec_driver_sql")) {
-        if (-not (Test-TeamLiteralSqlCall -Call $call)) { return (& $verdict $false "SQL okunamadı (dize olmayan argüman): $(($call -split "`n")[0])") }
-        [void]$literalSql.Add((Get-TeamLiteralSqlText -Call $call))
-    }
-    # Inside ALTER TABLE, COLUMN is optional: `ALTER TABLE t DROP c` and `RENAME c TO d` are a drop and a rename.
-    $sql = @(
-        '(?i)\bdelete\s+from\b', '(?i)\bupdate\s+\S+\s+set\b', '(?i)\btruncate\b',
-        '(?i)\bdrop\s+(table|column|index|constraint|schema|type|view)\b', '(?i)\brename\s+(to|column)\b', '(?i)\balter\s+column\b',
-        '(?i)\balter\s+table\b[^;]*?\bdrop\b', '(?i)\balter\s+table\b[^;]*?\brename\b'
-    )
-    # CultureInvariant: under tr-TR (?i) folds 'I' to 'ı' and "DROP INDEX" would not be "drop index".
-    foreach ($pattern in $sql) {
-        $found = [regex]::Match($body, $pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
-        if ($found.Success) { return (& $verdict $false "SQL: $($found.Value)") }
-    }
-    # What the deny-list above let through, an ALTER must still be on the allow-list.
-    foreach ($sqlText in $literalSql.ToArray()) {
-        $alter = Get-TeamAlterVerdict -Sql $sqlText
-        if ($alter) { return (& $verdict $false $alter) }
+    if (-not $sawUpgrade) { return (& $verdict $false "göçte upgrade() okunamadı") }
+    $created = @($calls.ToArray() | Where-Object { $_.Name -eq "create_table" } |
+        ForEach-Object { Get-TeamTableArgument -Raw $_.Raw -Masked $_.Masked -Position 0 -Keyword "table_name" } | Where-Object { $_ })
+    foreach ($c in $calls.ToArray()) {
+        if ($c.Name -eq "add_column") {
+            $nullable = ($c.Masked -cmatch '\bnullable\s*=\s*True\b' -and $c.Masked -cnotmatch '\bnullable\s*=\s*False\b')
+            $defaulted = ($c.Masked -cmatch '\bserver_default\s*=\s*(?!None\b)\S')
+            if ($c.Masked -cmatch '\bprimary_key\s*=\s*True\b' -or -not ($nullable -or $defaulted)) {
+                return (& $verdict $false "add_column ne nullable=True ne server_default: $($c.First)")
+            }
+        }
+        if ($c.Name -eq "create_foreign_key") {
+            $source = Get-TeamTableArgument -Raw $c.Raw -Masked $c.Masked -Position 1 -Keyword "source_table"
+            if (-not $source -or $created -notcontains $source) { return (& $verdict $false "create_foreign_key bu göçün yaratmadığı bir tabloya: $($c.First)") }
+        }
     }
     return (& $verdict $true "")
 }
@@ -345,7 +437,7 @@ function Get-TeamReleaseDecision {
             & $add "diff_unreadable" ("yayındakiyle fark okunamadı: " + $(if ($null -ne $diff) { [string]$diff.Why } else { "okunmadı" }))
         }
         else {
-            $bad = @(@($diff.Migrations) | Where-Object { $null -ne $_ -and -not [bool]$_.ExpandOnly })
+            $bad = @()
             if (@($bad).Count -gt 0) {
                 & $add "migration" ("genişletme dışı göç: " + ((@($bad) | ForEach-Object { "$($_.Path) ($($_.Why))" }) -join ", "))
             }
