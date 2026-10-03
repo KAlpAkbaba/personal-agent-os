@@ -358,7 +358,8 @@ Test-Case "7a. the gate's block (fake docker): the integration run fails, the da
     $before = [Environment]::GetEnvironmentVariable($gateVariable, "Process")
     $run = Invoke-GateBlock -Docker $fake.Path -PytestExit 1
     $after = [Environment]::GetEnvironmentVariable($gateVariable, "Process")
-    Assert-Equal "$before" "$after" "a later step sees the variable's original value"
+    # Compared, never printed: the value is a URL with a password in it.
+    Assert-True ("$before" -ceq "$after") "a later step sees the variable's original value (it still holds the block's URL; value not shown)"
     $calls = @(Get-FakeCalls $fake)
     $create = @($calls | Where-Object { $_ -match "CREATE DATABASE $($run.Name)\b" })
     $drop = @($calls | Where-Object { $_ -match "DROP DATABASE IF EXISTS $($run.Name)\b" })
