@@ -21302,3 +21302,1544 @@ partial-lock mutants that no test held deterministically; now both are RED with 
 open note is carded: `OpenAIEmbedder` keeps the same unlocked LRU (`openai-embedder-lru-lock`). The same integration
 carries ADR-0214 addendum 16 (the cycle's runs have no background commands), which is on the lead branch already and is
 in service from the cycle's next start.
+
+## ADR-0257 — A routine's browser action asks the execution_target rule; the shared device port does not - behind a setting that is OFF (2026-10-03)
+
+Task: `execution-call-site-routines` (roadmap 2b, ADR-0213 rule row 1, ADR-0220). 2026-10-02.
+
+Context: `app.routines.target.choose_routine_target` had no caller. A routine's `browser_action`
+was sent by `BrokerDeviceAction` to whatever `select_device` picked - the healthiest machine.
+
+Decision:
+1. `ActionDispatcher._browser_action` sends through `BrokerDeviceAction.scheduled()`, a view of
+   the port (like `bound_to`'s). On that view a `browser.<op>` of `BROWSER_ACTION_ALLOWLIST` asks
+   `select_routine_device` (`choose_routine_target` over the same registry snapshot, with the
+   operation as `capabilities` and the payload's `url`), then `wiring.device_for`: the cloud
+   device, or `NoCapableDeviceError` -> the existing failed `DeviceRunResult("no_capable_device")`
+   whose message ends with the decision's reason (`... (no_target_available)`), which is the text
+   the routine's failure notification already carries. A refusal never reaches `_select_for`.
+2. Every other capability on that view (`app.launch`, `desktop.*`) keeps `_select_for`: the rule
+   is not asked, no execution row is written.
+3. `selection_for` on the view asks the same rule through a pure twin (`probe_routine_device`:
+   `rule.decide` over `wiring.device_for`'s availability test) because `wiring.choose` writes and
+   commits ledger rows and a probe is not a run. One parametrized test holds probe == run.
+4. The ledger rows are the record, not the decision (`ledger_required=False`, as the research
+   start): a ledger that will not write is logged and the action is still sent.
+5. **Behind a setting, OFF by default** (lead ruling 2026-10-03):
+   `routines_execution_rule_enabled: bool = False` (`PAGENTOS_ROUTINES_EXECUTION_RULE_ENABLED`),
+   read by `ActionDispatcher._browser_action` at each firing. OFF: the dispatcher calls the
+   plain port exactly as main does (`self._device_action.run(...)`, same arguments) - the
+   machine `_select_for` picks, and the rule writes no row, not even a probe's. ON: points 1-4.
+   No compose line: turning it on is its own owner decision, after the cloud worker can keep a
+   session across firings (next section). Tests through the object `create_app` builds (the
+   routine dispatcher over `app.state.device_action`), off and on, unit and dev-stack
+   PostgreSQL. `get_settings` is `lru_cache`d: the value is the process's at start.
+
+**Where the build departs from the card - the lead decides each.**
+- **The card put the check in `_select_for` for every caller, by capability. Not built that way.**
+  `BrokerDeviceAction` is ONE object (`app/main.py:289`) held by the wake sequence, the operator,
+  the mission, the voice path, the toast ladder and artifact open. The cloud worker advertises
+  `browser.media_play`, `browser.session_open`, `browser.navigate`: a capability-only check sends
+  the wake alarm's music and the operator's "ofiste şunu aç" to the cloud, or refuses them
+  (`forced_target_not_allowed`). So the rule is asked only by the scheduled view, and only the
+  routine dispatcher takes that view. `test_the_shared_port_itself_does_not_ask_the_rule` holds it.
+- **`media_playback` does not ask the rule.** It opens a VISIBLE `isolated` window for an owner who
+  is to hear it; the cloud worker refuses every profile but `research`
+  (`browser_agent/cloud/policy.py`) and has no display or speaker. Under the rule every
+  `media_playback` routine would fail for ever. If the owner wants row 1 to cover it, it is one
+  line (`_media_playback` takes the same view) and the feature is then dead until a cloud audio
+  path exists. OPEN - an owner/lead decision.
+- **Deny-listed site: the rule's own answer is the cloud, and a routine inherits it** (the card's
+  acceptance line "a deny-listed url -> refused deny_listed_site" is WITHDRAWN by the lead,
+  2026-10-03). The deny-list is the machines' allow-list concern, not the cloud's: ADR-0213's
+  table says "acting on a deny-listed site -> refused; reading is not refused", and the addendum
+  and `wiring.choose` force `acting=False` for every scheduled job, so
+  `test_execution_wiring.py::test_the_routine_adapter_is_read_only_and_cloud_only` (outside the
+  area) asserts a deny-listed url is SELECTED cloud. A scheduled routine reading a deny-listed
+  site is therefore sent to the cloud worker (no owner session there; READ+NAVIGATE policy).
+  Built: the mapping (a refusal the rule RETURNS - payment, ask_owner, or a future deny-list
+  refusal - is the same failed result with its reason, never sent), tested with a stubbed
+  decision, and a test pinning the real answer (selected cloud). Whether scheduled reads of such
+  sites should be refused is a rule question the lead cards separately (`app/execution/`).
+
+Consequences (not softened; every one below holds with the setting ON - OFF, nothing changes):
+- A scheduled browser action runs in the cloud or fails. Cloud offline, revoked, not advertising
+  the operation or denied it by policy -> `no_capable_device`, with a machine online and able.
+- A routine that names a machine for a browser action is refused (`forced_target_not_allowed`),
+  even with that machine and the cloud both up. No routine field names a device today (nothing
+  calls `scheduled(targets=...)`); the refusal is what any future one gets. The word "bulutta" is
+  the cloud.
+- A routine `browser_action` that ACTS (`click`, `fill`, `upload`) is sent to the cloud as a read
+  (the rule never sees `acting`); the cloud worker's READ+NAVIGATE session policy is what refuses
+  it. A routine that used to click on a home machine no longer does.
+  A machine word beside the cloud word (`("bulutta", "ev")`, either order) is the machine word:
+  refused, on the run and on the probe.
+- **A `selected` ledger row is not proof the action ran.** The cloud worker requires a `session_id`
+  on every operation but `browser.worker_status` (`browser_agent/worker.py::_require_session_id`,
+  lines 1131-1149: a payload without one is `validation_error`), and every operation other than
+  `session_open` must name a session already open ON THAT WORKER (`unknown session`). The routine
+  dispatcher sends ONE operation per firing and opens no session, so a `browser_action` that
+  carries no `session_id`, or names one opened on a machine, is selected for the cloud, written
+  `execution.selected target=cloud`, and then FAILS on the worker. The row records where the rule
+  sent the operation, nothing more; whether it ran is the firing's own outcome (`DispatchOutcome`,
+  the device command's result). So the card's PROVEN_REAL criterion ("the first routine whose
+  ledger row says target=cloud") is not sufficient: PROVEN_REAL needs that row AND a succeeded
+  command result from the cloud device for the same firing. Until a routine can open a cloud
+  session (one action = one operation today), the only `browser_action` that can succeed there
+  is `session_open` itself. Before turning the setting on: count production routines whose
+  action kind is `browser_action` - each one that works today through a machine's session stops
+  working.
+- Whether production's cloud worker advertises `browser.navigate` today is UNVERIFIED (the last
+  host snapshot predates the 2026-10-02 release and holds no device capabilities). If it does
+  not, every routine `browser_action` fails `no_capable_device` with the setting on.
+- **READY_FOR_OWNER, not part of the merge:** the first production evidence needs the setting
+  ON (an owner decision, after the cloud worker keeps a session across firings) and is a firing
+  whose ledger row says `execution.selected target=cloud` AND whose cloud device command
+  succeeded. The merge itself changes nothing in production (the setting is off).
+
+**At merge (the lead, integration d20261003, fourth).** The second inspection approved the code and showed that, live,
+the rule would send a routine's `browser_action` - which works today through a machine's session - to the cloud worker,
+where every operation needs a session opened there and one operation per firing can only open one: the owner's working
+routines would fail. The lead ruled the switch: `routines_execution_rule_enabled`, default OFF; the third inspection
+confirmed off = the main's routing on PostgreSQL (`test_routines_execution_target_postgres.py`, 4 passed on a scratch
+database). The acceptance line "a deny-listed url is refused" was withdrawn for this card: the rule's own answer for a
+deny-listed site is the cloud (the allow-list is the machines'), and the question is the lead's to card. Switching it on
+is the owner's decision, after the cloud worker can keep a session across firings - and it needs a compose line then.
+
+## ADR-0258 — The owner's trials - the third gate on the server side (2026-10-03)
+
+Status: accepted (worker, cycle d20261003; the lead numbers it at merge)
+Proposal: team/proposals/2026-10-01-deneme-listesi.md (owner approved 2026-10-01)
+
+**Decision.**
+- `owner_trials` items become objects `{id, sentence, machine, expect, verdict, said, at}`
+  (`verdict` null | "oldu" | "olmadi"; `said`, `at` null until decided). The old plain-string
+  form stays valid. Both schema copies hold it as `$defs/owner_trial` WITHOUT a `type`
+  keyword: `required` / `properties` / `additionalProperties` apply to an object only, so a
+  string passes and an object is fully checked - no `anyOf`, which neither validator
+  (store.py, test_team_queue_schema.py) knows. Cost: a number or null item is not refused by
+  the schema; `trials.trial_objects` ignores anything that is not an object.
+- `GET /v1/team/approvals` gains `trials`: `[{task_id, title, sha, trial}]` for every
+  object trial with `verdict` null on a task in `released` / `awaiting_real_evidence`.
+  Old string trials are not listed (no id to decide on); the lead converts them.
+- `POST /v1/team/trials/decision {task_id, trial_id, verdict, said}` (owner session):
+  `said` is required for "olmadi" (422 `said_required`), at most 500 characters; a decided
+  trial is 409 `already_decided`; unknown task / trial 404; a task not in the two states 409
+  `not_on_trial`. Same lock rule as the approvals (refused on the file store while a cycle
+  runs; taken on the database store), same write lock, ledger event first.
+- "oldu" records verdict, words, time; the state is never changed and PROVEN_REAL is never
+  claimed. When no trial is left open and all said "oldu", `reason` =
+  `sahip denedi: oldu (<at>) - PROVEN_REAL satırını lead yazar`.
+- "olmadi" opens `fix-<task_id>-<n>` (first free n; the task id is shortened so the whole
+  fits 64 characters) in `approved` with `area: []`, `reason: "alan: lead belirler"`, the
+  original's `roadmap_row` and budget, title `Düzelt: <sentence>`, the goal quoting the
+  sentence, machine, expectation, the owner's words and the released sha. The original task
+  is written first (its conditional write is the race guard), then the fix task.
+- The fix task's `proposal` is the same text as its goal, as prose (inspector return,
+  d20261003). Without a proposal an approved task with no area is not a split candidate
+  (`Test-TeamSplitCandidate`): the cycle moves it to `assigned` and `Test-TeamQueue` then
+  refuses the queue in every later cycle. Prose, not a `team/proposals/` path: the split card
+  prints it whole, and on the Cloud Core no file exists for the lead's run to read - so no
+  one has to write a proposal file. A unit test runs the cycle's own `TeamQueue.ps1` on the
+  task the route made (split candidate, next = rest).
+
+**Open risks.**
+- The ledger event is recorded before the queue write (as in `approvals.decide`): a
+  `stale_write` leaves a `team.trial.*` event for a decision that never landed. The
+  response is 409 and the owner retries; the orphan event names the `updated_at` it read.
+- "olmadi" makes two writes that are not one transaction (the task, then the fix task): a
+  failure between them leaves the verdict recorded with no fix task.
+
+**For the lead at merge.**
+- Vocabulary: add `team.trial.passed` and `team.trial.failed` (`trials.EVENT_TRIAL_PASSED`,
+  `trials.EVENT_TRIAL_FAILED`); the tests monkeypatch them until then.
+- Inspector role text: READY_FOR_OWNER lines become `owner_trials` objects.
+- Release step: a released task with open trials -> `awaiting_real_evidence` (the route
+  accepts decisions in both states, so the order does not matter).
+- `scripts/lib/TeamRun.ps1:443` (cycle report "Sahibin gerçek cihazda deneyecekleri") still
+  reads the items as strings; it must read `.sentence` / `.machine` / `.expect` of an object.
+- Enter 38.3-38.5 as the first open trials.
+
+**At merge (the lead, integration d20261003, fourth).** Approved at the second inspection. The API and the schema are
+merged; the merge work the card named is carded as `owner-trials-wiring` (the cycle report's reading of a trial object -
+`TeamRun.ps1` - the vocabulary constants, the inspector's role text, the release step that sends a released task with open
+trials to `awaiting_real_evidence`, and 38.3-38.5 as the first open trials). Until then no task carries a trial object, so
+nothing reads the new shape; the page is `owner-trials-page`.
+
+## ADR-0259 — Ofis bir oda olur: amber ve lacivert robotlar, sahip bir insan, altta enerji çubuğu
+
+**Tarih.** 2026-10-03. **Karar veren.** Sahip istedi ("Bizim arayüzü ajanlardan bağımsız bir şekilde bu hale
+getirebilir misin", piksel ofis örneği; "Ofis ortamı bu görseldeki karakterlere yakın olabilir", ekran yüzlü amber
+ve lacivert robotlar), lead uyguladı (`lead/office-room`). Ajanların koşusundan bağımsız: yalnız web kabuğu.
+
+**Ne değişti.**
+
+- `officeSprites.ts` (küçük piksel kişiler) kalktı; yerine `officeRobots.tsx`: her koltuk rolüne göre bir karakter
+  çizer (`characterOf`): çalışanlar ve araştırmacı **amber** (inşa edenler), lead / entegratör / denetleyici
+  **lacivert** (karar verenler), lead'in anteninde altın ışık; **sahip bir insan** (ten ve saç, ekran yüz yok).
+  Her robotun yüzü koyu bir ekran, gözleri beyaz.
+- Üç duruş üç ayrı çizim: çalışan robot masada yazar (iki kol karesi sırayla, göz kırpar, ekran parlar), bekleyen
+  oturur, işi geri dönen masanın yanında ayakta durur ve başının üstünde **"!"** balonu yanıp söner.
+- Oda: üstte duvar şeridi (raf, pano, saksı), karo zemin, altta kanepe ve su sebili. Mobilya `.office-decor`
+  katmanında mutlak konumlu: hiçbir zaman bir ızgara hücresi ya da koltuk değildir, koltuklardan sonra gelir.
+- Odanın altında **enerji çubuğu** (`officeEnergy.ts`): "Enerji %N" = döngünün son bildirdiği kullanım
+  penceresinin kalanı (`cycle.limits.all.used_pct`, ADR-0214 ek 14), yanında "Çalışan ajanlar r/c". Alan yoksa
+  "Enerji bilinmiyor" ve boş çubuk - asla uydurma dolu çubuk. Düzeyler: >%30 yeşil, ≤%30 amber, %0 boş.
+- Renkler `.office` üzerinde değişken; oda kendi açık zeminini boyar, Kokpit'in koyu zemininde de aynı okunur.
+  Hareket tercihi "azaltılmış" ise hiçbir şey kıpırdamaz.
+
+**Testler.** `apps/web/tests/office/robots.test.tsx` (8): karakter tablosu, amber/lacivert, sahip insan, üç duruş
+üç çizim, mobilya koltuk değil, enerji değeri / bilinmiyor / dört düzeyin sınırları. Eski ofis testleri (55)
+değişmeden yeşil: koltukların sınıfları ve `data-*` öznitelikleri korundu.
+Mutasyon KIRMIZI (yedekten geri yüklendi, sha256 eşit): lead amber çizilir → 1 kırmızı; "!" balonu çizilmez →
+1 kırmızı; düşük düzey sınırı `<= 30` → `< 30` → 1 kırmızı. Web: tsc temiz, oxlint yeni uyarı yok, vitest
+126 dosya / 2172 test yeşil.
+
+**Telefon.** Ofis'in dışarıdan telefondan açılması ayrı iş: web kabuğunun Cloud Core'da barındırılması
+(sahip "Sunucuda barındır" seçti, `lead/web-on-cloud-core`). Bu karar yalnız görünüş.
+
+## ADR-0260 — Merged work is gated and put on main by a step, not by a person (`scripts/team/integrate.ps1`; on main, NOT scheduled) (2026-10-02)
+
+Task `cycle-auto-integrate`, approved at its fifth inspection (four returns, each a real finding: an unchecked file
+could reach main; a process the lead run left behind wrote after the check; the step waited out a limit holding the
+lock; the model policy was not followed). The step never releases; a release stays ADR-0214 addendum 9's.
+
+**Context.**
+
+The cycle starts every 30 minutes but ENDS at "merged into `integrate/<cycle-id>`". The full
+gate on that branch and the merge to main were the lead's, by hand. A task whose `depends_on`
+is not on main waits (`Get-TeamUnmetDependencies`), so a task finished at noon unblocked nothing
+until a person had time. Owner, 2026-10-01: "sürekli, kontrollü olması gerekiyor."
+
+**Decision.**
+
+`scripts/team/integrate.ps1` (decisions in `scripts/lib/TeamIntegrate.ps1`) is a SEPARATE step
+the scheduled task runs after the cycle. It never releases, makes no tag and names nothing of
+production, the recovery supervisor or the last-known-good record (a test reads its text).
+
+1. **What it takes.** Tasks in `merged`, grouped by `integration_branch`, whose branch is ahead
+   of main, that no returned task holds and whose tip the gate was not already red on (point 7).
+   Nothing else: no lock, no report, exit 0.
+2. **The lock** is the cycle's (file or API, the same functions), held as
+   `integrate-<branch>` and released in `finally`. The other machine's lock stops it before
+   anything is written.
+3. **Where.** `.claude/worktrees/gate/<branch>`, on a DETACHED HEAD: git allows a branch in one
+   worktree only, and `integrate/<cycle>` already lives in the cycle's own. It is this step's
+   scratch tree and the only place that is ever reset. main is merged in first; a conflict is
+   aborted and the tasks go to `stopped` with `main ile çakışma: <files>`.
+4. **The lead's wiring run** gets, per task, the "For the lead at merge" section of the newest
+   worker and inspector report (the report file when it is there, else the queue's forty
+   lines). The SCRIPT judges its diff, the model does not: allowed are `docs/`, `.github/`,
+   `team/`, `scripts/quality-gate.ps1`, `state/BUILD_STATE.json`, and a file a section NAMES as
+   a path (whole, or its last directories; a bare `main.py` opens nothing). One file outside
+   that refuses the run whole: the tree is reset, nothing is merged. What passed is committed
+   and the integration branch is fast-forwarded to it, so what is gated IS the branch.
+   **The run has Bash and shares the repository**, so the worktree's diff is not all it can
+   change: `refs/heads/<Base>`, the integration branch and `refs/remotes/<Remote>/<Base>` are
+   read before and after the run. One that moved (a commit made on main from the gate worktree
+   while main is checked out nowhere; a push) refuses the run with exit 13, is named with both
+   shas in the report, the console and every task's reason, and stops the branch AT ONCE (not
+   at the second attempt: a second attempt would merge the moved main in, gate it and push it).
+   The step does NOT put the ref back: it cannot tell the run's move from a person's during the
+   same minutes, and it never moves a branch backwards. The report carries the
+   `git update-ref <ref> <before> <after>` line for the lead. Only these three refs are watched:
+   the lead's own session commits and makes branches in the main checkout all day, and watching
+   every ref would refuse runs for that.
+   Two additions to the card's list, both the most restrictive reading:
+   `state/BUILD_STATE.json` is allowed (TEAM_PROTOCOL 4 makes it the lead's);
+   `team/queue.json` and `team/lock.json` are refused although they are under `team/` (they are
+   the cycle's; a committed held lock stops every cycle for six hours).
+5. **The gate** runs in that worktree after `uv sync` (services/api, services/browser) and
+   `pnpm install --frozen-lockfile --prefer-offline` (at the root, where pnpm's lock file is);
+   the report says what each took. docker, uv and pnpm are resolved as an `.exe` or a `.cmd`
+   only - PATH folder by folder, then the fallbacks - never through `Get-Command`, which answers
+   `pnpm.ps1` on this machine, a file a process cannot start. What the gate leaves changed in
+   its worktree is discarded before the merge for main is made there. Docker is probed first (`docker info`): down means
+   `Docker çalışmıyor` and nothing changes. GREEN needs BOTH exit code 0 and the gate's last
+   word `QUALITY GATE: PASS`; a failed step is read from the `FAILED: ` line of the gate's
+   `Invoke-Step` (the summary table is cut at the console's width). The log is
+   `team/reports/<cycle>/gate-<n>.log`, written as the gate runs.
+6. **Green.** main gets `git merge --no-ff` of exactly the gated commit (message names the sha;
+   the merge's tree must equal the gated tree), is pushed, and the tasks become
+   `awaiting_release` with main's sha. main is only moved FORWARD: by `merge --ff-only` in the
+   worktree that has it checked out (git refuses if the owner's uncommitted work is in the way),
+   or by a compare-and-swap `update-ref` when no worktree has it. Green is recorded before main
+   is touched, so a run that dies, or finds main blocked, is finished by the next one WITHOUT a
+   second gate.
+7. **Red.** Nothing reaches main. The failing steps and the first failing test go into the
+   report and each task's `reason`; a task is `returned` when the failing steps' text holds the
+   path of a file its branch changed (whole, or at least two last segments - how pytest prints
+   it) AND that file is inside the task's area - a worker's branch is opened from the cycle's
+   `-Base` (the lead's branch, which can be ahead of main), so its diff against main also holds
+   files that are not its own. The others stay `merged`. A gate-return does not count towards
+   the inspector's two returns.
+   **A returned task's code stays on the integration branch, so the branch goes onto main WHOLE
+   or not at all.** While any task with `integration_branch` = this branch is not in `merged` /
+   `awaiting_release` / `released` / `awaiting_real_evidence` / `done`, nothing of the branch is
+   gated: a green gate would put the returned task's code on main while its task says
+   `returned`. The tasks that stay `merged` wait, and their reason names whom they wait for. The
+   worker's fix is merged into the same branch by the cycle, the task is `merged` again, the tip
+   is new, and ONE gate judges everything. Reverting the returned task's merge out of the branch
+   was rejected: the fixed branch could then only come back through a revert of the revert, and
+   a step that rewrites what the cycle merged is no longer "nothing is forced".
+   `-ClearGateStop` does not open a held branch; the lead's way out is the task's own state.
+   **A commit the gate was red on is not gated again.** When the last attempt is `red` on the
+   branch's tip and main is contained in it, the step waits (no lock, no lead run, exit 0) for
+   a new tip - a fix merged in, main moved - or for `-ClearGateStop`, which gates it once more
+   (a flake, a service that was down). The second hour of a known answer is not spent.
+8. **Two failed attempts in a row stop the branch** (TEAM_PROTOCOL 10) until the lead runs
+   `-ClearGateStop`. A refused lead run and a lead run without a result count as attempts (they
+   would otherwise be retried every half hour, a lead run each); the usage limit, a missing
+   environment and a blocked main do not. A moved ref (point 4) stops it at the first.
+   The count lives in `team/reports/<cycle>/gate-<n>.json`
+   because the queue's schema has no field for it and this task may not change the schema.
+
+9. **Third round (inspector's second return, 2026-10-02) - five rules that replace what points
+   4, 5, 7 and 8 said where they differ.**
+   - **The lead-diff check reads moves as what they are.** `git diff --name-only --no-renames`:
+     with rename detection a file moved out of a task's area into `docs/` was listed by its new,
+     allowed name only and the deletion in the area rode to main on a green gate.
+   - **A red verdict survives a failed queue write.** The attempt's record now carries the
+     verdict (`blamed`, `reason`, `waits`) and `applied: false`; it is set to `true` only after
+     the queue was written. A run that finds the LAST record red on the branch's tip and not
+     applied writes the verdict (under the lock, no Docker probe, no lead run, no gate) and
+     exits 6 or 8 - before the "held" and "already red" waits are even asked. The write stays
+     the STRICT one (`Save-TeamQueueApi` without `-SkipStale`): the next run reads the store
+     again, so its write is on the fresh version and the other writer's change is kept. A record
+     without the mark (made before it existed) is never re-applied. `-ClearGateStop` asks for a
+     new gate instead.
+   - **The environment is built BEFORE the lead's run**, so a broken `uv`/`pnpm` costs no model
+     run however often the step comes back (exit 10, nothing counted - nothing was paid for).
+     The tree is then put back on the commit: what a build scribbles on a tracked file (a lock
+     file) is neither held against the lead's run nor gated. When the wiring changes a file the
+     environment is built from (`pyproject.toml`, `uv.lock`, `pnpm-lock.yaml`, `package.json`,
+     `pnpm-workspace.yaml`) it is built again on the wired commit; a failure THERE is a
+     `lead_failed` attempt, counted, and the integration branch is not moved. Any other error
+     after a lead run was started is recorded as `error` and counted too: two stop the branch.
+   - **Blame comes from FAILING lines of FAILING steps only** (`Get-TeamGateFailingLines`): a
+     line that begins with a failure's mark and the indented lines under it, a line holding a
+     place in a file (`path:line`, `path(line,col)`), a compiler's `error`, pytest's progress
+     line with an F or an E. A line that says PASS is never one. A gate that died (no step said
+     `FAILED: `, a timeout) names NOBODY: its tasks stay `merged` with the reason, and the
+     commit waits for a new tip or the lead's `-ClearGateStop`. The price is the other
+     direction: a failure whose lines carry no mark this reader knows returns nobody, and the
+     lead looks. That is the cheaper error - a wrong return costs a worker run and an inspector
+     run per innocent task.
+   - **The step never runs uncapped.** `-GateMinutes` (default 150) and `-LeadMinutes` (default
+     30) must be more than 0 and at most 240 together; each of the three parts of the
+     environment's build is capped at 15 minutes (built twice at most). Worst case 5.5 hours,
+     inside the lock's six-hour takeover - a
+     later run can no longer reset the worktree under a live gate. This departs from "no time
+     cap on a run" (owner, 2026-09-30) for this step only, because this step holds the team
+     lock while it waits; a gate killed at its cap is red, names nobody, and is said.
+
+10. **Fourth round (inspector's third return, 2026-10-02).**
+    - **A gate worktree deleted by hand is made again.** The step never removes its trees (a
+      gigabyte each), so somebody will; git keeps the record and `git worktree add` then refuses
+      the path - every run ended 12, with no strike and no reason on the task. Now
+      `Reset-TeamGateWorktree` removes THAT path's record (`git worktree remove <path>`, which
+      git allows for a missing folder) and adds the tree again. Not `git worktree prune`: that
+      clears every missing worktree's record in the repository, and the others are not this
+      step's (a test holds that another missing worktree stays registered). An EMPTY folder
+      that is left is taken. A folder that is left WITHOUT its `.git` and not empty (a delete
+      that stopped at an open file) is not deleted by the step - it cannot tell the folder is
+      its own - and the run stops with the folder's name and "delete it by hand".
+    - **A run that started nothing writes no report.** Stopped by the lock (exit 3) or by Docker
+      (exit 4), the step used to write `team/reports/<cycle>-integrate.md` and post it: half an
+      hour after a red gate the Onay Merkezi showed "kilit başka koşuda" in place of the gate's
+      words. Now such a run writes and posts nothing for the branch - in API mode it sends GETs
+      only - and leaves one line (time, machine, branches, the sentence) in
+      `team/reports/integrate-skipped.log`, local, newest 200 kept. `cycle.ps1` still overwrites
+      its own report in the same case (outside this task's area).
+    - **main moving while the gate runs** was right and untested: both guards (the "main is
+      contained in what was gated" check and the tree-equality throw) could be removed with the
+      suite green. A test now moves main from the fake gate's hook: exit 11, main is the other
+      writer's commit and nothing else, nothing pushed, the tasks stay `merged` with the reason,
+      and the next run merges the new main in and gates AGAIN.
+    - **The tree-equality guard was dead, and is not any more.** Writing that test's mutations
+      showed it: with the first guard removed, the merge still reached main. The guard compared
+      `Get-TeamRevision "<sha>^{tree}"` on both sides, and that function asks git for a COMMIT -
+      a tree is "" through it, and "" equals "". `Test-TeamSameTree` reads the trees themselves
+      and answers false when either cannot be read. Given the first guard the second cannot
+      fire (a merge of a descendant onto its ancestor has the descendant's tree), so it is
+      proven by its own test and by the mutation: first guard removed, the step now ends 12 with
+      main untouched instead of merging.
+
+11. **Fifth round (inspector's fourth return, 2026-10-02): the first REAL lead run.**
+    - **Only what the diff check saw is committed.** The real run ended with "tests are running in
+      the background; I will write the report when they finish". The check read the tree once and
+      `git add -A` then committed whatever was there: a file written in between reached main in
+      2 of 10 runs. Three rules now, each with its own test and its own mutation:
+      (a) the run's WHOLE process tree is stopped when its main process ends (or its cap is
+      reached), before a ref, the result or a file is read. The run is put in a Windows job
+      object the moment it is started; the job is terminated and the step waits until it is
+      empty. `taskkill /T` does not do this: it finds children through a parent that is alive,
+      and here the parent is gone. The output pipes are read after the stop, so a process that
+      kept the run's stdout open no longer turns a finished run into "no result". The report
+      says how many processes the run left and their names;
+      (b) the allow-list is held against the COMMITTED diff (`git diff --name-only --no-renames
+      <before the run> <the commit>`), not against the working tree before staging: what is
+      checked is, by construction, what is gated. A writer the job does not hold (started
+      through a service, a scheduled task) that writes before the commit is refused with the
+      file's name - a `lead_refused` attempt;
+      (c) the tree is put back on the commit before the gate runs, so a file written after the
+      commit is neither committed nor gated on (the inspector's other 8 of 10).
+      The lead's card now says: wait for every command you started, start nothing in the
+      background; what is still going when the run ends is stopped and never committed.
+    - **The step follows the model policy (TEAM_PROTOCOL 9a; ADR-0214 addenda 7, 10, 13).** The
+      setting is read where the cycle reads it - `GET /v1/team/queue/models` in API mode, else
+      `team/models.json`, else the defaults, through the same `Read-TeamModelSetting` - and
+      `team/limits.json` is read (never written: it is the cycle's file). The lead's run starts
+      on the lead's model, or - when that one is limited and `fallback` is on - on the next open
+      model down (`Get-TeamRunModel`); the report says `model düşürüldü: <from> -> <to>`. With
+      no open model no run is started and the environment is not built. A run that answers with
+      the usage limit closes its model (or every model: a session or weekly limit) for the rest
+      of the step, the tree is put back, and the same wiring run is started again AT ONCE one
+      model down - one try per model of the chain, all under the one `-LeadMinutes` cap.
+      **A usage limit is never an attempt** (no record, no strike, exit 7 every time) and **the
+      step never waits for a reset**: it holds the team lock, and the next scheduled run asks
+      again (a test holds that `integrate.ps1` has no sleep at all). `-Model` is, as in the
+      cycle, the model of a role the setting does not name, and must be one of the three ids.
+      What the step learns about a limit lives for that step only; the next one finds out
+      again in one five-second run unless a cycle has written it to `team/limits.json`.
+
+**Open decisions for the lead (not built by this task).**
+
+1. **The lock is held for the whole gate** (up to 150 minutes by default), as the card asks, so
+   no cycle starts on this machine while a gate runs - against rule (c), "the cycle is never
+   paused for the lead's gate" (ADR-0214 addendum 8). Options: (a) keep it, and accept that a
+   gate pauses the cycle; (b) release the lock after the wiring commit and take it again for
+   the merge - safe only in API mode (per-task versioned writes; a stale write is already
+   recovered by the next run), in file mode the step would overwrite the cycle's queue; (c) a
+   lock of the step's own, so two gates never overlap but the cycle is not held. The worker's
+   reading: (b) or (c), API mode only, as a task of its own with its own tests.
+2. **`-Base main` while worker branches open from `team/nightly/lead`.** `-Base` is the branch
+   that RECEIVES the gated work. An integration branch carries the lead branch's commits too,
+   so the first green gate puts them on main with the tasks, unreviewed as a set. Options: (a)
+   schedule the step only once the cycle's `-Base` is main; (b) schedule it with
+   `-Base team/nightly/lead` and keep the merge to main the lead's; (c) accept it - the lead
+   branch's commits pass the same full gate. The step does not choose; the default stays main.
+3. **The wiring run may edit the `scripts/quality-gate.ps1` it is then judged by.** The file is
+   on the allowed list because adding a suite to the gate is the wiring. Nothing stops a run
+   from REMOVING a step: the gate would be green on less. Options: (a) accept it and read the
+   wiring commit's diff of that file in the report (it is listed under "lead'in bağladığı
+   dosyalar"); (b) run the gate script of `-Base` (main's copy) plus the suites the reports
+   name; (c) refuse a wiring diff of `quality-gate.ps1` that deletes a line holding
+   `Invoke-Step`. The worker's reading: (c) is small and closes the cheap way out.
+4. **`.claude/worktrees/gate` is the lead's own worktree on this machine**
+   (`lead/cycle-rereads-queue`). The step's trees would nest inside it: `git add -A` there
+   stages `integrate/<cycle>` as an embedded repository, and removing that worktree deletes the
+   gate trees under it (recovered now, point 10, at the price of a new environment build).
+   Move the worktree, or the step's folder, before scheduling.
+
+5. **The dev stack's database is shared by the gate and the inspectors.** `quality-gate.ps1`
+   and the inspectors' integration runs both reset the dev database `pagentos`. Today the lock
+   keeps a cycle (and so its inspectors) from starting while a gate runs on this machine; if
+   open decision 1 is answered with (b) or (c) - the lock released during the gate - the two
+   reset the database under each other (the fourth inspection lost its first probe to exactly
+   that: `relation "owner_sessions" does not exist`). It already happens across the two
+   machines only if both point at one stack, and with a lead's or an inspector's hand-run
+   outside any lock. Options: (a) keep the lock for the whole gate (decision 1a) - simple, and
+   a gate pauses the cycle for up to 150 minutes; (b) the gate gets a database of its own
+   (`pagentos_gate_<branch>`, created and migrated by the gate's environment step, the name
+   passed to the gate) - nothing shared, costs a migration per run and a gate that honours
+   the name; (c) a second lock for "whoever resets the dev database", taken by the gate and by
+   an inspector's integration run. The worker's reading: (b), and decision 1 only after it.
+6. **A run that started nothing is invisible in the Onay Merkezi.** A lock or a Docker stop
+   (exit 3, exit 4) is one line in `team/reports/integrate-skipped.log` on this machine and
+   nowhere else, on purpose (point 10: it must not replace the branch's last real report). So
+   "Docker has been down since the morning and nothing was integrated" cannot be seen from
+   the phone. Options: (a) post the newest lines as a report of their own
+   (`integrate-skipped.md`) - needs the Onay Merkezi to list it without making it "the newest
+   report"; (b) a field in the live status the cycle already PUTs (`integrate: { last_skip,
+   since, count }`) shown on the Ofis page - needs the route's schema and the page; (c) after N
+   skipped runs in a row, one `awaiting_owner` line ("Docker çalışmıyor, N denemedir") - the
+   only one that reaches the owner without being looked for, and the only one that can nag.
+   The worker's reading: (b), with (c) for Docker only.
+
+**Consequences.**
+
+- A dependency reaches main, and its dependants start, without the lead's hands.
+- The suite must be added to `scripts/quality-gate.ps1` and `.github/workflows/ci.yml`, and the
+  call to `scripts/team/register-nightly.ps1`, by the lead (outside this task's area). The
+  scheduled call need not pass the caps (the defaults are caps); it may pass smaller ones.
+- Still open after the third round (the inspector's minors): the queue is read before the lock
+  is taken and not again after the gate's hour (a stale write is now recovered by the next run,
+  not prevented); gate worktrees, each with its `.venv` and `node_modules`, are never removed;
+  the `gate-<n>.json` records are local to the machine, so strikes, the moved-ref stop and an
+  unapplied verdict are per machine.
+- One slow task holds its whole branch: with one integration branch a day, a task returned by
+  the gate at noon keeps the day's other merged tasks off main until it is fixed and merged
+  again. That is the price of never putting unpassed code on main; the lead can take a task out
+  by hand.
+- After a moved ref the ref stays where the run left it until the lead looks. If it was main,
+  main holds a commit no gate saw; this branch is stopped, but ANOTHER integration branch that
+  goes green would merge and push that main. Not closed by this task.
+- After a failed push the tasks are `awaiting_release` and nothing retries the push until
+  another branch goes green (the report and exit code 9 say it). Not closed by this task.
+- `cycle.ps1` still writes "tam kapı ve main'e birleştirme bu betikte yok; lead yapar" under
+  the protocol gaps; that line is stale once the step is scheduled.
+- Still open after the fifth round: a writer no job object holds (started through a service or
+  a scheduled task) that writes WHILE THE GATE RUNS makes the gate judge a tree that is not the
+  commit; what reaches main is still exactly the commit (the tree-equality guard), but the
+  verdict is then about something else. A file name git quotes (non-ASCII) is refused by the
+  allow-list even under `docs/` - the safe direction. The step does not write
+  `team/limits.json`, so a limit it met is found again by the next step (one short run).
+- Evidence: PROVEN_AUTOMATED with fakes (sandbox repository, fake gate, fake lead, fake API,
+  fake docker/uv/pnpm); the process-tree stop is exercised with real Windows processes (a
+  child the run leaves behind, and one started through WMI that no job holds). The real gate
+  and a real `claude -p` lead run have NOT been run by this task (the fourth inspection ran a
+  real lead run and real `uv`/`pnpm` in a scratch clone: PROVEN_PROXY, on the code before this
+  round).
+
+**At merge (the lead, integration d20261002, fourth).** The suite is a step of the gate and a line of the CI file
+(`team-integrate.tests.ps1`, 78 cases, about 25 minutes - the longest PowerShell step; carded: the gate's independent
+PowerShell suites run side by side). `scripts/team/register-nightly.ps1` is NOT changed: nothing calls the step yet.
+The open decisions, ruled:
+1. *The lock for the whole gate.* Not kept: the owner's rule is that the cycle is never paused for a gate. The step
+   gets a lock of its own, API mode only (option c) - card `integrate-own-lock`, and the step is scheduled only after
+   it.
+2. *`-Base main` while task branches open from `team/nightly/lead`.* Accepted (option c): the lead branch's commits
+   are release records and the lead's wiring, and they pass the same full gate; this is what the lead's own
+   integrations have done all of 2026-10-02.
+3. *The wiring run may edit the gate it is judged by.* Option (c): a wiring diff of `scripts/quality-gate.ps1` that
+   deletes a line holding `Invoke-Step` is refused - in `integrate-own-lock`'s card, with its test.
+4. *`.claude/worktrees/gate`.* Done: the lead's worktree of that name was removed on 2026-10-02; the lead's own gate
+   worktrees are `gate<n>` beside it, never under it.
+5. *The dev database shared by the gate and the inspectors.* Option (b): the gate gets a database of its own - card
+   `gate-own-database`; decision 1's lock is released during the gate only after it.
+6. *A run that started nothing is invisible.* Option (b) with (c) for Docker - card `integrate-skips-visible`, after
+   `office-stable-seats` (same files).
+Also carded from the fifth inspection: the surviving mutation (no test holds the reset of the tree before the retry
+one model down - a test where the limited run writes before it answers). Until the step is scheduled, the gate and
+the merge to main stay the lead's, as every integration of this day was.
+
+### ADR-0254 addendum 1 (2026-10-03): the misheard purge never holds the start
+
+Draft: `team/plans/misheard-purge-start-bounded-adr.md` (numbered at the ninth integration of d20261003).
+
+Status: proposed by worker `misheard-purge-start-bounded`; the lead numbers it as an addendum
+of the misheard store's ADR (`team/plans/misheard-ledger-store-adr.md`).
+Source: `team/reports/d20261002/misheard-ledger-store-inspector-2.md`, findings 1-4.
+
+## Context
+
+`PurgeLoop.start()` ran its first purge pass and waited for it. With an expired row locked by
+another transaction the real application did not start within 8 s, and started the moment the
+lock was released: there is no `lock_timeout` anywhere. Every other loop of the lifespan
+(`RetentionSweeper`, `SelfModelRefresher`) only creates its task in `start()`. Nothing can
+reach this today (no writer, no row). It becomes reachable once `misheard-relay-wiring`
+writes and a row is 30 days old, because `record()` purges inside the voice turn's transaction.
+
+## Decision
+
+1. **`start()` only creates the task.** The first pass is the task's first iteration
+   (`_loop`: pass, then sleep the interval). The application serves before the first pass
+   has run. `stop()` cancels the task at once, also while a pass is blocked. The thread's
+   statement then finishes or fails on its own and never reaches the application.
+2. **The pass is bounded.** On PostgreSQL the pass's transaction begins with
+   `SET LOCAL lock_timeout = '<PURGE_LOCK_TIMEOUT_S>s'` (`PURGE_LOCK_TIMEOUT_S = 3`).
+   `LOCAL`: the setting ends with the pass's transaction and never reaches a pooled
+   connection (a test reads `SHOW lock_timeout` before and after). A pass that meets a locked
+   row gives up after 3 s. It counts one failure in the loop's heartbeat, with the
+   exception's class only (`OperationalError`), never its text. SQLite has no such setting
+   and no row locks; the statement is skipped there.
+3. **What a skipped pass costs.** The expired row lives until the next pass (24 h later, or
+   the next `GET`/`record()` purge). It is never listed meanwhile: `list_items` and `answer`
+   already filter on `expires_at` themselves. Health keeps `status: ok` with `failures` /
+   `last_error` set (the house `LoopHeartbeat` semantics).
+4. **The clock.** `purge_once(moment)` takes the moment the loop read on the event loop. One
+   clock still decides both what has expired and whether the loop is behind.
+5. **`record()` refuses a caller's type error.** A `reason` or `mode` that is not a string,
+   or a `heard_at` / `now` that is neither `None` nor a `datetime`, answers `None` like every
+   other refusal. Nothing is written and the caller's transaction stays usable.
+6. **Two tests for mutants that survived.** The purge at the exact expiry instant
+   (`expires_at <= now`; one microsecond before it, the row stays). A purge that raises
+   inside `record()` is logged by its class (`trigger=record`) and the row is still written.
+7. **`POST /v1/voice/misheard/{id}/meaning` reads its own body.** A body that is not JSON
+   answers `422 {detail: {code: "body_invalid", message: <Turkish>}}` instead of FastAPI's
+   English `{detail: [...]}`. A JSON array answers the existing `meant_empty` refusal. A lone
+   surrogate in `meant` (valid JSON that no UTF-8 can carry) answers
+   `422 {code: "meant_invalid"}` instead of an unhandled `UnicodeEncodeError` (500). No
+   refusal echoes the body, and the stored row is unchanged. An empty body is still "no
+   meaning" (`meant_empty`).
+
+## Consequences
+
+- `app/main.py` is unchanged: the lifespan still calls `start()` and `stop()`.
+- A test that read `purge.passes == 1` right after the lifespan started now waits for the
+  pass (a hang guard, not the claim).
+- Carried into `misheard-relay-wiring` (not this card): inspector 2's finding 5 (a second
+  writer of one key waits for the first transaction; flush before calling `record()`).
+
+### ADR-0241 addendum 1 (2026-10-03): the seat panel speaks the owner's language
+
+Draft: `team/plans/office-panel-plain-turkish-adr.md` (numbered at the ninth integration of d20261003).
+
+**Owner, 2026-10-02 17:40**, with a screenshot of the Ofis panel of a working seat:
+"Çalışan kısmının kabul kısmının sonu red gözüküyor, neden hala devam ediyor?" The panel printed
+the card's `acceptance` raw (English, written for the worker and the inspector); its last sentence
+was a mutation instruction, "... rule removed -> RED.", and he read RED as the task's verdict. Under
+"Durum: çalışıyor" it also printed "Durum: in_progress", the queue's own word.
+
+**Decision (page only; no server change, no new API field, no setting).**
+
+1. The task's state is shown once, in Turkish (`taskStateText` in `officeModel.ts`). The raw word
+   is never printed outside the fold; an unknown state is shown as it is, never hidden.
+
+   | queue state | panel says |
+   |---|---|
+   | proposed | önerildi, henüz başlamadı |
+   | awaiting_owner | sahibin onayını bekliyor |
+   | approved | onaylandı, sırada |
+   | assigned | bir çalışana verildi, başlıyor |
+   | in_progress | yazılıyor |
+   | inspecting | denetleniyor |
+   | returned | denetleyici geri gönderdi; yeniden yazılacak |
+   | stopped | durdu: Hakim bakacak |
+   | merged | birleştirildi, yayın bekliyor |
+   | awaiting_release | yayın için sahibin onayını bekliyor |
+   | released | yayında |
+   | awaiting_real_evidence | yayında; gerçek kullanımda kanıt bekliyor |
+   | done | bitti |
+   | rejected (not in the schema; kept for older rows) | vazgeçildi |
+
+   `model.test.ts` reads the state enum of `team/queue.schema.json`: a state added there without a
+   phrase fails the test.
+2. First view, in order: seat name, seat state, "İşin durumu: <Turkish>", the title, "Başladı:
+   HH:MM", "Neden: …" (only a reason that does not start with `LEAD`), "Son rapor: <outcome>".
+3. `goal`, `acceptance`, `evidence_expected` (shown only when the API sends it - today it does not)
+   and a `LEAD …` reason sit inside ONE closed native `<details>` titled "Ajanlar için yazılmış kart
+   metni (İngilizce, teknik)", whose first line says RED / GREEN / PASS / FAIL there are the agents'
+   test instructions, not the task's result.
+
+**Why folded, not removed.** The text is the contract the worker and inspector are held to; the
+lead and the owner (when he asks why something came back) need it whole and selectable. Folding
+keeps it one click away without being the first thing the owner reads. A native `<details>` needs
+no state hook, is keyboard reachable, and survives the 5-second refresh closed.
+
+Unchanged: the seat-state line, the several-runs list, the report block, branch, sha, approvals;
+a seat with no task renders byte-equal to before (literal in `panel.test.tsx`).
+
+### ADR-0214 addendum 17 (2026-10-03): the feeder cuts cards beside a running cycle, under its own lock
+
+Draft: `team/plans/feeder-own-lock-adr.md` (numbered at the ninth integration of d20261003).
+
+Status: accepted (worker, feeder-own-lock, cycle d20261003). Closes ADR-0237 "Known limit, not
+closed here" and ADR-0214 addendum 11 "Not here".
+
+## Context
+
+`scripts/team/feed.ps1` took the cycle's lock as `feed-<date>` and stopped (exit 3) when a
+cycle held it. A cycle holds it for most of the day, so the queue was fed only BETWEEN cycles
+and could run dry beside idle seats. Addendum 11 removed the reason: the cycle reads the store
+again before every pass and runs a card somebody else wrote. The server already makes every
+task write conditional (`_check_put`, `DbStore.put_task`: a create of an existing id and an
+update from a stale version are 409 `stale_write`). No server change is made.
+
+## Decision
+
+1. **Two paths.** When the team lock is held by a LIVE cycle of THIS machine (decision `ours`,
+   the pid alive) AND the queue is the Cloud Core's (`-QueueUrl`), the feeder takes the
+   **lock-free path**. Everything else is today's path, byte for byte: a free / stale / dead
+   lock is taken as `feed-<date>` (so the tick's cycle cannot start under a feed in flight) and
+   the idea row may be committed; another machine's fresh lock, a live cycle's lock in
+   FILE mode (one writer: the lock's holder), and a live FEEDER of ours (holder cycle_id
+   `feed-*`: it holds the team lock, not the feeder's own lock, so a second lead run beside it
+   would cut the same rows again) still stop it with exit 3, no lead run, no report.
+2. **The feeder's own lock.** A machine-local file outside the repository
+   (`$env:LOCALAPPDATA\PagentOS\team-feeder.lock`, `-FeederLockPath` for the tests), created
+   exclusively and kept open for the run (readable, not deletable), holding pid, machine and
+   time. A second feeder that finds it held by a live pid says so and exits 3 with no report.
+   A lock whose pid is gone, or older than 6 hours (`$script:TeamFeedOwnLockStaleHours`), is
+   taken over and the report says so. Released in `finally`. The cycle's lock is never taken,
+   released or written on this path.
+3. **Isolation of the lead run.** The lead works in a throwaway detached worktree of the
+   checkout's HEAD under `.claude/worktrees/feed/<feed>-<n>-<pid>`; the before/after snapshot
+   (rule 7) is taken THERE, so what the running cycle writes into the main checkout meanwhile
+   (its reports, split files, proposals) is neither refused nor blamed on the run, while the
+   run's own stray write still refuses the feed whole. The accepted feed file is copied to
+   `team/plans/` of the main checkout; the worktree is removed in `finally`
+   (`git worktree remove --force`). A git command that meets another git's lock file is tried
+   again (15 x 1 s), then fails loudly - never swallowed.
+4. **No idea row on this path.** `docs/ROADMAP.md` is neither edited nor committed while a live
+   cycle holds the lock (Edit stays excluded from the lead's tools; the report says
+   "onaylanan fikir satırı bu koşuda yazılmadı (...): döngü çalışıyor"); the next
+   between-cycles feed asks again. A commit in the checkout a running cycle works from is not
+   made without its lock.
+5. **The re-read before the write.** The lead run takes minutes. Before anything is written the
+   queue is read AGAIN from the store; a card whose id somebody created meanwhile is dropped
+   with every card that depends on it (named in the report), and the rest is judged whole
+   against the FRESH queue (`Test-TeamFeed`, `Test-TeamQueue` on fresh + new): e.g. a title
+   somebody queued meanwhile refuses the file whole.
+6. **Create-only writes.** Only the new tasks are sent, each as its own `PUT` with
+   `expected_updated_at: null`, in dependency order (`Save-TeamFeedCreates`,
+   `scripts/lib/TeamFeed.ps1`). A task the store has is never sent, whatever its state. A 409
+   means somebody made that id first: that card and its dependants are dropped and named, what
+   was written stays, nothing is retried or overwritten. A store that does not answer at the
+   re-read or a write: nothing further is written, the feed file stays on disk, the report says
+   so, the exit code is 1.
+7. **The report** of a lock-free run is written to `team/reports/feed-<date>.md` and NOT posted
+   to the store: the Onay Merkezi shows the newest report, and that stays the cycle's. The cards
+   are visible in the queue.
+8. Unchanged: `-MinRunnable`, `-MaxNew`, the stop flag (nothing starts, the flag is left), the
+   model chain and the limit rules of addendum 13 (`-MaxLimitWaitMinutes` still bounds a wait;
+   on this path no cycle lock is held while waiting), `-DryRun` (it prints which path it would
+   take and writes nothing: no lock file, no worktree, only GETs).
+
+## Still not serialised
+
+Two MACHINES' feeders: the local lock serialises the feeders of one machine only. Two machines
+can each cut cards beside their own cycle; the store's conditional create keeps them from
+overwriting each other (a duplicate id is 409 and dropped), but two different ids for the same
+roadmap item are possible if both judges ran before either wrote. The title rule against the
+fresh queue narrows this; it does not close it.
+
+## Evidence
+
+`scripts/tests/team-feed.tests.ps1` (cases "lock-free 1..13", "lock-free writes",
+"lock-free judge"; red first against the unchanged script), five mutation REDs,
+`services/api/tests/integration/test_team_feed_lockfree_postgres.py` (real routes + DbStore on
+the dev stack's PostgreSQL, real feed.ps1, fake lead). No server change, no migration, no
+setting; `tick.ps1` is unchanged, so the scheduled task needs no re-registration.
+
+## Known gap: no production caller reaches this path yet
+
+Nothing on the build PC starts `feed.ps1` while a cycle runs. The scheduled task
+`\PagentOS Team Nightly Cycle` runs `tick.ps1` with `-MultipleInstances IgnoreNew`
+(`register-nightly.ps1`), and `tick.ps1` waits for its cycle child (`Start-Process -Wait`), so
+every tick that falls inside a running cycle is ignored; `cycle.ps1` never calls `feed.ps1`.
+The lock-free path is therefore reachable only by hand today, and the queue can still run dry
+beside idle seats. This addendum does NOT make the change "live from the first tick after the
+release" - that claim is withdrawn. Follow-up card for the lead to open:
+**`feeder-trigger-beside-cycle`** - start `feed.ps1 -QueueUrl ...` while a cycle runs (either
+`cycle.ps1` calls it in a child process when fewer tasks are runnable than worker seats, with a
+deadline, or a separate scheduled task that is not blocked by the tick's IgnoreNew); area
+`scripts/team/cycle.ps1` or `scripts/team/register-nightly.ps1` + its tests. PROVEN_REAL for
+this addendum waits for that card.
+
+### ADR-0214 addendum 18 (2026-10-03): the tick waits for its script's own process and stops what the script left in its job
+
+Draft: `team/plans/tick-not-held-by-orphans-adr.md` (numbered at the ninth integration of d20261003).
+
+**Status:** accepted (worker, cycle d20261003, card `tick-not-held-by-orphans`)
+
+## Incident
+
+2026-10-03, local time: the pool cycle `d20261003` (pid 46484) started at 02:00 from the
+scheduled task's tick (pid 50864), ended and released its lock. The tick did not end: it had
+no child of its own, but two processes an agent run had left behind at 02:40 - a
+`tail -n +1 -f <a worker's log>` and a `grep --line-buffered` reading it, parent gone - were
+still alive. The scheduled task (MultipleInstances IgnoreNew) skipped every later trigger
+(LastTaskResult 0x800710E0); no cycle ran and the Ofis page said nothing. At 04:15 the lead
+stopped the two processes, the tick exited at once, and the next start ran the cycle.
+
+## Cause
+
+`tick.ps1` started the feeder and the cycle with `Start-Process -NoNewWindow -Wait -PassThru`.
+In Windows PowerShell 5.1 `-Wait` waits for the started process AND every process it ever
+started (it puts them in a job and waits for the job to empty). Any descendant that never
+ends - a log follower, a server a test forgot, a suite left in the background - holds the
+tick for ever. Addendum 16 (no background commands in a run) removes the commonest source,
+not the class. Measured on the old tick by `scripts/tests/team-tick.tests.ps1` (red first):
+still alive at the 60 s hang guard in 5 of 6 cases, and it exited 0.1-2 s after the test
+stopped the leftover - the leftover alone held it.
+
+## Decision
+
+- The feeder and the cycle are each created SUSPENDED (CreateProcessW, inherited handles and
+  console as Start-Process -NoNewWindow made them), put into a Windows job object the tick
+  owns, and only then resumed: every process they ever start is in that job, whoever its
+  parent is by the end.
+- The tick waits for the script's OWN process (WaitForSingleObject on its handle), never for
+  its descendants. Its exit code is still the cycle's; the feeder still never decides whether
+  the cycle runs.
+- Only after that process has exited: the processes still in the job are listed, each is
+  written to the tick's log (`team/logs/tick.log`, git-ignored; `-LogPath` for the tests) as
+  `pid <id> <name> (left by the feeder|cycle): <command line, first 200 characters>`, and the
+  job is terminated. With `-DailyId` (the tick then knows the cycle's id) the same lines are
+  appended to `team/reports/<cycle>.md` under "## Geride kalan süreçler (tick durdurdu)" when
+  that file exists.
+- The boundary is the job, never a name or a path: a process started outside it (the owner's,
+  another session's, the dev stack) is never touched, even with the very same command line.
+  Nothing of a RUNNING script is touched.
+- A job that cannot be created or assigned: the script still runs, the tick still waits only
+  for its own process (Start-Process without -Wait), and says ONCE in its log "what the
+  feeder or the cycle leaves behind will not be stopped". No kill-on-close: a tick that is
+  itself killed does not take a running cycle with it.
+- Test hook: `PAGENTOS_TEAM_TICK_JOB_FAILS` (set = no job object). Unset outside the suite.
+
+## Evidence
+
+PROVEN_AUTOMATED: `scripts/tests/team-tick.tests.ps1` (6 cases, gate step "Agent team tick not
+held by orphans", CI line), red first on the old tick, three mutation REDs (-Wait restored;
+the job ended while the cycle runs; leftovers stopped by command line instead of by job).
+PROVEN_REAL is the lead's: the first real tick that logs a leftover it stopped, or a night
+with no tick alive after its cycle.
+
+## ADR-0261 — The role half of "alan dışı geri verme" (2026-10-03)
+
+Draft: `team/plans/area-widen-role-lines-adr.md` (numbered at the ninth integration of d20261003).
+
+Card: `area-widen-role-lines` (proposal `team/proposals/2026-10-02-alan-disi-geri-verme.md`,
+rules 1 and 3). The parser is `Get-TeamAreaRequest` in `scripts/lib/TeamArea.ps1` (card
+`area-widen-rules`).
+
+## Decision
+
+- `.claude/agents/inspector.md`: when an item of a RETURN can only be fixed in a file outside
+  the card's area, the report carries `alan_disi: [path, path]` alone on its own line ABOVE
+  the verdict; the verdict stays the last line and stays `RETURN (...)`. A defect inside the
+  area is never turned into a request; protected paths are never wished for (the finding is
+  written and the lead decides).
+- `.claude/agents/worker.md`: after the red acceptance test is written, run and committed, if
+  turning it green needs a file outside the area, the worker does not implement and does not
+  touch that file; it returns at once with `ALAN_ISTEGI: [path, ...]`, the red test's name and
+  one sentence of why. "Never touch files outside your area" is unchanged.
+- `scripts/tests/team-area.tests.ps1` section `roles` reads both role files from disk, takes
+  each file's own example line and parses it with `Get-TeamAreaRequest` for that role; and the
+  inspector's example report (request line, then `RETURN (...)`) is read by both
+  `Get-TeamVerdict` and `Get-TeamAreaRequest`. The role text and the parser cannot drift.
+
+## Why the worker asks after the red test and before any implementation
+
+- The red test is the evidence that the request is real: it names the behaviour that cannot
+  turn green inside the area, so the lead (and later the cycle) judges a concrete failing
+  test, not a guess. A request before it would be a widening asked on intuition.
+- Before any implementation, because a half-implementation inside the area that only makes
+  sense with the outside file is either thrown away or merged incomplete; and touching the
+  outside file "just a little" breaks the area rule the inspector enforces. Returning at once
+  costs one short run; the committed red test survives into the next round.
+
+## What the lead does with the line until the wiring exists
+
+The roles only write the line; neither role text promises what the cycle does with it. Until
+the cycle's wiring card lands, the lead reads the line in the report, resolves it by hand with
+the rules of `TeamArea.ps1` (widen if nobody holds the files, wait behind a holder, refuse a
+protected path or past the cap), edits the card's area in the store, and re-runs the card.
+Whether real inspectors and workers write the line is counted in the next real cycles'
+reports - this ADR claims only the contract between the role text and the parser.
+
+## ADR-0262 — The search-engine probe for the Cloud Core's address (2026-10-03)
+
+Draft: `team/plans/cloud-search-engines-probe-adr.md` (numbered at the ninth integration of d20261003).
+
+Status: proposed (card `cloud-search-engines-probe`, cycle d20261003). Relates to ADR-0213,
+ADR-0248 ('At merge (the lead)').
+
+## Context
+
+Before the owner is asked to switch `research_execution_rule_enabled` on, somebody has to
+know which search engine answers the cloud worker from the datacentre address without a
+verification wall. The only numbers so far are from the home PC's address in a local image
+(bing answered 10 results; duckduckgo ended in its captcha twice out of two). Brave in
+headless Chromium and every engine from the datacentre address are unmeasured.
+
+## Decision
+
+1. An instrument, `browser_agent.cloud.engine_probe`, in the cloud package (the production
+   image carries it once it is rebuilt by ADR-0248 release-order step 2 - the owner's
+   approval; nothing here builds the image). It drives the UNCHANGED worker over stdio
+   (`SubprocessWorker` + `build_worker_args`: headless Chromium, a dedicated profile on a
+   temporary data dir) and reads the outcome `run_search` itself recorded in `attempts`
+   (also inside a PROVIDER_RATE_LIMITED error's evidence). It has no classifier of its own.
+2. The numbers: the engines are `search_engines.ENGINES` (read, never retyped); three fixed
+   public questions (two Turkish, one English, none the owner's); at most **12** requests per
+   run, one run per invocation; one attempt per (engine, question), **no retry**; at least
+   **20 s** between two requests to the same engine; **45 s** per request; **15 min** for the
+   whole run (the rest is `not_run_deadline`). A fifth engine makes the default plan refuse
+   until the cap is decided again.
+3. No bypass. No captcha is answered, no consent button pressed, no stealth plugin, proxy or
+   changed user agent. Every search says `interstitial: "fallback"`, never `handoff` (the
+   window is headless; nothing may wait for a person). After an engine's first wall
+   (captcha, consent, blocked) or failure (transport_error, error) its remaining questions
+   are not sent (`skipped_after_wall`).
+4. The host side, `infra/docker/cloud-browser/measure-search-engines.sh`: a THROWAWAY
+   container (`docker run --rm`) from `pagentos/cloud-browser:local`, under the limits of
+   `compose.fragment.yml` (memory 2g, swap 2g, shm 2gb, pids 512, cpus 2, init, cap-drop
+   ALL, no-new-privileges) and a 512m tmpfs at /tmp. It SHARES with the production worker
+   the image and the host's outbound address - exactly what is being measured. It does NOT
+   share its state, profile, volumes (`/mnt/pagentos-data` is never mounted), broker URL or
+   enrollment token; it never execs into, stops, restarts, builds or recreates any
+   container and runs no `docker compose`. It refuses below 2.5 GiB of available host
+   memory (the CPX32 also runs the api) and exits 3 with one line when the image does not
+   carry the module. It writes nothing on the host.
+5. Output: a markdown table (one row per planned request: outcome, result COUNT, wall,
+   error class, elapsed ms), one summary line per engine ('answered n of 3' or 'wall:
+   captcha at query 1') and the meta (date UTC, image digest, worker version, Chromium
+   version, "the host's own outbound address (not printed)"). No address, no result title,
+   no URL. `--json` adds the same rows as JSON.
+
+## How the lead runs it
+
+After the release, on the host, read-only:
+`infra/docker/cloud-browser/measure-search-engines.sh --json`, then saves standard output on
+his own PC as `docs/evidence/cloud-search-engines-<date>.md`.
+
+## What the table does not do
+
+It decides nothing by itself. `CLOUD_SEARCH_ORDER` and the setting stay as they are; the
+order is the lead's decision from the table (a later card) and the setting is the owner's,
+shown the table first. An `empty` row may be a wall the worker has no marker for (the
+summary line says so): read it as suspect, not as "answered".
+
+## Evidence
+
+- PROVEN_AUTOMATED: the tool (unit tests, four mutation REDs).
+- NOT_RUN: the measurement from the Cloud Core's address - the lead's run on the host.
+- NOT_RUN: a run in a locally built image from the home address (would only prove the tool
+  runs end to end; it says nothing about the datacentre address).
+- NOT VERIFIED: the three wall fixtures (`duckduckgo-captcha.html`, `bing-wall.html`,
+  `brave-wall.html`) are hand-reduced, not recordings; whether Bing's and Brave's real wall
+  pages carry a marker the worker's `classify_page` knows is unknown.
+
+## ADR-0263 — Measurement recordings: twenty scripted sentences, 30 days, on the owner's own object store (2026-10-03)
+
+Draft: `team/plans/measure-recordings-api-adr.md` (numbered at the ninth integration of d20261003).
+
+Context: ADR-0242 delivered the STT measuring instrument and left no recording to measure ("how they are recorded
+without the owner becoming an operator is an open follow-up"). Proposal `team/proposals/2026-10-02-olcum-kaydi.md`,
+approved by the owner on 2026-10-02; this is its storage half. The page (`measure-recording-page`) and the
+download-and-measure side (`measure-compare-from-core`) are separate cards against the same contract.
+
+Decision:
+- Package `app/voice/measurement`: `service.py` (pure of FastAPI) and `routes.py` (owner session). Sentences are
+  `app.voice.stt_compare.OWNER_SENTENCES`, index 1..20, never retyped; place is `ev` or `ofis`; a recording is
+  `(place, index)`, file name `<place>-<NN>.wav`. Audio: WAV, PCM 16-bit, mono, 16 000 Hz, 0 < length <= 30 s,
+  <= 1 048 576 bytes, validated with `app.voice.providers.wav_info` / `wav_duration_ms`.
+- No table. The existing `ObjectStore` (`artifacts.store`, one bucket) holds `voice-measurement/<place>/<NN>.wav`
+  and its sidecar `voice-measurement/<place>/<NN>.json`. The store has no list call, so the layout is ENUMERABLE:
+  2 places x 20 sentences is every key that can exist. There is no shared index object to read-modify-write, and
+  "delete everything" walks all forty pairs, so an orphan cannot survive. A table would add a migration and a
+  second source of truth beside the bytes for forty slots that never grow.
+- Write order audio then sidecar; a sidecar write that fails removes both (best effort) and answers 503 - an empty
+  slot the owner reads again is better than an audio described by another reading's metadata. A re-save
+  (`tekrar`) replaces both and restarts the 30 days. One lock per process guards save / delete / purge.
+- Retention: `expires_at = recorded_at + 30 days`; a recording is expired when `now > expires_at`. Three triggers:
+  (1) every read filters on the expiry, so an expired recording is never listed, served or put in the manifest even
+  when no purge has run; (2) `GET /v1/voice/measurement` purges before it lists; (3) `DailyPurge`, registered as the
+  sweep `measurement_recordings` on the API's existing `RetentionSweeper` (started and cancelled by the lifespan,
+  named in `/health` under `retention` with its last count or error): it purges on the sweeper's first pass after
+  start (the sweeper's own `retention_sweep_initial_delay_s`, so a booting process does no housekeeping) and then
+  once every 24 h; a purge that failed is retried on the next hourly pass. No second loop was added: the guard
+  `test_every_background_loop_the_app_starts_can_be_seen_in_health` refuses a loop `/health` cannot see, and the
+  sweeper is the loop that is already seen. The 30 days are held by the server process on the host, never by a session
+  (TEAM_PROTOCOL 9). Purge also removes half-written pairs (no sidecar, unreadable sidecar, sidecar without audio).
+- API: `GET /v1/voice/measurement`, `PUT|DELETE /v1/voice/measurement/recordings/{place}/{index}`,
+  `GET .../{index}/audio` (audio/wav), `DELETE /v1/voice/measurement/recordings`, `GET /v1/voice/measurement/manifest
+  [?place=]` - exactly what `stt_compare.load_manifest` reads, plus `ready_transcripts: {"chrome-web-speech": ...}`
+  only when the browser transcript is not null (null = Chrome's recogniser did not run, "" = it ran and wrote
+  nothing) and `browser_engine`. The PUT body is JSON with base64 (no multipart parser is added), read under a byte
+  bound and refused (413 `audio_too_large`) before it is parsed or decoded. Every refusal is
+  `{detail: {code, message}}` with a Turkish message; a store fault is 503 `store_unavailable`, never a 500.
+- Logs carry place, index, bytes and sha256 only - never the transcript, the base64, the capture settings or audio.
+
+KVKK: a voice recording is personal data. Only the twenty scripted sentences are accepted (the index names the
+sentence; free speech has no slot). They rest on the owner's own Cloud Core object store (Hetzner NBG1), 30 days,
+and are deleted at once on his word (one or all). They are never used for speaker verification (ADR-0171
+unchanged). The recording is what the browser delivered with its noise suppression on - "the sound the system
+hears", not raw audio; the capture settings stored beside it say which. The owner's approval of the idea is his
+permission for these recordings to rest 30 days on the Cloud Core.
+
+Consequences: the release carries NO migration and no new dependency or setting (automatic under ADR-0214
+addendum 9). Accepted risk: during a blue-green overlap two processes may purge while one saves; a purge landing
+between the two writes removes the new audio and the owner reads that sentence again. Lead at merge: the new sweep name must be added to two pinned expectations outside this card's area
+(`tests/unit/test_health_endpoint.py` sweeps list; `tests/unit/test_maintenance.py` expected results). Open
+follow-up: the spoken sentences "Ölçüm kaydını başlat" / "ölçüm kayıtlarını sil" are NOT built here - `app/voice/intents.py` is in three
+other cards' areas; they wait until it is free.
+
+## ADR-0264 — The STT collector reads the misheard notebook (2026-10-03)
+
+Draft: `team/plans/misheard-collector-adr.md` (numbered at the ninth integration of d20261003).
+
+Status: accepted (card misheard-collector, cycle d20261003). Extends ADR-0224 addendum 4 and
+ADR-0254.
+
+## Context
+
+`scripts/voice/collect-stt-corpus.ps1` turned a read-only production dump into proposals for
+the STT corpus, from two kinds of line: 'session' (a local-mode sentence the router did not
+understand, the only place a sentence was kept) and 'audit' (names and numbers, counted). A
+paid session kept no sentence, so the tool had never had anything to read from one. The
+misheard notebook (ADR-0254, `misheard_utterances`) now keeps the recogniser's written
+sentence in both modes for 30 days, and the owner's answer (`meant`) once he gives one.
+
+## Decision
+
+1. **A third line kind.** `-ShowQuery` prints three read-only statements, each one SELECT (the
+   session/audit `union all` became two statements); the third emits one json line
+   `{kind:'misheard', ...}` per notebook row heard in the last `-Days` days, naming every
+   CONTRACT column as the table names it. The PostgreSQL integration test executes the SQL
+   text taken from the script's own output, so the script and the table cannot drift.
+2. **A 'misheard' line is proposed exactly as a 'session' line**: origin real, its UTC day
+   (whatever offset the database session wrote), times_heard, whole-rendering comparison
+   (equal to a REAL rendering: skipped and counted; equal to a DERIVED one: proposed with
+   `confirms_derived_case`). It also carries mode, engine, device_id, reason,
+   resolved_intent, band, confidence. Status is `owner_answered` with `meant` = the owner's
+   words letter for letter when the row has an answer, else `needs_owner_meaning`.
+3. **The merge rule.** One sentence, in any number of lines of either kind, is ONE proposal:
+   times_heard is the sum, the earliest day is kept. An answer is never lost to a line without
+   one (answered wins over unanswered). Two different answers for one sentence are both kept -
+   the first in `meant`, the rest in `meant_also` - and never merged or chosen between; the
+   same answer twice is one. A 'session' proposal a notebook line joins gains the notebook's
+   mode / engine / device_id / reason and `meant_also`; a dump with no 'misheard' line gives
+   proposals byte-for-byte in the old shape.
+4. **The report** gains `misheard: {rows, by_reason, by_mode, answered}` over every notebook
+   line read (including those skipped as already in the corpus).
+
+## Why the tool still writes proposals and never the corpus
+
+The owner's answer is his words, not a corpus case: the case needs an intent, entities, an
+application and a device, and mapping "Ofis bilgisayarının ekranını kapat" to them is a
+judgement a person makes and the owner can confirm. A tool that guessed that mapping would
+put its own reading into the measurement it is measured by (ADR-0224's 95% target). So
+intent / tool / application / device stay null even for an answered row, and every refusal
+stands: never the corpus file, never a `.py`, never over the dump, inside the repository only
+under `state/reports` (proposals hold raw sentences, KVKK).
+
+## ADR-0265 — The misheard notebook's page, `/core/misheard` (2026-10-03)
+
+Draft: `team/plans/misheard-page-adr.md` (numbered at the ninth integration of d20261003).
+
+Status: accepted (card misheard-page, cycle d20261003). Builds on ADR-0254 (the store and
+`/v1/voice/misheard`).
+
+## Decision
+
+1. **Its own page for now.** The proposal (team/proposals/2026-10-02-yanlis-anlasilan-cumle-defteri.md)
+   places 'Ne demek istemiştin?' in the Onay Merkezi, but `apps/web/app/core/approvals` belongs
+   to another approved card in the same cycle (owner-trials-page). Two cards editing one page in
+   one night is a merge conflict by design, so the list lives at `/core/misheard` and the core
+   controls get one static link after the Ofis link (no count, no new prop). Embedding the list
+   in the Onay Merkezi is a later card; the view (`MisheardView`) is a pure component so that
+   card can mount it as it is.
+2. **'Defteri unut' is one press.** One button, ONE `DELETE /v1/voice/misheard`, no dialog, no
+   second question (owner rule 2026-09-18: the first word applies). The page then says how many
+   sentences were deleted, from the server's `{deleted: n}`. 'Sil' on a row is the same: one
+   press, that row's id.
+3. **What a row shows:** the one sentence exactly as the recogniser wrote it; when it was heard,
+   in the owner's local time; the mode in Turkish ('Ücretli' / 'Yerel'); the machine, the
+   recogniser and the confidence band when the server knew them (left out, never "null", when
+   it did not); the failed tool's name for `tool_failed`; why it is here as one Turkish sentence
+   per reason (four reasons, four sentences; an unknown reason is shown as its own code, never
+   hidden); an input 'Ne demek istemiştin?' with 'Kaydet' (1..2000 characters) until answered,
+   and the owner's meaning once answered. The head says how many are open and, from the
+   server's `retention_days`, that the sentences are kept as text for that many days and then
+   delete themselves, and that no sound is kept.
+4. **What a row never shows:** audio (there is none - the store keeps text only), any
+   transcript beyond the one sentence, the session id, the confidence number or the router's
+   resolved intent (they are for the evaluation, not for the owner's answer).
+5. **A refusal stays a refusal.** Every call returns `{ok: false, code, message}` for a non-2xx
+   answer and the page shows the server's own Turkish sentence; nothing is turned into success.
+
+## Consequences
+
+- The client's paths and the item's fields are held to `routes.py` and `models.py` by
+  `apps/web/tests/misheard/contract.test.ts`; a renamed route or column turns it red.
+- When the Onay Merkezi embeds the list, the link in CoreControls may go; the nav test in
+  `tests/misheard/nav.test.ts` moves with it.
+
+## ADR-0266 — The Turkish pack question gets two buttons on /core (2026-10-03)
+
+Draft: `team/plans/pack-question-button-adr.md` (numbered at the ninth integration of d20261003).
+
+Status: accepted (worker, cycle d20261003). The lead numbers it.
+Builds on ADR-0249 ("Not done here", plan D3) and ADR-0173.
+
+## Context
+
+`LocalVoiceMode` asks `packQuestion` (PACK_QUESTION_TR) when the owner has set
+`pagentos.core.localStt` to `acik` / `olc` and Chrome answers `downloadable`, and
+`answerPackQuestion(yes)` must be called from a click: Chrome's `install()` consumes the
+click's transient user activation. Nothing on /core drew the question or called the answer,
+so the path was unreachable.
+
+## Decision
+
+1. `LocalModeViewProps` gains an OPTIONAL `onAnswerPack?: (yes: boolean) => void`; every
+   earlier caller and test renders unchanged.
+2. With the local switch on and `snapshot.packQuestion !== null`, `LocalModeBlock` draws the
+   snapshot's own sentence (the view types no sentence) in `data-local-pack-question`, and -
+   only when the handler is given - two `core-chip` buttons, `data-local-pack-answer="yes"`
+   ("Evet, indir") and `"no"` ("Hayır"). With no handler the sentence is shown and no button:
+   never a button that does nothing. Start/stop and the listening indicator do not move.
+3. The synchronous-click rule: each `onClick` calls `onAnswerPack(true|false)` directly - no
+   promise, no timer, no state update before the call - and `VoiceControl` passes
+   `(yes) => answerPackQuestion(yes)`, which calls `LocalVoiceMode.answerPackQuestion`, which
+   calls `install()` in the same stack.
+4. The building of the `local` props moves into one exported pure function,
+   `buildLocalViewProps`, in `VoiceControl.tsx`, so the wiring is testable without a DOM.
+
+## How the test holds the rule
+
+`tests/uistate/voice-control-pack-question.test.tsx` builds a real `LocalVoiceMode` from the
+fakes (`acik`, FakeOnDevice `downloadable`), gives its snapshot to the real view through
+`buildLocalViewProps`, walks the element tree, calls the yes button's `onClick`, and asserts
+`installCalls == [{langs:["tr-TR"], processLocally:true}]` on the next line with no await or
+tick. Mutations proven RED: the yes wrapped in `void Promise.resolve().then(...)`; both buttons
+passing `true`; the builder not passing `answerPackQuestion`.
+
+## Not done / not proven
+
+No real Chrome has run this: whether Chrome accepts the activation from this click and how
+large the pack is stay NOT_RUN. No setting is turned on; the default `kapali` never asks.
+Nothing is downloaded except by the owner's own click on "Evet, indir".
+
+## ADR-0267 — Research is the cycle's default (2026-10-03)
+
+Draft: `team/plans/researcher-every-cycle-adr.md` (numbered at the ninth integration of d20261003).
+
+Context: ADR-0214 addendum 5 (owner, 2026-10-01): the researcher runs in EVERY cycle. The pool
+(addendum 8/15) already gives the researcher its own seat beside the tasks' runs, and addendum 11
+already posts every waiting idea's text to the store. What was left: `cycle.ps1` ran the
+researcher only with `-Research`.
+
+Decision:
+1. `cycle.ps1` runs the researcher by default. `-NoResearch` turns it off; `-Research` is still
+   accepted and changes nothing (a scheduled task registered with it keeps working);
+   `-ResearchOnly` and `-ResearchEveryHours` are unchanged.
+2. `register-nightly.ps1` no longer passes `-Research`.
+3. The test harness (`Invoke-Cycle` in `team-cycle.tests.ps1`) passes `-NoResearch` unless a test
+   asks for the researcher (`-Research`, `-ResearchOnly`) or for the script's default
+   (`-DefaultResearch`), so the existing tests keep their exact call lists.
+
+Not rebuilt (already on the base branch): the run beside the first refill, the live status entry
+`{task: cycle, role: researcher}`, the proposal POST (`Send-IdeaTexts`), the usage-limit rules of
+`Resume-OwnRun`. New tests pin them under the default.
+
+4. A researcher at the usage limit follows the rule of every run, and THE CYCLE was fixed (not
+   the test): when a lower model is left, the run restarts on it. With no model left, the cycle
+   waits out the limit, or with `-WaitForUsageLimit:$false` it stops starting new runs and writes the limit's own stop
+   line ("Max kullanım limiti; ... aynı -CycleId ile yeniden başlat"). Stopping in that mode IS the
+   intended rule (the same as a worker's limit). What was wrong: `Complete-Research` also wrote
+   "araştırmacı: başarısız: Max kullanım limiti" under the stops, calling the limit the
+   researcher's failure. A limited researcher run now writes no such line and no
+   `research-last.txt` marker (the next cycle runs it again). The test now also accepts
+   `inspecting` for the task beside it: its worker finished, and the stopped cycle starts no
+   inspection.
+
+Consequence: a hand-started cycle now spends one researcher run unless `-NoResearch` is given.
+
+## ADR-0268 — The recogniser's name of a local-mode turn is kept on the server (2026-10-03)
+
+Draft: `team/plans/stt-engine-on-turn-audit-adr.md` (numbered at the ninth integration of d20261003).
+
+Task `stt-engine-on-turn-audit`, cycle d20261003. Closes ADR-0249's "Not done here - for the LEAD
+at merge" line (plan D4): the web client already posts `payload.stt_engine` on every local-mode
+`utterance` event; until now the server accepted the key and dropped it. It must land before the
+owner's `olc` measurement can be read.
+
+## Decision
+
+1. **The vocabulary is the client's, letter for letter.** `app/voice/stt_engine.py`:
+   `STT_ENGINES = {"chrome-cihaz-ici", "chrome-bulut", "bilinmiyor"}`, the members of
+   `export type SttEngine` in `apps/web/app/lib/voice/localMode.ts` (ADR-0249 decision 3 says what
+   each promises). The lead's brief suggested `web_speech_*` / `realtime`; the released client, ADR-0249
+   and the open card `misheard-relay-wiring` (same payload key, into `misheard_utterances.engine`)
+   all use the Turkish names, so a second spelling would split one fact into two columns. A unit
+   test reads the TypeScript type and asserts the two sets are equal.
+2. **Null for everything else.** `normalise(value)` returns the value only when it is exactly one of
+   the three; another word, a different case, a value longer than `MAX_LEN = 64`, a non-string, a
+   list, null or a missing key/payload are all `None` - never truncated into a name, never guessed,
+   never raised. A paid (realtime) session sends no name today (`controller.ts` posts
+   `{kind, turn, text}`), so its turns carry null; the session row's `provider` already says which
+   paid recogniser it was. No `realtime` name is invented.
+3. **Where it is kept** (`record_client_events`, the `utterance` branch only):
+   - the `voice_intent_resolved` audit row: `metadata_json.stt_engine` (broker `audit_events`,
+     JSON on SQLite / JSONB on PostgreSQL);
+   - the turn record `context_json.last_utterance.stt_engine` (built fresh each utterance, so the
+     latest sentence's name wins; a field not copied there is seen by no tool and no later reader -
+     `misheard-relay-wiring` reads it from here);
+   - `GET /v1/voice/realtime/sessions/{id}/activity`: each `intents` entry gains `stt_engine`.
+4. **It decides nothing.** Route, band, tool result and the response of a turn are what they were.
+   The response's `state.last_utterance` mirrors the turn record, so `session_state` shows the turn
+   record WITHOUT `stt_engine` (`_without_stt_engine`); the events response is byte-equal with and
+   without the key (test masks only the session id and the clock). The name is one of three fixed
+   words - never the sentence (KVKK); no log line is added.
+5. **No migration, no setting, no dependency, no compose/env change.** The value lives inside
+   existing JSON columns; alembic head is unchanged (an integration test asserts a single head, the
+   database at it, and no revision naming the key). Release is automatic under ADR-0214 addendum 9.
+
+## The comparison (read-only, for the lead after the owner's `olc` session)
+
+```sql
+SELECT metadata_json ->> 'stt_engine'                  AS stt_engine,
+       metadata_json -> 'understanding' ->> 'band'     AS band,
+       metadata_json ->> 'intent'                      AS intent,
+       count(*)                                        AS turns
+  FROM audit_events
+ WHERE action = 'voice_intent_resolved'
+   AND category = 'voice_realtime'          -- service.AUDIT_CATEGORY
+   AND created_at >= :since
+ GROUP BY 1, 2, 3
+ ORDER BY 1, 2, 3;
+```
+
+Names and numbers only; no sentence leaves the table. `NULL` in the first column = a turn whose
+client named no engine (a paid session, an older client, or a value outside the three).
+
+## Known limits
+
+- No real Chrome has sent `chrome-cihaz-ici` yet (ADR-0249 known limits); proven with the relay only.
+- The integration test ran on a scratch database (`pagentos_stt_engine`) on the dev stack's
+  PostgreSQL, because the shared `pagentos` database was already at another branch's `0065`.
+
+## ADR-0269 — ADR-0224 addendum 4's gap, step 1: the rule tables read layer 1's reading (2026-10-03)
+
+Draft: `team/plans/understanding-rules-read-lemmas-adr.md` (numbered at the ninth integration of d20261003).
+
+**Status.** Built (worker, cycle d20261002). The owner's target (>= 95 % on sentences as the STT
+renders them) is **still not met**: 98 of 106 = **92.5 %**. This step's own bar (>= 90 %, polite
+29/29, fused >= 24/29, 0 wrong-device) is met.
+
+**The number (2026-10-02, branch on main e1543a97, layers 1-3, no layer-2 engine in the harness).**
+
+| | 2026-10-01 | 2026-10-02 |
+|---|---|---|
+| correct | 73 / 106 = 68.9 % | **98 / 106 = 92.45 %** (97 acted + 1 question) |
+| polite | 16 / 29 | **29 / 29** |
+| fused | 12 / 29 | **24 / 29** |
+| diacritics | 24 / 24 | 24 / 24 |
+| invented suffix | 18 / 21 | 18 / 21 (not this step) |
+| real sentences | 3 / 3 | 3 / 3 |
+| wrong-device actions | 0 (11 observable) | 0 (11 observable) |
+| confident wrong readings | 8 | 6 |
+| not understood | 25 | 2 |
+
+`KNOWN_GAPS` lost 25 cases and gained none (33 -> 8). The Owner Utterance Suite, run again after
+the second pass (decision 2's owned-sentence rule) in ONE process on the committed sources
+(`intents.py` sha256 `d9c42028…`, `normalize.py` `3f582858…`): **2754 / 2754** (2756 tests
+passed, 0 failed, 22 min 24 s on a busy machine). The STT numbers above did not move with the
+second pass. About 300 of the owner sentences carry a polite form layer 1 now reads; none
+changed its route. Third pass (the "don't" guard without punctuation, the two-ways test), on
+main 65cd94ff merged in, `normalize.py` sha256 `b50c7ed7…`, `intents.py` unchanged `d9c42028…`:
+Owner Utterance Suite **2754 / 2754** (2756 passed, 0 failed, 20 min 20 s, TMP/TEMP on an empty
+E: folder); STT report unchanged (98/106 = 0.9245, polite 29/29, fused 24/29, 0 wrong-device).
+
+**Decision.**
+
+1. **One mechanism, in `resolve_intent`, for every table** (`intents._layer_one_route`). Layer 1
+   gained `normalize.lemma_reading(text)`: the owner's sentence with exactly two kinds of rewrite -
+   a polite form of a verb layer 1 knows written as its bare imperative ("kapatın", "kapatınız",
+   "kapatsana", "kapatır mısın(ız)", "kapatabilir misin(iz)" -> "kapat"), and a fused token written
+   as its two words. That text goes through the very same `_resolve_intent_rules`. No table gained
+   a form; a test holds that "kapatın", "bakın", "bulun", "yapın", "kurun" are in no table.
+2. **Who wins.** The words as heard are resolved first, as always.
+   - Every polite form in the sentence is one a table LISTS ("okuyun" in the research-read table
+     since ADR-0184, "açın" since ADR-0233) and a table owns the sentence: exact closed form, 1.0,
+     nothing re-read.
+   - A polite form no table lists: the imperative reading decides, at the suffix-dropped
+     confidence (0.9, `route_repair="polite"`, which the relay's `policy.rule_reading` already
+     maps to `MATCH_SUFFIX_DROPPED`). Where the words as heard reached the SAME intent (a stem
+     table read "yazar mısın" by its prefix), the surface reading is returned - the owner's slots
+     are untouched ("Şuraya ışıkları söndürün yazar mısın?" types "ışıkları söndürün", not layer
+     1's rewrite of it), only the confidence says a suffix was dropped.
+   - **Where the words as heard reached ANOTHER intent, the table that owns the sentence keeps
+     it, exactly as heard (1.0, no repair) - polite form or fused word alike.** The first build
+     said "they reached it without the verb, so the imperative wins"; that premise is false for
+     dictated content and was a regression against main (inspector, 2026-10-02): "Şunu hatırla:
+     ışıkları söndürün." went from `memory_remember` to `window_close` at 0.9, "Şunu yaz: sabah
+     alarmı kurun." from `type_text` to `alarm_create`, "Yarın bana hatırlat: müziği durdurun."
+     from `memory_remember` to `stop`. The premise is now CHECKED instead of assumed
+     (`intents._asks_with_no_verb_of_its_own`); the imperative takes an owned sentence only when
+     all three hold: (a) the words as heard were read as a QUESTION (class `query`) - a table
+     that read a command keeps its sentence; (b) the sentence is one clause (no `, ; : . ! ?`
+     with words after it); (c) no word but the polite form is a verb - neither a form a router
+     table lists nor a form of a verb layer 1 knows. That leaves "Kendi kendini geliştirmeyi
+     duraklatın." (`explain` by the noun alone -> `evolution_pause`, 0.9) and nothing else in
+     either corpus. Each of the three guards has its own sentence and its own RED mutation.
+   - A split reading of the SAME intent, or of a sentence no table owns, is returned whole
+     (`route_repair="fused"`, `confidence` 0.75 - a repaired word, the confidence of a
+     confusion): the surface slots were read off the fused token.
+   - **Not covered, and not new:** a sentence NO table owns as heard is read as its bare
+     imperative is, the bare rule's own weakness included - "Şunu not et: ekranları kapatın." is
+     `display_off` at 0.9 because "Şunu not et: ekranları kapat." is `display_off` on main;
+     likewise "Ekranları kapatın demedim.". Dictation after a verb no table knows is a gap of
+     the tables, not of this mechanism.
+3. **The fused split** (`normalize._split`, applied in `normalize()` too and recorded as
+   `Normalized.applied_splits`, like a confusion): a token is split when, and only when, it is two
+   words layer 1 knows (a stem, a stem with its suffix chain, or one of the closed `_WORDS`).
+   Never: a token that is itself a known word ("bugün", "bugünün", "masaüstünde"); a verb as the
+   first half ("silver" is not sil + ver); a negative form as a half; a half under two letters;
+   a second split; a token that divides two ways ("masaüstümüziki" is masaüstü + müziki and
+   masaüstümüz + iki: left whole - held by `test_a_token_that_divides_two_ways_is_left_whole`,
+   added in the third pass after inspector-2 found the claim untested).
+4. **A negative never becomes its positive.** The grammar has no negative chain, so "kapatma" and
+   "unutma" keep their surface (unchanged). New, and explicit: `lemma_reading` returns None for a
+   sentence that carries a negative imperative of a known verb (`_says_dont`), so a polite clause
+   beside a "don't" is not turned into the action. **Corrected in the third pass:** the bare form
+   ("kapatma") is ALSO the verbal noun, and the first build counted it as "don't" only at the end
+   of a clause or before punctuation - but Chrome Web Speech (ADR-0173) writes no punctuation, so
+   "Ekranları kapatma ışıkları söndürün" read as `display_off` at 0.9 (inspector-2: 9 of 25
+   unpunctuated probes flipped, acting at HIGH). Now a bare negative before another word says
+   "don't" UNLESS that word proves it the verbal noun: the next word, with nothing between them, is
+   a compound head (`normalize._is_compound_head`) - a known noun, not a verb, whose EVERY reading
+   carries a possessive ("indirme klasörünü gösterin": klasör + poss3sg/poss2sg + acc). "ışıkları",
+   "ama", "hatırlatma", "kurun", a bare noun, a word layer 1 does not know - none proves it, so
+   the sentence gets no reading and is resolved as heard. Erring this way costs only the reading
+   (the surface tables still run); the corpora did not move (STT 98/106 unchanged; owner corpus
+   below). The sentences of the finding are router tests (`test_a_dont_without_punctuation_still_says_dont`).
+   **Fourth pass (inspector, third pass's finding 1):** a compound head after the negative is not
+   proof when the word BEFORE it is the negative's own accusative object: "Ekranı kapatma sesini
+   kapatın" read as `display_off` 0.9 ("sesini" is all-possessive). The guard now also says
+   "don't" when the word right before the bare negative (no punctuation between) can be an
+   accusative object (`normalize._is_accusative_object`: a known noun with any reading ending in
+   acc - "ekranı" is acc or poss3sg, no telling, so it counts - or a closed pronoun object,
+   "bunu", "onları"). This also refuses "ekranı kapatma düğmesine bas" (the verbal noun with its
+   object): the conservative side, it loses only the reading. Corpora unchanged (STT 98/106,
+   owner 2754/2754).
+   Not closed here, and not new: their BARE twins ("Ekranları kapatma ışıkları söndür") are
+   resolved by the surface tables as on main.
+5. **Mail and calendar.** The older repairs never route into `mail_*` / `calendar_*` (B45/B46).
+   This reading is narrower, not wider, about ACTIONS - "Gönderir misin?", "Gönderin." after a
+   read-back are still not a send, and a sentence a mail/calendar table already owns is never
+   re-read (not even its confidence moves: "Bunu bir saat erteleyin." with an event in focus,
+   "Son maili okur musun?" - held by a test since the second pass) - but it does route into the QUERY class of those families: "Maillerime bakın." ->
+   `mail_inbox`, "Fatura maillerini bulun." -> `mail_search`. Reading mail changes nothing the owner
+   can see (the table's own comment at `QUERY_TOOL_BY_INTENT`), and the card's polite 29/29 cannot
+   be reached without these two. **This is the one judgement the lead should look at.**
+6. **Vocabulary.** `_VERBS` is unchanged (it also feeds layer 3's negation cap, which this task
+   must not move). `_TABLE_VERBS` (28) adds the verbs of the router's exact-form tables so the
+   mechanism covers them ("açıkla" joined in the second pass: the router reads it inline, and
+   guard (c) above must know it is a verb - "Şunu açıkla gözünü kapatınız"); left out on purpose: mutating stems (et, kaydet, git) and verbs whose
+   polite form is a common word (alın, basın, kesin, koyun, sayın). `_WORDS` (28: determiners,
+   pronouns, small numbers) and six nouns (göz, hareket, teknik, gün, bugün, buçuk) exist for the
+   split. **Honest note:** these words were chosen knowing the corpus; the corpus cannot be tuned,
+   the vocabulary can. What keeps it from being a fit: every sentence of the Owner Utterance Suite
+   (2754) is run through the splitter in a unit test and none may split.
+
+**Two things on the card that do not hold as written.**
+- "'Raporu okuyun.' and 'Alarmı kurar mısınız?' fall through": they did not (measured on e1543a97:
+  `research_open` and `alarm_create`, 1.0). "Raporu okuyun." is an exact listed form and stays 1.0
+  - the card's own rule ("the surface form still wins where a table matches it exactly") against
+  the card's acceptance line (0.9 for this sentence); the rule was followed. "Alarmı kurar
+  mısınız?" is 0.9 now (no table lists the question form).
+- "the split is recorded like a confusion": it is recorded, and `ResolvedIntent.confidence` is
+  0.75; but the relay's `policy.rule_reading` (outside this area) maps every `route_repair` to 0.9,
+  so a split sentence is acted on at HIGH, not read back. One line there (fused -> `MATCH_CONFUSION`)
+  makes it MEDIUM. Not done: layer 3 is out of the area.
+
+**What is left (8 cases, all in `KNOWN_GAPS`).**
+- 3 invented suffix + 2 fused read as ANOTHER intent at HIGH ("Hesapü makinesini aç." -> media;
+  "Şubug'ı kendin düzelt." -> memory_correct; "Buresmi Paint'te yeniden çiz." -> repeat): an exact
+  rule that nothing may contest - `understanding-confident-wrong`.
+- 2 fused with a half layer 1 does not know ("Uyurkenekranları", "Faturamaillerini"): a free word
+  is not vocabulary; this is layer 2's (the semantic reading).
+- "Saat yedibuçukta beni uyandır.": the router now reads it as the two-word sentence; the alarm
+  TOOL parses the time from the sentence as heard and refuses (`when_unparsed`). The fix is in the
+  relay/tool (hand the tool the reading), outside this area.
+
+**For the lead at merge.** `tests/unit/test_stt_utterance_corpus.py` (outside the area) still says
+"73/106 = 68.9 %" in the strict-xfail reason; the xfail itself stays correct (92.5 % < 95 %).
+`policy._negative_forms` could import `normalize.is_negative` instead of its own copy.
+
+## ADR-0270 — The owner's web shell runs on the Cloud Core, reached over the tailnet with HTTPS (2026-10-03)
+
+Draft: `team/plans/web-on-cloud-core-adr.md` (numbered at the ninth integration of d20261003).
+
+**Why.** Owner decision 2026-10-03: he wants the web shell (Ofis, Onay Merkezi, the voice
+page) on his PHONE when he is outside. Until now it ran only on the home PC
+(`scripts/voice/start-web-voice.ps1`: `pnpm --dir apps/web dev --port 3000`, API over the
+tailnet through the same-origin `/api` rewrite), so it was gone whenever the PC was off. He
+chose to host it ON the Cloud Core; the phone reaches it over his tailnet (Tailscale), over
+HTTPS - a browser gives the microphone only to a secure context. Nothing is exposed to the
+public internet.
+
+**The shape.**
+
+- **Image** `infra/docker/web/Dockerfile` (multi-stage, Node 24 bookworm-slim). Build stage:
+  pnpm 11.24.0 from the workspace lockfile (`--frozen-lockfile --filter @pagentos/web...`),
+  `next build` with `NEXT_PUBLIC_API_BASE=/api`. Final stage: only Next's traced `standalone`
+  output + `.next/static` + `public/`, run as uid 10003 on fixed port 3000, with a
+  HEALTHCHECK on `/` (a prerendered page - it answers whether or not the api is up or
+  mid-release). The build context is the repository root, cut to an allowlist by
+  `infra/docker/web/Dockerfile.dockerignore` (lockfile, workspace file, `apps/web`, and the one
+  file outside the package the shell imports, `packages/protocol/realtime-session-contract.json`
+  - the first build failed on exactly that); every `.env*`, `node_modules`, `.next` and the
+  rest of the repository never reach the build daemon. No secret in the image or its build
+  arguments: the only arguments are `/api` and `http://edge:8001`.
+- **`standalone`, not bare `next start`.** `apps/web/next.config.ts` gains an opt-in
+  (`PAGENTOS_WEB_STANDALONE=1`, set only by the Dockerfile) for `output: "standalone"` and
+  the workspace as tracing root. Unset, the config is byte-for-byte what the dev server and
+  the quality gate's build already used (a vitest file holds that). Reason: the traced output
+  carries only what the server needs (45 MB layer) instead of the workspace's whole
+  `node_modules` plus pnpm in the final image. It is Next's own production server.
+- **The upstream is a build argument, by necessity.** `next build` evaluates the rewrite
+  and stores it in `.next/routes-manifest.json`; `next start`/`server.js` do not re-read
+  `PAGENTOS_API_UPSTREAM` (proved: a container started with a different value still proxied to
+  the baked `edge:8001`). The value is `http://edge:8001` - the edge, which follows the
+  blue/green switch, never an api colour - so a release or a rollback of the api needs no
+  touch of this container. A test holds that the compose argument, the Dockerfile default and
+  nginx's `listen` agree.
+- **Compose service `web`** in `docker-compose.prod.yml`, profile `aux` (the godseye
+  precedent, ADR-0197): `127.0.0.1:3000:3000` - **loopback only**, no tailnet or public
+  bind; `mem_limit`/`memswap_limit` 512m, `pids_limit` 256, read-only root with a `/tmp`
+  tmpfs, `cap_drop: ALL`, `no-new-privileges`, `init`, healthcheck, `restart: unless-stopped`,
+  no `depends_on`, no `env_file`, no environment at all.
+- **HTTPS: `tailscale serve`, never `funnel`.** `scripts/cloud/enable-web-tailnet-https.sh`
+  (run once on the host by the lead): `tailscale serve --bg --https=443 http://127.0.0.1:3000`
+  - `--bg` makes the configuration persist across reboots and tailscaled restarts. Idempotent
+  (reads `serve status`; already served = no call), `--status` (exit 0 served / 1 not /
+  4 funnel on), `--off` (`tailscale serve --https=443 off`). It refuses `funnel` in any
+  form (its single tailscale wrapper runs only `serve` and `status`; a Funnel found ON stops
+  it with exit 4 and a message - it does not even reach for it to switch it off). If the
+  tailnet's HTTPS certificates are not enabled it exits 3 and prints the one owner line.
+
+**Memory budget (measured locally on the built image, 2026-10-03, Docker Desktop).** Image
+94 MB. Idle 40 MiB (cgroup), 47 MiB after a burst of page loads and proxied calls, 95 MB peak
+RSS of the node process. Limit 512 MiB = five times the peak, on a 7.7 GiB host that also
+runs the api, Postgres, Temporal, Redis, MinIO and godseye (2 GiB limit). **The build is the
+expensive part, not the run:** `next build` (Turbopack) peaks near 2.1 GiB (measured with the
+build stage under a cgroup: SIGKILLed at 1 GiB and at 1.5 GiB, passes at 2 GiB; 2 and 4 CPUs
+alike; ~10 s). `--webpack` needs ~1 GiB but fails type-checking on a pre-existing
+`app/gods-eye/page.tsx` export (`GODS_EYE_URL`), so it is not an option without touching the
+app. Hence a guard in the release: `aux_up` reads `MemAvailable` and, below
+`PAGENTOS_WEB_BUILD_MIN_AVAILABLE_MB` (default 3072), starts the web image that already exists
+with `--no-build` instead of building (said in the output); unreadable meminfo errs safe.
+Compose layer caching makes an api-only release rebuild nothing; only a web source change
+builds.
+
+**A release and a rollback.** `release-cloud-core-bluegreen.sh`'s `aux_up` (unchanged in
+kind) now loops `godseye`, `web`, one `compose up -d --no-deps` call each, AFTER the api's
+transaction (after `RELEASE OK`), each failure swallowed and printed (`aux: web NOT up`),
+never `--wait`, never `--force-recreate`. A failing web build therefore cannot fail, delay or
+roll back the api release (red-first tests with a failing fake `up`, with both aux services
+failing, and with low memory). A rollback is the api's own switch: the web container is not
+part of it, keeps serving, and follows the edge to the old colour. The reconcile and the
+recovery path never name `web` (a test holds it); a compose change makes the pinned recovery
+bundle stale as always - re-pin with `install-recovery-supervisor.sh <sha>` (an owner/lead
+step, existing rule). A broken web image is rolled back by redeploying the previous sha; the
+api is unaffected either way. The maintenance-reboot window's container list is unchanged
+(it still names godseye, not web): the web container restarts by policy after a reboot.
+
+**What the owner must do (his, not ours).** (1) Install the Tailscale app on the phone and
+sign it into his tailnet. (2) If HTTPS certificates are not yet on: Tailscale admin console ->
+DNS -> MagicDNS on, then HTTPS Certificates -> Enable HTTPS. (3) Open
+`https://<host>.<tailnet>.ts.net/` (the lead reads the exact name from `--status`) and sign in
+ONCE with the owner credential: the session token lives in the browser's `localStorage`
+(`apps/web/app/lib/session.ts`, its own trade-off paragraph); it is per-origin, so the tailnet
+origin starts signed out, and a phone that is lost is revoked from another client. Allow the
+microphone for that origin. Note: a Tailscale HTTPS certificate puts the machine's `.ts.net`
+name in public Certificate Transparency logs (the name, not the content).
+
+**Known, not done here.** (a) The `/gods-eye` page frames `http://<host>:4173/`; on an https
+origin that is mixed content and the browser blocks it - the page's new-tab link still works,
+the inline globe does not. A follow-up could serve godseye through `tailscale serve --https=8443`
+too. (b) `docker compose up` on the host builds on the VM; a pre-built image from the home PC
+would remove the 2 GiB transient. (c) The web shell has no server-side auth of its own - the
+api's owner session is the boundary, and the tailnet is the network boundary. (d) Not verified
+on the real host: the `Dockerfile.dockerignore` lookup needs BuildKit (the compose v2 default;
+Docker Desktop 28 / compose 2.38 here), `tailscale serve`'s wording on the host's version,
+and the first real build's time and memory on a CPX32.
+
+**Evidence.** PROVEN_AUTOMATED: `services/api/tests/unit/test_compose_web_shell.py` (14: aux
+profile, loopback-only ports, memory + swap limit, healthcheck port, edge upstream agreeing
+across compose / Dockerfile / nginx, no secret, non-root final stage, allowlist context, aux
+loop and its place after `RELEASE OK`, no `web` in the reconcile/recovery logic, the tailnet
+script's port equals the published port); `scripts/tests/cloud-release-bluegreen.tests.ps1`
+(+7: aux build order, failure isolation, low-memory path); `scripts/tests/web-tailnet-https.tests.ps1`
+(21, with a fake tailscale; mutations of the target and of the idempotence check turn five
+red); `apps/web/tests/deploy/next-config.test.ts` (4). PROVEN_REAL locally only: the image
+built, started read-only with all capabilities dropped, answered `/`, `/voice`, `/core/office`
+and proxied `/api/*` to an `edge:8001` stand-in. NOT_RUN: the real host and a real tailnet.
+
+## ADR-0271 — The ceiling on a write, and the page a task keeps (ADR-0207 PR-C) (2026-10-03)
+
+Draft: `team/plans/webtask-write-ceiling-retention-adr.md` (numbered at the ninth integration of d20261003).
+
+Date: 2026-10-03. Card: `webtask-write-ceiling-retention`. Status: accepted. Closes the two
+items ADR-0240 left under "Not here (for the lead at merge)".
+
+## Context
+
+The Cloud Core's gate classifies every step (`app/webtask/risk.py::classify_step`) and the
+loop passes `risk_ceiling` to `BrowserPort.act` for every action, but
+`DeviceTaskBrowser.act` put it on the wire for `browser.click` only, and the worker's
+`_op_fill` / `_op_select_option` / `_op_set_checked` classified nothing (static
+REVERSIBLE_WRITE). For a `ref` target `_bound_target` already refuses a changed
+(tag, role, name); the gap was a control whose WIRING changed (moved into a form, made
+to submit) under the same name, and every semantic target. Separately, `TaskState.observation`
+(the last observation, up to 6 000 characters of page text) stayed in `web_tasks.state_json`
+for ever after the task ended.
+
+## Decision
+
+1. **Contract v1.8** (`BROWSER_CAPABILITIES.md` §4a, changed first). `risk_ceiling` is
+   accepted on `browser.fill`, `browser.select_option`, `browser.set_checked`. With it the
+   worker describes the resolved element, classifies the WRITE (HIGH_IMPACT marker →
+   HIGH_IMPACT; `submits` or an external-communication marker → EXTERNAL_COMMUNICATION;
+   unnamed and (`submits` or `in_form`), not for `fill` → EXTERNAL_COMMUNICATION; else
+   REVERSIBLE_WRITE), applies the session policy with that class, refuses above the
+   ceiling with click's error (`security_scope_error`, `retryable:false`, evidence
+   `reason:"above_ceiling"`, `risk_class`, `risk_ceiling`) before anything is written,
+   and answers `{"ok":true,"risk_class":…}`. Without the field: v1.7 exactly
+   (`{"ok":true}`). No operation name, no `contracts` key.
+2. **The name comes from the collector.** The worker reads name / `submits` / `in_form`
+   through `_DESCRIBE_OBSERVED_JS` (extended to return the two flags) - the same
+   definition an observation uses, so both halves classify the same inputs. Not
+   `_DESCRIBE_ELEMENT_JS`: its `name` falls back to a field's VALUE and would classify a
+   write by what is typed into it. An element the collector does not list is described
+   as nameless and in a form (classified as one that may send).
+3. **`policy.classify_write`** mirrors `risk.classify_write` + the unnamed-and-wired rule;
+   `tests/unit/test_write_ceiling.py` runs one table through both (the Cloud's module
+   loaded from its source file).
+4. **The old-agent limit.** A worker from before v1.8 ignores the field and writes. The
+   Cloud Core detects it by the missing `risk_class` and raises `capability_missing`
+   (naming contract v1.8). That ONE write was performed, gated only by the Cloud Core's
+   own gate. Because the loop (not changed here) counts a failed act and may plan
+   another write, `device_port` remembers the device (process memory) and sends it no
+   further write; clicks still go (their ceiling is enforced since v1.7). A Cloud Core
+   restart forgets this and costs at most one more Cloud-gated write; an agent updated
+   while the Cloud Core runs stays refused for writes until the next restart (the safe
+   direction).
+5. **Retention.** `service._write` stores a new document (never an in-place edit):
+   terminal status (done / failed / cancelled) → `observation: null`,
+   `observation_fresh: false`; waiting for the owner and not fresh → url / title /
+   elements kept, `text` dropped; running → kept whole (the next round acts on it without
+   observing twice). Triggers: every terminal `_write` (run_round_db, cancel_db, fail_db),
+   `active_task` failing an orphan (ORPHAN_AFTER 20 min) or an abandoned parked task
+   (PARKED_AFTER 3 h), and `scrub_observations(db, now)` - idempotent, called from
+   `start_task_db` before the new row - for rows written before this rule.
+   Readers checked (grep `.observation` in service.py / loop.py and app-wide): `loop._observe`
+   reads the stored one only when `observation_fresh` is true (never in a wait, never after
+   the end); `loop.element_of` reads elements (kept while waiting) and has no caller in
+   `app/`; `task_dict` never showed it; the planner, gate and verify read the observation the
+   current round obtained. No reader needs the text after a park or anything after the end.
+
+## Not here
+
+- A timed sweep from the app's lifespan (`app/main.py` is held by open cards): rows are
+  scrubbed when the next task starts, not on a clock. Named follow-up.
+- No migration (`state_json` is one JSON column), no setting, no compose change.
+- `gate.py`, `risk.py`, `loop.py` unchanged (the Decision already carries the ceiling).
+- Unreachable in production until PR-D gives `start_task_db` a caller and the home PC's
+  agent is updated to a worker serving v1.8 (an owner-visible agent update, not this card).
+
+### ADR-0214 addendum 19 (2026-10-03): each run of the cycle has its own temp folder on the data drive, removed when the run ends
+
+**Why.** C: (the system drive) filled to zero at about 12:00 on 2026-10-03: the gate's unit run
+failed with `OSError(28, 'No space left on device')` and Docker's engine stopped (its disk image
+lives on C:). The day before, `%TEMP%` held 2.67 million leaked test folders. The owner,
+2026-10-03: "Eğer bu ajanlar C'nin altında çalışıyorsa bunları E'nin altına da alabiliriz; biraz
+yavaşlasa da disk sorunumuzu tamamen çözecektir." The agents' worktrees are on E: already; what
+they write on C: is the temp folders of the tests they start.
+
+**Decision.** `team/cycle-settings.json` gets `run_temp_root` (an absolute path; this machine:
+`E:\AI\tmp-team`). For every run the cycle starts, `Start-TeamRun` creates
+`<run_temp_root>\<task>-<role>-<8 hex>` and sets the run's `TEMP`, `TMP` and `TMPDIR` to it; when
+the run is over (`Complete-RoleRun`, after `Wait-TeamRun`) `Remove-TeamRunTemp` deletes the
+folder - best effort: a file still held open stays, and a folder with a link inside is left
+whole (a recursive delete would follow the link). No key, a relative path or an unreadable file:
+the machine's TEMP, as before; the seat settings are read as before (`Read-TeamCycleSettings`
+ignores the new key).
+
+**Not here.** The lead's gate keeps the machine's TEMP on C:: measured the same day, Unity's
+player build in `SceneUnityProductionTests` fails with TEMP on E: ("Fatal error", 12 errors) and
+passes in 56 s with TEMP on C:. An agent that runs that one test gets the same failure; it is a
+Unity-licensed-editor test the gate runs, not an agent's routine check.
+
+**Tests.** `team-cycle.tests.ps1`, "each run gets its own temp folder under run_temp_root, removed
+when the run ends": both runs' TEMP and TMP are their own folder under the root, named by task and
+role, and gone after the run although the fake left a file in it; without the key the machine's
+TEMP. Mutation RED: the removal call taken out -> red; TEMP not set -> red (restored from backup
+copies, sha256 equal).

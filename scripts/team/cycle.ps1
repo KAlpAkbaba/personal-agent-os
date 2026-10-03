@@ -773,7 +773,13 @@ try {
                 foreach ($subject in $subjects) { $prompt += "`n- " + ([string]$subject).Trim() }
             }
         }
-        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory
+        $runTemp = ""
+        $tempRoot = Read-TeamRunTempRoot -Path $settingsPath
+        if ($tempRoot) {
+            $label = if ($null -ne $Task) { [string]$Task.id } else { "cycle" }
+            $runTemp = Join-Path $tempRoot ("{0}-{1}-{2}" -f $label, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
+        }
+        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp
         $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp); model = $runModel }
         [void]$script:liveRuns.Add($live)
         $loweredFrom = ""
@@ -789,6 +795,7 @@ try {
         return [pscustomobject]@{
             Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel
             LoweredFrom = $loweredFrom; Where = $WorkingDirectory; Prompt = $Prompt; ExcludeTools = @($ExcludeTools)
+            RunTemp = $runTemp
         }
     }
 
@@ -798,6 +805,7 @@ try {
            so nothing waits here; a run past its time is killed. #>
         param($Started)
         $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline
+        Remove-TeamRunTemp -Path ([string]$Started.RunTemp)
         $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model ([string]$Started.Model)
         $taskId = if ($null -ne $Started.Task) { [string]$Started.Task.id } else { "cycle" }
         $number = 1

@@ -471,6 +471,22 @@ function Read-TeamCycleSettings {
     }
 }
 
+function Read-TeamRunTempRoot {
+    <#
+    .SYNOPSIS
+        The folder under which each run of the cycle gets its own temp folder: the
+        'run_temp_root' of team/cycle-settings.json, an absolute path, or "" (the machine's TEMP).
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+    try { $document = Read-TeamJson -Path $Path } catch { return "" }
+    if ($document -isnot [System.Management.Automation.PSCustomObject]) { return "" }
+    if ($null -eq $document.PSObject.Properties["run_temp_root"]) { return "" }
+    $value = [string]$document.run_temp_root
+    if (-not $value -or -not [System.IO.Path]::IsPathRooted($value)) { return "" }
+    return $value
+}
+
 function Read-TeamSplitFile {
     <#
     .SYNOPSIS

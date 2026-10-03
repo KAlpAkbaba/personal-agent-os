@@ -15,22 +15,31 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `661a5efe4a4989a0996fb3264302264c8c977bfa` (2026-10-03 01:14 UTC = 04:14 yerel, api-green), LKG `e9f8c2d6`,
-pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5b39ec`, 65 dk). QUALIFICATION Stage 48. Ana kopya
-`team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
-**DÖNGÜ `d20261003` (pid 42348) 04:16 yerelde yeni kodla başladı: koşularda arka plan komutu YOK, tek komut 1 saate kadar
-(ADR-0214 ek 16). 04:15'e kadar ekip DURMUŞTU: önceki döngü bittiği halde 02:00 zamanlayıcı süreci, bir ajanın bıraktığı
-`tail -f` + `grep` yüzünden kapanmadı, zamanlayıcı her turu atladı - lead ikisini durdurdu, görevi elle başlattı. Kalıcı
-düzeltme kartı `tick-not-held-by-orphans` (ÖNCELİKLİ). DİKKAT: Ofis "0/6" ya da durum belgesi eski pid gösterirse önce
-`Get-ScheduledTaskInfo` (LastTaskResult 0x800710E0 = önceki tur hâlâ açık) ve yetim süreçlere bak.**
+**ÜRETİM: main `e6682a61688d7c4531f5a0ff19de91fd3e780d9d` (2026-10-03 13:22 UTC = 16:22 yerel, api-blue), LKG `661a5efe`,
+pin = RELEASE (lead pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`22d90798`, 96 dk: 15 294 birim, 178
+entegrasyon). QUALIFICATION Stage 49. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+**TELEFON (49.3, PROVEN_REAL): web kabuğu sunucuda, tailnet HTTPS: https://pagentos-core.tail0e6789.ts.net (yalnız tailnet;
+`tailscale serve` -> 127.0.0.1:3000; geri almak: `enable-web-tailnet-https.sh --off`). Ev PC dev kabuğu da telefondan
+`http://100.92.148.30:3000` (allowedDevOrigins). Sahip yeni adrese bir kez giriş yapar (oturum adres başına).**
+**LEAD DALINDA (kapısız, team-cycle 214/214): `lead/agent-temp-on-e` (ADR-0214 ek 19): her döngü koşusunun TEMP'i
+`E:\AI\tmp-team\<iş>-<rol>-<8hex>`, koşu bitince silinir. Bir sonraki döngü başlangıcında devrede; main'e bir sonraki entegrasyonla.**
+**DİSK (2026-10-03): C: ~12:00'de SIFIRA indi (kapı `OSError(28)`, Docker motoru durdu - lead Docker Desktop'ı yeniden başlattı).
+C:'nin sahipleri ölçüldü: Program Files 112 GB, Docker 47 GB, pagefile+hiberfil 53 GB; OneDrive 222 GB'ın tamamı yalnız bulutta
+(diskte 0). AppData altında E:'ye junction ÇÖZÜLMÜYOR (STATUS_MOUNT_POINT_NOT_RESOLVED, Android ile ölçüldü, geri alındı);
+kullanıcı kökündekiler (.gradle, anaconda3) junction ile E:\C-tasinan'a taşınıyor (`scratchpad/move_to_e.ps1`). Docker kendi
+"Disk image location" ayarıyla taşınmalı (junction değil). Program listesi sahibe verildi; silmeler onun.**
+**SAHİBİN OFİS MODELİ (2026-10-03, kartlar kuyrukta, hepsi sahibin fikri): `team-board` (pano, denetimde), `team-board-consult`
+(danışma: bağlam + A/B seçenekleri, cevaplayan işi okuyarak), `office-board-bubbles`, `inspector-advice` (öneri + ekip dersleri),
+`lead-on-duty` (nöbetçi Hakim), `test-slots-on-board`, `worker-owns-its-return` (geri dönen iş aynı çalışana, oturumu sürdürerek;
+ÖNCELİKLİ), `continuous-team-loop` (döngü kalkar, sürekli akış, devralma; ÖNCELİKLİ). 15:00'te döngü 4 saat sınırında boşaldı -
+yarım saatten fazla 1 çalışan + 1 denetleyici (ölçüldü) - continuous-team-loop'un sebebi.**
 **BELLEK ÇÖKÜŞÜ (2026-10-03 ~05:00-05:50 yerel): 48 GB'lık ev bilgisayarının belleği TÜKENDİ - lead'in oturumu, sahibin web
 kabuğu (`next dev` :3000) ve sekizinci entegrasyonun kapısı (`gate/d20261003-4` @ `4f80a564`) çöktü. Kapı kırmızı ama KUSUR DEĞİL:
 PS paketlerinde `OutOfMemoryException`, `git: Out of memory`, pnpm 0xC0000409. 10:57'de bulunan: `test-slots` çalışanının TÜM birim
 paketi (tek `pytest tests/unit` süreci) 14 GB'a çıkmış ve büyüyordu - lead durdurdu (boş bellek 17,6 -> 28 GB). Önlemler: (1) web
 kabuğu oturumdan BAĞIMSIZ yeniden başlatıldı (günlük `%LOCALAPPDATA%/PagentOS/web-shell`); (2) `team/cycle-settings.json`: 3 çalışan +
 2 denetleyici (GEÇİCİ - bellek önlemi gelene kadar; sahip daha çok çalışan istiyor); (3) worker.md / inspector.md: ajanlar TÜM birim
-paketini kendileri koşturmaz, kapı koşturur. Kartlar: `run-memory-cap`, `unit-suite-memory`. Sekizinci entegrasyonun kapısı yeniden
-koşacak (`gate/d20261003-4`: `execution-call-site-routines` + `owner-trials-api`).**
+paketini kendileri koşturmaz, kapı koşturur. Kartlar: `run-memory-cap`, `unit-suite-memory`.**
 **SAHİBİN KURALI (2026-10-03 00:07): "bundan sonra kapısı yeşil olanlar otomatik canlıya geçsin, beklemesinler" - denetimden geçen
 iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (`team/stop.flag`). Ek 9'un üç istisnası
 (compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor.**

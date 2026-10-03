@@ -203,19 +203,45 @@ compose() {
     docker compose --profile bluegreen --profile aux -f "$input_tree/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"
 }
 
+mem_available_mb() {
+    # MemAvailable of this host in MiB (0 when it cannot be read, so the guard errs safe).
+    local kb
+    kb="$(awk '/^MemAvailable:/ { print $2; exit }' "${PAGENTOS_MEMINFO:-/proc/meminfo}" 2>/dev/null || true)"
+    printf '%s' "$(( ${kb:-0} / 1024 ))"
+}
+
 aux_up() {
-    # ADR-0197: bring the aux workloads to the released tree, BEST EFFORT and after the
-    # api's own transaction has succeeded - a failed image build or a slow npm ci here
-    # must never fail, roll back or delay the api release. Nothing is proven by this
-    # beyond "compose was asked"; the owner-facing check is the page itself.
-    local out rc=0
-    out="$(compose up -d --no-deps --build godseye 2>&1)" || rc=$?
-    if [ "$rc" -eq 0 ]; then
-        echo "aux: godseye up ($(compose ps --status running --services 2>/dev/null | grep -cx godseye || true) running)"
-    else
-        echo "aux: godseye NOT up (rc=$rc); the api release stands. Last lines:" >&2
-        printf '%s\n' "$out" | tail -5 >&2
-    fi
+    # ADR-0197: bring the aux workloads (godseye, and the owner's web shell - ADR "web on
+    # the Cloud Core") to the released tree, BEST EFFORT and after the api's own transaction
+    # has succeeded - a failed image build or a slow npm ci here must never fail, roll back
+    # or delay the api release. Each service is its own compose call, so one that fails
+    # never stops the next. Nothing is proven by this beyond "compose was asked"; the
+    # owner-facing check is the page itself.
+    local svc out rc build_flag avail floor="${PAGENTOS_WEB_BUILD_MIN_AVAILABLE_MB:-3072}"
+    for svc in godseye web; do
+        rc=0
+        build_flag="--build"
+        if [ "$svc" = web ]; then
+            # `next build` peaks near 2.1 GiB (measured 2026-10-03, 4 CPUs) on a host that
+            # also serves the api: when the host cannot spare that, the image that is
+            # already there keeps running (a web change then waits for the next release)
+            # rather than risking the OOM killer picking the api. --no-build, because compose
+            # builds a MISSING image by itself; with none there the start fails, loudly and alone.
+            avail="$(mem_available_mb)"
+            if [ "$avail" -lt "$floor" ]; then
+                build_flag="--no-build"
+                echo "aux: web NOT rebuilt: ${avail} MiB available < ${floor} MiB a build needs; starting the image already there (no build)" >&2
+            fi
+        fi
+        # shellcheck disable=SC2086
+        out="$(compose up -d --no-deps $build_flag "$svc" 2>&1)" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            echo "aux: $svc up ($(compose ps --status running --services 2>/dev/null | grep -cx "$svc" || true) running)"
+        else
+            echo "aux: $svc NOT up (rc=$rc); the api release stands. Last lines:" >&2
+            printf '%s\n' "$out" | tail -5 >&2
+        fi
+    done
 }
 
 in_container_health() {
