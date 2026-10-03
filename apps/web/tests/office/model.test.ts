@@ -1,7 +1,46 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { buildOffice, buildPanel, selectSeat } from "../../app/core/office/officeModel";
+import {
+  TASK_STATE_TR,
+  buildOffice,
+  buildPanel,
+  selectSeat,
+  taskStateText,
+} from "../../app/core/office/officeModel";
 import { SEAT_ORDER, busyCycle, twoWorkers } from "./fixtures";
+
+/** The queue's states, read from team/queue.schema.json at the repository root. */
+function queueStates(): string[] {
+  const schema = JSON.parse(readFileSync(resolve(__dirname, "../../../../team/queue.schema.json"), "utf8"));
+  return schema.$defs.task.properties.state.enum as string[];
+}
+
+describe("the task's state in Turkish", () => {
+  it("has a phrase for every state of the queue's schema", () => {
+    const states = queueStates();
+    expect(states.length).toBeGreaterThanOrEqual(13);
+    for (const state of states) {
+      expect(Object.hasOwn(TASK_STATE_TR, state), state).toBe(true);
+      expect(taskStateText(state), state).not.toBe(state);
+      expect(taskStateText(state), state).not.toContain("_");
+    }
+  });
+
+  it("does not give the same phrase to states that mean different things to the owner", () => {
+    const four = ["in_progress", "inspecting", "returned", "stopped"].map(taskStateText);
+    expect(new Set(four).size).toBe(4);
+    const all = queueStates().map(taskStateText);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("returns a state it does not know unchanged, prototype names included", () => {
+    for (const unknown of ["brand_new_state", "", "constructor", "toString"])
+      expect(taskStateText(unknown)).toBe(unknown);
+  });
+});
 
 describe("the office model", () => {
   it("draws two working workers typing with their task titles and 2/6 in the top bar", () => {
@@ -204,7 +243,6 @@ describe("the seat panel", () => {
     expect(panel.role).toBe("Çalışan 1");
     expect(panel.task).toMatchObject({
       title: "Birinci iş",
-      state: "implementing",
       goal: "birinci hedef",
       acceptance: "birinci kabul",
     });
@@ -227,6 +265,16 @@ describe("the seat panel", () => {
 
   it("carries the reason of a returned task", () => {
     expect(buildPanel(twoWorkers(), "inspector")!.reason).toBe("testler kırmızı");
+  });
+
+  it("gives the panel the task's state in Turkish and its start time", () => {
+    const panel = buildPanel(twoWorkers(), "worker-1")!;
+    expect(panel.task?.stateText).toBe("implementing"); // not a queue state: shown as it is
+    expect(panel.task?.since).toMatch(/^\d\d:\d\d$/);
+    expect(buildPanel(twoWorkers(), "inspector")!.task?.stateText).toBe(
+      taskStateText("returned"),
+    );
+    expect(buildPanel(twoWorkers(), "inspector")!.task?.since).toBeNull();
   });
 
   it("selects on click and deselects on a second click", () => {
