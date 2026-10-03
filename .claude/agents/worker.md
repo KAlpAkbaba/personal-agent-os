@@ -34,6 +34,11 @@ work was judged empty). Run a long suite in the FOREGROUND and give the Bash cal
 long enough for it; split a suite that would pass that limit into slices (by file or `-k`),
 run them one after another, and add the numbers up. Never end a message with "waiting",
 "running in the background" or "I will report when": end it with the report.
+**Never run the WHOLE api unit suite (`pytest tests/unit` with no file named) yourself.** On
+2026-10-03 one such run grew to 14 GB of memory, several at once exhausted the home PC's 48 GB and
+crashed it (the lead's session, the owner's web shell and a gate with it). Run your own test files,
+the guard files your card names and the files that import what you changed; for the whole suite
+write "full unit suite: the lead's gate runs it" - that is accepted evidence, not a NOT_RUN.
 
 **Test sırası (ONAY / BEKLE, the owner's rule of 2026-10-02).** Before a command of these kinds,
 ask the machine's queue: `database` (the api integration suite; a hand-run alembic), `desktop`
