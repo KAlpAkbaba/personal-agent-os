@@ -1,0 +1,208 @@
+# Personal Agent OS - the STAGING stack on the home PC (team/plans ADR "staging-stack").
+#
+# The owner's idea, 2026-10-03: a copy of the real server where a test team can use the
+# product "like the device owner" - the same api and web images the Cloud Core runs, built
+# from a commit on main or the lead branch, but with its OWN database, queue, bucket and
+# identities. Nothing here can reach production or the owner's accounts, and nothing is
+# shared with the dev stack the gate resets (the gate of 2026-10-03 22:29 was red because a
+# gate and agents shared the dev stack's Temporal queue).
+# services/api/tests/unit/test_staging_isolation.py holds every one of these lines.
+#
+# Compose project: pagentos-staging. Containers: pagentos-staging-*. Volumes:
+# pagentos-staging-* (named explicitly, so no project prefix can make them collide).
+# Every published port binds 127.0.0.1 only, in the 28xxx block (the dev stack uses
+# 15432/16379/17233/18233/19000/19001, the dev web 3000/3100, the dev api 8001):
+#   web shell                  127.0.0.1:28000 -> 3000   <- the staging url
+#   api                        127.0.0.1:28001 -> 8001
+#   PostgreSQL 16 + pgvector   127.0.0.1:28432 -> 5432   (for the test team's checks)
+#   Temporal frontend (gRPC)   127.0.0.1:28233 -> 7233
+#   MinIO S3 API               127.0.0.1:28900 -> 9000
+#   Redis                      not published
+#
+# Credentials below are STAGING-ONLY constants for a loopback stack that holds test data
+# only. They are not secrets and must never be reused anywhere else. The only values that
+# can come from outside are PAGENTOS_STAGING_* variables (deploy.ps1 sets the images and
+# the release sha; an optional, SEPARATE test vendor key may be given the same way) - the
+# isolation test refuses any other `${...}`, so the owner's real keys in a shell or a
+# `.env` can never leak into staging.
+#
+# Images: deploy.ps1 builds pagentos-staging/cloud-core:<sha12> and
+# pagentos-staging/web:<sha12> from that commit's tree and starts them with --no-build.
+# The `build:` sections let `up.ps1 -Build` build the current tree as `:local`.
+
+name: pagentos-staging
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: pagentos-staging-postgres
+    command:
+      - postgres
+      - "-c"
+      - "max_connections=200"
+    environment:
+      POSTGRES_USER: staging
+      POSTGRES_PASSWORD: staging-only # staging-only, loopback
+      POSTGRES_DB: pagentos_staging
+    ports:
+      - "127.0.0.1:28432:5432"
+    volumes:
+      - pagentos-staging-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U staging -d pagentos_staging"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    mem_limit: 1g
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: pagentos-staging-redis
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "128mb"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    mem_limit: 256m
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    container_name: pagentos-staging-minio
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: staging-artifacts # staging-only
+      MINIO_ROOT_PASSWORD: staging-only-minio # staging-only, loopback
+    ports:
+      - "127.0.0.1:28900:9000"
+    volumes:
+      - pagentos-staging-minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    mem_limit: 512m
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:1.27.2
+    container_name: pagentos-staging-temporal
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: staging
+      POSTGRES_PWD: staging-only # staging-only, loopback
+      POSTGRES_SEEDS: postgres
+      # auto-setup registers this namespace; the api's workflows run in it, on their own
+      # task queue (the api env below) - never the dev stack's `default` namespace.
+      DEFAULT_NAMESPACE: pagentos-staging
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CLI_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:28233:7233"
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    mem_limit: 1g
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../../services/api
+    image: pagentos-staging/cloud-core:${PAGENTOS_STAGING_RELEASE_TAG:-local}
+    container_name: pagentos-staging-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    environment:
+      # Not "dev" (no OpenAPI docs, the dev-only paths stay off) and not "prod".
+      PAGENTOS_ENVIRONMENT: staging
+      PAGENTOS_DATABASE_URL: postgresql+psycopg://staging:staging-only@postgres:5432/pagentos_staging
+      PAGENTOS_REDIS_URL: redis://redis:6379/0
+      PAGENTOS_S3_ENDPOINT_URL: http://minio:9000
+      PAGENTOS_S3_ACCESS_KEY: staging-artifacts
+      PAGENTOS_S3_SECRET_KEY: staging-only-minio # staging-only, loopback
+      PAGENTOS_S3_BUCKET: pagentos-staging-artifacts
+      PAGENTOS_TEMPORAL_ADDRESS: temporal:7233
+      PAGENTOS_TEMPORAL_NAMESPACE: pagentos-staging
+      PAGENTOS_TEMPORAL_TASK_QUEUE: pagentos-staging
+      PAGENTOS_WORKER_MODE: embedded
+      PAGENTOS_VOICE_PROFILE_SECRET: staging-only-voice-profile # staging-only
+      # Local mode works free: the deterministic simulator answers a voice session. A real
+      # realtime vendor is reachable ONLY with a separate TEST key given as
+      # PAGENTOS_STAGING_VOICE_OPENAI_API_KEY - never the owner's production key.
+      PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED: "true"
+      PAGENTOS_VOICE_OPENAI_API_KEY: ${PAGENTOS_STAGING_VOICE_OPENAI_API_KEY:-}
+      # The owner's mail and calendar are never connected here: no IMAP/SMTP host, no ICS
+      # url, sending and calendar writes off. The test team uses the fake providers the
+      # test suite already has, never a real account.
+      PAGENTOS_MAIL_SEND_ENABLED: "false"
+      PAGENTOS_CALENDAR_WRITE_ENABLED: "false"
+      # The embedding model is a ~100 MB download; staging answers with the deterministic
+      # embedder so it starts offline and small (the ADR records this one difference).
+      PAGENTOS_MEMORY_EMBEDDING_PROVIDER: deterministic
+      PAGENTOS_MEMORY_RERANK_PROVIDER: none
+      PAGENTOS_WEB_ORIGINS: '["http://127.0.0.1:28000","http://localhost:28000"]'
+      # The test team's owner credential is minted by seed.ps1 through the host-side
+      # recovery path (docker exec), so the HTTP bootstrap stays loopback-only.
+      PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
+      PAGENTOS_TEAM_STORE: file
+      PAGENTOS_RELEASE: ${PAGENTOS_STAGING_RELEASE:-}
+    volumes:
+      - pagentos-staging-identity:/srv/pagentos/var/identity
+    ports:
+      - "127.0.0.1:28001:8001"
+    mem_limit: 2g
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: /api
+        # Baked into the routes manifest by `next build` (see the Dockerfile): staging's
+        # web talks to staging's api by its compose-internal name, nothing else.
+        PAGENTOS_API_UPSTREAM: http://api:8001
+    image: pagentos-staging/web:${PAGENTOS_STAGING_RELEASE_TAG:-local}
+    container_name: pagentos-staging-web
+    depends_on:
+      - api
+    init: true
+    ports:
+      - "127.0.0.1:28000:3000"
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 256
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  pagentos-staging-postgres:
+    name: pagentos-staging-postgres
+  pagentos-staging-minio:
+    name: pagentos-staging-minio
+  pagentos-staging-identity:
+    name: pagentos-staging-identity
