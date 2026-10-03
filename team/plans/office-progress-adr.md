@@ -1,0 +1,58 @@
+# ADR (office-progress): the Ofis's İlerleme strip is read from the roadmap, never typed in
+
+**Status:** proposed by the worker, 2026-10-04 (cycle d20261003). The lead numbers it.
+
+## Context
+
+The owner, 2026-10-03: "Ben ajanları görüyorum ama şu anda roadmap'e göre projenin ortalama yüzde
+kaçı tamamlandı, yüzde kaçı kaldı göremiyorum." The Danışman counted it by hand that evening.
+
+## Decision
+
+1. `services/api/app/team/progress.py` parses two documents of the tree the process serves:
+   `docs/ROADMAP.md` (the JARVIS table and "The order") and
+   `docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md` (every table row with a numeric ID).
+   `GET /v1/team/office` carries the result as the additive field `progress`
+   (`{jarvis, order, v1, rule, as_of}`); `as_of` is `settings.release` (the exported release sha)
+   or null. The root is `app.state.progress_root`, default the repository root.
+2. Weights: JARVIS HAVE 1, PARTIAL 0.5, MISSING 0; the NEVER / HARDWARE row is excluded from the
+   denominator. The order: done 1, partial 0.5, open 0. v1.0: IMPL `DONE` = done, PROOF `PR` =
+   proven in reality. A row whose state cannot be read is `unknown`, named in `jarvis.unknown`,
+   and counted as NOT done (an empty IMPL is `unknown` in `by_status`). The rule is sent as text.
+3. Rounding: nearest whole percent, an exact half rounds DOWN (62.5 -> 62): progress is never
+   rounded up from a tie.
+4. A missing file or a missing section makes that part `null`; the page shows "okunamadı".
+5. The page: `OfficeProgress.tsx` under the top bar, a native `<details>` (click opens, no
+   state, works without JS), three thin `role="meter"` bars, the panel lists the JARVIS rows by
+   state (Var / Yarım / Yok / Okunamadı / Hedef değil) and the order's next open step. Styled
+   inline in the office palette (office.css was not in the card's area).
+6. Deviation from the card: there is no `officeProgress.ts`. On a case-insensitive disk it and
+   `OfficeProgress.tsx` are the same import (`./OfficeProgress` resolved to the .ts on Windows and
+   the component was `undefined`); the model lives in `OfficeProgress.tsx` as `buildProgress`.
+
+## Proposed ROADMAP marker (for the Proje Yöneticisi to apply at merge)
+
+A step of "### The order" may begin with `**DONE**` or `**PARTIAL**` right after its number; no
+marker means open. The parser reads the marker first; without one it falls back to the word DONE
+in the step's own line (step 1 today). The seven lines, the rest of each line unchanged:
+
+```
+1. **DONE** **Memory** — DONE 2026-09-29: PR-1 in production (ADR-0200), PR-2 automated
+2. **PARTIAL** **browser-use, anywhere** — the JARVIS that does anything on the web:
+3. **Secretary** — Radicale (own calendar/contacts), a mail account, then the telephony
+4. **The house** — Home Assistant as the `smart_home` provider; "salonun ışığını kapat".
+5. **Everywhere** — reopened: the office PC is the second device; next: session→device
+6. **Voice and character** — close the Turkish TTS gap, then give the persona its wit.
+7. **Sight** — gesture stage 2 merged after the owner's trial; AR as a later surface.
+```
+
+With the markers the order reads (1 + 0.5) / 7 = 21 %; without them 1 / 7 = 14 % (what the page
+shows until they are applied). The card's "Sıralı plan %25" was an illustration, not a count.
+
+## Consequences / open
+
+- **Production shows `null` for all three today:** the api image (`services/api/Dockerfile`,
+  context `services/api`) does not ship `docs/`. To light the strip on the Cloud Core, either COPY
+  the two files into the image (needs a build context that sees `docs/`) or mount them read-only
+  and set `app.state.progress_root`. Outside this card's area; the lead decides.
+- The strip changes with the documents: a release that edits the table changes the number.

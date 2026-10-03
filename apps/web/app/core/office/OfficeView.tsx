@@ -6,6 +6,7 @@
 import Link from "next/link";
 
 import OfficePanel from "./OfficePanel";
+import OfficeProgress from "./OfficeProgress";
 import OfficeScene from "./OfficeScene";
 import type { OfficeView as Office } from "./officeApi";
 import { energyOf } from "./officeEnergy";
@@ -45,6 +46,7 @@ export default function OfficeView({
           </span>
         )}
       </div>
+      <OfficeProgress progress={view.progress} />
       <div className="office-main">
         <OfficeScene
           seats={office.seats}
