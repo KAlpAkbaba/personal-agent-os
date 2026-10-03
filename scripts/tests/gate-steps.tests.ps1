@@ -287,6 +287,12 @@ function Invoke-GateTwoWays {
         . ([scriptblock]::Create((Get-GateFunctionText $fn)))
     }
     $powershell5 = $powershell
+    # The gate's own last lines (the summary, the final word, the exit code), with `exit n`
+    # turned into a printed "exit=n" so they can run here.
+    $gateText = [System.IO.File]::ReadAllText($gatePath)
+    $tail = $gateText.Substring($gateText.LastIndexOf("# -------------------------------------------------------------------- summary"))
+    if ($tail -match '(?m)^\s*exit(?! [01]\s*$)') { throw "the gate's last lines must end in a literal 'exit 1' / 'exit 0' (team-integrate.tests.ps1 reads them): $($Matches[0])" }
+    $tail = $tail.Replace('$gateClock.Elapsed.TotalSeconds', '1') -replace '(?m)^(\s*)exit (\d)\s*$', '$1Write-Output "exit=$2"; return'
     $out = @{}
     foreach ($way in @("serial", "group")) {
         $GateSerial = ($way -eq "serial")
@@ -303,8 +309,7 @@ function Invoke-GateTwoWays {
                     Assert-ExitCode "fake suite tests"
                 }
                 Complete-GateGroup
-                $code = Write-GateSummary -WallSeconds 1
-                Write-Output "exit=$code"
+                . ([scriptblock]::Create($tail))
             } *>&1 | ForEach-Object { [string]$_ })
         $out[$way] = $lines
     }
@@ -326,6 +331,19 @@ Test-Case "7. a failing step prints the same FAILED line and the same final word
     Assert-True (@($ways["group"] | Where-Object { $_ -eq "exit=1" }).Count -eq 1) "the grouped gate exits 1"
     Assert-True (@($ways["group"] | Where-Object { $_ -eq "=== A fake suite that fails (PS5.1) ===" }).Count -eq 1) "the grouped step has its own section header"
     Assert-True (@($ways["group"] | Where-Object { $_ -match 'FAIL  the fake case' }).Count -ge 1) "the grouped step's log is printed"
+}
+
+Test-Case "8. the suites that read quality-gate.ps1's text still read it green (team-area's step, team-integrate's words)" {
+    # 2026-10-03: the group's first real run was red in exactly these two: team-area wants its
+    # step's 5.1 call written in the gate, team-integrate wants the final word and exit literal.
+    foreach ($reader in @(
+            @{ Suite = "team-area.tests.ps1"; Filter = "^gate: quality-gate\.ps1 runs this suite" },
+            @{ Suite = "team-integrate.tests.ps1"; Filter = "^the fake gate speaks the real gate's words" })) {
+        $lines = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\tests\$($reader.Suite)") -Filter $reader.Filter 2>&1 | ForEach-Object { [string]$_ })
+        $code = $LASTEXITCODE
+        $passed = @($lines | Where-Object { $_ -match '^\s*PASS\s' }).Count
+        Assert-True ($code -eq 0 -and $passed -eq 1) "$($reader.Suite) -Filter '$($reader.Filter)': exit $code, $passed passed ($(@($lines | Where-Object { $_ -match 'FAIL|expected|actual' }) -join ' | '))"
+    }
 }
 
 foreach ($p in @($script:Leftovers)) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }

@@ -175,18 +175,13 @@ function Complete-GateGroup {
 }
 
 function Write-GateSummary {
-  # The table, the wall time and the final word; returns the exit code.
+  # The table and the wall time. The final word and the exit code stay at the script's end in
+  # their old words (team-integrate.tests.ps1 reads them there).
   param([double]$WallSeconds)
   Write-Host ""
   Write-Host "=== Quality gate summary ===" -ForegroundColor Cyan
   $script:results | Format-Table -AutoSize | Out-String | Write-Host
   Write-Host "gate wall time: $([math]::Round($WallSeconds)) s"
-  if ($script:failed) {
-    Write-Host "QUALITY GATE: FAIL" -ForegroundColor Red
-    return 1
-  }
-  Write-Host "QUALITY GATE: PASS" -ForegroundColor Green
-  return 0
 }
 
 function Find-Dotnet {
@@ -421,8 +416,8 @@ if (-not $Fast) {
   # gate-parallel-suites (team/plans/gate-faster-adr.md): the PowerShell / bash suites from here
   # to Complete-GateGroup share no fixed port, temp path, database, git worktree or desktop -
   # the ADR gives the evidence per suite - and run side by side, each as its own process, at
-  # most -GateMaxParallel at once. The three that start the fake team API share one lane: one
-  # at a time, listed first because together they are the group's longest path. What shares
+  # most -GateMaxParallel at once. The two grouped suites that start the fake team API share
+  # one lane: one at a time, listed first because together they are the group's longest path. What shares
   # something stays below the group, in the old order. -GateSerial runs it all one by one.
   Start-GateGroup
 
@@ -435,15 +430,6 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"
     Invoke-GateSuite $script -Lane "fake-team-api"
     Assert-ExitCode "team-integrate tests"
-  }
-
-  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
-    # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
-    # fake in place of the model and a git repository made for the test.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-cycle.tests.ps1"
-    Invoke-GateSuite $script -Lane "fake-team-api"
-    Assert-ExitCode "team-cycle tests"
   }
 
   Invoke-Step "Agent team roadmap feeder (PS5.1 + git, no model)" {
@@ -645,15 +631,6 @@ if (-not $Fast) {
     Assert-ExitCode "team-tick tests"
   }
 
-  Invoke-Step "Agent team area widening rules (PS5.1, no model)" {
-    # A fix outside a card's area: the request line of a report, the widen / wait / refuse
-    # judgement and the protected paths (scripts/lib/TeamArea.ps1) - functions only.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-area.tests.ps1"
-    Invoke-GateSuite $script
-    Assert-ExitCode "team-area tests"
-  }
-
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
     # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
     # fake docker, apt, systemctl and curl. Nothing here touches a host.
@@ -686,6 +663,28 @@ if (-not $Fast) {
 
   # Below the group, one by one as before: what shares something with a grouped suite or with
   # the desktop.
+  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
+    # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
+    # fake in place of the model and a git repository made for the test.
+    # Not grouped: its pool cases time seats against each other and were red beside the group
+    # (2026-10-03, two of 214) and green alone - it runs with nothing beside it.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-cycle.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "team-cycle tests"
+  }
+
+  Invoke-Step "Agent team area widening rules (PS5.1, no model)" {
+    # A fix outside a card's area: the request line of a report, the widen / wait / refuse
+    # judgement and the protected paths (scripts/lib/TeamArea.ps1) - functions only.
+    # Not grouped: the suite reads this step's own text and wants the 5.1 call written here
+    # (team-area.tests.ps1, "gate: quality-gate.ps1 runs this suite as its own step"); 2 s.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-area.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-area tests"
+  }
+
   Invoke-Step "UTF-8 JSON decoding (PS5.1)" {
     # A real qualification record showed Turkish letters as mojibake: 5.1 decoded a
     # charset-less JSON body as Latin-1 while the database held correct UTF-8.
@@ -762,4 +761,11 @@ if (-not $Fast) {
 
 # -------------------------------------------------------------------- summary
 
-exit (Write-GateSummary -WallSeconds $gateClock.Elapsed.TotalSeconds)
+Write-GateSummary -WallSeconds $gateClock.Elapsed.TotalSeconds
+
+if ($failed) {
+  Write-Host "QUALITY GATE: FAIL" -ForegroundColor Red
+  exit 1
+}
+Write-Host "QUALITY GATE: PASS" -ForegroundColor Green
+exit 0
