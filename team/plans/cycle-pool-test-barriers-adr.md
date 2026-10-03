@@ -64,6 +64,19 @@ collected task-one's second inspection - its report file - so the stop is applie
   Get-TeamAreaHolders); it is held by the function case "seats: a task whose area overlaps ...",
   which goes RED (`worker:task-one,worker:task-two,worker:task-three`).
 
+## After the first inspection (RETURN, 2026-10-03)
+
+- Markers are read with `Read-Marker` (the suite): a read refused by another process holding the
+  file (IOException / UnauthorizedAccessException anywhere in the exception chain) is tried again
+  every 50 ms inside a 60 s hang guard; any other failure throws at once. The barrier self-test,
+  `Assert-BarriersOpened` and the "seats are per role" snapshot use it. A new self-test holds a
+  marker open from a child process: a plain read is refused, `Read-Marker` reads it once it is free
+  (RED with the retry removed).
+- The barrier self-test no longer asserts "ended within a second" (1.07 s under load): it asserts
+  the order - the run did not end while the file was missing, its `.ended` says "file", and its
+  `released_at` is not before the file was written. The 60 s WaitForExit is the only time bound,
+  a hang guard.
+
 ## Consequences
 
 A test of the pool now says which run waits for which event; a late snapshot can no longer fail it,

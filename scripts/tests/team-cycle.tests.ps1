@@ -1140,6 +1140,56 @@ try {
     finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+    function Read-Marker {
+        <# A marker of the fake, read again while another process holds it open (the inspector,
+           2026-10-03: ReadAllText refused a freshly renamed .started 3 times in 21 runs under
+           load - most likely a scanner or indexer opening the new file). The bound is a hang
+           guard, not an assertion. #>
+        param([string]$Path, [int]$Seconds = 60)
+        $deadline = [datetime]::UtcNow.AddSeconds($Seconds)
+        while ($true) {
+            try { return (Read-TeamJson -Path $Path) }
+            catch {
+                # A .NET call's failure arrives wrapped (MethodInvocationException): look down the chain.
+                $sharing = $false
+                for ($cause = $_.Exception; $cause; $cause = $cause.InnerException) {
+                    if ($cause -is [System.IO.IOException] -or $cause -is [System.UnauthorizedAccessException]) { $sharing = $true }
+                }
+                if (-not $sharing -or [datetime]::UtcNow -gt $deadline) { throw }
+                Start-Sleep -Milliseconds 50
+            }
+        }
+    }
+
+    Test-Case "a marker another process holds open is read once it is free: the reader waits inside its hang guard, it does not fail" {
+        $work = Join-Path $env:TEMP ("pagentos-markerlock-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+        [void]$sandboxes.Add($work)
+        [void](New-Item -ItemType Directory -Force -Path $work)
+        $marker = Join-Path $work "inspector-task-one.started"
+        [System.IO.File]::WriteAllText($marker, '{"in_flight":"task-one:inspector"}')
+        $held = Join-Path $work "held"
+        $release = Join-Path $work "release"
+        # The holder lets go 1.5 s after it is told to: the read below starts while it still holds.
+        $script = "`$f = [System.IO.File]::Open('$marker', 'Open', 'Read', 'None'); [System.IO.File]::WriteAllText('$held', 'held'); " +
+            "`$until = [datetime]::UtcNow.AddSeconds(60); while (-not (Test-Path -LiteralPath '$release') -and [datetime]::UtcNow -lt `$until) { Start-Sleep -Milliseconds 50 }; " +
+            "Start-Sleep -Milliseconds 1500; `$f.Dispose()"
+        $holder = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($script))) -PassThru -WindowStyle Hidden
+        try {
+            $deadline = [datetime]::UtcNow.AddSeconds(60)
+            while (-not (Test-Path -LiteralPath $held)) {
+                if ([datetime]::UtcNow -gt $deadline -or $holder.HasExited) { throw "the holder did not open the marker (hang guard 60 s)" }
+                Start-Sleep -Milliseconds 50
+            }
+            $refused = $false
+            try { [void](Read-TeamJson -Path $marker) } catch { $refused = $true }
+            Assert-True -Condition $refused -Because "the lock is real: a plain read is refused while it is held (the failure the inspector saw)"
+            [System.IO.File]::WriteAllText($release, "go")
+            Assert-Equal -Expected "task-one:inspector" -Actual ([string](Read-Marker -Path $marker).in_flight) -Because "the marker reader waits for the holder and reads the marker whole"
+            Assert-True -Condition ($holder.WaitForExit(60000)) -Because "the holder ended (hang guard 60 s)"
+        }
+        finally { if (-not $holder.HasExited) { $holder.Kill() } }
+    }
+
     function Start-FakeAlone {
         <# The fake as the cycle starts it - role file, card on standard input - with no cycle around it. #>
         param([string]$Work, [string]$Role, [string]$TaskId)
@@ -1157,7 +1207,7 @@ try {
         return [pscustomobject]@{ Process = $child; Output = $child.StandardOutput.ReadToEndAsync() }
     }
 
-    Test-Case "the fake's barrier: a run told to wait writes its 'started' marker, does not end before the file appears, ends at once after it; with no barrier its answer is as before and no marker is written" {
+    Test-Case "the fake's barrier: a run told to wait writes its 'started' marker, does not end before the file appears, ends after it; with no barrier its answer is as before and no marker is written" {
         $work = Join-Path $env:TEMP ("pagentos-fakebarrier-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
         [void]$sandboxes.Add($work)
         $markers = Join-Path $work "markers"
@@ -1181,16 +1231,18 @@ try {
                 if ([datetime]::UtcNow -gt $deadline -or $held.Process.HasExited) { throw "the run wrote no 'started' marker (hang guard 60 s)" }
                 Start-Sleep -Milliseconds 50
             }
-            Assert-Equal -Expected "task-one:inspector" -Actual (Read-TeamJson -Path (Join-Path $markers "inspector-task-one.started")).in_flight -Because "the marker names the runs in flight - this one"
+            Assert-Equal -Expected "task-one:inspector" -Actual (Read-Marker -Path (Join-Path $markers "inspector-task-one.started")).in_flight -Because "the marker names the runs in flight - this one"
             Assert-True -Condition (-not $held.Process.WaitForExit(3000)) -Because "the file is not there: the run does not end"
             Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $markers "inspector-task-one.ended"))) -Because "nor does it say it ended"
             $opened = [datetime]::UtcNow
             [System.IO.File]::WriteAllText($open, "open")
             Assert-True -Condition ($held.Process.WaitForExit(60000)) -Because "the file is there: the run ends (hang guard 60 s)"
-            $ended = Read-TeamJson -Path (Join-Path $markers "inspector-task-one.ended")
+            $ended = Read-Marker -Path (Join-Path $markers "inspector-task-one.ended")
             Assert-Equal -Expected "file" -Actual $ended.barrier -Because "it was the file that let it go, not the guard"
-            $lag = ([datetime]::Parse([string]$ended.released_at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal) - $opened).TotalSeconds
-            Assert-True -Condition ($lag -lt 1) -Because "it saw the file within a second of it (polls every 50 ms): $lag s"
+            # The ORDER, not a lag: it let go after the file was written (a one-second ceiling here
+            # read 1.07 s under load, 2026-10-03). How soon is bounded by the hang guard above only.
+            $released = [datetime]::Parse([string]$ended.released_at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+            Assert-True -Condition ($released -ge $opened) -Because "it let go after the file appeared, not before: released $($released.ToString('o')), file written from $($opened.ToString('o'))"
             Assert-Equal -Expected $expected -Actual $held.Output.Result -Because "and it answers as the scenario says"
         }
         finally { foreach ($name in $names) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue } }
@@ -2234,7 +2286,7 @@ try {
         foreach ($name in $Runs) {
             $path = Join-Path $Markers "$name.ended"
             Assert-True -Condition (Test-Path -LiteralPath $path) -Because "$name ended"
-            Assert-Equal -Expected "file" -Actual ([string](Read-TeamJson -Path $path).barrier) -Because "$name was let go by the event it waited for, not by the hang guard"
+            Assert-Equal -Expected "file" -Actual ([string](Read-Marker -Path $path).barrier) -Because "$name was let go by the event it waited for, not by the hang guard"
         }
     }
 
@@ -3130,7 +3182,7 @@ try {
         foreach ($names in $seen) {
             Assert-True -Condition (@($names -split "," | Where-Object { $_ -match ":inspector$" }).Count -le 2) -Because "never a third inspection beside two: $names"
         }
-        Assert-Equal -Expected "ins-b:inspector,ins-c:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker" -Actual ([string](Read-TeamJson -Path (Join-Path $markers "inspector-ins-c.started")).in_flight) `
+        Assert-Equal -Expected "ins-b:inspector,ins-c:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker" -Actual ([string](Read-Marker -Path (Join-Path $markers "inspector-ins-c.started")).in_flight) `
             -Because "the third inspection took the seat the first one left, while everything else was still running (ins-b and the workers were held until it started)"
         Assert-True -Condition ($seen -contains "ins-b:inspector,ins-c:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker") -Because "and the cycle's own status says the same: $($seen -join ' | ')"
         Assert-Equal -Expected "merged,merged,merged,merged,merged,merged" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
