@@ -339,6 +339,60 @@ Test-Case "the earlier rounds' SQL - any ALTER, ADD VALUE, an unreadable or a on
         "op.get_bind().execute(sa.text(load('x.sql')))", "op.execute(`"`"`"`n        CREATE TABLE x (id int)`n    `"`"`")")
 }
 
+# Denetleyici-4 (2026-10-03): three holes in "in doubt, not expand-only", each closed with a case.
+function Get-ModuleVerdict {
+    param([string]$Head)
+    $tail = "`n`n`ndef upgrade() -> None:`n    op.create_index(`"ix`", `"notes`", [`"c`"])`n`n`ndef downgrade() -> None:`n    pass`n"
+    return (Get-TeamMigrationVerdict -Path "services/api/alembic/versions/x.py" -Status "A" -Text ("from alembic import op`nimport sqlalchemy as sa`n" + $Head + $tail))
+}
+
+Test-Case "inspector-4 (1): a star import binds unknown names (op/sa among them) - not expand-only" {
+    foreach ($head in @("from helpers import *", "from sqlalchemy import *", "from alembic.op import (`n    *`n)")) {
+        $verdict = Get-ModuleVerdict -Head $head
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "star import: $head"
+        Assert-True -Condition ([bool]$verdict.Why) -Because "it says why - $head"
+    }
+}
+
+Test-Case "inspector-4 (2): any binding of upgrade/downgrade/op/sa - a walrus, a later target, a module-level assignment - is not expand-only" {
+    foreach ($head in @("Y = (op := 1)", "Y = [sa := 2]", "upgrade = sa.text", "downgrade = 1", "X = op = 1", "X = Y = sa = 1",
+            "X: int = (upgrade := 3)", "sa: object = 1")) {
+        $verdict = Get-ModuleVerdict -Head $head
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "rebinding: $head"
+        Assert-True -Condition ([bool]$verdict.Why) -Because "it says why - $head"
+    }
+    Assert-NotExpandOnly -Because "a walrus inside upgrade()" -Bodies @('op.create_index("ix", (op := "notes"), ["c"])')
+    $verdict = Get-ModuleVerdict -Head "revision = `"0066`"`nX: int = 1"
+    Assert-True -Condition $verdict.ExpandOnly -Because "a plain constant still passes: $($verdict.Why)"
+}
+
+Test-Case "inspector-4 (3): add_column reads the column's OWN keywords - a nested nullable=True, ** spread, sa.null() default or non-literal nullable is not expand-only" {
+    Assert-NotExpandOnly -Because "not provably nullable or defaulted" -Bodies @(
+        "op.add_column('t', sa.Column('c', sa.Integer, nullable=0, info={'k': sa.Column('z', nullable=True)}))",
+        "op.add_column('t', sa.Column('c', sa.Integer, server_default=sa.null(), **NN))",
+        "op.add_column('t', sa.Column('c', sa.Integer, nullable=True, **NN))",
+        "op.add_column('t', sa.Column('c', sa.Integer, server_default=sa.null()))",
+        "op.add_column('t', sa.Column('c', sa.Integer, server_default=None))",
+        "op.add_column('t', sa.Column('c', sa.Integer, nullable=NULLABLE, server_default='0'))",
+        "op.add_column('t', sa.Column('c', sa.Integer, nullable=(True)))",
+        "op.add_column('t', sa.Column('c', sa.Integer, *EXTRA, nullable=True))",
+        "op.add_column('t', COLUMN)",
+        "op.add_column('t', sa.Column('c', sa.Integer, nullable=True), **KW)",
+        "op.add_column('t', sa.Column('c', sa.Integer, comment='nullable=True'))")
+    foreach ($body in @("op.add_column('t', sa.Column('c', sa.Integer, nullable=True))",
+            "op.add_column('t', column=sa.Column('c', sa.Integer(), nullable=False, server_default='0'))",
+            "op.add_column(table_name='t', column=sa.Column('c', sa.Integer(), server_default=sa.text('0')), schema='public')")) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition $verdict.ExpandOnly -Because "a plainly nullable/defaulted column: $body - $($verdict.Why)"
+    }
+}
+
+Test-Case "inspector-4 (ek): create_index(..., unique=True) is not expand-only (it may reject rows the old colour writes)" {
+    Assert-NotExpandOnly -Because "a unique index" -Bodies @(
+        'op.create_index("ix", "notes", ["c"], unique=True)', 'op.create_index("ix", "notes", ["c"], unique=UNIQUE)',
+        'op.create_index("ix", "notes", ["c"], **KW)')
+}
+
 Test-Case "only alembic versions are migrations" {
     Assert-True -Condition (Test-TeamMigrationPath -Path "services/api/alembic/versions/20261003_0066_x.py") -Because "a version file"
     Assert-True -Condition (-not (Test-TeamMigrationPath -Path "services/api/alembic/env.py")) -Because "env.py is not a version"
