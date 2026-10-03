@@ -1,0 +1,21 @@
+# Build context = the repository root (infra/docker/docker-compose.prod.yml, service `web`).
+# An allowlist: everything else in the repository (services, team, state, docs, the
+# owner's identity root, any .env) never reaches the build daemon, let alone the image.
+*
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!apps/web/**
+# The one file outside the package the web shell imports (app/lib/voice/session-contract.ts):
+# the realtime session contract, bundled into the client at build time.
+!packages/protocol/realtime-session-contract.json
+# ...except what must never ride along from the web package.
+apps/web/node_modules
+apps/web/.next
+apps/web/tests
+apps/web/preview
+apps/web/AGENTS.md
+apps/web/**/.env
+apps/web/**/.env.*
+apps/web/**/*.key
+apps/web/**/*.pem
+apps/web/tsconfig.tsbuildinfo

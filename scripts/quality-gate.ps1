@@ -531,6 +531,16 @@ if (-not $Fast) {
     Assert-ExitCode "host-snapshot tests"
   }
 
+  Invoke-Step "Web shell on the tailnet: HTTPS script (PS5.1 + bash, fake tailscale)" {
+    # The web shell runs on the Cloud Core (aux `web` service, loopback only); the phone reaches
+    # it over `tailscale serve` HTTPS. The script that sets that up, against a fake tailscale:
+    # the loopback target, idempotence, --off, and that `funnel` is never called. No tailnet.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\web-tailnet-https.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "web-tailnet-https tests"
+  }
+
   Invoke-Step "Web shell build" {
     $pnpm = Resolve-Tool "pnpm" @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
     if (-not $pnpm) { throw "pnpm not found" }
