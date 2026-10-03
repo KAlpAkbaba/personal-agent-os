@@ -44,11 +44,10 @@ about to use the dev stack, or that the lead already decided the question it is 
 
 ## What the lead wires at merge (outside this task's area)
 
-- `services/api/app/main.py`: `from app.team.routes_board import router as team_board_router`
-  and `app.include_router(team_board_router)` beside `team_router`; then delete the
-  `xfail(strict=True)` marker on `test_the_real_application_serves_the_board`
-  (`tests/unit/test_team_board.py`) in the same commit - it turns into a failure the moment
-  the router is wired, so it cannot be forgotten.
+- DONE (the Proje Yöneticisi, 2026-10-03, commit 1873239b): `services/api/app/main.py` includes
+  `routes_board.router` beside `team_router`; the strict xfail is gone and
+  `test_the_real_application_serves_the_board` asks the real application by request (401 / 404).
+  The PostgreSQL tests run on that wiring (no router added by hand).
 - `scripts/team/cycle.ps1`: give each run `PAGENTOS_TEAM_URL` = the `-QueueUrl` and
   `PAGENTOS_TEAM_TOKEN_FILE` = the `-QueueToken` path, and tell the run its seat name.
 - The role text below into `.claude/agents/{lead,researcher,integrator,worker,inspector}.md`

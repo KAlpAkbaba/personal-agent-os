@@ -106,11 +106,13 @@ def parse_since(since: str | None) -> str | None:
         return None
     try:
         at = datetime.fromisoformat(since.replace("Z", "+00:00"))
-    except ValueError as error:
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=UTC)
+        # a time at the edge of the calendar with an offset (9999-12-31T23:59:59-23:59) is a
+        # valid ISO string that overflows when turned to UTC: refused like any bad time
+        return stamp(at)
+    except (ValueError, OverflowError) as error:
         raise Refused(422, "invalid", [f"since is an ISO time: {since!r}"]) from error
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=UTC)
-    return stamp(at)
 
 
 def _shape_problems(body: Any) -> list[str]:

@@ -30,7 +30,6 @@ from app.db import build_engine, build_session_factory
 from app.main import create_app
 from app.team import board
 from app.team.models import TeamStateRow
-from app.team.routes_board import router as board_router
 from app.team.store import DbStore
 from tests.integration.conftest import attach_owner, shared_identity
 
@@ -141,7 +140,6 @@ def test_the_routes_refuse_with_their_4xx_on_postgres(factory) -> None:
     settings = Settings()
     app = create_app(settings)
     app.state.team_store = DbStore(factory)
-    app.include_router(board_router)
     client = TestClient(app)
     attach_owner(app, client, settings)
     for body in (
@@ -172,7 +170,6 @@ def served(factory, tmp_path: Path) -> Iterator[tuple[str, Path]]:
     settings = Settings()
     app = create_app(settings)
     app.state.team_store = DbStore(factory)
-    app.include_router(board_router)
     runtime = shared_identity(settings)
     app.state.identity = runtime
     token_file = tmp_path / "team.token"

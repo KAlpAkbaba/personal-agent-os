@@ -207,6 +207,13 @@ def test_read_refuses_a_since_that_is_not_a_time(store: board.Board) -> None:
     assert _refused(lambda: store.read(since="dün")).status == 422
 
 
+@pytest.mark.parametrize("since", ["9999-12-31T23:59:59-23:59", "0001-01-01T00:00:00+23:59"])
+def test_read_refuses_a_since_that_overflows_the_calendar(store: board.Board, since: str) -> None:
+    # the inspector's finding (team-board-inspector-3): a valid ISO time at the calendar's edge
+    # overflowed in astimezone(UTC) and the route answered 500 - the board says 4xx, never 500
+    assert _refused(lambda: store.read(since=since)).status == 422
+
+
 def test_the_pure_prune_is_idempotent() -> None:
     notes = [
         {
@@ -280,6 +287,7 @@ def test_the_route_answers_429_for_the_twenty_first_note(client: TestClient) -> 
 
 def test_the_route_refuses_bad_query_values(client: TestClient) -> None:
     assert client.get(NOTES, params={"since": "dün"}).status_code == 422
+    assert client.get(NOTES, params={"since": "9999-12-31T23:59:59-23:59"}).status_code == 422
     assert client.get(NOTES, params={"limit": 0}).status_code == 422
     assert client.get(NOTES, params={"limit": 501}).status_code == 422
 
