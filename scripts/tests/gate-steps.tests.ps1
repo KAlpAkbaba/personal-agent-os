@@ -1,0 +1,336 @@
+<#
+.SYNOPSIS
+    The gate's suite group (scripts/lib/GateSteps.ps1, team/plans/gate-faster-adr.md): the
+    PowerShell suites that share nothing run side by side, each as its own process.
+
+.DESCRIPTION
+    The gate ran its steps strictly one after another although most suites touch nothing the
+    others touch. Invoke-GateStepGroup runs a list of steps, at most N at once, each in its own
+    powershell.exe with stdout and stderr in two files, and answers per step: name, outcome,
+    exit code, seconds, the two log paths. A step past its deadline is killed with its process
+    tree and is a failed step, never a hang.
+
+    The cases, by number (the card's acceptance names them). Every fake step is written by
+    this file into a temp folder; bounds are hang guards, never the claim:
+
+      1  three steps that each wait for a file this test creates only after it has seen all
+         three 'started' markers: all three ARE running at once (run with -Case1MaxParallel 1
+         for the red);
+      2  -MaxParallel 2 with four steps: never more than two started without a matching end;
+      3  one step exits 3 among passing ones: its name and code come back, the others ran to
+         their end, the group failed;
+      4  a step that never ends is killed at its deadline WITH its child, is reported with the
+         timeout word, and the group returns;
+      5  100 000 lines on each stream are complete in their own files (the pipe-full hang),
+         and a step that writes to stderr and exits 0 passes;
+      6  results come back in the listed order whatever order the steps ended in;
+      7  the real quality-gate.ps1's printing functions: a failing step prints the same
+         `FAILED:` line and the same final word grouped as it does sequentially.
+
+    Run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tests\gate-steps.tests.ps1
+#>
+
+[CmdletBinding()]
+param(
+    # Runs only the cases whose name matches this pattern (the mutation proofs re-run a slice).
+    [string]$Filter = "",
+    # Case 1's group width; 1 is the red run the card asks for.
+    [int]$Case1MaxParallel = 3
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$gatePath = Join-Path $repoRoot "scripts\quality-gate.ps1"
+$powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+. (Join-Path $repoRoot "scripts\lib\GateSteps.ps1")
+
+$script:Failures = 0
+$script:Passes = 0
+$sandbox = Join-Path $env:TEMP ("pagentos-gatesteps-tests-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+$script:Leftovers = New-Object System.Collections.ArrayList
+
+function Test-Case {
+    param([string]$Name, [scriptblock]$Body)
+    if ($Filter -and $Name -notmatch $Filter) { return }
+    try { & $Body; $script:Passes++; Write-Host "  PASS  $Name" }
+    catch {
+        $script:Failures++
+        Write-Host "  FAIL  $Name" -ForegroundColor Red
+        Write-Host "        $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+function Assert-Equal {
+    param($Expected, $Actual, [string]$Because)
+    if ($Expected -ne $Actual) { throw "$Because`n          expected: <$Expected>`n          actual  : <$Actual>" }
+}
+
+function Assert-True {
+    param([bool]$Condition, [string]$Because)
+    if (-not $Condition) { throw $Because }
+}
+
+# One fake step for every case: it marks its start and its end in a folder and does what its
+# mode says in between.
+$fakeStep = Join-Path $sandbox "fake-step.ps1"
+[System.IO.File]::WriteAllText($fakeStep, @'
+param([string]$Dir, [string]$Id, [string]$Mode = "sleep", [int]$Exit = 0, [int]$Milliseconds = 0)
+$ErrorActionPreference = "Stop"
+function Set-Marker([string]$What) { [System.IO.File]::WriteAllText((Join-Path $Dir "$What-$Id"), [string][datetime]::UtcNow.Ticks) }
+Set-Marker "started"
+switch ($Mode) {
+    "wait-release" {
+        $deadline = [datetime]::UtcNow.AddSeconds(120)
+        while (-not (Test-Path -LiteralPath (Join-Path $Dir "release")) -and [datetime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    }
+    "sleep" { Start-Sleep -Milliseconds $Milliseconds }
+    "hang" {
+        $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $child = Start-Process -FilePath $ps -ArgumentList "-NoProfile -Command Start-Sleep -Seconds 600" -PassThru -WindowStyle Hidden
+        [System.IO.File]::WriteAllText((Join-Path $Dir "pids-$Id"), "$PID $($child.Id)")
+        Start-Sleep -Seconds 600
+    }
+    "flood" {
+        $out = [Console]::Out; $err = [Console]::Error
+        for ($i = 0; $i -lt 100000; $i++) { $out.WriteLine("out line $i"); $err.WriteLine("err line $i") }
+    }
+    "stderr" { [Console]::Error.WriteLine("a warning on stderr; the step still passes") }
+}
+Set-Marker "ended"
+exit $Exit
+'@, (New-Object System.Text.ASCIIEncoding))
+
+function New-CaseDir {
+    $dir = Join-Path $sandbox ([guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    return $dir
+}
+
+function New-FakeGateStep {
+    param([string]$Dir, [string]$Id, [string]$Mode = "sleep", [int]$Exit = 0, [int]$Milliseconds = 0, [int]$DeadlineSeconds = 0, [string]$Lane = "")
+    return New-GateStep -Name "step $Id" -Script $fakeStep -What "step $Id tests" -Lane $Lane -DeadlineSeconds $DeadlineSeconds `
+        -Arguments @("-Dir", $Dir, "-Id", $Id, "-Mode", $Mode, "-Exit", [string]$Exit, "-Milliseconds", [string]$Milliseconds)
+}
+
+function Get-Marker {
+    param([string]$Dir, [string]$What)
+    return @(Get-ChildItem -LiteralPath $Dir -Filter "$What-*" -ErrorAction SilentlyContinue)
+}
+
+function Get-MarkerTicks {
+    param([string]$Dir, [string]$What, [string]$Id)
+    $path = Join-Path $Dir "$What-$Id"
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    return [long]([System.IO.File]::ReadAllText($path))
+}
+
+# -------------------------------------------------------------- 1: running at once
+
+Test-Case "1. three steps waiting on a file the test makes only after all three started: all three run at once" {
+    $dir = New-CaseDir
+    $driver = Join-Path $dir "driver.ps1"
+    $resultPath = Join-Path $dir "results.json"
+    [System.IO.File]::WriteAllText($driver, @"
+`$ErrorActionPreference = "Stop"
+. "$(Join-Path $repoRoot "scripts\lib\GateSteps.ps1")"
+`$steps = @(foreach (`$id in @("a", "b", "c")) { New-GateStep -Name "step `$id" -Script "$fakeStep" -What "step `$id" -Arguments @("-Dir", "$dir", "-Id", `$id, "-Mode", "wait-release") })
+`$r = Invoke-GateStepGroup -Steps `$steps -MaxParallel $Case1MaxParallel -LogRoot "$(Join-Path $dir 'logs')"
+[System.IO.File]::WriteAllText("$resultPath", (ConvertTo-Json -InputObject @(`$r | ForEach-Object { `$_.Outcome })))
+"@, (New-Object System.Text.ASCIIEncoding))
+    $proc = Start-Process -FilePath $powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$driver`"" -PassThru -WindowStyle Hidden
+    [void]$script:Leftovers.Add($proc.Id)
+    $seen = 0
+    $endedBeforeRelease = 0
+    $guard = [datetime]::UtcNow.AddSeconds(45)    # hang guard: three powershell starts take seconds
+    while ([datetime]::UtcNow -lt $guard) {
+        $seen = @(Get-Marker -Dir $dir -What "started").Count
+        if ($seen -ge 3) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    $endedBeforeRelease = @(Get-Marker -Dir $dir -What "ended").Count
+    [System.IO.File]::WriteAllText((Join-Path $dir "release"), "go")
+    if (-not $proc.WaitForExit(180000)) { throw "the group did not return after the release (hang guard)" }
+    Assert-Equal 0 $endedBeforeRelease "no step ended before the release"
+    Assert-Equal 3 $seen "all three 'started' markers were there before the test released any step"
+    $outcomes = @(ConvertFrom-Json ([System.IO.File]::ReadAllText($resultPath)))
+    Assert-Equal "PASS,PASS,PASS" ($outcomes -join ",") "all three passed once released"
+}
+
+# ------------------------------------------------------------ 2: never more than N
+
+Test-Case "2. -MaxParallel 2 with four steps: never more than two started without a matching end, and two did overlap" {
+    $dir = New-CaseDir
+    $steps = @(foreach ($id in @("a", "b", "c", "d")) { New-FakeGateStep -Dir $dir -Id $id -Mode "sleep" -Milliseconds 3000 })
+    $r = @(Invoke-GateStepGroup -Steps $steps -MaxParallel 2 -LogRoot (Join-Path $dir "logs"))
+    Assert-Equal 4 @($r).Count "four results"
+    $events = New-Object System.Collections.ArrayList
+    foreach ($id in @("a", "b", "c", "d")) {
+        [void]$events.Add([pscustomobject]@{ T = (Get-MarkerTicks $dir "started" $id); D = 1 })
+        [void]$events.Add([pscustomobject]@{ T = (Get-MarkerTicks $dir "ended" $id); D = -1 })
+    }
+    # An end and a start at the same tick: the end first (it really happened before the start).
+    $running = 0; $most = 0
+    foreach ($e in @($events | Sort-Object -Property T, D)) {
+        $running += $e.D
+        if ($running -gt $most) { $most = $running }
+    }
+    Assert-True ($most -le 2) "at most two ran at once (saw $most)"
+    Assert-Equal 2 $most "two did run at once (the group is not serial)"
+}
+
+# ------------------------------------------------------------- 3: a failing step
+
+Test-Case "3. one step exits 3 among passing ones: its name and code come back, the others ran to their end, the group failed" {
+    $dir = New-CaseDir
+    $steps = @(
+        (New-FakeGateStep -Dir $dir -Id "first" -Mode "sleep" -Milliseconds 300),
+        (New-FakeGateStep -Dir $dir -Id "broken" -Mode "sleep" -Exit 3),
+        (New-FakeGateStep -Dir $dir -Id "last" -Mode "sleep" -Milliseconds 2000)
+    )
+    $r = @(Invoke-GateStepGroup -Steps $steps -MaxParallel 3 -LogRoot (Join-Path $dir "logs"))
+    $broken = @($r | Where-Object { $_.Outcome -ne "PASS" })
+    Assert-Equal 1 @($broken).Count "exactly one step failed"
+    Assert-Equal "step broken" $broken[0].Name "the failing step's name comes back"
+    Assert-Equal 3 $broken[0].ExitCode "its exit code comes back"
+    Assert-Equal "FAIL" $broken[0].Outcome "its outcome is FAIL"
+    foreach ($id in @("first", "last")) { Assert-True ($null -ne (Get-MarkerTicks $dir "ended" $id)) "step $id ran to its end" }
+    Assert-True (-not (Test-GateStepGroupPassed -Results $r)) "the group's result is failed"
+    Assert-True (Test-GateStepGroupPassed -Results @($r | Where-Object { $_.Outcome -eq "PASS" })) "...and the passing ones alone pass"
+}
+
+# ------------------------------------------------------------- 4: the deadline
+
+Test-Case "4. a step that never ends is killed at its deadline with its child, reported with the timeout word, and the group returns" {
+    $dir = New-CaseDir
+    $steps = @(
+        (New-FakeGateStep -Dir $dir -Id "hangs" -Mode "hang" -DeadlineSeconds 8),
+        (New-FakeGateStep -Dir $dir -Id "fine" -Mode "sleep" -Milliseconds 200)
+    )
+    $r = @(Invoke-GateStepGroup -Steps $steps -MaxParallel 2 -LogRoot (Join-Path $dir "logs"))
+    $pidsPath = Join-Path $dir "pids-hangs"
+    Assert-True (Test-Path -LiteralPath $pidsPath) "the hanging step started its child"
+    $pids = @(([System.IO.File]::ReadAllText($pidsPath)).Trim() -split '\s+' | ForEach-Object { [int]$_ })
+    foreach ($p in $pids) { [void]$script:Leftovers.Add($p) }
+    Start-Sleep -Milliseconds 500    # Process.HasExited lags a kill under load; the claim is below
+    $alive = @($pids | Where-Object { $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue) })
+    Assert-Equal "" ($alive -join ",") "the step ($($pids[0])) and its child ($($pids[1])) are both gone"
+    $hung = @($r | Where-Object { $_.Name -eq "step hangs" })[0]
+    Assert-Equal $script:GateStepTimeoutWord $hung.Outcome "the hanging step is reported with the timeout word"
+    Assert-True (-not (Test-GateStepGroupPassed -Results $r)) "a timed-out step fails the group"
+    Assert-Equal "PASS" (@($r | Where-Object { $_.Name -eq "step fine" })[0].Outcome) "the other step passed"
+}
+
+# ----------------------------------------------------------- 5: the two streams
+
+Test-Case "5. 100 000 lines on each stream land whole in their own files; stderr with exit 0 is a pass" {
+    $dir = New-CaseDir
+    $steps = @(
+        (New-FakeGateStep -Dir $dir -Id "flood" -Mode "flood" -DeadlineSeconds 300),
+        (New-FakeGateStep -Dir $dir -Id "warns" -Mode "stderr")
+    )
+    $r = @(Invoke-GateStepGroup -Steps $steps -MaxParallel 2 -LogRoot (Join-Path $dir "logs"))
+    $flood = $r[0]
+    Assert-Equal "PASS" $flood.Outcome "the flooding step ended by itself and passed (it did not block)"
+    $out = @([System.IO.File]::ReadAllLines($flood.StdoutPath) | Where-Object { $_ })
+    $err = @([System.IO.File]::ReadAllLines($flood.StderrPath) | Where-Object { $_ })
+    Assert-Equal 100000 @($out | Where-Object { $_ -like "out line *" }).Count "stdout holds every stdout line"
+    Assert-Equal 100000 @($err | Where-Object { $_ -like "err line *" }).Count "stderr holds every stderr line"
+    Assert-Equal 0 @($out | Where-Object { $_ -like "err line *" }).Count "no stderr line in the stdout file (never merged)"
+    Assert-Equal 0 @($err | Where-Object { $_ -like "out line *" }).Count "no stdout line in the stderr file"
+    Assert-Equal "PASS" $r[1].Outcome "a step that writes to stderr and exits 0 passes"
+    Assert-True ([System.IO.File]::ReadAllText($r[1].StderrPath) -match "still passes") "...and what it wrote is kept"
+}
+
+# ----------------------------------------------------------- 6: the listed order
+
+Test-Case "6. results come back in the listed order, whatever order the steps ended in" {
+    $dir = New-CaseDir
+    $steps = @(
+        (New-FakeGateStep -Dir $dir -Id "slow" -Mode "sleep" -Milliseconds 4000),
+        (New-FakeGateStep -Dir $dir -Id "middle" -Mode "sleep" -Milliseconds 2000),
+        (New-FakeGateStep -Dir $dir -Id "quick" -Mode "sleep" -Milliseconds 10)
+    )
+    $r = @(Invoke-GateStepGroup -Steps $steps -MaxParallel 3 -LogRoot (Join-Path $dir "logs"))
+    Assert-True ((Get-MarkerTicks $dir "ended" "quick") -lt (Get-MarkerTicks $dir "ended" "slow")) "the steps really ended out of order"
+    Assert-Equal "step slow,step middle,step quick" (@($r | ForEach-Object { $_.Name }) -join ",") "the listed order"
+    foreach ($x in $r) {
+        Assert-True ($x.Seconds -ge 0 -and (Test-Path -LiteralPath $x.StdoutPath) -and (Test-Path -LiteralPath $x.StderrPath)) "$($x.Name): seconds and both log paths"
+    }
+}
+
+Test-Case "6b. the named defaults: three at once, a deadline, a timeout word" {
+    Assert-Equal 3 $script:GateStepMaxParallel "the default width is the named constant 3"
+    Assert-True ($script:GateStepDeadlineSeconds -ge 3600) "the default deadline is a hang guard, not a stopwatch ($script:GateStepDeadlineSeconds s)"
+    Assert-Equal "TIMEOUT" $script:GateStepTimeoutWord "the timeout word"
+}
+
+# ------------------------------------------- 7: the gate prints the same either way
+
+function Get-GateFunctionText {
+    <# The text of one function of scripts/quality-gate.ps1, found by the parser. #>
+    param([string]$Name)
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($gatePath, [ref]$tokens, [ref]$errors)
+    $f = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name }, $true)
+    if ($null -eq $f) { throw "scripts/quality-gate.ps1 has no function $Name" }
+    return $f.Extent.Text
+}
+
+function Invoke-GateTwoWays {
+    <# One failing fake suite through the gate's own functions, sequential and grouped. #>
+    param([string]$Suite)
+    foreach ($fn in @("Invoke-Step", "Assert-ExitCode", "Get-StepFailureText", "Invoke-GateSuite", "Start-GateGroup", "Complete-GateGroup", "Write-GateSummary")) {
+        . ([scriptblock]::Create((Get-GateFunctionText $fn)))
+    }
+    $powershell5 = $powershell
+    $out = @{}
+    foreach ($way in @("serial", "group")) {
+        $GateSerial = ($way -eq "serial")
+        $GateMaxParallel = 0
+        $script:results = New-Object System.Collections.ArrayList
+        $script:failed = $false
+        $script:GateGroup = $null
+        $script:GateRecording = $null
+        $lines = @(& {
+                Start-GateGroup
+                Invoke-Step "A fake suite that fails (PS5.1)" {
+                    $script = $Suite
+                    Invoke-GateSuite $script
+                    Assert-ExitCode "fake suite tests"
+                }
+                Complete-GateGroup
+                $code = Write-GateSummary -WallSeconds 1
+                Write-Output "exit=$code"
+            } *>&1 | ForEach-Object { [string]$_ })
+        $out[$way] = $lines
+    }
+    return $out
+}
+
+Test-Case "7. a failing step prints the same FAILED line and the same final word grouped as sequentially (the real gate's functions)" {
+    $suite = Join-Path $sandbox "failing-suite.ps1"
+    [System.IO.File]::WriteAllText($suite, "Write-Host '  FAIL  the fake case'`r`nexit 3`r`n", (New-Object System.Text.ASCIIEncoding))
+    $ways = Invoke-GateTwoWays -Suite $suite
+    $failedSerial = @($ways["serial"] | Where-Object { $_ -match '^FAILED: ' })
+    $failedGroup = @($ways["group"] | Where-Object { $_ -match '^FAILED: ' })
+    Assert-Equal "FAILED: fake suite tests exited with code 3" ($failedSerial -join "|") "the sequential gate's line"
+    Assert-Equal ($failedSerial -join "|") ($failedGroup -join "|") "the grouped step's FAILED line equals the sequential one"
+    $wordSerial = @($ways["serial"] | Where-Object { $_ -match '^QUALITY GATE: ' })
+    $wordGroup = @($ways["group"] | Where-Object { $_ -match '^QUALITY GATE: ' })
+    Assert-Equal "QUALITY GATE: FAIL" ($wordSerial -join "|") "the sequential final word"
+    Assert-Equal ($wordSerial -join "|") ($wordGroup -join "|") "the grouped final word equals the sequential one"
+    Assert-True (@($ways["group"] | Where-Object { $_ -eq "exit=1" }).Count -eq 1) "the grouped gate exits 1"
+    Assert-True (@($ways["group"] | Where-Object { $_ -eq "=== A fake suite that fails (PS5.1) ===" }).Count -eq 1) "the grouped step has its own section header"
+    Assert-True (@($ways["group"] | Where-Object { $_ -match 'FAIL  the fake case' }).Count -ge 1) "the grouped step's log is printed"
+}
+
+foreach ($p in @($script:Leftovers)) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+
+Write-Host ""
+Write-Host "gate steps: $script:Passes passed, $script:Failures failed"
+if ($script:Failures -gt 0) { exit 1 }
+exit 0
