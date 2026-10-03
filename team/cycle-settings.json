@@ -1,0 +1,5 @@
+{
+  "max_parallel": 3,
+  "max_inspectors": 2,
+  "max_integrators": 1
+}
