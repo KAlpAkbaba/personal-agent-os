@@ -8,12 +8,13 @@
  * decisions live in `officeModel.ts` and `createOfficePoller`; this file only wires them.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import FamilyPage from "../../components/FamilyPage";
 import OfficeView from "./OfficeView";
 import { createOfficePoller, fetchOffice, type OfficeView as Office } from "./officeApi";
 import { selectSeat } from "./officeModel";
+import { arrivals } from "./officeMood";
 import "./office.css";
 
 function useReducedMotion(): boolean {
@@ -34,11 +35,20 @@ export default function OfficePage() {
   const [failure, setFailure] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const reducedMotion = useReducedMotion();
+  // the seats that just took a new task walk in to their desks for a moment
+  const [arriving, setArriving] = useState<string[]>([]);
+  const previous = useRef<Office | null>(null);
 
   useEffect(() => {
     const poller = createOfficePoller({
       fetch: fetchOffice,
       onData: (next) => {
+        const walked = arrivals(previous.current, next);
+        previous.current = next;
+        if (walked.length > 0) {
+          setArriving(walked);
+          window.setTimeout(() => setArriving([]), 2600);
+        }
         setView(next);
         setOffline(false);
         setFailure(null);
@@ -78,6 +88,7 @@ export default function OfficePage() {
           selected={selected}
           offline={offline}
           reducedMotion={reducedMotion}
+          arriving={arriving}
           onSelect={(seat) => setSelected((current) => selectSeat(current, seat))}
         />
       )}

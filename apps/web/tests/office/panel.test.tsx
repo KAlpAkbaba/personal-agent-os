@@ -202,7 +202,7 @@ describe("a seat with no task", () => {
       '<aside class="office-panel" data-office="panel" data-panel-seat="lead"><h2>Proje Yöneticisi</h2><p class="muted">Durum: bekliyor</p><p class="muted">Bu koltuğun şu an bir işi yok.</p></aside>',
     );
     expect(render(view, "owner")).toBe(
-      '<aside class="office-panel" data-office="panel" data-panel-seat="owner"><h2>Sahip</h2><p class="muted">Durum: bekliyor</p><p class="muted">Bu koltuğun şu an bir işi yok.</p></aside>',
+      '<aside class="office-panel" data-office="panel" data-panel-seat="owner"><h2>CTO</h2><p class="muted">Durum: bekliyor</p><p class="muted">Bu koltuğun şu an bir işi yok.</p></aside>',
     );
   });
 });
