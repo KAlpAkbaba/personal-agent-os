@@ -366,47 +366,28 @@ _ENTITIES: Final[dict[str, tuple[str | None, str | None]]] = {
 
 
 #: The measurement of 2026-10-01 (main 858c3e0b, layers 1-3, no layer-2 engine): 73 of 106
-#: correct = 68.9 %, 0 wrong-device actions - BELOW the 95 % target. These are the cases that
-#: were not correct, each with the verdict it got. It is a RATCHET, not an excuse: the unit
-#: test holds the failing set EQUAL to this table, so a case that starts failing names itself
-#: and a case the layers learn to read has to be taken out of here. The target test stays in
-#: the suite as a strict expected failure until this table is short enough to meet it.
+#: correct = 68.9 %, 0 wrong-device actions - BELOW the 95 % target, 33 cases listed here.
+#: 2026-10-02, once the rule tables read layer 1's reading (the polite forms of every verb it
+#: knows, a fused token split into its two known words): 98 of 106 = 92.5 %, polite 29/29,
+#: fused 24/29, 0 wrong-device - still BELOW the target; 25 cases left this table, none
+#: joined it. These are the cases that are not correct, each with the verdict it got. It is
+#: a RATCHET, not an excuse: the unit test holds the failing set EQUAL to this table, so a
+#: case that starts failing names itself and a case the layers learn to read has to be taken
+#: out of here. The target test stays in the suite as a strict expected failure until this
+#: table is short enough to meet it.
 #: ``wrong_reading`` here is always at HIGH: another intent's rule matched the distorted
-#: sentence exactly, which is the trial's own shape (the wrong thing, with full confidence).
+#: sentence exactly, which is the trial's own shape (the wrong thing, with full confidence) -
+#: except the fused time, which is now the right intent with a time the alarm tool cannot
+#: read ("yedibuçukta": the tool parses the sentence as heard, not the router's reading).
 KNOWN_GAPS: Final[dict[str, str]] = {
     "stt.derived.c.collision.alarm_create.fused": "wrong_reading",
-    "stt.derived.r.create.1.fused": "not_understood",
-    "stt.derived.macro.start.1.fused": "not_understood",
-    "stt.derived.d.inbox.1.polite": "not_understood",
-    "stt.derived.d.inbox.1.fused": "not_understood",
-    "stt.derived.r.tech.1.fused": "not_understood",
-    "stt.derived.a.create.1.fused": "not_understood",
-    "stt.derived.d.off.1.polite": "not_understood",
-    "stt.derived.d.off.1.fused": "not_understood",
     "stt.derived.am.1.fused": "not_understood",
-    "stt.derived.e.off.1.polite": "not_understood",
-    "stt.derived.e.off.1.fused": "not_understood",
-    "stt.derived.ev.pause.1.polite": "wrong_reading",
     "stt.derived.selfdev.fix.canonical.fused": "wrong_reading",
     "stt.derived.selfdev.fix.canonical.invented_suffix": "wrong_reading",
-    "stt.derived.op.app.1.fused": "not_understood",
     "stt.derived.op.app.1.invented_suffix": "wrong_reading",
-    "stt.derived.op.app.8.fused": "not_understood",
     "stt.derived.op.app.8.invented_suffix": "wrong_reading",
-    "stt.derived.doc.search.1.polite": "not_understood",
-    "stt.derived.mc.search.1.polite": "not_understood",
     "stt.derived.mc.search.1.fused": "not_understood",
-    "stt.derived.art.create.document.polite": "not_understood",
-    "stt.derived.app.create.tracker.polite": "not_understood",
-    "stt.derived.genesis.request.increment.polite": "not_understood",
-    "stt.derived.scene.create.blender.canonical.polite": "not_understood",
-    "stt.derived.scene.create.blender.canonical.fused": "wrong_reading",
-    "stt.derived.location.default.set.1.polite": "not_understood",
-    "stt.derived.n.open.1.polite": "not_understood",
-    "stt.derived.n.open.1.fused": "not_understood",
     "stt.derived.creative.redraw.canonical.fused": "wrong_reading",
-    "stt.derived.nativeapps.create.win.canonical.polite": "not_understood",
-    "stt.derived.nativeapps.create.win.canonical.fused": "not_understood",
 }
 
 
