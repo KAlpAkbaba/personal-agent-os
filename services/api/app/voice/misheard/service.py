@@ -34,6 +34,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
@@ -53,6 +54,10 @@ RETENTION_DAYS = 30
 #: How long the latest sentence of a session stays in this process's memory.
 HOLD_TTL_SECONDS = 120
 PURGE_INTERVAL_SECONDS = 24 * 60 * 60
+#: How long the lifespan's purge pass waits for a row another transaction holds (PostgreSQL's
+#: ``lock_timeout``, for the pass's own transaction only). Past it the pass gives up and
+#: counts a failure; the row lives until the next pass and is never listed meanwhile.
+PURGE_LOCK_TIMEOUT_S = 3
 
 REASON_NO_INTENT = "no_intent"
 REASON_ASKED_QUESTION = "asked_question"
@@ -129,6 +134,11 @@ def record(
 ) -> MisheardUtterance | None:
     """Write one row, or nothing. Never raises; never commits (the caller's transaction)."""
     if listen_only:
+        return None
+    # A caller's type error is a refusal like the others: never an exception in its turn.
+    if not isinstance(reason, str) or not isinstance(mode, str):
+        return None
+    if not all(value is None or isinstance(value, datetime) for value in (heard_at, now)):
         return None
     text = _cut(sentence, SENTENCE_WIDTH)
     if text is None or reason not in REASONS or mode not in MODES or session_id is None:
@@ -279,6 +289,14 @@ def answer(db: Session, item_id: uuid.UUID, meant: str, now: datetime) -> Mishea
 SessionScope = Callable[[], AbstractContextManager[Session]]
 
 
+def _bound_the_pass(db: Session) -> None:
+    """On PostgreSQL the pass waits at most ``PURGE_LOCK_TIMEOUT_S`` for a locked row. SET
+    LOCAL: the setting ends with the pass's transaction and never reaches the pool."""
+    dialect = getattr(getattr(db, "bind", None), "dialect", None)
+    if getattr(dialect, "name", None) == "postgresql":
+        db.execute(sql_text(f"SET LOCAL lock_timeout = '{int(PURGE_LOCK_TIMEOUT_S)}s'"))
+
+
 class PurgeLoop:
     """The purge that needs nobody: once when the application starts, then every 24 h.
 
@@ -286,9 +304,12 @@ class PurgeLoop:
     pass commits its own delete, and a pass that fails is logged by its error's type and
     tried again at the next interval - it never raises into the application.
 
-    ``start`` waits for the first pass before it returns: an application that serves has
-    purged, and no pass runs beside a request that has just begun. One clock - the one
-    passed in - decides both what has expired and whether the loop is behind.
+    ``start`` only creates the task, like every other loop of the lifespan: the first pass is
+    the task's first iteration, so a row another transaction holds can never hold the
+    application's start (misheard-purge-start-bounded). The pass itself is bounded by
+    ``PURGE_LOCK_TIMEOUT_S``. One clock - the one passed in - decides both what has expired
+    and whether the loop is behind; the loop reads it on the event loop, before the pass
+    goes to its thread.
     """
 
     def __init__(
@@ -310,13 +331,16 @@ class PurgeLoop:
         """Every pass that was tried, whether or not it could reach the table."""
         return self._beat.passes + self._beat.failures
 
-    def purge_once(self) -> int | None:
-        """One pass; the count, or None when it could not run."""
+    def purge_once(self, moment: datetime | None = None) -> int | None:
+        """One pass as of ``moment`` (the loop's clock when None); the count, or None when it
+        could not run."""
         removed: int | None = None
         failure: str | None = None
-        moment = self._clock()
+        if moment is None:
+            moment = self._clock()
         try:
             with self._session_scope() as db:
+                _bound_the_pass(db)
                 removed = purge(db, moment)
                 db.commit()
         except Exception as exc:  # noqa: BLE001 - housekeeping never takes the process down
@@ -340,13 +364,12 @@ class PurgeLoop:
 
     async def _loop(self) -> None:
         while True:
+            await asyncio.to_thread(self.purge_once, self._clock())
             await asyncio.sleep(self._interval_s)
-            await asyncio.to_thread(self.purge_once)
 
     async def start(self) -> None:
         if self._task is not None:
             return
-        await asyncio.to_thread(self.purge_once)
         self._task = asyncio.create_task(self._loop())
         self._beat.bind(self._task, now=_utc(self._clock()))
 

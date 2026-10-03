@@ -69,9 +69,10 @@ function Get-NightlyPlan {
     # tick.ps1: the roadmap feeder first, then the cycle (ADR-0214 addendum 8).
     $script = Join-Path $RepoRoot "scripts\team\tick.ps1"
     $usd = $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes -Research"
-    # -Research: the researcher runs in EVERY cycle, whether the queue is full or not (owner,
-    # 2026-10-01); its proposals wait for him in the Onay Merkezi as ideas.
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes"
+    # No -Research: the researcher runs in EVERY cycle by default, whether the queue is full or
+    # not (owner, 2026-10-01; ADR-0214 addendum 5); its proposals wait in the Onay Merkezi as
+    # ideas. A task registered earlier with -Research keeps working: the cycle accepts it.
     if ($QueueUrl) {
         if (-not $QueueToken) { throw "-QueueUrl needs -QueueToken (the path of the token file)" }
         $arguments += " -QueueUrl $QueueUrl -QueueToken `"$QueueToken`""

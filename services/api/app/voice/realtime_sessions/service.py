@@ -100,6 +100,7 @@ from app.voice.realtime_sessions.tools import (
 )
 from app.voice.realtime_sessions.tools_operator import enrolled_aliases, names_unbound_machine
 from app.voice.spoken_device import resolve_without_device_phrase
+from app.voice.stt_engine import normalise as normalise_stt_engine
 from app.voice.understanding import corrections as understanding_corrections
 from app.voice.understanding import policy as understanding_policy
 
@@ -617,6 +618,18 @@ def _leg_payload(
     }
 
 
+def _without_stt_engine(turn: Any) -> Any:
+    """The turn record as the session state shows it: without the recogniser's name.
+
+    ADR-0249 D4: the name is kept on the turn record, the audit row and the activity, and
+    decides nothing - so the state a turn answers with is what it was before the name
+    was kept (the response of a turn is byte-equal with and without it).
+    """
+    if not isinstance(turn, dict) or "stt_engine" not in turn:
+        return turn
+    return {key: value for key, value in turn.items() if key != "stt_engine"}
+
+
 def session_state(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
     """The continuity state (spec §7). Never includes a credential."""
     ctx = row.context_json or {}
@@ -649,7 +662,7 @@ def session_state(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
         # utterance the router resolved - the two facts the follow-up guard is keyed on,
         # readable by a harness without going through the audit rows.
         "last_research": ctx.get("last_research"),
-        "last_utterance": ctx.get("last_utterance"),
+        "last_utterance": _without_stt_engine(ctx.get("last_utterance")),
         "fsm_state": ctx.get("fsm_state"),
         "barge_in_count": int(ctx.get("barge_in_count", 0)),
         "voice": ctx.get("voice"),
@@ -1622,6 +1635,9 @@ def record_client_events(
             if narration_state is None:
                 narration_state = _narration_state_for(db, row)
             text = str(ev.get("text") or payload.get("utterance") or "")
+            # ADR-0249 D4: which recogniser wrote the sentence (the local mode names it;
+            # a paid session names none). Recorded, never consulted: it decides nothing.
+            heard_by = normalise_stt_engine(payload.get("stt_engine"))
             fsm = ctx.get("fsm_state")
             if research_context_known is None:
                 from app.explain.research_context import has_completed_research
@@ -2221,6 +2237,9 @@ def record_client_events(
                 "band": intent.band,
                 "candidates": [list(pair) for pair in intent.candidates],
                 "understanding": {**decision.audit_block(), "question": decision.question},
+                # ADR-0249 D4: which recogniser wrote THIS sentence, so a later reader of
+                # the turn (a tool, the misheard ledger) sees the name the audit row holds.
+                "stt_engine": heard_by,
             }
             resolved.append(
                 {
@@ -2325,6 +2344,9 @@ def record_client_events(
                     # best readings by INTENT NAME - the data the calibration reads. Never a
                     # candidate's evidence: it holds the owner's own words (KVKK).
                     "understanding": decision.audit_block(),
+                    # ADR-0249 D4: the recogniser's name (one of three fixed words, never
+                    # the sentence) - what the owner's `olc` comparison groups by.
+                    "stt_engine": heard_by,
                 }
             )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
@@ -3045,6 +3067,7 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                     "capability": meta.get("capability"),
                     "research_class": meta.get("research_class"),
                     "research_reference": meta.get("research_reference"),
+                    "stt_engine": meta.get("stt_engine"),
                 }
             )
         else:

@@ -232,6 +232,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\native-signing-trust.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-cycle.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-feed.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-tick.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-area.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\maintenance-reboot.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\host-snapshot.tests.ps1

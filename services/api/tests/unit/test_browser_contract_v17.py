@@ -130,7 +130,8 @@ def test_every_writing_operation_of_the_worker_asks_the_deny_list_first() -> Non
 
 def test_the_document_says_v1_7_and_what_it_is_made_of() -> None:
     contract = CONTRACT.read_text("utf-8")
-    assert "Status: contract **v1.7**" in contract
+    # v1.8 is the current version (test_browser_contract_v18.py); v1.7 stays in the log.
+    assert "- **v1.7 (2026-09-29, ADR-0207, PR-B)" in contract
     assert "## 4a. The risk ceiling and the task deny-list (contract v1.7, ADR-0207)" in contract
     for phrase in (
         "`risk_ceiling`",
