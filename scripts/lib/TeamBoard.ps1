@@ -109,13 +109,13 @@ function Format-TeamBoardRead {
     <# The lines `board.ps1 read` prints: at most TeamBoardReadMax notes, newest last. #>
     param([AllowEmptyCollection()][object[]]$Notes = @(), [string]$For = "")
     $list = @($Notes | Where-Object { $null -ne $_ } | Sort-Object -Property { [string]$_.id })
-    if ($list.Count -gt $script:TeamBoardReadMax) {
-        $list = $list[($list.Count - $script:TeamBoardReadMax)..($list.Count - 1)]
+    if (@($list).Count -gt $script:TeamBoardReadMax) {
+        $list = @($list[(@($list).Count - $script:TeamBoardReadMax)..(@($list).Count - 1)])
     }
     $lines = New-Object System.Collections.Generic.List[string]
-    if ($list.Count -eq 0) { $lines.Add("Panoda yeni not yok."); return $lines.ToArray() }
+    if (@($list).Count -eq 0) { $lines.Add("Panoda yeni not yok."); return $lines.ToArray() }
     $mine = @($list | Where-Object { Test-TeamBoardAddressed -Note $_ -For $For }).Count
-    $head = "Ekip panosu: {0} not" -f $list.Count
+    $head = "Ekip panosu: {0} not" -f @($list).Count
     if ($For) { $head += (", {0} tanesi {1} koltuğuna" -f $mine, $For) }
     $lines.Add($head + ".")
     foreach ($note in $list) { $lines.Add((Format-TeamBoardLine -Note $note -For $For)) }
