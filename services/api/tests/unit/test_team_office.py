@@ -401,6 +401,23 @@ def test_the_office_route_shows_every_run_of_a_cycle_wider_than_its_seats(owner)
     assert [s["seat"] for s in body["agents"]][-2:] == ["inspector", "owner"]
 
 
+def test_the_seats_a_cycle_posts_on_its_worker_runs_come_back_on_the_office(owner):
+    # office-stable-seats: the run that sat on worker-1 has ended; the other two keep 2 and 3.
+    owner.team_store.acquire_lock(machine="MAIL", cycle_id="c1", pid=7)
+    doc = _live_status([("b-task", "worker"), ("c-task", "worker"), ("x-task", "inspector")])
+    doc["runs"][0]["seat"] = 2
+    doc["runs"][1]["seat"] = 3
+    put = owner.put(STATUS, json=doc)
+    assert put.status_code == 200, put.text
+    assert owner.get(STATUS).json() == doc
+    body = owner.get(OFFICE).json()
+    assert _seat(body, "worker-1")["state"] == "waiting"
+    assert (_seat(body, "worker-2")["task_id"], _seat(body, "worker-3")["task_id"]) == (
+        "b-task",
+        "c-task",
+    )
+
+
 def test_a_status_with_an_unknown_key_or_a_wrong_type_is_a_422(owner):
     good = _live_status([("alpha-task", "worker")])
     assert owner.put(STATUS, json={**good, "surprise": 1}).status_code == 422
