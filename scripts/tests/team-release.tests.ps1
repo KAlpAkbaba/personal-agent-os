@@ -192,6 +192,55 @@ Test-Case "an unreadable migration, one without upgrade(), and a CHANGED or DELE
     }
 }
 
+function Get-UpgradeVerdict {
+    param([string]$Body)
+    $text = "from alembic import op`nimport os`nimport sqlalchemy as sa`n`n`ndef upgrade() -> None:`n    " + $Body + "`n`n`ndef downgrade() -> None:`n    pass`n"
+    return (Get-TeamMigrationVerdict -Path "services/api/alembic/versions/x.py" -Status "A" -Text $text)
+}
+
+Test-Case "ALTER TABLE ... DROP <col> without the COLUMN keyword is not expand-only (PostgreSQL makes COLUMN optional)" {
+    foreach ($body in @("op.execute('ALTER TABLE tasks DROP legacy_col')", 'op.execute("alter table tasks drop if exists legacy_col")', "op.execute(`"ALTER TABLE tasks ADD COLUMN x int NULL, DROP legacy_col`")")) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body drops a column"
+        Assert-True -Condition ($verdict.Why -match '(?i)drop') -Because "it says DROP: $($verdict.Why)"
+    }
+}
+
+Test-Case "ALTER TABLE ... RENAME <col> TO without the COLUMN keyword is not expand-only" {
+    foreach ($body in @("op.execute('ALTER TABLE tasks RENAME old_col TO new_col')", 'op.execute(sa.text("alter table tasks rename old_col to new_col"))')) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body renames a column"
+        Assert-True -Condition ($verdict.Why -match '(?i)rename') -Because "it says RENAME: $($verdict.Why)"
+    }
+}
+
+Test-Case "an execute whose argument is not a string literal is unreadable and stops; a literal one is read" {
+    $unreadable = @(
+        "op.execute(open(os.path.join(here, 'x.sql')).read())",
+        "sql = 'CREATE INDEX ix ON t (c)'`n    op.execute(sql)",
+        "op.execute(sa.text(SQL))",
+        "op.execute(f`"CREATE INDEX ix ON {table} (c)`")",
+        "op.get_bind().execute(sa.text(load('x.sql')))",
+        "op.get_bind().exec_driver_sql(load('x.sql'))",
+        "op.execute('CREATE INDEX ix ON t (c)' + suffix)"
+    )
+    foreach ($body in $unreadable) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body cannot be read"
+        Assert-True -Condition ($verdict.Why -match 'okunamad') -Because "it says unreadable: $($verdict.Why)"
+    }
+    $readable = @(
+        "op.execute('CREATE INDEX IF NOT EXISTS ix ON t (c)')",
+        'op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))',
+        "op.execute(`n        `"CREATE INDEX ix ON t (c) `"`n        `"WHERE c IS NOT NULL`"`n    )",
+        "op.execute(`"`"`"`n        CREATE TABLE x (id int)`n    `"`"`")"
+    )
+    foreach ($body in $readable) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition $verdict.ExpandOnly -Because "$body is a readable expand-only literal: $($verdict.Why)"
+    }
+}
+
 Test-Case "only alembic versions are migrations" {
     Assert-True -Condition (Test-TeamMigrationPath -Path "services/api/alembic/versions/20261003_0066_x.py") -Because "a version file"
     Assert-True -Condition (-not (Test-TeamMigrationPath -Path "services/api/alembic/env.py")) -Because "env.py is not a version"
