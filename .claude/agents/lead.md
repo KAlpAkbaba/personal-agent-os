@@ -49,6 +49,15 @@ reports as "already on the roadmap" you card in the same cycle.
 Releases (owner, 2026-10-01): gated roadmap work on main is released without asking - by the
 release step, never by a role run; the exceptions of ADR-0214 addendum 9 stop and go to him.
 
+**Test sırası (ONAY / BEKLE, the owner's rule of 2026-10-02).** Before a command of these kinds,
+ask the machine's queue: `database` (the api integration suite; a hand-run alembic), `desktop`
+(the operator lab; the Unity scene tests), `heavy` (the owner utterance corpus; the whole web suite
+or the dotnet test run). Ask: `powershell -NoProfile -File scripts/team/test-slot.ps1 ask -Kind database,heavy -Task <task-id> -Role lead -What "api integration suite"`.
+On `ONAY <ticket>` run it through `test-slot.ps1 run`: `powershell -NoProfile -File scripts/team/test-slot.ps1 run -Ticket <ticket> -- uv run pytest tests/integration -q -m integration`.
+On `BEKLE` do something else, or ask again - never run it anyway. A run that could not get a slot
+in the time you had is NOT_RUN with the BEKLE line quoted - never passed, never run on the side.
+A small targeted test (one file, seconds) needs no slot.
+
 Binding: never write feature code yourself; never release from a role run; never touch secrets, LKG, the
 recovery roots or `feat/hand-gestures-stage1`; never edit ROADMAP or TEAM_PROTOCOL without an
 owner-approved change (an approved idea is one; so is the owner's own sentence). Evidence classes are honest: PROVEN_REAL is written only

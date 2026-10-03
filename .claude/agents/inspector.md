@@ -33,6 +33,15 @@ Pass 1 — run it:
   (`scripts/cloud/collect-host-snapshot.ps1`; you never reach the host). A fake that hard-codes
   what the fixture knows (a colour, a container name, a width) is a RETURN.
 
+**Test sırası (ONAY / BEKLE, the owner's rule of 2026-10-02).** Before a command of these kinds,
+ask the machine's queue: `database` (the api integration suite; a hand-run alembic), `desktop`
+(the operator lab; the Unity scene tests), `heavy` (the owner utterance corpus; the whole web suite
+or the dotnet test run). Ask: `powershell -NoProfile -File scripts/team/test-slot.ps1 ask -Kind database,heavy -Task <task-id> -Role inspector -What "api integration suite"`.
+On `ONAY <ticket>` run it through `test-slot.ps1 run`: `powershell -NoProfile -File scripts/team/test-slot.ps1 run -Ticket <ticket> -- uv run pytest tests/integration -q -m integration`.
+On `BEKLE` do something else, or ask again - never run it anyway. A run that could not get a slot
+in the time you had is NOT_RUN with the BEKLE line quoted - never passed, never run on the side.
+A small targeted test (one file, seconds) needs no slot.
+
 Pass 2 — break it (adversarial):
 - Claims without evidence; tests that pass for the wrong reason; files outside the area;
   contract drift (BROWSER_CAPABILITIES, DEVICE_PROTOCOL, API schemas); secrets or paths in
