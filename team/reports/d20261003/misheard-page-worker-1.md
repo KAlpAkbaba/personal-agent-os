@@ -1,0 +1,39 @@
+## Şu an üzerinde çalışılan
+- Görev **misheard-page** (döngü d20261003), alan: `apps/web/app/core/misheard`, `apps/web/tests/misheard`, `apps/web/app/core/CoreControls.tsx`, `team/plans/misheard-page-adr.md`. Makine: geliştirme bilgisayarı (Windows). Durum: bitti, işlendi ve gönderildi.
+
+## Rapor
+- **sha:** `2f504a372781b0db3baca824f6f737abf29b9dc4` on `team/d20261003/worker-misheard-page`. Gönderildi, çalışma ağacı temiz.
+- **Değişen dosyalar (13, hepsi alan içinde):**
+  - `CoreControls.tsx`: +3 satır. Ofis bağlantısından sonra tek bir sabit `<Link href="/core/misheard" className="core-controls-link" data-control="misheard">` eklendi. Yeni prop ya da sayı yok.
+  - Yeni dosyalar `app/core/misheard/` altında:
+    - `misheardApi.ts`: dört çağrı ve `{ok:false, code, message}` biçiminde ret.
+    - `misheardModel.ts`: dört nedenin her biri için ayrı bir Türkçe cümle, bilinmeyen neden kendi koduyla gösterilir. Ayrıca mod etiketleri, güven bandı, yerel saat, `canSave`, saklama ve açık sayısı cümleleri.
+    - `misheardActions.ts`: tek basışla tek çağrı ve geri dönen cümle.
+    - `MisheardView.tsx`: hook içermeyen saf bileşen.
+    - `page.tsx`: `FamilyPage` ile durumu tutar.
+  - Testler `tests/misheard/` altında 5 dosya artı `fixtures.ts`. ADR metni `team/plans/misheard-page-adr.md` içinde.
+- **Önce kırmızı (PROVEN_AUTOMATED):** `vitest run tests/misheard` 5/5 dosya FAIL verdi: 4'ünde modül yoktu, nav testi "expected -1 to be greater than 5033" ile düştü. Uygulamadan sonra 5 dosya / 35 test geçti.
+- **Kabul kapsamı:**
+  - (1) Model: 4 neden 4 farklı cümle verir (`Set` boyutu 4). Bilinmeyen neden kendisi olarak görünür. `paid`→Ücretli, `local`→Yerel. Boş değerlerde "null" ya da "undefined" çıkmıyor.
+  - (2) İstemci: dört yol ve yöntem `apiFetch` üzerinden doğrulandı. 422, 404 ve 503 her çağrıda sunucunun mesajıyla `{ok:false, code, message}` olarak dönüyor.
+  - (3) Sayfa üç satır gösteriyor, açık sayısı 2. 7 içeren fikstürle saklama cümlesi 7 diyor, 30 demiyor. Kaydet boş girdide ve 2001 karakterde devre dışı, 2000 karakterde etkin. Basma, öğe ağacından alınan `onClick` ile yapılıyor. Kaydet ş/ğ/ı içeren cümleyi harfi harfine gönderiyor. Sil o satırın id'sini gönderiyor. Defteri unut tek çağrı yapıyor; kaynakta `confirm(`, `prompt(` ya da `<dialog` yok. Boş liste cümlesi ve sunucunun ret cümlesi görünüyor.
+  - (4) Sözleşme: test `routes.py` dosyasını okuyup `@router.<method>("<path>")` arıyor. Sayfanın okuduğu `item.*` alanları ve `MisheardItem` türü, `models.py` sütunlarıyla birebir eşleşiyor.
+  - (5) Nav testi: `/core/misheard` bağlantısı `/core/office`'ten sonra geliyor; sınıf ve `data-control` doğru.
+- **Mutasyonla kırmızı kanıtı (PROVEN_AUTOMATED), geri yükleme yedek kopyadan; sha256 öncesi ve sonrası aynı:**
+  - Model `0d7b3d6a…6dd`, Api `161aac4d…0d3`.
+  - M1, neden tablosu tek cümleye indirildi: model testinde 1 başarısız, 34 geçti.
+  - M2, `forgetAll` tek satır yoluna (`itemPath("all")`) yönlendirildi: 3 başarısız (client ×2, contract ×1), 32 geçti.
+- **Web kapıları (`node node_modules/...`, `pnpm exec` yok; PROVEN_AUTOMATED):**
+  - vitest tüm paket: 130 dosya / 2199 test geçti.
+  - tsc: `--noEmit` çıkış kodu 0.
+  - oxlint `app tests`: yalnızca önceden var olan uyarılar kaldı (CoreScene, useLoaded, CommandPalette, mail-calendar-states). Misheard dosyalarından uyarı yok; kendi üç `sort` uyarımı `toSorted` ile düzelttim.
+  - `tests/office` ve `tests/uistate` yeşil ve dokunulmadı.
+- **Sayfanın kendisi (PROVEN_PROXY):** testler `page.tsx`'i değil, fikstürlerle `MisheardView` bileşenini render ediyor. `page.tsx` yalnızca durumu tutup eylemlere bağlıyor; bu bağlama tsc ile denetlendi ama hiçbir testte çalıştırılmadı.
+- **NOT_RUN:**
+  - Dev stack'e karşı headless tarayıcı koşusu: kapsam dışı, denetleyiciye bırakıldı.
+  - `next build`: kabul listesinde yok.
+- **READY_FOR_OWNER**, misheard-relay-wiring ile birlikte ve yayından sonra: MAIL'de `/core/misheard` sayfasını açın. Söylediğiniz garip cümleyi bulun, ne demek istediğinizi yazıp Kaydet'e basın. Başka bir satırda Sil'e basın.
+- **Açık riskler:**
+  - Makine `cihaz <device_id ilk 8 karakter>` olarak gösteriliyor; API cihaz adını vermiyor.
+  - Cevaplanmış satırda yeni girdi yok; anlam yeniden yazılamıyor, ancak silinip yeniden söylenebiliyor.
+  - Lider için ADR numarası ve `docs/HANDOFF.md` güncellemesi bekliyor; bu dosyalara dokunmadım.

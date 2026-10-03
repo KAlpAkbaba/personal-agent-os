@@ -15,9 +15,14 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `e9f8c2d6034346651b9d456f491d8bae2cc93164` (2026-10-02 23:32 UTC = 3 Ekim 02:32 yerel, api-blue), LKG `65cd94ff`,
-pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`9a88b3c8`, 69 dk). QUALIFICATION Stage 47. Ana kopya
+**ÜRETİM: main `661a5efe4a4989a0996fb3264302264c8c977bfa` (2026-10-03 01:14 UTC = 04:14 yerel, api-green), LKG `e9f8c2d6`,
+pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5b39ec`, 65 dk). QUALIFICATION Stage 48. Ana kopya
 `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+**DÖNGÜ `d20261003` (pid 42348) 04:16 yerelde yeni kodla başladı: koşularda arka plan komutu YOK, tek komut 1 saate kadar
+(ADR-0214 ek 16). 04:15'e kadar ekip DURMUŞTU: önceki döngü bittiği halde 02:00 zamanlayıcı süreci, bir ajanın bıraktığı
+`tail -f` + `grep` yüzünden kapanmadı, zamanlayıcı her turu atladı - lead ikisini durdurdu, görevi elle başlattı. Kalıcı
+düzeltme kartı `tick-not-held-by-orphans` (ÖNCELİKLİ). DİKKAT: Ofis "0/6" ya da durum belgesi eski pid gösterirse önce
+`Get-ScheduledTaskInfo` (LastTaskResult 0x800710E0 = önceki tur hâlâ açık) ve yetim süreçlere bak.**
 **SAHİBİN KURALI (2026-10-03 00:07): "bundan sonra kapısı yeşil olanlar otomatik canlıya geçsin, beklemesinler" - denetimden geçen
 iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (`team/stop.flag`). Ek 9'un üç istisnası
 (compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor.**
