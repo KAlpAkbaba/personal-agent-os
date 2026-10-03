@@ -173,10 +173,10 @@ Test-Case "drop_column, drop_table, alter_column with a type or nullable change,
     }
 }
 
-Test-Case "an alter_column that changes only a comment or a server default, and an UPDATE inside a column NAME, stay expand-only" {
-    $text = "from alembic import op`n`n`ndef upgrade() -> None:`n    op.alter_column(`"notes`", `"colour`", comment=`"the colour`")`n    op.add_column(`"notes`", sa.Column(`"updated_at`", sa.DateTime(), nullable=True))`n`n`ndef downgrade() -> None:`n    pass`n"
+Test-Case "an UPDATE inside a column NAME stays expand-only (a name is not SQL)" {
+    $text = "from alembic import op`nimport sqlalchemy as sa`n`n`ndef upgrade() -> None:`n    op.add_column(`"notes`", sa.Column(`"updated_at`", sa.DateTime(), nullable=True))`n`n`ndef downgrade() -> None:`n    pass`n"
     $verdict = Get-TeamMigrationVerdict -Path "services/api/alembic/versions/x.py" -Status "A" -Text $text
-    Assert-True -Condition $verdict.ExpandOnly -Because "a comment and a nullable column: $($verdict.Why)"
+    Assert-True -Condition $verdict.ExpandOnly -Because "a nullable column named updated_at: $($verdict.Why)"
 }
 
 Test-Case "an unreadable migration, one without upgrade(), and a CHANGED or DELETED existing migration stop" {
@@ -198,20 +198,124 @@ function Get-UpgradeVerdict {
     return (Get-TeamMigrationVerdict -Path "services/api/alembic/versions/x.py" -Status "A" -Text $text)
 }
 
-Test-Case "ALTER TABLE ... DROP <col> without the COLUMN keyword is not expand-only (PostgreSQL makes COLUMN optional)" {
-    foreach ($body in @("op.execute('ALTER TABLE tasks DROP legacy_col')", 'op.execute("alter table tasks drop if exists legacy_col")', "op.execute(`"ALTER TABLE tasks ADD COLUMN x int NULL, DROP legacy_col`")")) {
+function Assert-NotExpandOnly {
+    param([string[]]$Bodies, [string]$Because)
+    foreach ($body in $Bodies) {
         $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body drops a column"
-        Assert-True -Condition ($verdict.Why -match '(?i)drop') -Because "it says DROP: $($verdict.Why)"
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$Because - $body"
+        Assert-True -Condition ([bool]$verdict.Why) -Because "it says why - $body"
     }
 }
 
-Test-Case "ALTER TABLE ... RENAME <col> TO without the COLUMN keyword is not expand-only" {
-    foreach ($body in @("op.execute('ALTER TABLE tasks RENAME old_col TO new_col')", 'op.execute(sa.text("alter table tasks rename old_col to new_col"))')) {
-        $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body renames a column"
-        Assert-True -Condition ($verdict.Why -match '(?i)rename') -Because "it says RENAME: $($verdict.Why)"
+# Expand-only is an ALLOW-list of alembic calls (Proje Yöneticisi, 2026-10-03 21:00, after three
+# returns that each found one more SQL form a deny-list let through): upgrade() may hold ONLY
+# op.create_table, op.create_index, op.add_column (nullable=True or a server_default) and
+# op.create_foreign_key on a table it creates. No raw SQL is safe any more.
+Test-Case "allow-list: op.create_table alone is expand-only" {
+    $verdict = Get-UpgradeVerdict -Body "op.create_table(`n        `"labels`",`n        sa.Column(`"id`", sa.Uuid(), primary_key=True),`n        sa.Column(`"name`", sa.String(64), nullable=False),`n    )"
+    Assert-True -Condition $verdict.ExpandOnly -Because "a new table: $($verdict.Why)"
+}
+
+Test-Case "allow-list: op.create_index alone is expand-only" {
+    $verdict = Get-UpgradeVerdict -Body 'op.create_index(op.f("ix_notes_colour"), "notes", ["colour"], unique=False)'
+    Assert-True -Condition $verdict.ExpandOnly -Because "a new index: $($verdict.Why)"
+}
+
+Test-Case "allow-list: op.add_column with nullable=True is expand-only" {
+    $verdict = Get-UpgradeVerdict -Body 'op.add_column("notes", sa.Column("colour", sa.String(length=16), nullable=True))'
+    Assert-True -Condition $verdict.ExpandOnly -Because "a nullable column: $($verdict.Why)"
+}
+
+Test-Case "allow-list: op.add_column NOT NULL with a server_default is expand-only" {
+    $verdict = Get-UpgradeVerdict -Body 'op.add_column("notes", sa.Column("pinned", sa.Boolean(), nullable=False, server_default=sa.false()))'
+    Assert-True -Condition $verdict.ExpandOnly -Because "a defaulted column: $($verdict.Why)"
+}
+
+Test-Case "allow-list: op.create_foreign_key on a table the same upgrade creates is expand-only" {
+    $verdict = Get-UpgradeVerdict -Body "op.create_table(`"labels`", sa.Column(`"id`", sa.Uuid(), primary_key=True), sa.Column(`"note_id`", sa.Uuid(), nullable=True))`n    op.create_foreign_key(`"fk_labels_note`", `"labels`", `"notes`", [`"note_id`"], [`"id`"])"
+    Assert-True -Condition $verdict.ExpandOnly -Because "a foreign key on a new table: $($verdict.Why)"
+}
+
+Test-Case "the real expand-only migration 0065 (module constants, a docstring, a unique constraint) is expand-only" {
+    $path = Join-Path $repoRoot "services/api/alembic/versions/20261002_0065_misheard_utterances.py"
+    $verdict = Get-TeamMigrationVerdict -Path "services/api/alembic/versions/x.py" -Status "A" -Text ([IO.File]::ReadAllText($path))
+    Assert-True -Condition $verdict.ExpandOnly -Because "0065 is one table and its index: $($verdict.Why)"
+}
+
+Test-Case "op.create_foreign_key on an EXISTING table is not expand-only (its rows are validated against the new constraint)" {
+    Assert-NotExpandOnly -Because "a constraint on an existing table" -Bodies @(
+        'op.create_foreign_key("fk_notes_label", "notes", "labels", ["label_id"], ["id"])',
+        "op.create_table(`"labels`", sa.Column(`"id`", sa.Uuid(), primary_key=True))`n    op.create_foreign_key(`"fk_notes_label`", `"notes`", `"labels`", [`"label_id`"], [`"id`"])")
+}
+
+Test-Case "op.add_column without nullable=True or a server_default is not expand-only" {
+    Assert-NotExpandOnly -Because "not provably nullable or defaulted" -Bodies @(
+        'op.add_column("notes", sa.Column("colour", sa.String(16)))',
+        'op.add_column("notes", sa.Column("colour", sa.String(16), nullable=False))',
+        'op.add_column("notes", sa.Column("id2", sa.Integer(), primary_key=True, nullable=True))')
+}
+
+Test-Case "op.execute is never expand-only - not even op.execute('SELECT 1') or CREATE INDEX" {
+    Assert-NotExpandOnly -Because "raw SQL is not on the allow-list" -Bodies @(
+        "op.execute('SELECT 1')", "op.execute('CREATE INDEX IF NOT EXISTS ix ON t (c)')",
+        'op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))', "op.get_bind().exec_driver_sql('SELECT 1')")
+}
+
+Test-Case "an alembic call that is not on the allow-list is not expand-only" {
+    Assert-NotExpandOnly -Because "an unrecognised op" -Bodies @(
+        'op.alter_column("notes", "colour", comment="the colour")', 'op.bulk_insert(notes_table, [{"id": 1}])',
+        'op.create_check_constraint("ck", "notes", "x > 0")', 'op.create_unique_constraint("uq", "notes", ["x"])',
+        "with op.batch_alter_table(`"notes`") as batch:`n        batch.add_column(sa.Column(`"c`", sa.Integer(), nullable=True))",
+        'op.create_table_comment("notes", "x")', 'op.invoke(something)')
+}
+
+Test-Case "anything in upgrade() that is not a bare allowed call is not expand-only (a helper, a loop, a variable, a call inside the arguments)" {
+    Assert-NotExpandOnly -Because "not a bare allowed op call" -Bodies @(
+        '_helper()', "for name in NAMES:`n        op.create_index(name, `"notes`", [name])", "t = `"notes`"`n    op.create_index(`"ix`", t, [`"c`"])",
+        'op.create_table("labels", *_columns())', 'op.create_index("ix", "notes", ["c"]); op.execute("DELETE FROM notes")',
+        'op.create_table("labels", sa.Column("id", sa.Uuid(), default=os.system("x")))', 'op.add_column("notes", sa.Column("c", sa.Integer(), nullable=True)) or op.execute("DELETE FROM notes")')
+}
+
+Test-Case "module-level code beyond imports and constants is not expand-only (a helper def, a call, an f-string)" {
+    $tail = "`n`n`ndef upgrade() -> None:`n    op.create_index(`"ix`", `"notes`", [`"c`"])`n`n`ndef downgrade() -> None:`n    pass`n"
+    foreach ($head in @("from alembic import op`nop.execute(`"DELETE FROM notes`")", "from alembic import op`n`n`ndef _helper():`n    pass",
+            "from alembic import op`nimport os`nX = f`"{os.system('x')}`"", "from alembic import op`nif True:`n    op.execute(`"DELETE FROM notes`")",
+            "from alembic import op`nX = op.get_bind()")) {
+        $verdict = Get-TeamMigrationVerdict -Path "services/api/alembic/versions/x.py" -Status "A" -Text ($head + $tail)
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "module code: $head"
     }
+}
+
+# Every example from the inspector's three reports (2026-10-03) - each is not expand-only.
+Test-Case "inspector examples: ALTER <col> TYPE, SET NOT NULL, ADD COLUMN NOT NULL without DEFAULT, RENAME VALUE" {
+    Assert-NotExpandOnly -Because "an ALTER changes the old colour's schema" -Bodies @(
+        "op.execute('ALTER TABLE tasks ALTER legacy_col TYPE bigint')", 'op.execute("alter table tasks alter legacy_col set data type bigint")',
+        "op.execute('ALTER TABLE tasks ALTER legacy_col SET NOT NULL')", "op.execute('ALTER TABLE tasks ADD COLUMN x int NOT NULL')",
+        'op.execute("alter table tasks add x int not null")', "op.execute(`"ALTER TYPE task_state RENAME VALUE 'a' TO 'b'`")",
+        "op.execute('ALTER TABLE tasks DROP legacy_col')", "op.execute('ALTER TABLE tasks RENAME old_col TO new_col')")
+}
+
+Test-Case "inspector examples: UPDATE ONLY, quoted and aliased UPDATE, MERGE ... DELETE" {
+    Assert-NotExpandOnly -Because "a data write" -Bodies @(
+        'op.execute("UPDATE ONLY jobs SET status = 1")', "op.execute('UPDATE `"my jobs`" SET status = 1')",
+        'op.execute("UPDATE jobs AS j SET status = 1")', 'op.execute("MERGE INTO jobs USING x ON jobs.id = x.id WHEN MATCHED THEN DELETE")')
+}
+
+Test-Case "inspector examples: DROP FUNCTION / SEQUENCE / TRIGGER / MATERIALIZED VIEW" {
+    Assert-NotExpandOnly -Because "a drop" -Bodies @(
+        'op.execute("DROP FUNCTION notify_job()")', 'op.execute("DROP SEQUENCE job_seq")',
+        'op.execute("DROP MATERIALIZED VIEW job_stats")', 'op.execute("DROP TRIGGER t ON jobs")')
+}
+
+Test-Case "inspector examples: an ORM data write - Session(...), .delete(), .update() - with no execute() at all" {
+    Assert-NotExpandOnly -Because "an ORM write" -Bodies @(
+        'Session(bind=op.get_bind()).query(Job).filter(Job.done).delete()',
+        "session = Session(bind=op.get_bind())`n    session.query(Job).update({`"status`": 1})`n    session.commit()",
+        'sa.orm.Session(bind=op.get_bind()).query(Job).delete()')
+}
+
+Test-Case "inspector example: a NOT NULL add hidden behind a ';' inside an SQL comment" {
+    Assert-NotExpandOnly -Because "a NOT NULL add without DEFAULT" -Bodies @("op.execute(`"`"`"ALTER TABLE jobs ADD c int -- note; x`n    NOT NULL`"`"`")")
 }
 
 Test-Case "upper-case SQL with an I in it (DROP INDEX / CONSTRAINT / VIEW) stops on a tr-TR machine too" {
@@ -226,71 +330,13 @@ Test-Case "upper-case SQL with an I in it (DROP INDEX / CONSTRAINT / VIEW) stops
     } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $culture }
 }
 
-# SQL ALTER is judged by an ALLOW-list: in doubt, not expand-only (inspector return 2, 2026-10-03).
-Test-Case "SQL ALTER TABLE ... ALTER <col> TYPE / SET NOT NULL without the COLUMN keyword is not expand-only" {
-    foreach ($body in @("op.execute('ALTER TABLE tasks ALTER legacy_col TYPE bigint')", 'op.execute("alter table tasks alter legacy_col set data type bigint")',
-            "op.execute('ALTER TABLE tasks ALTER legacy_col SET NOT NULL')")) {
-        $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body changes a column's type or nullability"
-        Assert-True -Condition ([bool]$verdict.Why) -Because "$body says why"
-    }
-}
-
-Test-Case "SQL ADD COLUMN ... NOT NULL without DEFAULT is not expand-only (as the add_column rule); with a DEFAULT it is" {
-    foreach ($body in @("op.execute('ALTER TABLE tasks ADD COLUMN x int NOT NULL')", 'op.execute("alter table tasks add x int not null")',
-            "op.execute('ALTER TABLE tasks ADD COLUMN x int PRIMARY KEY')")) {
-        $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body adds a NOT NULL column without a default"
-    }
-    foreach ($body in @("op.execute('ALTER TABLE tasks ADD COLUMN x int NOT NULL DEFAULT 0')", 'op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS note varchar(16)")',
-            "op.execute('ALTER TABLE tasks ADD COLUMN amount numeric(10,2) NULL, ADD COLUMN label text')")) {
-        $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition $verdict.ExpandOnly -Because "$body is expand-only: $($verdict.Why)"
-    }
-}
-
-Test-Case "SQL ALTER TYPE ... RENAME VALUE is not expand-only; ALTER TYPE ... ADD VALUE is" {
-    $verdict = Get-UpgradeVerdict -Body "op.execute(`"ALTER TYPE task_state RENAME VALUE 'a' TO 'b'`")"
-    Assert-True -Condition (-not $verdict.ExpandOnly) -Because "renaming an enum value breaks the old colour's writes"
-    $verdict = Get-UpgradeVerdict -Body "op.execute(`"ALTER TYPE task_state ADD VALUE IF NOT EXISTS 'parked' AFTER 'queued'`")"
-    Assert-True -Condition $verdict.ExpandOnly -Because "adding an enum value is expand-only: $($verdict.Why)"
-}
-
-Test-Case "an ALTER form the reader does not recognise is not expand-only (allow-list, not deny-list)" {
-    foreach ($body in @("op.execute('ALTER TABLE tasks SET UNLOGGED')", "op.execute('ALTER SEQUENCE tasks_id_seq RESTART WITH 1')",
-            "op.execute('ALTER TABLE tasks ADD CONSTRAINT ck CHECK (x > 0)')", "op.execute('ALTER TABLE tasks OWNER TO someone')",
-            "op.execute('ALTER INDEX ix_a SET TABLESPACE fast')", "op.execute('DO `$`$ BEGIN ALTER TABLE tasks ALTER x TYPE bigint; END `$`$')")) {
-        $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body is not a recognised expand-only ALTER"
-        Assert-True -Condition ($verdict.Why -match '(?i)alter') -Because "it names the ALTER: $($verdict.Why)"
-    }
-}
-
-Test-Case "an execute whose argument is not a string literal is unreadable and stops; a literal one is read" {
-    $unreadable = @(
-        "op.execute(open(os.path.join(here, 'x.sql')).read())",
-        "sql = 'CREATE INDEX ix ON t (c)'`n    op.execute(sql)",
-        "op.execute(sa.text(SQL))",
-        "op.execute(f`"CREATE INDEX ix ON {table} (c)`")",
-        "op.get_bind().execute(sa.text(load('x.sql')))",
-        "op.get_bind().exec_driver_sql(load('x.sql'))",
-        "op.execute('CREATE INDEX ix ON t (c)' + suffix)"
-    )
-    foreach ($body in $unreadable) {
-        $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body cannot be read"
-        Assert-True -Condition ($verdict.Why -match 'okunamad') -Because "it says unreadable: $($verdict.Why)"
-    }
-    $readable = @(
-        "op.execute('CREATE INDEX IF NOT EXISTS ix ON t (c)')",
-        'op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))',
-        "op.execute(`n        `"CREATE INDEX ix ON t (c) `"`n        `"WHERE c IS NOT NULL`"`n    )",
-        "op.execute(`"`"`"`n        CREATE TABLE x (id int)`n    `"`"`")"
-    )
-    foreach ($body in $readable) {
-        $verdict = Get-UpgradeVerdict -Body $body
-        Assert-True -Condition $verdict.ExpandOnly -Because "$body is a readable expand-only literal: $($verdict.Why)"
-    }
+Test-Case "the earlier rounds' SQL - any ALTER, ADD VALUE, an unreadable or a once 'readable' execute - is not expand-only either" {
+    Assert-NotExpandOnly -Because "raw SQL" -Bodies @(
+        "op.execute('ALTER TABLE tasks ADD COLUMN x int NOT NULL DEFAULT 0')", "op.execute(`"ALTER TYPE task_state ADD VALUE IF NOT EXISTS 'parked'`")",
+        "op.execute('ALTER TABLE tasks SET UNLOGGED')", "op.execute('ALTER SEQUENCE tasks_id_seq RESTART WITH 1')",
+        "op.execute('DO `$`$ BEGIN ALTER TABLE tasks ALTER x TYPE bigint; END `$`$')", "op.execute(open(os.path.join(here, 'x.sql')).read())",
+        "sql = 'CREATE INDEX ix ON t (c)'`n    op.execute(sql)", "op.execute(f`"CREATE INDEX ix ON {table} (c)`")",
+        "op.get_bind().execute(sa.text(load('x.sql')))", "op.execute(`"`"`"`n        CREATE TABLE x (id int)`n    `"`"`")")
 }
 
 Test-Case "only alembic versions are migrations" {
