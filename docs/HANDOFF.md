@@ -15,24 +15,32 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `661a5efe4a4989a0996fb3264302264c8c977bfa` (2026-10-03 01:14 UTC = 04:14 yerel, api-green), LKG `e9f8c2d6`,
-pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5b39ec`, 65 dk). QUALIFICATION Stage 48. Ana kopya
-`team/nightly/lead` üzerinde (= main + yayın kaydı).**
-**SIRADA (lead, 2026-10-03 12:00 yerel): DOKUZUNCU ENTEGRASYON hazırlanıyor, dal `gate/d20261003-5` (worktree `.claude/worktrees/gate12`)
-= sekizincinin aday commit'i `fda57727` + `integrate/d20261003` (döngünün onaylı 15 işi) + `lead/auto-integrate-wiring` (ADR-0260)
-+ `lead/web-on-cloud-core` (ADR-0270: web kabuğu Cloud Core'da, telefon tailnet HTTPS; compose değişikliği SAHİP ONAYLI). Taslaklar
-numaralandı: ADR-0261..0271, ADR-0214 ek 17-18, ADR-0241 ek 1, ADR-0254 ek 1. Sekizincinin kapısı yeşil olunca bu dal kapıya girer.
-Yayından sonra host adımları: yeniden pin, `sudo bash scripts/cloud/enable-web-tailnet-https.sh` (çıkış 3 = sahibin HTTPS adımı eksik).**
-**KAPIDA (lead, 2026-10-03 11:33 yerel): SEKİZİNCİ ENTEGRASYON yeniden, dal `gate/d20261003-4` (worktree `.claude/worktrees/gate11`)
-= `execution-call-site-routines` (ADR-0257) + `owner-trials-api` (ADR-0258) + lead dalının bellek önlemleri + **Ofis bir oda olur**
-(`lead/office-room`, ADR-0259: sahibin isteği, amber/lacivert robotlar, sahip insan, enerji çubuğu). Ön kontrol 1763/1763.
-Yeşilse HEMEN yayın (sahibin kuralı). 11:25'te `test-slots` koşusu kural gelmeden 33 sn önce başlamıştı ve yine tüm birim
-paketini (iki kez) koşturuyordu - lead durdurdu, iş `assigned`e döndü, yeni kuralla yeniden başlar.**
-**DÖNGÜ `d20261003` (pid 42348) 04:16 yerelde yeni kodla başladı: koşularda arka plan komutu YOK, tek komut 1 saate kadar
-(ADR-0214 ek 16). 04:15'e kadar ekip DURMUŞTU: önceki döngü bittiği halde 02:00 zamanlayıcı süreci, bir ajanın bıraktığı
-`tail -f` + `grep` yüzünden kapanmadı, zamanlayıcı her turu atladı - lead ikisini durdurdu, görevi elle başlattı. Kalıcı
-düzeltme kartı `tick-not-held-by-orphans` (ÖNCELİKLİ). DİKKAT: Ofis "0/6" ya da durum belgesi eski pid gösterirse önce
-`Get-ScheduledTaskInfo` (LastTaskResult 0x800710E0 = önceki tur hâlâ açık) ve yetim süreçlere bak.**
+**ÜRETİM: main `e6682a61688d7c4531f5a0ff19de91fd3e780d9d` (2026-10-03 13:22 UTC = 16:22 yerel, api-blue), LKG `661a5efe`,
+pin = RELEASE (lead pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`22d90798`, 96 dk: 15 294 birim, 178
+entegrasyon). QUALIFICATION Stage 49. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+**KAPIDA (Danışman, 2026-10-03 17:40 yerel): ONUNCU ENTEGRASYON = yalnız lead dalı HEAD: 'Hakim' -> 'Proje Yöneticisi', 'Sahip' -> 'CTO',
+OFİS CANLANDI (ADR-0272: duygular, yeni işe yürüme, teknoloji ofisi - sahibin isteği), her koşunun TEMP'i E:'de (ADR-0214 ek 19), Proje
+Yöneticisi ofis ajanı / sohbet lead'i Danışman + kart boyu kuralı (ek 20). İlk kapı (ffa1e4fe) 13. dakikada durduruldu ve ofisle
+birlikte yeniden başladı. KAPI BİTENE KADAR lead dalına commit YOK. Yeşilse hemen yayın + pin. integrate/d20261003 (fbb4cba7) bir
+SONRAKİ entegrasyon.**
+**KUYRUK BİRLEŞTİRİLDİ (ek 20): 17 başlamamış kart -> 8 (team-engine ÖNCELİKLİ, project-manager-seat ÖNCELİKLİ, team-board-talk,
+office-talk-visible, gate-faster, memory-safe-runs, account-pool, run-liveness-visible-all). DİKKAT: 28 kaydın Türkçesi BOM'suz .ps1
+yüzünden bozulmuştu ("YÃ¶neticisi"), onarıldı (scratchpad fix_mojibake.ps1); Türkçe metinli .ps1'e BOM koy.**
+**TELEFON (49.3, PROVEN_REAL): web kabuğu sunucuda, tailnet HTTPS: https://pagentos-core.tail0e6789.ts.net (yalnız tailnet;
+`tailscale serve` -> 127.0.0.1:3000; geri almak: `enable-web-tailnet-https.sh --off`). Ev PC dev kabuğu da telefondan
+`http://100.92.148.30:3000` (allowedDevOrigins). Sahip yeni adrese bir kez giriş yapar (oturum adres başına).**
+**LEAD DALINDA (kapısız, team-cycle 214/214): `lead/agent-temp-on-e` (ADR-0214 ek 19): her döngü koşusunun TEMP'i
+`E:\AI\tmp-team\<iş>-<rol>-<8hex>`, koşu bitince silinir. Bir sonraki döngü başlangıcında devrede; main'e bir sonraki entegrasyonla.**
+**DİSK (2026-10-03): C: ~12:00'de SIFIRA indi (kapı `OSError(28)`, Docker motoru durdu - lead Docker Desktop'ı yeniden başlattı).
+C:'nin sahipleri ölçüldü: Program Files 112 GB, Docker 47 GB, pagefile+hiberfil 53 GB; OneDrive 222 GB'ın tamamı yalnız bulutta
+(diskte 0). AppData altında E:'ye junction ÇÖZÜLMÜYOR (STATUS_MOUNT_POINT_NOT_RESOLVED, Android ile ölçüldü, geri alındı);
+kullanıcı kökündekiler (.gradle, anaconda3) junction ile E:\C-tasinan'a taşınıyor (`scratchpad/move_to_e.ps1`). Docker kendi
+"Disk image location" ayarıyla taşınmalı (junction değil). Program listesi sahibe verildi; silmeler onun.**
+**SAHİBİN OFİS MODELİ (2026-10-03, kartlar kuyrukta, hepsi sahibin fikri): `team-board` (pano, denetimde), `team-board-consult`
+(danışma: bağlam + A/B seçenekleri, cevaplayan işi okuyarak), `office-board-bubbles`, `inspector-advice` (öneri + ekip dersleri),
+`lead-on-duty` (nöbetçi Hakim), `test-slots-on-board`, `worker-owns-its-return` (geri dönen iş aynı çalışana, oturumu sürdürerek;
+ÖNCELİKLİ), `continuous-team-loop` (döngü kalkar, sürekli akış, devralma; ÖNCELİKLİ). 15:00'te döngü 4 saat sınırında boşaldı -
+yarım saatten fazla 1 çalışan + 1 denetleyici (ölçüldü) - continuous-team-loop'un sebebi.**
 **BELLEK ÇÖKÜŞÜ (2026-10-03 ~05:00-05:50 yerel): 48 GB'lık ev bilgisayarının belleği TÜKENDİ - lead'in oturumu, sahibin web
 kabuğu (`next dev` :3000) ve sekizinci entegrasyonun kapısı (`gate/d20261003-4` @ `4f80a564`) çöktü. Kapı kırmızı ama KUSUR DEĞİL:
 PS paketlerinde `OutOfMemoryException`, `git: Out of memory`, pnpm 0xC0000409. 10:57'de bulunan: `test-slots` çalışanının TÜM birim

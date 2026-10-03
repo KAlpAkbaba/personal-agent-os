@@ -13,16 +13,17 @@ import type {
   SeatId,
   SeatState,
 } from "./officeApi";
+import { type Mood, moodOf } from "./officeMood";
 
 export const REPORT_LINE_CAP = 40;
 export const SHA_SHORT = 12;
 
 const SEAT_NAME_TR = new Map<SeatId, string>([
-  ["lead", "Hakim"],
+  ["lead", "Proje Yöneticisi"],
   ["researcher", "Araştırmacı"],
   ["integrator", "Entegratör"],
   ["inspector", "Denetleyici"],
-  ["owner", "Sahip"],
+  ["owner", "CTO"],
 ]);
 const WORKER_SEAT = /^worker-([1-9]\d*)$/;
 
@@ -51,7 +52,7 @@ export const TASK_STATE_TR: Record<string, string> = {
   in_progress: "yazılıyor",
   inspecting: "denetleniyor",
   returned: "denetleyici geri gönderdi; yeniden yazılacak",
-  stopped: "durdu: Hakim bakacak",
+  stopped: "durdu: Proje Yöneticisi bakacak",
   merged: "birleştirildi, yayın bekliyor",
   awaiting_release: "yayın için sahibin onayını bekliyor",
   released: "yayında",
@@ -84,6 +85,8 @@ export type DrawnSeat = {
   badge: string | null;
   /** `×3` when the seat has more than one live run. */
   runCount: string | null;
+  /** How the character feels (officeMood.ts). */
+  mood: Mood;
   ariaLabel: string;
 };
 
@@ -154,7 +157,7 @@ function severalRuns(agent: OfficeAgent): OfficeRun[] {
   return runs.length > 1 ? runs : [];
 }
 
-function drawSeat(agent: OfficeAgent, ownerCount: number): DrawnSeat {
+function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now: Date = new Date()): DrawnSeat {
   const known = seatName(agent.seat);
   const name = known ?? agent.seat;
   const owner = agent.seat === "owner";
@@ -170,11 +173,12 @@ function drawSeat(agent: OfficeAgent, ownerCount: number): DrawnSeat {
     label: state === "working" ? (agent.task_title ?? agent.task_id) : null,
     badge: owner ? String(ownerCount) : null,
     runCount: runs > 0 ? `×${runs}` : null,
+    mood: moodOf({ ...agent, state }, task, now),
     ariaLabel: `${name}, ${STATE_TR[state]}${runs > 0 ? `, ${runs} koşu` : ""}`,
   };
 }
 
-export function buildOffice(view: OfficeView) {
+export function buildOffice(view: OfficeView, now: Date = new Date()) {
   const cycle = view.cycle;
   const topBar: TopBar = {
     cycleId: cycle.cycle_id ?? "döngü yok",
@@ -185,7 +189,9 @@ export function buildOffice(view: OfficeView) {
   };
   return {
     topBar,
-    seats: view.agents.map((agent) => drawSeat(agent, view.approvals.length)),
+    seats: view.agents.map((agent) =>
+      drawSeat(agent, view.approvals.length, agent.task_id ? view.tasks[agent.task_id] : undefined, now),
+    ),
     approvals: view.approvals.map((a) => ({
       taskId: a.task_id,
       title: a.title,

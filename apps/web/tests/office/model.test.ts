@@ -73,7 +73,7 @@ describe("the office model", () => {
     const office = buildOffice(twoWorkers());
     expect(office.seats.find((s) => s.seat === "worker-1")!.ariaLabel).toBe("Çalışan 1, çalışıyor");
     expect(office.seats.find((s) => s.seat === "inspector")!.ariaLabel).toBe("Denetleyici, döndü");
-    expect(office.seats.find((s) => s.seat === "lead")!.ariaLabel).toBe("Hakim, bekliyor");
+    expect(office.seats.find((s) => s.seat === "lead")!.ariaLabel).toBe("Proje Yöneticisi, bekliyor");
   });
 
   it("gives the owner seat the count of waiting approvals", () => {
@@ -124,7 +124,7 @@ const names = (view: ReturnType<typeof busyCycle>) => buildOffice(view).seats.ma
 describe("the seats the API sends", () => {
   it("draws four worker desks, Çalışan 1 to Çalışan 4, in an office with no run", () => {
     expect(names(busyCycle(0, 0))).toEqual([
-      "Hakim",
+      "Proje Yöneticisi",
       "Araştırmacı",
       "Entegratör",
       "Çalışan 1",
@@ -132,7 +132,7 @@ describe("the seats the API sends", () => {
       "Çalışan 3",
       "Çalışan 4",
       "Denetleyici",
-      "Sahip",
+      "CTO",
     ]);
     expect(buildOffice(twoWorkers()).seats.find((s) => s.seat === "worker-4")!.ariaLabel).toBe(
       "Çalışan 4, bekliyor",

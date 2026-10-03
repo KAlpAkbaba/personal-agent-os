@@ -22814,3 +22814,81 @@ for ever after the task ended.
 - `gate.py`, `risk.py`, `loop.py` unchanged (the Decision already carries the ceiling).
 - Unreachable in production until PR-D gives `start_task_db` a caller and the home PC's
   agent is updated to a worker serving v1.8 (an owner-visible agent update, not this card).
+
+### ADR-0214 addendum 19 (2026-10-03): each run of the cycle has its own temp folder on the data drive, removed when the run ends
+
+**Why.** C: (the system drive) filled to zero at about 12:00 on 2026-10-03: the gate's unit run
+failed with `OSError(28, 'No space left on device')` and Docker's engine stopped (its disk image
+lives on C:). The day before, `%TEMP%` held 2.67 million leaked test folders. The owner,
+2026-10-03: "Eğer bu ajanlar C'nin altında çalışıyorsa bunları E'nin altına da alabiliriz; biraz
+yavaşlasa da disk sorunumuzu tamamen çözecektir." The agents' worktrees are on E: already; what
+they write on C: is the temp folders of the tests they start.
+
+**Decision.** `team/cycle-settings.json` gets `run_temp_root` (an absolute path; this machine:
+`E:\AI\tmp-team`). For every run the cycle starts, `Start-TeamRun` creates
+`<run_temp_root>\<task>-<role>-<8 hex>` and sets the run's `TEMP`, `TMP` and `TMPDIR` to it; when
+the run is over (`Complete-RoleRun`, after `Wait-TeamRun`) `Remove-TeamRunTemp` deletes the
+folder - best effort: a file still held open stays, and a folder with a link inside is left
+whole (a recursive delete would follow the link). No key, a relative path or an unreadable file:
+the machine's TEMP, as before; the seat settings are read as before (`Read-TeamCycleSettings`
+ignores the new key).
+
+**Not here.** The lead's gate keeps the machine's TEMP on C:: measured the same day, Unity's
+player build in `SceneUnityProductionTests` fails with TEMP on E: ("Fatal error", 12 errors) and
+passes in 56 s with TEMP on C:. An agent that runs that one test gets the same failure; it is a
+Unity-licensed-editor test the gate runs, not an agent's routine check.
+
+**Tests.** `team-cycle.tests.ps1`, "each run gets its own temp folder under run_temp_root, removed
+when the run ends": both runs' TEMP and TMP are their own folder under the root, named by task and
+role, and gone after the run although the fake left a file in it; without the key the machine's
+TEMP. Mutation RED: the removal call taken out -> red; TEMP not set -> red (restored from backup
+copies, sha256 equal).
+
+### ADR-0214 addendum 20 (2026-10-03): the Proje Yöneticisi is an office agent, the chat lead is the Danışman; a card is the largest coherent piece
+
+**The owner, 2026-10-03.** "Hakim adını Proje Yöneticisi olarak değiştirelim." "Proje Yöneticisi de
+içeride çalışan agentlardan biri olsun, çünkü senin işin bölünebiliyor; onun görevi projeyi sadece
+yönetmek ve doğru gittiğini sürdürmek; senin görevin danışman olsun - danışman olarak bir ofise destek
+vermen ofis mantığına da uyuyor." "Küçük ama benzer işleri birleştirsin; işi çok bölmektense tek
+ajana daha sürdürülebilir yaptırsın." And: "farklı bir şey olursa düzeltmeler için, proje yöneticine
+danışmanlık vermen için sana yazarım."
+
+**Decision.**
+- The seat and the role are called **Proje Yöneticisi** (Ofis label, the stopped-task phrase
+  "durdu: Proje Yöneticisi bakacak", the panel heading, `lead.md`, TEAM_PROTOCOL, ROADMAP).
+- The Proje Yöneticisi becomes an agent INSIDE the office (card `project-manager-seat`, with
+  `team-engine` for the continuous loop it needs): it grooms the queue, unblocks stopped work,
+  answers the board's questions, chairs the 12:00 meeting. The chat session is the **Danışman**:
+  the owner's conversation, architecture and security second opinion, machine incidents, and -
+  until `cycle-auto-release` is proven - releases, host writes and the recovery pin.
+- **Card size:** a card is the largest coherent piece one agent can finish in one run; work on the
+  same subject or the same files is one card with sections. `lead.md` carries the rule. Applied the
+  same day: seventeen approved, not-started cards became eight (`team-engine`, `project-manager-seat`,
+  `team-board-talk`, `office-talk-visible`, `gate-faster`, `memory-safe-runs`, `account-pool`,
+  `run-liveness-visible-all`); each retired card is `done` with the reason "BİRLEŞTİRİLDİ -> <card>"
+  (the queue schema has no cancelled state).
+
+## ADR-0272 — The Ofis comes alive: characters with moods, a walk-in on a new task, a tech office; the owner's seat is the CTO (2026-10-03)
+
+**The owner, 2026-10-03.** "Karakterler güzel olmuş ama ofis ortamını da güzel yap; karakterler yeni iş
+alacağı zaman hareket etsinler, başarısız işlerde sinirlensinler, yorulsunlar, duyguları olsun ... daha
+güzel teknoloji bir ofis yap bu arkadaşlara, motive olsunlar." And: "Sahip adını CTO olarak değiştir."
+
+**Decision.** `officeMood.ts` (pure, the clock passed in): `moodOf(agent, task, now)` - working under
+45 minutes `focused`, from 45 minutes `tired`; the seat's task `stopped` or its last report
+"başarısız…" `angry`; sent back by the inspector `sad`; waiting `relaxed`; the owner's seat `happy`.
+`arrivals(previous, next)` lists the seats working on a task they did not have in the previous answer
+(the first answer moves nobody); the page keeps the previous answer and passes the list for 2.6 s.
+`buildOffice(view, now)` puts the mood on each drawn seat (`data-mood`). The faces differ by mood
+(slanted brows and a red screen with steam; half-shut eyes and a drop of sweat with slower hands; a
+frown and a tear; smiling shut eyes and a mug of tea); a walking character slides in to its desk. The
+room: a night-city window, a wall screen with moving bars, a server rack with blinking LEDs, a neon
+strip, a grid floor, a second desk screen and a desk light strip, a coffee machine, a cleaning robot.
+Every motion stops under prefers-reduced-motion; no image, font or library was added. The owner's
+seat is called `CTO`.
+
+**Tests.** `apps/web/tests/office/mood.test.tsx` (11): the mood table and its bounds, `buildOffice`
+with a given clock, each mood's drawing, the tired seat's slower hands, the walk-in list and the
+walk never under reduced motion, the room's pieces (none a seat), the CTO name. Mutation RED: the
+tired bound `>=` -> `>`; a stopped task not angry; nobody walks; walking under reduced motion.
+Office tests 87/87, tsc clean.
