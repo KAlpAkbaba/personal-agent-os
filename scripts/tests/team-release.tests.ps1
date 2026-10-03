@@ -214,6 +214,46 @@ Test-Case "ALTER TABLE ... RENAME <col> TO without the COLUMN keyword is not exp
     }
 }
 
+# SQL ALTER is judged by an ALLOW-list: in doubt, not expand-only (inspector return 2, 2026-10-03).
+Test-Case "SQL ALTER TABLE ... ALTER <col> TYPE / SET NOT NULL without the COLUMN keyword is not expand-only" {
+    foreach ($body in @("op.execute('ALTER TABLE tasks ALTER legacy_col TYPE bigint')", 'op.execute("alter table tasks alter legacy_col set data type bigint")',
+            "op.execute('ALTER TABLE tasks ALTER legacy_col SET NOT NULL')")) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body changes a column's type or nullability"
+        Assert-True -Condition ([bool]$verdict.Why) -Because "$body says why"
+    }
+}
+
+Test-Case "SQL ADD COLUMN ... NOT NULL without DEFAULT is not expand-only (as the add_column rule); with a DEFAULT it is" {
+    foreach ($body in @("op.execute('ALTER TABLE tasks ADD COLUMN x int NOT NULL')", 'op.execute("alter table tasks add x int not null")',
+            "op.execute('ALTER TABLE tasks ADD COLUMN x int PRIMARY KEY')")) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body adds a NOT NULL column without a default"
+    }
+    foreach ($body in @("op.execute('ALTER TABLE tasks ADD COLUMN x int NOT NULL DEFAULT 0')", 'op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS note varchar(16)")',
+            "op.execute('ALTER TABLE tasks ADD COLUMN amount numeric(10,2) NULL, ADD COLUMN label text')")) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition $verdict.ExpandOnly -Because "$body is expand-only: $($verdict.Why)"
+    }
+}
+
+Test-Case "SQL ALTER TYPE ... RENAME VALUE is not expand-only; ALTER TYPE ... ADD VALUE is" {
+    $verdict = Get-UpgradeVerdict -Body "op.execute(`"ALTER TYPE task_state RENAME VALUE 'a' TO 'b'`")"
+    Assert-True -Condition (-not $verdict.ExpandOnly) -Because "renaming an enum value breaks the old colour's writes"
+    $verdict = Get-UpgradeVerdict -Body "op.execute(`"ALTER TYPE task_state ADD VALUE IF NOT EXISTS 'parked' AFTER 'queued'`")"
+    Assert-True -Condition $verdict.ExpandOnly -Because "adding an enum value is expand-only: $($verdict.Why)"
+}
+
+Test-Case "an ALTER form the reader does not recognise is not expand-only (allow-list, not deny-list)" {
+    foreach ($body in @("op.execute('ALTER TABLE tasks SET UNLOGGED')", "op.execute('ALTER SEQUENCE tasks_id_seq RESTART WITH 1')",
+            "op.execute('ALTER TABLE tasks ADD CONSTRAINT ck CHECK (x > 0)')", "op.execute('ALTER TABLE tasks OWNER TO someone')",
+            "op.execute('ALTER INDEX ix_a SET TABLESPACE fast')", "op.execute('DO `$`$ BEGIN ALTER TABLE tasks ALTER x TYPE bigint; END `$`$')")) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body is not a recognised expand-only ALTER"
+        Assert-True -Condition ($verdict.Why -match '(?i)alter') -Because "it names the ALTER: $($verdict.Why)"
+    }
+}
+
 Test-Case "an execute whose argument is not a string literal is unreadable and stops; a literal one is read" {
     $unreadable = @(
         "op.execute(open(os.path.join(here, 'x.sql')).read())",
