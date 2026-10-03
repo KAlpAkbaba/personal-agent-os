@@ -42,7 +42,7 @@ corpus run write; a growth of 100 000 a day reaches the 2.6 million level in und
   at ~10 000/s. A path that does not exist returns `Missing`, `Count 0`, and the line reads
   `TEMP yok` (never thrown: the wiring card needs no try/catch around the reader).
 - **Orphans are a pid tree from recorded roots, never a name list.** `RunRoots` are the records the
-  wiring card takes from `Start-TeamRun` (`Pid`, `TaskId`, `Finished`, `StartedAt`). An orphan is a
+  wiring card takes from `Start-TeamRun` (`Pid`, `TaskId`, `Finished`, `StartedAt`, `FinishedAt`). An orphan is a
   live descendant (ParentProcessId walk, visited set so a stale a->b->a snapshot terminates) of a
   root whose `Finished` is true. The root pid itself is never returned. Selecting by name would make
   the owner's VR, Chrome, his own `pytest` and `next dev` candidates; a pid tree from roots the
@@ -55,7 +55,14 @@ corpus run write; a growth of 100 000 a day reaches the 2.6 million level in und
   it alive, so after the root dies a LATER process can take it (inspector 2026-10-03: the owner's
   Chrome got a finished run's pid an hour later and its renderer was returned). A live process
   holding the root's pid and created after `StartedAt` is a reuser; only the root's children
-  created before the reuser count. A holder without a CreationDate yields nothing. This is why
+  created before the reuser count. A holder without a CreationDate yields nothing. A reuser that
+  has itself exited leaves no holder to see (Danışman 2026-10-03 21:00, reproduced by the
+  inspector: a launcher took the dead root's pid, started Chrome 300/301 and exited - both were
+  returned). So a finished root also carries `FinishedAt`: a root child counts only when created
+  at or after `StartedAt` and strictly before `FinishedAt` (and before a live reuser, whichever is
+  earlier); a finished root without `FinishedAt` yields nothing. Rule: in doubt a process is the
+  owner's and is never touched. A run child that exited breaks the walk below it (its children
+  are reached only through live processes): a missed orphan, never a wrongly closed one. This is why
   `StartedAt` must be taken at or after the root process's creation (a `StartedAt` taken before
   it makes the live root read as a reuser and fails safe: nothing is closed).
 - **Orphans never fail the check** - they are closed, not waited on - but the line names them:
@@ -71,7 +78,9 @@ corpus run write; a growth of 100 000 a day reaches the 2.6 million level in und
 ## What the wiring card must call, where (`scripts/team/cycle.ps1`, `TeamQueue.ps1`, `TeamRun.ps1`)
 
 1. `Start-TeamRun` records each run's root: `Pid`, `TaskId`, `StartedAt` (UTC, taken AFTER the
-   process started), and `Finished` set true when the run ends.
+   process started), and when the run ends `Finished` = true together with `FinishedAt` (UTC, taken
+   when the cycle sees the run end - the root process has exited by then). A finished record
+   without `FinishedAt` closes nothing.
 2. At tick start: snapshot (`Get-TeamProcessSnapshot`), `Get-TeamOrphanTree` on the recorded roots,
    close exactly those pids (deepest first), never anything else.
 3. Before `Select-TeamSeatFill`, every tick: the four readers -> `Get-TeamHostPulse` ->

@@ -74,6 +74,8 @@ def _ps(tmp_path: Path, body: str, inputs: Any = None, timeout: int = HANG_GUARD
 
 
 ROOT_STARTED = "2026-10-03T05:00:00Z"
+ROOT_FINISHED = "2026-10-03T05:30:00Z"
+ROOT_SPAN = {"StartedAt": ROOT_STARTED, "FinishedAt": ROOT_FINISHED}
 
 
 def _proc(
@@ -215,6 +217,16 @@ def test_a_count_that_ran_out_of_time_under_the_maximum_does_not_fail(tmp_path):
     assert got["line"] == "Makine: bellek %40, TEMP 120000+, C: 100 GB, E: 100 GB"
 
 
+@pytest.mark.parametrize(
+    ("temp", "ok"), [(499_999, True), (500_000, True), (500_001, False)], ids=lambda v: str(v)
+)
+def test_temp_at_the_maximum_passes_and_one_above_fails(tmp_path, temp, ok):
+    # Danışman 2026-10-03 21:00: a -gt -> -ge mutation survived; equal passes, above fails
+    got = _ps(tmp_path, CHECK, _pulse_inputs(temp=temp))
+    assert got["ok"] is ok, got
+    assert any("TEMP" in r for r in got["reasons"]) is (not ok), got
+
+
 def test_a_count_that_ran_out_of_time_above_the_maximum_fails(tmp_path):
     got = _ps(tmp_path, CHECK, _pulse_inputs(temp=500_001, too_large=True))
     assert got["ok"] is False
@@ -312,7 +324,7 @@ def test_a_finished_runs_live_descendants_are_its_orphans(tmp_path):
         _proc(102, 100, "grep"),
         _proc(103, 101, "conhost", created="2026-10-03T05:00:06Z"),
     ]
-    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
     got = _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots})
     assert sorted(got) == [101, 102, 103]
 
@@ -330,7 +342,7 @@ def test_a_process_outside_the_recorded_trees_is_never_an_orphan(tmp_path):
         _proc(901, 900, "python"),
         _proc(902, 3, "chrome"),
     ]
-    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
     assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
 
 
@@ -341,7 +353,7 @@ def test_a_child_of_an_earlier_process_with_the_roots_pid_is_not_a_descendant(tm
         _proc(150, 100, "vrcompositor", created="2026-10-03T03:00:01Z"),
         _proc(101, 100, "tail"),
     ]
-    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
     assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
 
 
@@ -354,8 +366,42 @@ def test_a_dead_roots_pid_reused_later_does_not_make_the_new_owners_children_orp
         _proc(300, 100, "chrome-renderer", created="2026-10-03T06:00:01Z"),
         _proc(301, 300, "chrome-gpu", created="2026-10-03T06:00:02Z"),
     ]
-    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
     assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
+
+
+def test_a_reused_root_pid_whose_reuser_already_exited_hands_over_nothing_of_the_owner(tmp_path):
+    # Danışman 2026-10-03 21:00 (inspector reproduced it): the root (pid 100) finished and died; a
+    # short-lived launcher later took pid 100, started the owner's Chrome and exited. Nothing holds
+    # pid 100 at the sweep, so only FinishedAt can tell the run's children from the launcher's.
+    processes = [
+        _proc(101, 100, "tail"),  # the run's own leftover, created while the run lived
+        _proc(300, 100, "chrome", created="2026-10-03T06:00:01Z"),
+        _proc(301, 300, "chrome-gpu", created="2026-10-03T06:00:02Z"),
+    ]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
+    assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
+
+
+def test_a_finished_root_without_finished_at_closes_nothing(tmp_path):
+    # in doubt a process is the owner's: without the run's end there is no bound on a reuser
+    processes = [_proc(101, 100, "tail"), _proc(102, 101, "grep")]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == []
+
+
+def test_a_child_of_an_exited_intermediate_is_not_reached(tmp_path):
+    # the run's child 101 exited; its pid was reused by an owner process created after the run
+    # ended, whose child must not be reached; the run's own grandchild 103 (parent 101 dead) is a
+    # safe miss - the walk only goes through processes alive in the snapshot
+    processes = [
+        _proc(103, 101, "conhost", created="2026-10-03T05:00:06Z"),
+        _proc(101, 4, "vrmonitor", created="2026-10-03T06:00:00Z"),
+        _proc(400, 101, "vrdashboard", created="2026-10-03T06:00:01Z"),
+        _proc(102, 100, "grep"),
+    ]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
+    assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [102]
 
 
 def test_a_finished_root_still_alive_keeps_its_children(tmp_path):
@@ -364,7 +410,7 @@ def test_a_finished_root_still_alive_keeps_its_children(tmp_path):
         _proc(100, 4, "claude", created="2026-10-03T04:59:59Z"),
         _proc(101, 100, "tail"),
     ]
-    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
     assert _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}) == [101]
 
 
@@ -374,14 +420,14 @@ def test_a_parent_cycle_in_the_snapshot_terminates(tmp_path):
         _proc(102, 101, "b"),
         _proc(101, 102, "a-again"),  # a stale snapshot can hold a -> b -> a
     ]
-    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
     got = _ps(tmp_path, ORPHANS, {"processes": processes, "roots": roots}, timeout=60)
     assert sorted(set(got)) == [101, 102]
 
 
 def test_orphans_alone_do_not_fail_the_check_but_are_named(tmp_path):
     processes = [_proc(101, 100, "tail"), _proc(102, 100, "grep")]
-    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, "StartedAt": ROOT_STARTED}]
+    roots = [{"Pid": 100, "TaskId": "x", "Finished": True, **ROOT_SPAN}]
     got = _ps(tmp_path, CHECK, _pulse_inputs(processes=processes, roots=roots))
     assert got["ok"] is True, got
     assert sorted(got["orphans"]) == [101, 102]

@@ -18,7 +18,9 @@
     Thresholds compare strictly in one direction: below a minimum or above a maximum fails,
     equal passes. Orphans never fail the check (they are closed, not waited on); they are named
     in the line. An orphan is a live descendant of a RECORDED run root whose run has finished,
-    found by a ParentProcessId walk - never a process selected by its name.
+    found by a ParentProcessId walk - never a process selected by its name. A run root is
+    { Pid, TaskId, Finished, StartedAt, FinishedAt }; the root's children count only between
+    StartedAt and FinishedAt, and a finished root without FinishedAt yields nothing.
 
     Nothing here is wired into the cycle; see team/plans/host-pulse-rules-adr.md for where
     the wiring card calls what. Dot-sourceable, no top-level side effects.
@@ -158,12 +160,21 @@ function Get-TeamRunTree {
     # and created AFTER StartedAt is a reuser, and only the root's children created before the
     # reuser count - everything created from then on under that pid is the reuser's (inspector
     # 2026-10-03: the owner's Chrome took a finished run's pid and its renderer was returned).
+    # A reuser that has itself exited leaves no holder to see (Danışman 2026-10-03 21:00: a launcher
+    # took the dead root's pid, started Chrome and exited), so a FINISHED root also needs its
+    # FinishedAt: a root child counts only when created at or after StartedAt and strictly before
+    # FinishedAt. A finished root without FinishedAt yields nothing - in doubt a process is the
+    # owner's. A running root (Finished false, used for Largest only) is bounded by a holder alone.
     # Every deeper node is a live process of the snapshot, so its own creation bounds its children.
     param([object[]]$Processes, $Root)
     $started = ConvertTo-TeamPulseUtc (Get-TeamPulseValue $Root 'StartedAt' $null)
     $rootPid = [int](Get-TeamPulseValue $Root 'Pid' 0)
     if ($null -eq $started -or $rootPid -le 0) { return }
     $rootBefore = $null
+    if ([bool](Get-TeamPulseValue $Root 'Finished' $false)) {
+        $rootBefore = ConvertTo-TeamPulseUtc (Get-TeamPulseValue $Root 'FinishedAt' $null)
+        if ($null -eq $rootBefore) { return }
+    }
     foreach ($process in $Processes) {
         if ([int](Get-TeamPulseValue $process 'ProcessId' 0) -ne $rootPid) { continue }
         $holderCreated = ConvertTo-TeamPulseUtc (Get-TeamPulseValue $process 'CreationDate' $null)
