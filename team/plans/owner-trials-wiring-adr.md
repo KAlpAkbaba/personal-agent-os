@@ -39,7 +39,7 @@ mark then). The verdict rules are not touched.
 > trial the owner makes, above the verdict, as four lines alone on their own lines in this fixed
 > form (`services/api/app/team/trials.py` `parse_inspector_trials` reads it into an
 > `owner_trials` object): `deneme:` an id (lower case, digits, `-`), `cumle:` what the owner says
-> or does (at most 300 characters), `makine:` the device, `beklenen:` what he must see or hear.
+> or does (at most 300 characters), `makine:` the device, `beklenen:` what the owner must see or hear.
 > A block missing a line is skipped, not guessed:
 
 ```
