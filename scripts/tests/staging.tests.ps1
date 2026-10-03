@@ -63,7 +63,7 @@ $r = Invoke-Script "deploy.ps1" @("0000000000000000000000000000000000000bad", "-
 Assert-True ($r.Rc -eq 2 -and $r.Out -match "is not a commit") "deploy refuses an unknown sha (exit $($r.Rc))"
 
 $mainRef = $null
-foreach ($ref in @("origin/main", "main")) {
+foreach ($ref in @("origin/main")) {
     if ((Invoke-Git @("rev-parse", "--verify", "--quiet", "$ref^{commit}")).Rc -eq 0) { $mainRef = $ref; break }
 }
 if ($mainRef) {

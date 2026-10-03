@@ -23,10 +23,13 @@ one violation planted, so the checker itself is proved to see what it is for.
 from __future__ import annotations
 
 import copy
+import ipaddress
+import os
 import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[4]
@@ -222,7 +225,7 @@ def identity_violations(
 
 
 def test_staging_names_no_production_host() -> None:
-    assert production_violations(_texts()) == []
+    assert production_violations(_blackhole_lines_removed(_texts())) == []
 
 
 def test_staging_connects_no_real_account() -> None:
@@ -254,6 +257,10 @@ def test_deploy_refuses_a_sha_outside_main_and_the_lead_branch() -> None:
     text = (SCRIPTS / "deploy.ps1").read_text("utf-8-sig")
     assert "merge-base" in text and "--is-ancestor" in text
     assert "origin/main" in text and "team/nightly/lead" in text
+    # Only the remote's refs: a hand-made local branch named `main` must not wave a sha through.
+    refs = re.search(r"\$allowedRefs\s*=\s*@\(([^)]*)\)", text)
+    assert refs, "deploy.ps1 has no $allowedRefs list"
+    assert re.findall(r'"([^"]+)"', refs.group(1)) == ["origin/main", "origin/team/nightly/lead"]
 
 
 def test_up_refuses_under_six_gigabytes_free() -> None:
@@ -281,6 +288,127 @@ def test_checker_catches_a_planted_real_account() -> None:
         "${PAGENTOS_VOICE_OPENAI_API_KEY:-}"
     )
     assert account_violations(compose, _texts())
+
+
+# ----------------------------------------------------------------------------- what the api runs on
+# The compose text alone missed a production url the api INHERITS from a Settings default
+# (gods_eye_url = http://pagentos-core:4173/, inspector 2026-10-04): so the api's settings are
+# built here from staging's own environment, exactly as the container builds them, and every
+# value is searched. And a name is not the only way in: the container could reach the tailnet
+# by address, so staging's network has to make the whole tailnet range unroutable.
+
+#: Where staging sends a production NAME: TEST-NET-1 (RFC 5737), routed nowhere.
+BLACKHOLE = "192.0.2.1"
+#: The tailnet's address range (CGNAT, RFC 6598): every tailnet device lives in it.
+TAILNET_RANGE = ipaddress.ip_network("100.64.0.0/10")
+PRODUCTION_NAMES = ("pagentos-core", "pagentos-core.tail0e6789.ts.net")
+_DEFAULT = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-([^}]*))?\}")
+
+
+def _effective_settings(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The api's Settings as the staging container builds them: its env, no .env file."""
+    from app.config import Settings
+
+    for key in list(os.environ):
+        if key.upper().startswith("PAGENTOS_"):
+            monkeypatch.delenv(key)
+    for key, value in env.items():
+        monkeypatch.setenv(key, _DEFAULT.sub(lambda m: m.group(1) or "", value))
+    return Settings(_env_file=None).model_dump(mode="json")  # type: ignore[call-arg]
+
+
+def _strings(value: Any, path: str = "") -> list[tuple[str, str]]:
+    if isinstance(value, str):
+        return [(path, value)]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in _strings(v, f"{path}.{k}" if path else k)]
+    if isinstance(value, (list, tuple)):
+        return [s for i, v in enumerate(value) for s in _strings(v, f"{path}[{i}]")]
+    return []
+
+
+def settings_violations(settings: dict[str, Any]) -> list[str]:
+    return [
+        f"settings.{field}={value!r} names production ({marker})"
+        for field, value in _strings(settings)
+        for marker in PRODUCTION_MARKERS
+        if marker.lower() in value.lower()
+    ]
+
+
+def network_violations(compose: dict[str, Any]) -> list[str]:
+    found = []
+    networks = compose.get("networks") or {}
+    default = networks.get("default") or {}
+    subnets = [
+        ipaddress.ip_network(str(c.get("subnet")), strict=False)
+        for c in (default.get("ipam") or {}).get("config") or []
+        if c.get("subnet")
+    ]
+    if not any(TAILNET_RANGE.subnet_of(s) for s in subnets if s.version == 4):  # type: ignore[arg-type]
+        found.append(
+            f"the default network's subnet {[str(s) for s in subnets]} does not cover the tailnet "
+            f"{TAILNET_RANGE} - the containers could route to production by address"
+        )
+    if set(networks) - {"default"}:
+        found.append(f"extra networks {sorted(set(networks) - {'default'})}")
+    for svc_name, svc in (compose.get("services") or {}).items():
+        if svc.get("network_mode"):
+            found.append(
+                f"{svc_name}: network_mode {svc['network_mode']!r} leaves staging's network"
+            )
+        nets = svc.get("networks")
+        if nets and set(nets) != {"default"}:
+            found.append(f"{svc_name}: joins {sorted(nets)}, not only staging's own network")
+        hosts = {}
+        for entry in svc.get("extra_hosts") or []:
+            name, _, addr = str(entry).partition(":")
+            hosts[name] = addr
+        for name in PRODUCTION_NAMES:
+            if hosts.get(name) != BLACKHOLE:
+                found.append(f"{svc_name}: {name} is not sent to {BLACKHOLE} (extra_hosts)")
+    return found
+
+
+def _blackhole_lines_removed(texts: dict[str, str]) -> dict[str, str]:
+    """The extra_hosts lines that send a production name to the blackhole are the one place a
+    production name may be written; anything else on such a line still counts."""
+    line = re.compile(
+        r'^\s*-\s*"(?:'
+        + "|".join(re.escape(n) for n in PRODUCTION_NAMES)
+        + r"):"
+        + re.escape(BLACKHOLE)
+        + r'"\s*$',
+        re.MULTILINE,
+    )
+    return {name: line.sub("", text) for name, text in texts.items()}
+
+
+def test_staging_api_settings_name_no_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _env(_load(STAGING)["services"]["api"])
+    assert settings_violations(_effective_settings(env, monkeypatch)) == []
+
+
+def test_staging_network_cannot_reach_production() -> None:
+    assert network_violations(_load(STAGING)) == []
+
+
+def test_checker_catches_an_inherited_production_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _env(_load(STAGING)["services"]["api"])
+    env.pop("PAGENTOS_GODS_EYE_URL", None)  # the Settings default is production's aux url
+    assert settings_violations(_effective_settings(env, monkeypatch))
+
+
+def test_checker_catches_a_route_to_the_tailnet() -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["networks"]["default"]["ipam"]["config"] = [{"subnet": "172.30.0.0/16"}]
+    assert network_violations(compose)
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["api"]["extra_hosts"] = ["pagentos-core:100.90.158.26"]
+    assert network_violations(compose)
+    texts = _texts()
+    texts["docker-compose.staging.yml"] += '\n      - "pagentos-core:100.90.158.26"\n'
+    assert production_violations(_blackhole_lines_removed(texts))
 
 
 def test_checker_catches_a_planted_shared_volume() -> None:

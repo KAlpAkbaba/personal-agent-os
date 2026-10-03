@@ -44,6 +44,27 @@ stack, on a bind mount, on a non-loopback or colliding port, and on the namespac
 off); voice: the simulator answers (free); a real vendor only with a separate
 `PAGENTOS_STAGING_VOICE_OPENAI_API_KEY` test key.
 
+Reaching production (inspector's return, 2026-10-04). The compose text was clean but the api
+INHERITED `gods_eye_url = http://pagentos-core:4173/` from a Settings default, and from inside
+`pagentos-staging-api` the name `pagentos-core` resolved to 100.90.158.26 with 22/443/8001/4173
+open. Now: (a) the compose sets `PAGENTOS_GODS_EYE_URL: ""`, and the test builds the api's
+`Settings` from staging's own env (no `.env`, the host's `PAGENTOS_*` cleared) and fails on any
+production marker in ANY setting value - so the next inherited default is caught too; (b) every
+service maps `pagentos-core` and `pagentos-core.tail0e6789.ts.net` to 192.0.2.1 (TEST-NET-1,
+RFC 5737) via one `extra_hosts` anchor - the only place a production name may be written; (c) by
+ADDRESS: staging's network `pagentos-staging-net` has subnet **100.64.0.0/10**, the tailnet's
+own CGNAT range, so every tailnet address (the Cloud Core, the owner's PC and phone) is on-link
+for the containers: ARP gets no answer and connect fails with `EHOSTUNREACH` instead of being
+routed out through Docker Desktop and the host's Tailscale. The internet (vendors) stays reachable.
+Measured 2026-10-04 00:5x with the api image on `pagentos-staging-net`: `pagentos-core` and the
+tailnet name -> 192.0.2.1, every port timed out; 100.90.158.26:22/443/8001/4173 -> `[Errno 113]
+No route to host`; api.openai.com:443 open. Known limit, honest: production's PUBLIC addresses
+(the VM's internet IP, if it has one) are not blocked - only the tailnet range and the names are.
+A full egress block (an internal network plus a vendor-allowlist proxy) is a separate card.
+`deploy.ps1` now trusts only `origin/main` and `origin/team/nightly/lead` (a hand-made local
+`main` cannot wave a sha through), and after a deploy removes `pagentos-staging/*` images except
+this sha's and the previous one's (each sha is ~1.8 GB; C: ran out on 2026-10-03).
+
 Differences from production, deliberate: one api colour, no edge; the embedder is
 `deterministic` (no 100 MB model download; health says `semantic: false`); no backup mounts
 (health: `backup: skipped`).
@@ -60,8 +81,8 @@ Differences from production, deliberate: one api colour, no edge; the embedder i
 | redis | 5 MiB | 256 MiB |
 | **total** | **~0.85 GiB** | 5.25 GiB cap |
 
-Images: cloud-core 1.38 GB + web 391 MB per deployed sha (old tags are not pruned by deploy;
-`docker image rm pagentos-staging/...:<old>` frees them). First deploy 7m43s (cold web build),
+Images: cloud-core 1.38 GB + web 391 MB per deployed sha (deploy keeps this sha's and the previous
+sha's tags and removes the rest). First deploy 7m43s (cold web build),
 a deploy of an already-built sha 44 s. With ~0.85 GiB idle and a 5.25 GiB cap against 48 GB,
 staging and a gate FIT together; the guard is up.ps1's 6 GB-free floor (a start under memory
 pressure is refused and says to ask the test-slot queue for `heavy`). Staging need not be OFF

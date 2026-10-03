@@ -17,6 +17,8 @@
 
     The deployed sha is written to %LOCALAPPDATA%\PagentOS\staging\deployed.json.
 
+    Older staging images are removed after a deploy, except the previous sha's (to move back).
+
     Exit codes: 0 deployed; 1 build/docker failure; 2 sha refused; 3 not enough memory;
     4 not healthy; 5 migration failed.
 .PARAMETER Sha
@@ -40,7 +42,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$allowedRefs = @("origin/main", "main", "origin/team/nightly/lead", "team/nightly/lead")
+# Only the remote's refs: a local branch that merely carries the same name (made by hand, or
+# a stale one) must not be able to wave an unreviewed commit through.
+$allowedRefs = @("origin/main", "origin/team/nightly/lead")
 
 if (-not $NoFetch) {
     & git -C $repoRoot fetch --quiet origin main team/nightly/lead 2>&1 | Out-Null
@@ -106,6 +110,21 @@ if ($upRc -ne 0) { Write-Host "STAGING DEPLOY FAILED: up.ps1 exited $upRc"; exit
 
 $stateDir = Join-Path $env:LOCALAPPDATA "PagentOS\staging"
 New-Item -ItemType Directory -Force $stateDir | Out-Null
+# Each sha leaves ~1.8 GB of images (C: ran out on 2026-10-03): keep this sha's and the one
+# before it (to move back to), remove the other pagentos-staging/* tags.
+$keep = @($tag)
+$deployedFile = Join-Path $stateDir "deployed.json"
+if (Test-Path $deployedFile) {
+    try { $prev = Get-Content -Raw $deployedFile | ConvertFrom-Json; if ($prev.sha) { $keep += "$($prev.sha)".Substring(0, 12) } } catch { }
+}
+foreach ($repo in @("pagentos-staging/cloud-core", "pagentos-staging/web")) {
+    foreach ($old in @(& $docker image ls $repo --format "{{.Tag}}" 2>$null)) {
+        if ($old -and $old -ne "local" -and $keep -notcontains $old) {
+            & $docker image rm "${repo}:$old" 2>&1 | Out-Null
+            Write-Host "removed old staging image ${repo}:$old"
+        }
+    }
+}
 $record = [ordered]@{ sha = $full; ref = $onRef; deployed_at = (Get-Date).ToUniversalTime().ToString("o") }
 [IO.File]::WriteAllText((Join-Path $stateDir "deployed.json"), ($record | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
 Write-Host "STAGING DEPLOYED: $full at http://127.0.0.1:28000/"

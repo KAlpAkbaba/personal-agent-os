@@ -32,10 +32,19 @@
 
 name: pagentos-staging
 
+# Production by NAME goes nowhere: in every container both of the Cloud Core's tailnet names
+# resolve to TEST-NET-1 (RFC 5737, routed nowhere). By ADDRESS the `networks:` block at the
+# end makes the whole tailnet unroutable. These two lines are the only place a production
+# name may be written in staging (the isolation test allows exactly them).
+x-production-blackhole: &production-blackhole
+  - "pagentos-core:192.0.2.1"
+  - "pagentos-core.tail0e6789.ts.net:192.0.2.1"
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: pagentos-staging-postgres
+    extra_hosts: *production-blackhole
     command:
       - postgres
       - "-c"
@@ -59,6 +68,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: pagentos-staging-redis
+    extra_hosts: *production-blackhole
     command: ["redis-server", "--appendonly", "no", "--maxmemory", "128mb"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -71,6 +81,7 @@ services:
   minio:
     image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     container_name: pagentos-staging-minio
+    extra_hosts: *production-blackhole
     command: ["server", "/data"]
     environment:
       MINIO_ROOT_USER: staging-artifacts # staging-only
@@ -90,6 +101,7 @@ services:
   temporal:
     image: temporalio/auto-setup:1.27.2
     container_name: pagentos-staging-temporal
+    extra_hosts: *production-blackhole
     init: true
     depends_on:
       postgres:
@@ -164,6 +176,10 @@ services:
       PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
       PAGENTOS_TEAM_STORE: file
       PAGENTOS_RELEASE: ${PAGENTOS_STAGING_RELEASE:-}
+      # The Settings default is production's aux url (the God's Eye page on the Cloud Core);
+      # staging has none, so the voice tool says it is not configured.
+      PAGENTOS_GODS_EYE_URL: ""
+    extra_hosts: *production-blackhole
     volumes:
       - pagentos-staging-identity:/srv/pagentos/var/identity
     ports:
@@ -185,6 +201,7 @@ services:
     depends_on:
       - api
     init: true
+    extra_hosts: *production-blackhole
     ports:
       - "127.0.0.1:28000:3000"
     mem_limit: 512m
@@ -198,6 +215,18 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
+
+# Staging's own network, and its subnet IS the tailnet's range (100.64.0.0/10, CGNAT): every
+# tailnet address - the Cloud Core, the owner's PC and phone - is then "on this bridge", so a
+# container ARPs for it, nobody answers, and the connection fails (EHOSTUNREACH) instead of
+# going out through Docker Desktop and the host's Tailscale. The internet (vendors) stays
+# reachable through the bridge's gateway. Measured in the ADR.
+networks:
+  default:
+    name: pagentos-staging-net
+    ipam:
+      config:
+        - subnet: 100.64.0.0/10
 
 volumes:
   pagentos-staging-postgres:
