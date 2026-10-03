@@ -162,7 +162,7 @@
         "owner_trials": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/owner_trial"
           }
         },
         "release_approved": {
@@ -178,6 +178,51 @@
             "voice",
             "owner_sentence"
           ]
+        }
+      }
+    },
+    "owner_trial": {
+      "title": "A trial the owner makes on a real device. The old form, a plain string, is accepted too: the rules below hold for an object only.",
+      "required": [
+        "id",
+        "sentence",
+        "machine",
+        "expect",
+        "verdict",
+        "said",
+        "at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "sentence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "machine": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expect": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "enum": [
+            null,
+            "oldu",
+            "olmadi"
+          ]
+        },
+        "said": {
+          "title": "null, or the owner's own words"
+        },
+        "at": {
+          "title": "null, or when the owner decided",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
         }
       }
     },

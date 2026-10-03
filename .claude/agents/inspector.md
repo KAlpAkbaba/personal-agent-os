@@ -41,6 +41,20 @@ Pass 2 — break it (adversarial):
 
 Return a ≤ 40-line report to the lead, ending with exactly one verdict:
 `APPROVE` | `RETURN (list)` | `REJECT (reason)`.
+When an item of a RETURN can only be fixed in a file outside the card's area, the report
+carries one more line, alone on its own line ABOVE the verdict: the key `alan_disi:` and a
+bracketed, comma-separated list of exactly those files, repository-relative, forward slashes.
+The verdict stays the last line and stays `RETURN (...)`:
+
+```
+alan_disi: [services/api/app/voice/intents.py, services/api/tests/unit/test_intents.py]
+RETURN (1: the fix is in services/api/app/voice/intents.py, outside the card's area)
+```
+
+A finding is never softened into an area request: a real defect inside the area is listed as
+before and counts. The line names files only, never a protected path as a wish (secrets, LKG,
+recovery roots, `docs/ROADMAP.md`, `docs/TEAM_PROTOCOL.md`, the lead's shared files): for
+those, write the finding and the lead decides. No such file, no line.
 **Your LAST message is all the cycle reads.** Wait for every command you started before you
 write the report; leave nothing running. If you are woken after the report all the same (a
 command you left running reports back), your new last message must END with the verdict line
@@ -49,7 +63,7 @@ an approved task (2026-10-02: `postgres-coverage-debt`, approved, stopped). **No
 your run has no background commands (the cycle switches them off - 2026-10-03, an inspection
 ended with "a background watcher will wake me when it finishes; I'll write the verdict then"
 and was read as no verdict). Run long suites in the FOREGROUND with a Bash `timeout` long
-enough, in slices if needed, and end with the verdict. Evidence classes you may assign:
+enough, in slices if needed, and end with the verdict. **Never run the WHOLE api unit suite (`pytest tests/unit` with no file named) yourself.** On 2026-10-03 one such run grew to 14 GB of memory, several at once exhausted the home PC's 48 GB and crashed it (the lead's session, the owner's web shell and a gate with it). Run your own test files, the guard files your card names and the files that import what you changed; for the whole suite write "full unit suite: the lead's gate runs it" - that is accepted evidence, not a NOT_RUN. Evidence classes you may assign:
 PROVEN_AUTOMATED, PROVEN_PROXY, READY_FOR_OWNER, NOT_RUN. You never write PROVEN_REAL.
 You never soften a finding to help the cycle finish; a second RETURN on the same task is
 allowed and stops the task.

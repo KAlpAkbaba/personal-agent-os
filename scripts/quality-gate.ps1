@@ -504,6 +504,16 @@ if (-not $Fast) {
     Assert-ExitCode "team-feed tests"
   }
 
+  Invoke-Step "Agent team tick not held by orphans (PS5.1, no model)" {
+    # 2026-10-03: a `tail -f` an agent run left behind held the scheduled tick (Start-Process
+    # -Wait waits for every descendant) and no cycle ran for two hours. The tick waits for its
+    # script's own process and stops what is left in the job it owns - fakes in place of both.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-tick.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-tick tests"
+  }
+
   Invoke-Step "Agent team area widening rules (PS5.1, no model)" {
     # A fix outside a card's area: the request line of a report, the widen / wait / refuse
     # judgement and the protected paths (scripts/lib/TeamArea.ps1) - functions only.
@@ -511,6 +521,17 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\team-area.tests.ps1"
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
     Assert-ExitCode "team-area tests"
+  }
+
+  Invoke-Step "Agent team integrate step (PS5.1 + git, fake gate, no model)" {
+    # ADR-0260: scripts/team/integrate.ps1 gates a merged integration branch and puts exactly
+    # the gated commit on main - against a sandbox repository, a fake gate, a fake lead and
+    # the fake team API. The step is on main and NOT scheduled; this suite is what keeps it
+    # honest until it is. About 25 minutes: the longest PowerShell step of the gate.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-integrate tests"
   }
 
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
@@ -529,6 +550,16 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\host-snapshot.tests.ps1"
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
     Assert-ExitCode "host-snapshot tests"
+  }
+
+  Invoke-Step "Web shell on the tailnet: HTTPS script (PS5.1 + bash, fake tailscale)" {
+    # The web shell runs on the Cloud Core (aux `web` service, loopback only); the phone reaches
+    # it over `tailscale serve` HTTPS. The script that sets that up, against a fake tailscale:
+    # the loopback target, idempotence, --off, and that `funnel` is never called. No tailnet.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\web-tailnet-https.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "web-tailnet-https tests"
   }
 
   Invoke-Step "Web shell build" {

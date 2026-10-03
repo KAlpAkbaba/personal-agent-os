@@ -20,6 +20,7 @@ from app.notifications import events as notification_events
 from app.notifications import ladder as notification_ladder
 from app.research import service as research_service
 from app.security.registry import AuthorizedAssetRegistry
+from app.voice.measurement.service import Recordings
 from app.voice.realtime_sessions import service as realtime_service
 
 
@@ -43,6 +44,9 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
     monkeypatch.setattr(
         notification_events, "sweep_backup_failures", lambda db, **_: ["pagentos-backup.service"]
     )
+    # The measurement recordings' purge: stubbed for the same reason - what is asserted is
+    # that the APPLICATION reaches it.
+    monkeypatch.setattr(Recordings, "purge", lambda self, now: 0)
     app = create_app(Settings(_env_file=None))
 
     results = app.state.retention_sweeper.sweep_once()
@@ -59,6 +63,8 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
         "notification_ladder": 3,
         # B12 req 385: one failed unit turned into a notice the owner will see.
         "backup_failure_notices": 1,
+        # Nothing expired: the purge ran and dropped nothing.
+        "measurement_recordings": 0,
         # B07 req 679: a dry run on an empty database counts nothing, which is the honest
         # answer and not a skipped sweep.
         "audit_retention": 0,

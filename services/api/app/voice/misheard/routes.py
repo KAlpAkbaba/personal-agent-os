@@ -10,11 +10,12 @@ Turkish message. The rules live in ``app.voice.misheard.service``, not here.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.identity.dependencies import require_owner_session
 from app.voice.misheard import service
@@ -65,12 +66,37 @@ def _item_id(raw: str) -> uuid.UUID:
         raise _not_found() from error
 
 
+async def _payload(request: Request) -> Any:
+    """The body as JSON, read here rather than by FastAPI: its own refusal is an English
+    ``{detail: [...]}`` that echoes what it could not read. Nothing at all is no meaning."""
+    raw = await request.body()
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError as error:  # JSONDecodeError and UnicodeDecodeError alike
+        raise HTTPException(
+            422,
+            {"code": "body_invalid", "message": "İstek okunamadı; anlamı JSON olarak gönder."},
+        ) from error
+
+
 def _meant(payload: Any) -> str:
     value = payload.get("meant") if isinstance(payload, dict) else None
     if not isinstance(value, str) or not value.strip():
         raise HTTPException(
             422, {"code": "meant_empty", "message": "Ne demek istediğini yaz; anlam boş olamaz."}
         )
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:  # a lone surrogate: valid JSON, no UTF-8 holds it
+        raise HTTPException(
+            422,
+            {
+                "code": "meant_invalid",
+                "message": "Anlamda yazılamayan bir karakter var; düzeltip yaz.",
+            },
+        ) from error
     text = value.strip()
     if len(text) > MEANT_WIDTH:
         raise HTTPException(
@@ -103,12 +129,10 @@ async def list_misheard(request: Request) -> dict[str, Any]:
 
 
 @router.post("/v1/voice/misheard/{item_id}/meaning")
-async def answer_misheard(
-    item_id: str, request: Request, payload: Annotated[Any, Body()] = None
-) -> dict[str, Any]:
+async def answer_misheard(item_id: str, request: Request) -> dict[str, Any]:
     artifacts = request.app.state.artifacts
     row_id = _item_id(item_id)
-    meant = _meant(payload)
+    meant = _meant(await _payload(request))
 
     def run() -> dict[str, Any]:
         with artifacts.session() as session:

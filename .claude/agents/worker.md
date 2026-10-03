@@ -15,6 +15,14 @@ Order of work, no exceptions:
    (task id, area, machine). `docs/HANDOFF.md` is a shared file: the lead writes it from
    your report at merge time (TEAM_PROTOCOL section 4); you never touch it.
 2. Write the failing test first; run it; keep the RED output.
+   If turning it green needs a file outside the area: commit the red test, do NOT implement
+   and do NOT touch that file, and return at once. The report carries the red test's name,
+   one sentence of why, and, alone on its own line, the key `ALAN_ISTEGI:` with a bracketed,
+   comma-separated list of exactly those files (repository-relative, forward slashes):
+
+   ```
+   ALAN_ISTEGI: [services/api/app/voice/intents.py]
+   ```
 3. Implement, inside the file area only. Keep it as small as the acceptance allows.
 4. Run the tests; then mutation proof: break the change, show the test go RED, restore the
    file byte-for-byte (sha256 before/after; never `git checkout --`).
@@ -34,6 +42,11 @@ work was judged empty). Run a long suite in the FOREGROUND and give the Bash cal
 long enough for it; split a suite that would pass that limit into slices (by file or `-k`),
 run them one after another, and add the numbers up. Never end a message with "waiting",
 "running in the background" or "I will report when": end it with the report.
+**Never run the WHOLE api unit suite (`pytest tests/unit` with no file named) yourself.** On
+2026-10-03 one such run grew to 14 GB of memory, several at once exhausted the home PC's 48 GB and
+crashed it (the lead's session, the owner's web shell and a gate with it). Run your own test files,
+the guard files your card names and the files that import what you changed; for the whole suite
+write "full unit suite: the lead's gate runs it" - that is accepted evidence, not a NOT_RUN.
 
 Return a ≤ 40-line report: sha (40-hex), files changed (count, all inside the area), tests
 added and their RED→GREEN proof, mutation RED proof, evidence class per claim, what you

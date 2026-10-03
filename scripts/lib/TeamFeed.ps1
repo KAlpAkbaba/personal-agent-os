@@ -21,9 +21,11 @@
       * an EDIT of the roadmap is new rows inside the "Approved ideas" table and nothing
         else, one row per approved idea, each naming that idea's proposal.
 
-    The one function that touches anything is Get-TeamFeedSnapshot, and it only reads: the
-    checkout's `git status` with a hash of each file it lists, so that what a lead run
-    changed can be told from what was already there.
+    Get-TeamFeedSnapshot only reads: the checkout's `git status` with a hash of each file it
+    lists, so that what a lead run changed can be told from what was already there.
+
+    The functions of the path BESIDE A RUNNING CYCLE (at the end) do touch things, and say
+    so: the feeder's own lock file, a throwaway worktree, and create-only writes to the store.
 
     Windows PowerShell 5.1, StrictMode.
 #>
@@ -685,4 +687,249 @@ function Compare-TeamFeedSnapshot {
         [void]$stray.Add([string]$path)
     }
     return @($stray.ToArray())
+}
+
+# ------------------------------------------------------------------ beside a running cycle
+#
+# A live cycle of THIS machine holds the team's lock for most of the day (API mode). The feeder
+# then does not take that lock: it takes its own (a machine-local file), lets the lead work in
+# a throwaway worktree, reads the store again before it writes, and writes only NEW tasks, each
+# as a conditional create. Nothing here touches the cycle's lock.
+
+# A feeder's own lock older than this is somebody's that died without its finally.
+$script:TeamFeedOwnLockStaleHours = 6
+# A git command that met another git's lock file (the cycle uses git in the same checkout) is
+# tried again this many times, a second apart; then it is a failure, said as one.
+$script:TeamFeedGitLockTries = 15
+
+function Read-TeamFeederLock {
+    <# The feeder lock's document ({pid, machine, acquired_at}), read while its holder keeps the
+       file open; $null when it cannot be read or is not that document. #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+        try {
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+            $text = $reader.ReadToEnd()
+        }
+        finally { $stream.Dispose() }
+        $document = ConvertFrom-Json -InputObject $text
+        if ($null -eq $document -or $null -eq $document.PSObject.Properties["pid"]) { return $null }
+        return $document
+    }
+    catch { return $null }
+}
+
+function Get-TeamFeederLockVerdict {
+    <#
+    .SYNOPSIS
+        Whether a feeder lock that is there is somebody's: held (a live pid, younger than the
+        bound) | dead (its pid is gone) | stale (older than the bound) | unreadable.
+    #>
+    param($Held, [datetime]$Now = [datetime]::UtcNow, [datetime]$FileTime = [datetime]::UtcNow)
+    if ($null -eq $Held) {
+        # Being written this very moment, or broken: the file's own age decides.
+        if (($Now - $FileTime).TotalHours -ge $script:TeamFeedOwnLockStaleHours) { return [pscustomobject]@{ Kind = "stale"; Why = "okunamayan, $script:TeamFeedOwnLockStaleHours saatten eski" } }
+        return [pscustomobject]@{ Kind = "held"; Why = "okunamıyor (yazılıyor olabilir)" }
+    }
+    $holderPid = 0
+    [void][int]::TryParse([string]$Held.pid, [ref]$holderPid)
+    $since = [string](Get-TeamProperty -InputObject $Held -Name "acquired_at" -Default "")
+    $at = ConvertFrom-TeamTimestamp -Text $since
+    if ($null -eq $at -or ($Now.ToUniversalTime() - $at).TotalHours -ge $script:TeamFeedOwnLockStaleHours) {
+        return [pscustomobject]@{ Kind = "stale"; Why = "pid $holderPid, $since - $script:TeamFeedOwnLockStaleHours saatten eski" }
+    }
+    $alive = ($holderPid -gt 0 -and $null -ne (Get-Process -Id $holderPid -ErrorAction SilentlyContinue))
+    if (-not $alive) { return [pscustomobject]@{ Kind = "dead"; Why = "pid $holderPid artık yok ($since)" } }
+    return [pscustomobject]@{ Kind = "held"; Why = "pid $holderPid, $since" }
+}
+
+function Enter-TeamFeederLock {
+    <#
+    .SYNOPSIS
+        Takes the feeder's own lock: a file created exclusively and KEPT OPEN (others may read
+        it, nobody may delete it) until Exit-TeamFeederLock. Acquired, Why (when not), TookOver
+        (the verdict on a lock that was taken over, else empty).
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Machine, [datetime]$Now = [datetime]::UtcNow)
+    $folder = Split-Path -Parent $Path
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+    $tookOver = ""
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $stream = $null
+        try { $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read) }
+        catch {
+            if (-not (Test-Path -LiteralPath $Path)) { throw }
+            $fileTime = (Get-Item -LiteralPath $Path).LastWriteTimeUtc
+            $verdict = Get-TeamFeederLockVerdict -Held (Read-TeamFeederLock -Path $Path) -Now $Now -FileTime $fileTime
+            if ($verdict.Kind -eq "held") { return [pscustomobject]@{ Acquired = $false; Why = $verdict.Why; TookOver = ""; Stream = $null; Path = $Path } }
+            # A holder that is gone closed its handle with it: the file can go. One that still
+            # has it open cannot be deleted - then it is held, whatever its document says.
+            try { [System.IO.File]::Delete($Path) }
+            catch { return [pscustomobject]@{ Acquired = $false; Why = "$($verdict.Why); dosya hâlâ açık"; TookOver = ""; Stream = $null; Path = $Path } }
+            $tookOver = $verdict.Why
+            continue
+        }
+        $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes((ConvertTo-Json -InputObject ([ordered]@{ pid = $PID; machine = $Machine; acquired_at = (Get-TeamTimestamp -Now $Now) }) -Compress))
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+        return [pscustomobject]@{ Acquired = $true; Why = ""; TookOver = $tookOver; Stream = $stream; Path = $Path }
+    }
+    return [pscustomobject]@{ Acquired = $false; Why = "another feeder took it at the same moment"; TookOver = ""; Stream = $null; Path = $Path }
+}
+
+function Exit-TeamFeederLock {
+    <# Closes and removes the feeder's own lock. Said, not thrown, when the file stays. #>
+    param($Lock)
+    if ($null -eq $Lock -or -not $Lock.Acquired) { return "" }
+    try { $Lock.Stream.Dispose() } catch { }
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        try { if (Test-Path -LiteralPath $Lock.Path) { [System.IO.File]::Delete($Lock.Path) }; return "" }
+        catch { Start-Sleep -Milliseconds 300 }
+    }
+    return "the feeder's own lock file could not be removed: $($Lock.Path)"
+}
+
+function Invoke-TeamFeedGit {
+    <# A git command in the checkout a running cycle also uses: another git's lock file is
+       waited out (tried again), anything else - and a lock that does not go - is a failure. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string[]]$Arguments)
+    $result = $null
+    for ($attempt = 1; $attempt -le $script:TeamFeedGitLockTries; $attempt++) {
+        $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments $Arguments
+        if ($result.Success) { return $result }
+        if (([string]$result.StdErr) -notmatch '(?i)\.lock\b|unable to create .*lock|another git process') { break }
+        Start-Sleep -Seconds 1
+    }
+    throw "git $($Arguments[0..1] -join ' ') failed: $(([string]$result.StdErr).Trim())"
+}
+
+function New-TeamFeedWorktree {
+    <# A throwaway worktree of the checkout's HEAD (detached: no branch is made) for one lead
+       run, under .claude/worktrees/feed, which git ignores. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string]$Name)
+    if ($Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$') { throw "'$Name' cannot name a worktree" }
+    $path = Join-Path (Join-Path $RepoRoot ".claude\worktrees\feed") $Name
+    $parent = Split-Path -Parent $path
+    if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Force -Path $parent) }
+    [void](Invoke-TeamFeedGit -RepoRoot $RepoRoot -Arguments @("worktree", "add", "--detach", $path, "HEAD"))
+    return $path
+}
+
+function Remove-TeamFeedWorktree {
+    <# Removes the throwaway worktree, whatever the run left in it (it was judged already).
+       Returns what could not be done, as a sentence; empty when it is gone. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return "" }
+    try { [void](Invoke-TeamFeedGit -RepoRoot $RepoRoot -Arguments @("worktree", "remove", "--force", $Path)) }
+    catch { return "the throwaway worktree was not removed: $($_.Exception.Message)" }
+    return ""
+}
+
+function Select-TeamFeedFresh {
+    <#
+    .SYNOPSIS
+        The feed against the queue as it is NOW: a card whose id somebody created since the
+        first read is not ours to write, and neither is any card that waits for it. Feed (what
+        is kept, in order) and Dropped ({Id, Why}).
+    #>
+    param($Feed, [Parameter(Mandatory = $true)]$Before, [Parameter(Mandatory = $true)]$Fresh)
+    $old = @{}
+    foreach ($task in @(Get-TeamTasks -Queue $Before)) { $old[[string]$task.id] = $true }
+    $now = @{}
+    foreach ($task in @(Get-TeamTasks -Queue $Fresh)) { $now[[string]$task.id] = $task }
+    $dropped = New-Object System.Collections.ArrayList
+    $gone = @{}
+    foreach ($item in @($Feed)) {
+        $id = [string](Get-TeamProperty -InputObject $item -Name "id" -Default "")
+        if ($id -and $now.ContainsKey($id) -and -not $old.ContainsKey($id)) {
+            $gone[$id] = $true
+            [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = "bu id lead koşusu sürerken başka bir yazar tarafından oluşturuldu ('$([string]$now[$id].title)')" })
+        }
+    }
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+        foreach ($item in @($Feed)) {
+            $id = [string](Get-TeamProperty -InputObject $item -Name "id" -Default "")
+            if (-not $id -or $gone.ContainsKey($id)) { continue }
+            $waits = @(@(Get-TeamProperty -InputObject $item -Name "depends_on" -Default @()) | Where-Object { $gone.ContainsKey([string]$_) })
+            if (@($waits).Count -gt 0) {
+                $gone[$id] = $true
+                $changed = $true
+                [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = "yazılmayan $([string]$waits[0]) kartına bağlı" })
+            }
+        }
+    }
+    $kept = @(@($Feed) | Where-Object { -not $gone.ContainsKey([string](Get-TeamProperty -InputObject $_ -Name "id" -Default "")) })
+    return [pscustomobject]@{ Feed = $kept; Dropped = @($dropped.ToArray()) }
+}
+
+function Get-TeamFeedCreateOrder {
+    <# The tasks in the lead's order, except that a task comes after every task of the same list
+       it depends on. #>
+    param([object[]]$Tasks = @())
+    $byId = [ordered]@{}
+    foreach ($task in @($Tasks)) { $byId[[string]$task.id] = $task }
+    $placed = @{}
+    $order = New-Object System.Collections.ArrayList
+    $visiting = @{}
+    $place = $null
+    $place = {
+        param([string]$Id)
+        if ($placed.ContainsKey($Id) -or $visiting.ContainsKey($Id)) { return }
+        $visiting[$Id] = $true
+        foreach ($dependency in @(Get-TeamProperty -InputObject $byId[$Id] -Name "depends_on" -Default @())) {
+            if ($byId.Contains([string]$dependency)) { & $place ([string]$dependency) }
+        }
+        $placed[$Id] = $true
+        [void]$order.Add($byId[$Id])
+    }
+    foreach ($id in @($byId.Keys)) { & $place ([string]$id) }
+    return @($order.ToArray())
+}
+
+function Save-TeamFeedCreates {
+    <#
+    .SYNOPSIS
+        Writes NEW tasks to the store, each as its own conditional create (a PUT whose
+        expected_updated_at is null: the store answers 409 when the id exists). Nothing else
+        is ever sent - no task the store has, whatever its state.
+
+    .DESCRIPTION
+        In dependency order. A 409 means somebody made that id first: that task, and every task
+        that depends on it, is dropped and named; what was written stays; nothing is retried or
+        overwritten. Any other failure stops the writing: Failed says why, and the tasks not
+        reached are named as not written.
+        Written (ids), Dropped ({Id, Why}), Failed (empty when none).
+    #>
+    param([Parameter(Mandatory = $true)]$Store, [object[]]$Tasks = @())
+    $written = New-Object System.Collections.ArrayList
+    $dropped = New-Object System.Collections.ArrayList
+    $gone = @{}
+    $failed = ""
+    foreach ($task in @(Get-TeamFeedCreateOrder -Tasks $Tasks)) {
+        $id = [string]$task.id
+        if ($failed) { [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = "depo yazmayı kesti" }); continue }
+        $waits = @(@(Get-TeamProperty -InputObject $task -Name "depends_on" -Default @()) | Where-Object { $gone.ContainsKey([string]$_) })
+        if (@($waits).Count -gt 0) {
+            $gone[$id] = $true
+            [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = "yazılmayan $([string]$waits[0]) kartına bağlı" })
+            continue
+        }
+        $body = [ordered]@{ task = $task; expected_updated_at = $null }
+        try { [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/tasks/$id" -Body $body) }
+        catch {
+            if (([string]$_.Exception.Message) -match '^HTTP 409 ') {
+                $gone[$id] = $true
+                [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = "depo 409 dedi: bu id'yi başkası önce oluşturdu" })
+                continue
+            }
+            $failed = ([string]$_.Exception.Message -replace '\s+', ' ').Trim()
+            [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = "depo yanıt vermedi" })
+            continue
+        }
+        [void]$written.Add($id)
+    }
+    return [pscustomobject]@{ Written = @($written.ToArray()); Dropped = @($dropped.ToArray()); Failed = $failed }
 }

@@ -133,6 +133,10 @@ $docker = @(
     '    if [ -n "${FAKE_RELOAD_EXIT:-}" ]; then exit "$FAKE_RELOAD_EXIT"; fi',
     '    cp "$FAKE_EDGE/upstream.conf" "$FAKE_STATE/edge-upstream"; exit 0;;',
     '  compose*" config -q"*) exit "${FAKE_CONFIG_EXIT:-0}";;',
+    '  compose*" up "*godseye|compose*" up "*" web")',
+    '    # ADR-0197 + the web shell: the aux workloads, never part of the api transaction. FAKE_AUX_FAIL=<regex of services> makes those fail.',
+    '    if [ -n "${FAKE_AUX_FAIL:-}" ] && printf "%s" "$*" | grep -qE " (${FAKE_AUX_FAIL})\$"; then echo "failed to solve: process did not complete successfully" >&2; exit "${FAKE_AUX_EXIT:-1}"; fi',
+    '    exit 0;;',
     '  compose*" up "*api-*)',
     '    if [ -n "${FAKE_UP_EXIT:-}" ]; then exit "$FAKE_UP_EXIT"; fi',
     '    colour=$(colour_of "$*")',
@@ -191,6 +195,11 @@ $lockHeldS = [int]$snapshot.operation_lock.longest_run * [Math]::Max(1, [int]$sn
 $fixtureDir = Join-Path $script:Sandbox "fixture"
 New-Item -ItemType Directory -Force -Path $fixtureDir | Out-Null
 [IO.File]::WriteAllText((Join-Path $fixtureDir "lock-held-s.txt"), "$lockHeldS`n")
+# MemAvailable as the web shell's image build reads it (ADR "web on the Cloud Core"): a host with room for `next build`, and one without.
+$meminfoOk = Join-Path $fixtureDir "meminfo-ok"
+$meminfoLow = Join-Path $fixtureDir "meminfo-low"
+[IO.File]::WriteAllText($meminfoOk, "MemTotal:        8000000 kB`nMemAvailable:    6000000 kB`n")
+[IO.File]::WriteAllText($meminfoLow, "MemTotal:        8000000 kB`nMemAvailable:    1500000 kB`n")
 $flock = @(
     '#!/usr/bin/env bash',
     'echo "flock $*" >> "$FAKE_STATE/flock.log"',
@@ -244,7 +253,7 @@ function Invoke-Release {
     $lockDefault = if ($Sha -eq "--reconcile" -or $Mode -eq "--reconcile") { "FAKE_LOCK_HELD_S=0 " } else { "" }
     $lockLog = Join-Path $hostBase "state\flock.log"
     Remove-Item -LiteralPath $lockLog -Force -ErrorAction SilentlyContinue
-    $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_EDGE_DIR='$(& $u (Join-Path $hostBase 'edge'))' PAGENTOS_MODELS_DIR='$(& $u (Join-Path $hostBase 'models'))' PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_DRAIN_S=0 PAGENTOS_WAIT_STEP_S=0 PAGENTOS_HANDOFF_WAIT_S=1 PAGENTOS_EDGE_SETTLE_TRIES=2 PAGENTOS_EDGE_SETTLE_STEP_S=0 " +
+    $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_EDGE_DIR='$(& $u (Join-Path $hostBase 'edge'))' PAGENTOS_MODELS_DIR='$(& $u (Join-Path $hostBase 'models'))' PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_DRAIN_S=0 PAGENTOS_WAIT_STEP_S=0 PAGENTOS_HANDOFF_WAIT_S=1 PAGENTOS_EDGE_SETTLE_TRIES=2 PAGENTOS_EDGE_SETTLE_STEP_S=0 PAGENTOS_MEMINFO='$(& $u $meminfoOk)' " +
            "FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' FAKE_ENV='$(& $u (Join-Path $hostBase '.env'))' FAKE_EDGE='$(& $u (Join-Path $hostBase 'edge'))' FAKE_FIXTURE='$(& $u $fixtureDir)' $lockDefault" +
            (($Env.GetEnumerator() | ForEach-Object { "$($_.Key)='$($_.Value)' " }) -join "") +
            "PATH='$(& $posix $fakeBin):'`"`$PATH`" bash '$(& $u $hostScript)' $Sha $Mode 2>&1"
@@ -311,6 +320,32 @@ try {
         $orderOk = ($iBuild -ge 0 -and $iBuild -lt $iMigrate -and $iMigrate -lt $iUpGreen -and $iUpGreen -lt $iHealth -and $iHealth -lt $iReload -and $iReload -lt $iDrainBlue -and $iDrainBlue -lt $iReload2 -and $iReload2 -lt $iStopBlue)
         if (-not $orderOk) { Write-Host "      indexes: build=$iBuild migrate=$iMigrate upGreen=$iUpGreen health=$iHealth reload=$iReload drainBlue=$iDrainBlue reload2=$iReload2 stopBlue=$iStopBlue"; $calls | ForEach-Object { Write-Host "      $_" } }
         Assert-True $orderOk "order: build -> migrate -> up idle -> health on idle -> device upstream reload -> drain old -> HTTP reload -> stop old (after the drain)"
+
+        # The web shell is an aux workload like godseye (ADR-0197): built and brought up by the
+        # same aux_up, one compose call each, AFTER the api's transaction.
+        $iAuxGod = [array]::IndexOf($calls, ($calls | Where-Object { $_ -match " up -d --no-deps --build godseye$" } | Select-Object -First 1))
+        $iAuxWeb = [array]::IndexOf($calls, ($calls | Where-Object { $_ -match " up -d --no-deps --build web$" } | Select-Object -First 1))
+        Assert-True ($iAuxGod -gt $iStopBlue -and $iAuxWeb -gt $iAuxGod -and $r.Output -match "aux: godseye up" -and $r.Output -match "aux: web up") "the aux workloads, the web shell included, are built and brought up one compose call each, after the api's transaction (after the old colour stopped)"
+        Assert-True (@($calls | Where-Object { $_ -match "--profile aux" -and $_ -match " up -d --no-deps --build web$" }).Count -eq 1 -and -not ($calls -match " up .*--wait.* web") -and -not ($calls -match "force-recreate")) "the web shell is brought up under the aux profile, by name, with no dependencies, never waited on and never force-recreated"
+
+        Reset-Host
+        $rAux = Invoke-Release -Env @{ FAKE_AUX_FAIL = "web" }
+        Assert-True ($rAux.Exit -eq 0 -and $rAux.Output -match "RELEASE OK: $sha is running as api-green" -and $rAux.Output -match "aux: web NOT up \(rc=1\); the api release stands" -and $rAux.Output -match "aux: godseye up" -and (Get-Active) -eq "green" -and (Get-Release) -eq $sha) "a web shell that fails to build never fails or rolls back the api release: exit 0, RELEASE OK, the new colour active, the failure said"
+        Reset-Host
+        $rAux2 = Invoke-Release -Env @{ FAKE_AUX_FAIL = "godseye|web"; FAKE_AUX_EXIT = "17" }
+        $iWebAfterGod = [array]::IndexOf($rAux2.Calls, ($rAux2.Calls | Where-Object { $_ -match " up -d --no-deps --build web$" } | Select-Object -First 1))
+        Assert-True ($rAux2.Exit -eq 0 -and $rAux2.Output -match "aux: godseye NOT up \(rc=17\)" -and $rAux2.Output -match "aux: web NOT up \(rc=17\)" -and $iWebAfterGod -ge 0 -and (Get-Release) -eq $sha) "one aux workload failing does not stop the next from being tried, and neither touches the release"
+
+        # `next build` peaks near 2.1 GiB; a host that cannot spare it starts the image that is already there.
+        Reset-Host
+        $rLow = Invoke-Release -Env @{ PAGENTOS_MEMINFO = (& $u $meminfoLow) }
+        Assert-True ($rLow.Exit -eq 0 -and $rLow.Output -match "aux: web NOT rebuilt: 1464 MiB available < 3072 MiB a build needs" -and ($rLow.Calls -match " up -d --no-deps --no-build web$").Count -eq 1 -and -not ($rLow.Calls -match " up -d --no-deps --build web$") -and ($rLow.Calls -match " up -d --no-deps --build godseye$").Count -eq 1 -and $rLow.Output -match "RELEASE OK") "a host without room for the web build starts the image already there (--no-build, so a missing image is not built either), says why, and the release and the other aux workload are unaffected"
+        Reset-Host
+        $rUnread = Invoke-Release -Env @{ PAGENTOS_MEMINFO = (& $u (Join-Path $fixtureDir "no-such-meminfo")) }
+        Assert-True ($rUnread.Exit -eq 0 -and $rUnread.Output -match "aux: web NOT rebuilt: 0 MiB available" -and -not ($rUnread.Calls -match " up -d --no-deps --build web$")) "an unreadable meminfo errs safe: no web build"
+        Reset-Host
+        $rFloor = Invoke-Release -Env @{ PAGENTOS_MEMINFO = (& $u $meminfoLow); PAGENTOS_WEB_BUILD_MIN_AVAILABLE_MB = "1024" }
+        Assert-True ($rFloor.Exit -eq 0 -and ($rFloor.Calls -match " up -d --no-deps --build web$").Count -eq 1) "the floor is PAGENTOS_WEB_BUILD_MIN_AVAILABLE_MB: lowered below what the host has, the build runs"
         Assert-True ($r.Output -match "device handoff: 1/1 after 0s device session\(s\) on api-green" -and (Get-Sessions "green") -eq 1 -and (Get-Sessions "blue") -eq 0) "the device sessions moved to the new colour BEFORE it took HTTP, and the script waited for them"
         Assert-True (-not ($calls -match " stop api-blue" | Where-Object { [array]::IndexOf($calls, $_) -lt $iReload }) -and -not ($calls -match "force-recreate") -and -not ($calls -match "postgres|redis|minio|temporal")) "the active colour is never stopped before the switch; nothing is force-recreated; dependencies are never named"
         Assert-True ((Test-Up "green") -and -not (Test-Up "blue")) "afterwards only the new colour runs"

@@ -405,6 +405,8 @@ class Settings(BaseSettings):
     #: commit that holds the cloud clamp and one `session_open` on it has been verified;
     #: with an older image every unnamed research would be sent there and fail.
     research_execution_rule_enabled: bool = False
+    #: The same for a routine's browser_action (ADR-0213 row 1); OFF = main's device choice.
+    routines_execution_rule_enabled: bool = False
 
     #: Whether "bu hafta ne oldu" is told by the model narrator (ADR-0244 B: the voice
     #: tool hands the session's chat provider to the narrative). OFF by default: on, every
