@@ -14,7 +14,8 @@ The causes, each fixed where it is (the sentences are never listed anywhere):
   claimed as heard (memory_correct's bare "düzelt", the bare repeat's "yeniden"): two
   claimants, neither exact - MEDIUM at most, both named, and the policy asks;
 * the relay's adapter gave a repaired WORD the suffix-dropped 0.9 (HIGH) where the router
-  gave it the confusion's 0.75.
+  gave it the confusion's 0.75;
+* the alarm tool kept a fused "yedibuçukta" one word and found no time in the right reading.
 """
 
 from __future__ import annotations
@@ -110,24 +111,22 @@ def test_a_fused_time_is_a_repaired_word_and_never_high():
     assert decision.band == BAND_MEDIUM and decision.confidence == CONFUSION
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "ALAN_ISTEGI app/alarms/tr_time.py: the alarm tool parses 'yedibuçukta' as heard "
-        "(the router's reading is right; the time is the tool's)"
-    ),
-)
 def test_the_alarm_tool_reads_a_fused_half_hour():
     """stt.derived.c.collision.alarm_create.fused, the tool half: ``parse_when_text`` gets the
-    sentence as heard and refuses ``when_unparsed``. Outside this card's area."""
+    sentence as heard; ``_tokens`` kept "yedibuçukta" one word, so ``_spoken_clock`` found no
+    hour and the tool refused ``when_unparsed`` - the router's right reading did the wrong
+    thing. A number word fused to its "buçuk"/"çeyrek" is two words."""
     from datetime import UTC, datetime
 
     from app.alarms.tr_time import parse_when_text
 
     now = datetime(2026, 10, 3, 5, 0, tzinfo=UTC)
-    parsed = parse_when_text("Saat yedibuçukta beni uyandır.", now=now, timezone="Europe/Istanbul")
-    plain = parse_when_text("Saat yedi buçukta beni uyandır.", now=now, timezone="Europe/Istanbul")
+    zone = "Europe/Istanbul"
+    parsed = parse_when_text("Saat yedibuçukta beni uyandır.", now=now, timezone=zone)
+    plain = parse_when_text("Saat yedi buçukta beni uyandır.", now=now, timezone=zone)
     assert parsed == plain
+    quarter = parse_when_text("Sekizeçeyrek var, uyandır.", now=now, timezone=zone)
+    assert quarter == parse_when_text("Sekize çeyrek var, uyandır.", now=now, timezone=zone)
 
 
 # --- the rule: two claimants, neither exact -------------------------------------------------
@@ -171,6 +170,16 @@ def test_the_relays_adapter_gives_a_repaired_word_the_confidence_of_a_confusion(
         assert reading is not None and reading.match_kind == MATCH_CONFUSION, repair
     polite = policy.rule_reading("app_open", application="calc", route_repair="polite")
     assert polite is not None and polite.match_kind != MATCH_CONFUSION
+
+
+def test_a_repaired_word_in_another_clause_does_not_contest_the_first_clauses_command():
+    """``_claim_the_same_words``'s clause break: "Notu düzelt" is the owner's command and what
+    follows the comma is its own clause - the fused "şubug'ı" there shares the verb "düzelt"
+    with it but does not make the first command a contested one. As heard, full confidence."""
+    for said in ("Notu düzelt, şubug'ı kendin düzelt.", "Şunu not al: buresmi yeniden çiz."):
+        resolved = resolve_intent(said)
+        assert resolved == intents_module._resolve_intent_rules(said), said
+        assert "contested" not in (resolved.route_repair or ""), said
 
 
 # --- the invented ending, read by layer 1 ----------------------------------------------------

@@ -382,10 +382,10 @@ _ENTITIES: Final[dict[str, tuple[str | None, str | None]]] = {
 #: 2026-10-03 (step 2, no confident wrong reading): 103 of 106 = 97.2 %, invented suffix
 #: 21/21, fused 26/29 - the target is MET. Five wrong readings left this table: an invented
 #: ending is read as the word it is ("Notü" -> "not"), and two rules claiming the same words
-#: once a word is repaired ask between them. The fused time stays: the router's reading is
-#: right (now MEDIUM, a repaired word), the alarm tool's time parser is not this card's.
+#: once a word is repaired ask between them. The fused time left too: the router read it
+#: right (MEDIUM, a repaired word) and the alarm tool now splits "yedibuçukta" into the hour
+#: and its "buçukta" - 104 of 106, no wrong reading left.
 KNOWN_GAPS: Final[dict[str, str]] = {
-    "stt.derived.c.collision.alarm_create.fused": "wrong_reading",
     "stt.derived.am.1.fused": "not_understood",
     "stt.derived.mc.search.1.fused": "not_understood",
 }

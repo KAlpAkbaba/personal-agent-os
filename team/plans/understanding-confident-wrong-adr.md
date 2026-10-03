@@ -44,8 +44,13 @@ Owner Utterance Suite on the same sources: **2754 / 2754** (2756 tests passed, 4
    the suffix-dropped 0.9 (HIGH) while the router gave a repaired word 0.75: a fused or invented
    repair is now a confusion in both.
 
-**Not closed here.** `c.collision.alarm_create.fused`: the reading is right (alarm_create, now
-MEDIUM) but the alarm tool parses "yedibuçukta" as heard (`app/alarms/tr_time.py`, outside the
-card) - it stays in KNOWN_GAPS, the strict-xfail test `test_the_alarm_tool_reads_a_fused_half_hour`
-names it. `test_stt_utterance_corpus.py::test_stt_corpus_meets_the_target` is a strict xfail
-that now XPASSes: its marker must go (outside the card).
+6. **The fused time (second pass, area widened by the consultant).** `c.collision.alarm_create.fused`
+   was read right (alarm_create, MEDIUM) but the alarm tool parses the sentence as heard:
+   `tr_time._tokens` kept "yedibuçukta" one word, `_spoken_clock` found no hour, the tool
+   refused. `_split_fused_fraction` now cuts a token into hour + "buçuk"/"çeyrek" (and their
+   listed forms) only when the head is a number word, bare or with a clock case suffix
+   ("sekizeçeyrek"), so no other word is ever cut. It left KNOWN_GAPS; the strict xfail on
+   `test_stt_corpus_meets_the_target` is removed - the target is a plain test now.
+
+**Final number (second pass):** 104 / 106 = 98.11 %, 100 acted + 4 questions, 2 not_understood
+(`am.1.fused`, `mc.search.1.fused`), **confident_wrong_readings 0**, wrong-device 0, TARGET_MET.
