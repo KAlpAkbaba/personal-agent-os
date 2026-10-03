@@ -35,6 +35,10 @@
       PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS  the reset, seconds from now (default 3600)
       PAGENTOS_FAKE_CLAUDE_RAN_MODEL       "<role>=<id>": that role's modelUsage names <id>
           whatever --model said, as a tool that substituted the model itself would print
+
+    The pool's hooks (cycle-seat-pool), independent of the scenario as well - described where
+    they are read: PAGENTOS_FAKE_CLAUDE_SECONDS (how long each run takes),
+    PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS, PAGENTOS_FAKE_CLAUDE_SETTINGS (+ _JSON, _RUN).
 #>
 # No param block, on purpose: with one, PowerShell binds the tool's `-p` to its own common
 # parameter -PipelineVariable and swallows the argument after it (`--output-format` never
@@ -97,7 +101,7 @@ if ($card -match '(?m)^- id: (\S+)') { $taskId = $Matches[1] }
 $here = (Get-Location).ProviderPath
 
 if ($log) {
-    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
+    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
     Add-SharedLine -Path $log -Line ($entry | ConvertTo-Json -Compress)
 }
 
@@ -159,10 +163,13 @@ function Invoke-Git {
 #     cycle's live status file to <snapshot>\<role>-<task>.json - what a reader sees while a run is in flight;
 #   PAGENTOS_FAKE_CLAUDE_STOPFLAG (+ _ROLE, default worker): that role's run creates the stop flag, as the
 #     owner or the lead would while the cycle works.
+#   PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS: how long the run stays before it takes that snapshot (default 4).
 $snapshotDir = [string]$env:PAGENTOS_FAKE_CLAUDE_SNAPSHOT
 $statusFile = [string]$env:PAGENTOS_FAKE_CLAUDE_STATUS
 if ($snapshotDir -and $statusFile) {
-    Start-Sleep -Seconds 4
+    $snapshotAfter = 4
+    if ([string]$env:PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS -match '^\d{1,3}$') { $snapshotAfter = [int]$env:PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS }
+    Start-Sleep -Seconds $snapshotAfter
     if (-not (Test-Path -LiteralPath $snapshotDir)) { [void](New-Item -ItemType Directory -Force -Path $snapshotDir) }
     if (Test-Path -LiteralPath $statusFile) { Copy-Item -LiteralPath $statusFile -Destination (Join-Path $snapshotDir "$role-$taskId.json") -Force }
 }
@@ -181,6 +188,22 @@ if ($heartbeat -and $statusFile -and $role -eq "worker") {
 $stopFlag = [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG
 $stopRole = if ($env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE) { [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE } else { "worker" }
 if ($stopFlag -and $role -eq $stopRole) { Set-Content -LiteralPath $stopFlag -Value "stop" -Encoding ASCII }
+# cycle-seat-pool hooks, independent of the scenario too:
+#   PAGENTOS_FAKE_CLAUDE_SETTINGS + _SETTINGS_JSON + _SETTINGS_RUN ("<role>:<task>"): that run writes the
+#     text to the file - somebody changes team/cycle-settings.json while the cycle works;
+#   PAGENTOS_FAKE_CLAUDE_SECONDS: how long a run takes, per run: "<role>:<task>=<seconds>" entries, comma
+#     separated, `*` for every task of a role. The run stays that long AFTER the hooks above and
+#     before it answers - one seat busy for eight seconds while another is free after one.
+$settingsFile = [string]$env:PAGENTOS_FAKE_CLAUDE_SETTINGS
+if ($settingsFile -and [string]$env:PAGENTOS_FAKE_CLAUDE_SETTINGS_RUN -eq "${role}:$taskId") {
+    [System.IO.File]::WriteAllText($settingsFile, [string]$env:PAGENTOS_FAKE_CLAUDE_SETTINGS_JSON, (New-Object System.Text.UTF8Encoding($false)))
+}
+foreach ($entry in @(([string]$env:PAGENTOS_FAKE_CLAUDE_SECONDS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+    if ($entry -match '^([a-z]+):([a-z0-9*-]+)=(\d{1,3})$' -and $Matches[1] -eq $role -and ($Matches[2] -eq "*" -or $Matches[2] -eq $taskId)) {
+        Start-Sleep -Seconds ([int]$Matches[3])
+        break
+    }
+}
 
 if ($scenario -eq "silent") {
     [Console]::Out.Write("I could not do that.")

@@ -1211,7 +1211,7 @@ nothing ran - and nothing was released from it.
 | 41.4 | The browser task loop has a model behind its planner interface: one forced `step` call, strict parse, fixed-word errors | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_webtask_model_planner.py`. The real API: `NOT_RUN`. Nothing in production reaches it (no caller of `start_task_db`, no `-AuthorizeTasks` on MAIL) |
 | 41.5 | PR-C's binding limits at the gate: a write is classified from its element, payment is one boundary for every action, an unnamed submitting control is read back, a site name counts in site position only, a grant is bound to what the control is wired to | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_webtask_gate.py`, `test_webtask_acceptance.py`; seventeen mutations RED (worker and after the inspector's return) |
 | 41.6 | ADR-0224 measured on sentences as the STT renders them | `PROVEN_AUTOMATED` (the instrument) | `services/api/tests/unit/test_stt_utterance_corpus.py`: **73 of 106 (68.9 %)**, 25 not understood, 8 read wrongly with confidence, 0 on a wrong device. **The owner's target (>= 95 %) is NOT met**; the test of the target is a strict xfail and the report says `BELOW_TARGET` |
-| 41.7 | The gate runs every PowerShell suite and the web suite | `PROVEN_REAL` | gate 38/38 on `d93f6a2a`, steps "Agent team roadmap feeder" and "Web shell lint, unit tests and types": 122 files, 2 087 tests; before this the web suite ran nowhere before a release (GitHub Actions has been off since 2026-09-19) |
+| 41.7 | The gate runs every PowerShell suite and the web suite | `PROVEN_REAL` | gate 38/38 on `d93f6a2a` (`scripts/quality-gate.ps1`), steps "Agent team roadmap feeder" (`scripts/tests/team-feed.tests.ps1`) and "Web shell lint, unit tests and types": 122 files, 2 087 tests; `tests/unit/test_ci_covers_every_suite.py` holds the list; before this the web suite ran nowhere before a release (GitHub Actions has been off since 2026-09-19) |
 | 41.8 | A release of gated roadmap work without a question, verified | `PROVEN_REAL` | 2026-10-01 23:50 UTC: `RELEASE OK: 5f250e5b… is running as api-blue`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-blue is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over. The first preflight answered exit 82 ("another blue/green release or recovery operation is running"): the release's lock is taken with `flock -n` and met the minute reconcile; nothing was changed, the second attempt passed. The maintenance script already waits for that lock (38.17); the release script does not yet |
 
 ## Stage 42 — d20261002, first integration: four worker seats and an Ofis that counts runs, a cycle that reads the store before every pass, a feeder that follows the model chain (ADR-0241 … ADR-0244, ADR-0246, ADR-0214 addenda 11-13)
@@ -1277,3 +1277,68 @@ sha one minute later.
 | 44.4 | The api and its embedded worker came back by themselves | `PROVEN_REAL` | health `ok`, `temporal` ok and `temporal_worker` ok at 13:03:59; the api's own log shows ONE `degraded` health sample inside the seven seconds and `ok` on both sides of it; no container other than temporal was recreated (`docker ps`: every other container's uptime unchanged) |
 | 44.5 | The fake hosts are built from the host as it is now | `PROVEN_AUTOMATED` | `scripts/tests/fixtures/host-snapshot.json` collected 2026-10-02 13:05:42 UTC (serving colour green, 1126 columns); `cloud-release-bluegreen.tests.ps1` 112, `host-snapshot.tests.ps1` 95, `maintenance-reboot.tests.ps1` 35, `test_host_snapshot_schema.py` green on it |
 | 44.6 | `docker stop` of the temporal container behaves as before under tini | `NOT_RUN` | ADR-0252 says so: tini forwards SIGTERM (documented), the stop time was not measured on the host; the next maintenance window measures it |
+
+## Stage 45 — d20261002, fourth integration: the area-widening rules, the model policy on the Cloud Core (ADR-0253, ADR-0214 addendum 14)
+
+Released 2026-10-02 20:55 UTC as main `86e6fde9b64682885591dfe0ad7b365285a79cc9` (api-blue; previous `f60e02e4…` kept
+as last known good; schema unchanged, `0064_memory_vocabulary_class`). Full gate 39/39 on `c18dacd7` (the merge
+commit's tree is identical): 14 806 unit, 156 integration, 2 162 web, team-cycle 184, team-feed 65, team-area 117.
+Released under the standing rule (ADR-0214 addendum 9): no migration, no compose, edge or environment change, health
+`ok`. Two earlier gates of this integration were stopped: `742d4f51` by the lead at minute 35, when the pre-run of
+`team-integrate.tests.ps1` on the merged tree was 77/1 (`cycle-auto-integrate` was taken out and returned - the run is
+put into its job object only after it has started); `8425c6d9` RED after 3.5 hours on three steps: a real lint
+finding (seven bare `.Count` in `scripts/lib/TeamArea.ps1`), a test that raced the application's own announcer loop
+(`test_mobile_push`, reproduced alone and fixed), and the Unity scene test past its 600 s - the owner was playing a VR
+game on the machine at the time; it passed in this gate (the Agent tests took 4 min 16 s).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 45.1 | The release, verified | `PROVEN_REAL` | 20:55 UTC: `RELEASE OK: 86e6fde9… is running as api-blue`, 2/2 device sessions handed over after 1 s, health `ok` through the edge and over the tailnet; `APPROVED_SHA` = RELEASE; `RECONCILE OK: api-blue is canonical`; 0 defunct processes on the host; no error line in the api's log of the first five minutes |
+| 45.2 | The model setting is served by the Cloud Core and is the one the owner's file names | `PROVEN_REAL` | `GET /v1/team/queue/models` on production answers lead and inspector `claude-fable-5-1`, worker, integrator and researcher `claude-opus-5-5`, fallback true - the roles of `team/models.json`; `tests/unit/test_team_models_setting.py`, `tests/integration/test_team_models_postgres.py`. The owner changing it from the Ofis page: `NOT_RUN` (`model-policy-office-ui`) |
+| 45.3 | A fix outside a card's area is judged by rules: widen / wait / refuse, protected paths never widened into | `PROVEN_AUTOMATED` | `scripts/tests/team-area.tests.ps1` (117, in the gate and the CI file), ADR-0253 with the lead's nine protected entries (RED first: 10 failed before them). Wired into the cycle: `NOT_RUN` (`area-widen-cycle-wiring`) |
+| 45.4 | The announcer test decides with one sweeper | `PROVEN_AUTOMATED` | `tests/integration/test_mobile_push.py`: alone, before the fix, 1 failed of 16; after, 16 passed four times in a row and 156 in the gate |
+| 45.5 | The gate's own speed on this machine | `PROVEN_REAL` (measured) | the unit step took 1 h 48 min (56 min on the afternoon's gate) with 92 % of 28 threads idle: the user's temp folder held 2 671 896 entries, 2.66 million of them empty folders the voice-corpus harness never removed (card `corpus-temp-dirs-leak`); the owner removed the 2 312 840 older than a day with the lead's script at about 23:05-23:30 local time, while this gate ran (0 failures, 24 minutes). The next gate's time is the measurement of what that bought |
+
+## Stage 46 — d20261003, first integration: the cycle is a pool - a seat is filled when it is free (ADR-0214 addendum 15, ADR-0251 addendum 1)
+
+Released 2026-10-02 22:14 UTC as main `65cd94fffcaaa1028cdfc751729a9238b69102b9` (api-green; previous `86e6fde9…` kept
+as last known good; schema unchanged). Full gate 39/39 on `1fec640b` (the merge commit's tree is identical) in 66
+minutes: 14 806 unit, 156 integration, 2 164 web, team-cycle 208, team-feed 65, team-area 117. Released under the
+standing rule; the owner that night: "Geceyi bekleme, kapı yeşilse hemen devreye al" and "bundan sonra kapısı yeşil
+olanlar otomatik canlıya geçsin, beklemesinler".
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 46.1 | The release, verified | `PROVEN_REAL` | 22:14 UTC: `RELEASE OK: 65cd94ff… is running as api-green`, 2/2 device sessions handed over after 1 s, health `ok` through the edge and over the tailnet; `APPROVED_SHA` = RELEASE; `RECONCILE OK: api-green is canonical` |
+| 46.2 | A free seat is filled while other runs are still in flight; seats are per role; the store and `team/cycle-settings.json` are read at every refill | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 208 of 208, in the gate and in a pre-run on the merged tree (14 minutes); the inspector's two own mutations RED. One case failed once in six runs under the heaviest load for the inspector (a snapshot read late): `cycle-pool-test-barriers` |
+| 46.3 | The pool in service on the home PC | `PROVEN_REAL` (2026-10-03, see 47.4) | `team/stop.flag` written 22:15 UTC: the cycle `d20261002` (started 11:05 UTC on the batch loop) starts nothing new and ends when its one run in flight does; the scheduler's next tick starts the pool from the lead branch. `PROVEN_REAL` is the Ofis page - or the status document - showing a worker seat refilled while another worker of the same cycle is still running |
+| 46.4 | What cleaning the temp folder bought (Stage 45.5) | `PROVEN_REAL` (measured) | the same unit step: 1 h 48 min 35 s on `c18dacd7` (the folder held 2.67 million entries), 29 min 42 s on `1fec640b` after the owner removed 2 312 840 of them; 56 min 28 s on the afternoon's gate. The whole gate: 66 minutes. The leak itself is still open (`corpus-temp-dirs-leak`): each corpus run adds about eleven thousand folders |
+| 46.5 | `voice/session-storm` awaits its events | `PROVEN_AUTOMATED` | `apps/web/tests/voice/session-storm.test.ts`; web suite 2 164. The product finding its author made (a network flap after a 410 costs one attach) is `voice-gone-is-terminal` |
+
+## Stage 47 — d20261003, second integration: the notebook of misunderstood sentences, its store; the narrative's model narrator wired behind a setting that is OFF (ADR-0254, ADR-0255)
+
+Released 2026-10-02 23:32 UTC as main `e9f8c2d6034346651b9d456f491d8bae2cc93164` (api-blue; previous `65cd94ff…` kept as
+last known good; migration `0065_misheard_utterances` applied after a pre-migration backup). Full gate 39/39 on
+`9a88b3c8` (the merge commit's tree is identical) in 69 minutes: 14 908 unit, 162 integration, team-cycle 208.
+Released under the standing rule without asking: the migration is one CREATE TABLE with its index (expand-only), no
+compose, edge or environment change, health `ok`.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 47.1 | The release with its migration, verified | `PROVEN_REAL` | 23:32 UTC: `BACKUP OK` (pre-migration snapshot, 10 s), `Running upgrade 0064_memory_vocabulary_class -> 0065_misheard_utterances`, `api-blue schema at 0065_misheard_utterances (database matches the tree)`, 2/2 device sessions handed over after 1 s, `RELEASE OK`; `APPROVED_SHA` = RELEASE; `RECONCILE OK: api-blue is canonical`; no error line in the api's first four minutes |
+| 47.2 | The notebook's purge loop runs and answers in health | `PROVEN_REAL` | production health: `misheard_purge` running, interval 86 400 s, passes 1, failures 0, retention 30 days; `tests/unit/test_misheard_store.py`, `test_misheard_routes.py`, `tests/integration/test_misheard_postgres.py`. No sentence reaches the table before `misheard-relay-wiring` (and `misheard-purge-start-bounded` comes first) |
+| 47.3 | The narrative's model narrator is wired and OFF | `PROVEN_AUTOMATED` | `tests/unit/test_narrative_model_wiring.py` (17); production speaks as before (the setting defaults off and the compose file does not name it). Switching it on: the owner's decision, with the compose line |
+| 47.4 | The pool in service: a seat is filled while other runs of the same cycle are still in flight | `PROVEN_REAL` | the old cycle `d20261002` ended on `team/stop.flag` and the scheduler started `d20261003` at 23:00 UTC on the pool; its status document at 23:33 UTC: the worker of `execution-call-site-routines` (started 23:00:20) still running beside eight runs started after it - workers at 23:13, 23:22, 23:26, 23:29, 23:30 and inspectors at 23:02 and 23:27 - into seats that runs which had ended (e.g. `understanding-rules-read-lemmas`, its report written) left free. Six worker seats and two inspections in flight at once |
+
+## Stage 48 — d20261003, third integration: a run of the cycle has no background commands; the local embedder's cache is locked (ADR-0214 addendum 16, ADR-0256)
+
+Released 2026-10-03 01:14 UTC as main `661a5efe4a4989a0996fb3264302264c8c977bfa` (api-green; previous `e9f8c2d6…` kept
+as last known good; schema unchanged, `0065_misheard_utterances`). Full gate 39/39 on `cc5b39ec` (the merge commit's tree
+is identical) in 65 minutes: 14 914 unit, 162 integration. Released under the standing rule.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 48.1 | The release, verified | `PROVEN_REAL` | 01:14 UTC: `RELEASE OK: 661a5efe… is running as api-green`, 2/2 device sessions handed over after 1 s, health `ok`; `APPROVED_SHA` = RELEASE; `RECONCILE OK: api-green is canonical` |
+| 48.2 | A run of the cycle cannot start a background command and may run one foreground command for an hour | `PROVEN_AUTOMATED` + `PROVEN_REAL` (the switches) | `scripts/tests/team-cycle.tests.ps1`, case "each role runs on the model the team's setting names for it": RED without each variable, GREEN with both (`scripts/lib/TeamRun.ps1`). The tool's own behaviour, measured by the lead on claude 2.1.285: with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` a Bash call with `run_in_background` is refused as an unexpected parameter; with `BASH_MAX_TIMEOUT_MS=3600000` an eleven-minute command finishes where the default cuts it at 10 min 0 s |
+| 48.3 | The cycle runs on it | `PROVEN_REAL` | the pool cycle `d20261003` ended on `team/stop.flag`; the scheduler's tick that had started it stayed alive afterwards - held by two processes an agent run had left (`tail -f` on a worker's log and a `grep` reading it; card `tick-not-held-by-orphans`) - and the lead stopped those two and started the task: a new cycle (pid 42348) took the lock at 01:16:52 UTC from the lead branch that carries the switches |
+| 48.4 | The local embedder's cache under concurrent threads | `PROVEN_AUTOMATED` | `tests/unit/test_memory_local_embedder.py` (forced interleavings, both partial-lock mutants RED); ADR-0256. `OpenAIEmbedder` keeps the same unlocked cache: `openai-embedder-lru-lock` |

@@ -64,6 +64,9 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "briefing_announcer",
     "research_tool_call_announcer",
     "selfmodel_refresher",
+    # misheard-ledger-store: the notebook's 24-hour purge. Advisory like the loops above -
+    # a 30-day promise nothing sweeps is a promise kept on paper, so the loop is visible.
+    "misheard_purge",
     # B07 req 679: the retention POLICY itself, readable. A policy nobody can see is a
     # policy nobody can check.
     "audit_retention",
@@ -130,6 +133,7 @@ def test_health_ok_shape(monkeypatch) -> None:
             "briefing_announcer",
             "research_tool_call_announcer",
             "selfmodel_refresher",
+            "misheard_purge",
             "audit_retention",
             "backup",
         ):
@@ -177,6 +181,42 @@ def test_health_ok_shape(monkeypatch) -> None:
         "sub_ticks",
         "failing_sub_ticks",
     }
+
+
+def test_the_misheard_purge_loop_answers_in_health(monkeypatch) -> None:
+    """The loop the lifespan starts is the one health reports: running, every 24 h."""
+    with make_client(monkeypatch, ALL_OK) as client:
+        body = client.get("/v1/system/health").json()
+    purge = body["checks"]["misheard_purge"]
+    assert purge["status"] == "ok"
+    assert purge["running"] is True
+    assert purge["required"] is False
+    assert purge["interval_s"] == 24 * 60 * 60
+    assert purge["retention_days"] == 30
+
+
+def test_a_misheard_purge_loop_that_is_behind_is_reported_and_degrades_nothing(
+    monkeypatch,
+) -> None:
+    """Advisory, like the other loops: housekeeping that is late is said out loud and is no
+    reason to refuse a release that asks whether the API is serving."""
+    from datetime import UTC, datetime, timedelta
+
+    with make_client(monkeypatch, ALL_OK) as client:
+        loop = client.app.state.misheard_purge
+        loop._clock = lambda: datetime.now(UTC) + timedelta(days=4)
+        body = client.get("/v1/system/health").json()
+    assert body["checks"]["misheard_purge"]["status"] == "fail"
+    assert body["checks"]["misheard_purge"]["required"] is False
+    assert body["status"] == "ok"
+    assert "misheard_purge" not in body["failing_checks"]
+
+
+def test_without_the_lifespan_the_misheard_purge_loop_is_skipped(monkeypatch) -> None:
+    client = make_client(monkeypatch, ALL_OK)
+    purge = client.get("/v1/system/health").json()["checks"]["misheard_purge"]
+    assert purge["status"] == "skipped"
+    assert purge["running"] is False
 
 
 def test_health_broker_check_shape(monkeypatch) -> None:

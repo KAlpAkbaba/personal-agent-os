@@ -325,6 +325,16 @@ function Start-TeamRun {
     # 2.1.285 binary; the variable is not on the documented page - best effort). The proof
     # that a run was not lowered is its modelUsage, which the cycle compares after every run.
     $psi.EnvironmentVariables["CLAUDE_CODE_NO_MODEL_FALLBACK"] = "1"
+    # A run of the cycle is never woken again: its final message is its result. On 2026-10-03
+    # five runs of one night started their suites in the background, ended with "I will report
+    # when it finishes", and were judged as empty work. The tool's own switch takes the
+    # background parameter out of the run's Bash tool (proven by the lead on 2.1.285: the call
+    # is refused as an unexpected parameter), so a long command runs in the foreground.
+    $psi.EnvironmentVariables["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+    # ... which needs a foreground call that may last as long as a suite: the tool cuts a call at
+    # ten minutes by default (measured: 'Command timed out after 10m 0s'; an 11-minute command
+    # finished with this limit). An hour; a longer suite runs in slices.
+    $psi.EnvironmentVariables["BASH_MAX_TIMEOUT_MS"] = "3600000"
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
@@ -348,33 +358,30 @@ function Stop-TeamProcessTree {
     catch { }
 }
 
+function Test-TeamRunOver {
+    <#
+    .SYNOPSIS
+        Whether a run has ended, or is past its deadline. Nothing waits here: it is what a
+        caller asks that keeps several runs in flight and blocks on none of them (the cycle's
+        pool). Wait-TeamRun then collects such a run at once, killing it if it is still going.
+    #>
+    param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline)
+    if ($Run.Process.HasExited) { return $true }
+    return ([datetime]::UtcNow -ge $Deadline.ToUniversalTime())
+}
+
 function Wait-TeamRun {
     <#
     .SYNOPSIS
         Wait for a run until its deadline. A run past its deadline is killed with its
         children, and what it printed is kept.
     #>
-    param(
-        [Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline,
-        # Called every -TickSeconds while the run is going (the live status's heartbeat: a status
-        # nobody refreshed for ten minutes reads as "no cycle"). 0 is no tick.
-        [scriptblock]$OnTick = $null, [int]$TickSeconds = 0
-    )
+    param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline)
     # [datetime]::MaxValue is "no deadline" (owner decision 2026-09-30: no time cap on a
     # run); WaitForExit(-1) waits for ever, and a span that large would not fit an int.
-    $exited = $false
-    while ($true) {
-        $remainingMs = ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds
-        $remaining = if ($remainingMs -ge [int]::MaxValue) { -1 } else { [int][Math]::Max(0, $remainingMs) }
-        if ($null -ne $OnTick -and $TickSeconds -gt 0) {
-            $slice = $TickSeconds * 1000
-            if ($remaining -ge 0 -and $remaining -lt $slice) { $slice = $remaining }
-            if ($Run.Process.WaitForExit($slice)) { $exited = $true; break }
-            if ($remaining -ge 0 -and $remaining -le $slice) { break }
-            try { & $OnTick } catch { }
-        }
-        else { $exited = $Run.Process.WaitForExit($remaining); break }
-    }
+    $remainingMs = ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds
+    $remaining = if ($remainingMs -ge [int]::MaxValue) { -1 } else { [int][Math]::Max(0, $remainingMs) }
+    $exited = $Run.Process.WaitForExit($remaining)
     $timedOut = -not $exited
     if ($timedOut) {
         Stop-TeamProcessTree -ProcessId $Run.Process.Id

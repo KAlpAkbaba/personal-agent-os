@@ -566,6 +566,90 @@ Test-Case "a file is inside an area or it is not" {
 }
 
 Write-Host ""
+Write-Host "the pool's seats (cycle-seat-pool): per role, in queue order, never two tasks on the same files"
+
+function New-SeatRun {
+    param([string]$Id, [string]$Role, [string[]]$Area = @())
+    $task = $null
+    if ($Id) { $task = New-Task -Id $Id -Area $(if (@($Area).Count -gt 0) { $Area } else { @("src/$Id") }) }
+    return [pscustomobject]@{ Task = $task; Role = $Role }
+}
+
+function Get-SeatFill {
+    param([object[]]$Candidates, [object[]]$InFlight = @(), [hashtable]$Seats = @{ worker = 3; inspector = 2; integrator = 1 })
+    $chosen = @(Select-TeamSeatFill -Candidates $Candidates -InFlight $InFlight -Seats $Seats)
+    return (@($chosen | ForEach-Object { "$($_.Role):" + $(if ($null -ne $_.Task) { [string]$_.Task.id } else { "cycle" }) }) -join ",")
+}
+
+Test-Case "seats: each role has its own - three inspections never keep a worker seat empty, and a role never takes another role's seat" {
+    # 2026-10-01 22:15, the owner at the Ofis page: three inspections filled the cycle's three
+    # slots and all three WORKER seats sat empty with eight tasks assigned.
+    $waiting = @((New-SeatRun "ins-a" "inspector"), (New-SeatRun "ins-b" "inspector"), (New-SeatRun "ins-c" "inspector"),
+        (New-SeatRun "wrk-d" "worker"), (New-SeatRun "wrk-e" "worker"), (New-SeatRun "wrk-f" "worker"), (New-SeatRun "wrk-g" "worker"))
+    Assert-Equal -Expected "inspector:ins-a,inspector:ins-b,worker:wrk-d,worker:wrk-e,worker:wrk-f" -Actual (Get-SeatFill -Candidates $waiting) -Because "two inspectors and three workers, side by side"
+    $flying = @((New-SeatRun "wrk-x" "worker"), (New-SeatRun "wrk-y" "worker"), (New-SeatRun "ins-z" "inspector"))
+    Assert-Equal -Expected "inspector:ins-a,worker:wrk-d" -Actual (Get-SeatFill -Candidates $waiting -InFlight $flying) -Because "the runs in flight hold their seats: one inspector seat and one worker seat are free"
+    Assert-Equal -Expected "" -Actual (Get-SeatFill -Candidates @((New-SeatRun "wrk-d" "worker")) -InFlight @((New-SeatRun "wrk-x" "worker"), (New-SeatRun "wrk-y" "worker"), (New-SeatRun "wrk-z" "worker"))) -Because "no worker seat is free - and the two free inspector seats are not a worker's"
+    Assert-Equal -Expected "" -Actual (Get-SeatFill -Candidates @((New-SeatRun "wrk-d" "worker")) -InFlight $flying -Seats @{ worker = 1; inspector = 2; integrator = 1 }) -Because "a setting lowered below what is in flight starts nothing (and stops nothing)"
+    $others = @((New-SeatRun "" "researcher"), (New-SeatRun "idea-one" "lead"), (New-SeatRun "idea-two" "lead"), (New-SeatRun "int-a" "integrator"), (New-SeatRun "int-b" "integrator"), (New-SeatRun "wrk-d" "worker"))
+    Assert-Equal -Expected "researcher:cycle,lead:idea-one,integrator:int-a,worker:wrk-d" -Actual (Get-SeatFill -Candidates $others -InFlight @((New-SeatRun "wrk-x" "worker"), (New-SeatRun "wrk-y" "worker"))) `
+        -Because "one researcher, one lead and one integrator run beside the workers; a second of each waits"
+    Assert-Equal -Expected "integrator:int-a,integrator:int-b" -Actual (Get-SeatFill -Candidates @((New-SeatRun "int-a" "integrator"), (New-SeatRun "int-b" "integrator")) -Seats @{ worker = 1; inspector = 1; integrator = 2 }) -Because "the integrator seats are a number too"
+}
+
+Test-Case "seats: queue order is kept, and a task has one run at a time" {
+    $waiting = @((New-SeatRun "task-a" "worker"), (New-SeatRun "task-b" "worker"), (New-SeatRun "task-c" "worker"))
+    Assert-Equal -Expected "worker:task-a,worker:task-b" -Actual (Get-SeatFill -Candidates $waiting -Seats @{ worker = 2; inspector = 2; integrator = 1 }) -Because "the first two of the queue, not the last two"
+    Assert-Equal -Expected "worker:task-b" -Actual (Get-SeatFill -Candidates $waiting -InFlight @((New-SeatRun "task-a" "inspector")) -Seats @{ worker = 1; inspector = 2; integrator = 1 }) -Because "a task whose run is in flight is not started a second time, in any role"
+    Assert-Equal -Expected "" -Actual (Get-SeatFill -Candidates @((New-SeatRun "task-a" "integrator")) -InFlight @((New-SeatRun "task-a" "worker"))) -Because "nor in a role that holds no files, with its own seat free"
+    Assert-Equal -Expected "worker:task-a" -Actual (Get-SeatFill -Candidates @((New-SeatRun "task-a" "worker"), (New-SeatRun "task-a" "inspector"))) -Because "nor twice in one refill"
+    Assert-Equal -Expected "" -Actual (Get-SeatFill -Candidates @()) -Because "nothing waits, nothing starts"
+}
+
+Test-Case "seats: a task whose area overlaps the area of a task in flight waits for it, whichever of the two works or inspects; an integrator's study holds no files" {
+    # Section 4: two concurrent tasks never share an area. The queue's own rules keep such a pair
+    # out of work (Test-TeamQueue, Get-TeamAreaHolders) - on the copy they look at. A run in
+    # flight is the cycle's own copy of its task, whatever the store says of it meanwhile.
+    $holder = New-SeatRun "task-one" "worker" @("src/area")
+    foreach ($role in @("worker", "inspector")) {
+        foreach ($area in @("src/area", "src/area/deep", "SRC/Area/", "src")) {
+            Assert-Equal -Expected "" -Actual (Get-SeatFill -Candidates @((New-SeatRun "task-two" $role @($area)))  -InFlight @($holder)) -Because "'$area' as a $role beside a worker on src/area"
+            Assert-Equal -Expected "" -Actual (Get-SeatFill -Candidates @((New-SeatRun "task-two" $role @("src/other", $area)))  -InFlight @((New-SeatRun "task-one" "inspector" @("src/area")))) -Because "any one of several areas, beside an inspection"
+        }
+    }
+    Assert-Equal -Expected "worker:task-two" -Actual (Get-SeatFill -Candidates @((New-SeatRun "task-two" "worker" @("src/area2"))) -InFlight @($holder)) -Because "'area' and 'area2' are two directories"
+    $pair = @((New-SeatRun "task-one" "worker" @("src/area")), (New-SeatRun "task-two" "worker" @("src/area/deep")), (New-SeatRun "task-three" "worker" @("src/third")))
+    Assert-Equal -Expected "worker:task-one,worker:task-three" -Actual (Get-SeatFill -Candidates $pair) -Because "of two that wait together the first of the queue starts; the other waits, and the one behind it does not"
+    Assert-Equal -Expected "worker:task-two" -Actual (Get-SeatFill -Candidates @((New-SeatRun "task-two" "worker" @("src/area/deep"))) -InFlight @((New-SeatRun "task-one" "integrator" @("src/area")))) -Because "an integrator writes a plan, not the area"
+    Assert-Equal -Expected "integrator:task-two" -Actual (Get-SeatFill -Candidates @((New-SeatRun "task-two" "integrator" @("src/area/deep"))) -InFlight @($holder)) -Because "and its study starts beside the holder"
+}
+
+Test-Case "settings: team/cycle-settings.json names the seats of a running cycle; what it does not name, and a file that is not there, are the parameters'; a value that is no seat count changes nothing and is said" {
+    # 2026-10-01: a setting changed at 16:45 took effect at 19:35 - a cycle process is bound to
+    # the arguments it started with, and a cycle that has work does not end.
+    $work = Join-Path $env:TEMP ("pagentos-seats-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+    [void](New-Item -ItemType Directory -Force -Path $work)
+    try {
+        $file = Join-Path $work "cycle-settings.json"
+        $read = { param($text)
+            if ($null -ne $text) { [System.IO.File]::WriteAllText($file, [string]$text, (New-Object System.Text.UTF8Encoding($false))) }
+            $seats = Read-TeamCycleSettings -Path $file -Workers 3 -Inspectors 2 -Integrators 1
+            "$($seats.Workers)/$($seats.Inspectors)/$($seats.Integrators)/$(@($seats.Problems).Count)"
+        }
+        Assert-Equal -Expected "3/2/1/0" -Actual (& $read $null) -Because "no file: the parameters"
+        Assert-Equal -Expected "5/2/1/0" -Actual (& $read '{"max_parallel":5}') -Because "what the file names; the rest stays"
+        Assert-Equal -Expected "4/3/2/0" -Actual (& $read '{"max_parallel":4,"max_inspectors":3,"max_integrators":2}') -Because "all three"
+        Assert-Equal -Expected "3/2/1/0" -Actual (& $read '{}') -Because "an empty setting names nothing"
+        foreach ($bad in @('{"max_parallel":0}', '{"max_parallel":"6"}', '{"max_inspectors":2.5}', '{"max_integrators":true}', '{"max_parallel":17}', '{"max_parallel":5,"max_inspectors":-1}', 'not json', '[4]')) {
+            Assert-Equal -Expected "3/2/1/1" -Actual (& $read $bad) -Because "'$bad' is not a setting: the parameters stand - not half of the file - and it is said"
+        }
+        $said = @((Read-TeamCycleSettings -Path $file -Workers 3 -Inspectors 2 -Integrators 1).Problems)[0]
+        Assert-True -Condition ($said -match "cycle-settings\.json") -Because "the sentence names the file: $said"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host ""
 Write-Host "a run"
 
 $roles = Join-Path $repoRoot ".claude\agents"
@@ -1203,8 +1287,12 @@ try {
     Test-Case "the cycle's cap stops it: no run is started once the money is spent" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/other")))
         $run = Invoke-Cycle -Root $root -Scenario "costly" -MaxUsd 6 -MaxParallel 1
-        Assert-Equal -Expected 2 -Actual @($run.Calls).Count -Because "4 + 4 is over 6: the third run never started"
-        Assert-True -Condition ($run.Report -match "bütçe tavanı: 8[.,]00 / 6[.,]00 USD") -Because $run.Report
+        # Seats are per role (cycle-seat-pool): after task-one's worker (4 USD, under the cap) its
+        # inspection and task-two's worker start side by side. Whichever of the two ends first,
+        # the money is spent by then (8, or 12 when both ended) and nothing further starts.
+        Assert-Equal -Expected "inspector:task-one,worker:task-one,worker:task-two" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" } | Sort-Object) -join ",") -Because "4 is under 6, 8 is over: task-two's inspection never started"
+        Assert-True -Condition ($run.Report -match "bütçe tavanı: (8|12)[.,]00 / 6[.,]00 USD") -Because $run.Report
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "bütçe tavanı")).Count -Because "said once, however many refills followed: $($run.Report)"
         Assert-True -Condition ([double]$run.Calls[1].budget -le 2.0) -Because "the second run was given what was left, not its own cap: $($run.Calls[1].budget)"
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
     }
@@ -1297,7 +1385,10 @@ try {
         Use-FakeHooks -Environment $hooks -Body { $script:seqRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
         Assert-Equal -Expected 0 -Actual $script:seqRun.ExitCode -Because ($script:seqRun.StdOut + $script:seqRun.StdErr)
         $second = Read-TeamJson -Path (Join-Path $snapshots "worker-task-two.json")
-        Assert-Equal -Expected "task-two:worker" -Actual (@($second.runs | ForEach-Object { "$($_.task):$($_.role)" }) -join ",") -Because "only the run in flight is listed: $($second | ConvertTo-Json -Compress)"
+        # One worker seat: task-two's worker starts when task-one's has ended. (Task-one's
+        # inspection has a seat of its own since cycle-seat-pool and may be listed beside it.)
+        $listed = @($second.runs | ForEach-Object { "$($_.task):$($_.role)" })
+        Assert-True -Condition ($listed -contains "task-two:worker" -and $listed -notcontains "task-one:worker") -Because "the finished worker is gone from the list, the one in flight is in it: $($second | ConvertTo-Json -Compress)"
         Assert-True -Condition ([double]$second.estimated_usd -ge 0.25) -Because "the first run's cost is already in: $($second.estimated_usd)"
     }
 
@@ -1348,9 +1439,14 @@ try {
         $run = $null
         Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_STOPFLAG = $flag; PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE = "inspector" } -Body { $script:stopRun2 = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
         $run = $script:stopRun2
-        Assert-Equal -Expected "worker,inspector" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "the inspection ran, nothing after it"
+        # Seats are per role (cycle-seat-pool): task-two's worker took the worker seat in the same
+        # refill that started task-one's inspection - before the flag. Both were in flight when it
+        # came up, both finish and are recorded, and nothing starts after it.
+        Assert-Equal -Expected "inspector:task-one,worker:task-one,worker:task-two" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" } | Sort-Object) -join ",") -Because "the runs in flight finished, nothing after the flag: no inspection of task-two"
         Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "an approved inspection is still merged"
-        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the second task was only moved to assigned (no plan needed), never started"
+        $two = Get-TaskById -Queue $run.Queue -Id "task-two"
+        Assert-Equal -Expected "inspecting" -Actual $two.state -Because "the worker in flight finished; its inspection is the next cycle's"
+        Assert-Equal -Expected 1 -Actual @($two.reports).Count -Because "and its run is recorded"
         Assert-True -Condition (-not (Test-Path -LiteralPath $flag)) -Because "the flag is removed"
     }
 
@@ -1559,6 +1655,16 @@ try {
         foreach ($call in $none.Calls) {
             Assert-Equal -Expected "stream-json" -Actual ([string]$call.output) -Because "the limit events are only in the stream"
             Assert-Equal -Expected "1" -Actual ([string]$call.no_fallback_env) -Because "the tool is told not to substitute the model itself"
+            # 2026-10-03: five runs of one night ended with "the suite is running in the background, I
+            # will report when it finishes" - a run of the cycle is never woken again, so the work was
+            # judged empty and tasks were returned and stopped for nothing. The tool's own switch
+            # removes the background parameter from the run's Bash tool (the lead proved it: the call
+            # is refused with "An unexpected parameter `run_in_background` was provided").
+            Assert-Equal -Expected "1" -Actual ([string]$call.no_background_env) -Because "a run of the cycle cannot start a background command it will never be told about"
+            # Without the background, a long suite must fit one foreground call: the tool cuts a call at
+            # ten minutes unless told otherwise (the lead measured both: 'Command timed out after 10m 0s'
+            # by default, an 11-minute command finished with the limit raised).
+            Assert-Equal -Expected "3600000" -Actual ([string]$call.bash_max_timeout_env) -Because "one foreground command may run for an hour"
             Assert-Equal -Expected $false -Actual ([bool]$call.fallback_flag) -Because "--fallback-model is never passed"
         }
     }
@@ -2051,6 +2157,13 @@ try {
         return @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_.Trim() -and $_ -notmatch ' /__state ' })
     }
 
+    # Four tests below replay a store that refuses or fails a write at a moment defined by the
+    # SHAPE of a batch: both workers end, both inspections start together, the first one's look
+    # at the store is the next read. The pool gives a seat away when it is free, so that shape
+    # is no longer the only one. With one poll every six seconds both runs of a pair end in
+    # the same poll and are completed one after the other - the batch's shape, on purpose.
+    $onePoll = "-PollMilliseconds 6000"
+
     Test-Case "in API mode the cycle takes the lock through the API, writes the task's states there, posts the report, and leaves the files alone" {
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"))
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
@@ -2177,7 +2290,7 @@ try {
         # window in which a stop could arrive unseen was the rest of the batch.
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
         $lines = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(GET /v1/team/queue|PUT /v1/team/queue/tasks/task-(one|two)) 200" } | ForEach-Object { ($_ -replace '^(\w+) /v1/team/queue/?(tasks/)?', '$1 ') -replace ' 200$', '' })
         $tail = @($lines)[(@($lines).Count - 5)..(@($lines).Count - 1)] -join " | "
@@ -2198,7 +2311,7 @@ try {
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $outage `
             -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
         $state = Get-FakeApiState -Api $api
         Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
@@ -2344,7 +2457,7 @@ try {
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
             -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
         $requests = @(Get-FakeApiRequests -Api $api)
         Assert-Equal -Expected 1 -Actual @($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 409" }).Count -Because "task-one's 'merged' was refused"
@@ -2367,7 +2480,7 @@ try {
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
             -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
         $writes = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-(one 409|two 503)" } | ForEach-Object { ($_ -replace '^PUT /v1/team/queue/tasks/', '') }) -join ", "
         Assert-Equal -Expected "task-two 503, task-one 409, task-two 503" -Actual $writes -Because "the start's failed write, then the refusal and the failure in ONE save"
@@ -2760,6 +2873,385 @@ try {
         Assert-Equal -Expected $sonnet -Actual (Get-TeamModelsApi -Store $store).roles.worker -Because "a refused PUT changed nothing"
         $gone = Start-FakeApi -Tasks @() -NoModels
         Assert-Equal -Expected $null -Actual (Get-TeamModelsApi -Store (New-TeamApiStore -Url $gone.Url -TokenFile $gone.TokenFile)) -Because "404 is 'this Cloud Core has no such route', not an error"
+    }
+
+    # ------------------------------------------------------------------ the pool (cycle-seat-pool)
+    Write-Host ""
+    Write-Host "the pool: a seat is filled when it is free, the seats are per role, the store is read at every refill"
+
+    function Get-RunNames {
+        <# The runs a live status names, as "task:role", sorted. #>
+        param($Status)
+        return @(@($Status.runs) | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.task):$($_.role)" } | Sort-Object)
+    }
+    function Get-SnapshotRuns {
+        param([string]$Folder, [string]$Name)
+        return ((Get-RunNames -Status (Read-TeamJson -Path (Join-Path $Folder "$Name.json"))) -join ",")
+    }
+    function Get-PoolHooks {
+        <# Every run copies the live status a second after it started; the named runs take longer. #>
+        param([string]$Root, [string]$Seconds = "")
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = (Join-Path $Root "snapshots"); PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $Root "team\status.json"); PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS = 1 }
+        if ($Seconds) { $hooks["PAGENTOS_FAKE_CLAUDE_SECONDS"] = $Seconds }
+        return $hooks
+    }
+
+    Test-Case "the pool: a seat that is free is filled at once - the third task's worker and the first task's inspector start while the second task's worker is still running" {
+        # Cycle adr0224-02: three workers recorded at 3310 / 3295 / 3275 seconds - the two short
+        # ones waited for the long one, because a batch was started and then waited for WHOLE.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")), (New-Task -Id "task-three" -Area @("src/a3")))
+        $hooks = Get-PoolHooks -Root $root -Seconds "worker:task-two=8"
+        Use-FakeHooks -Environment $hooks -Body { $script:poolRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
+        $run = $script:poolRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $snapshots = Join-Path $root "snapshots"
+        $third = Get-SnapshotRuns -Folder $snapshots -Name "worker-task-three"
+        Assert-True -Condition ($third -match "task-two:worker" -and $third -match "task-three:worker") -Because "task-three's worker took the seat task-one's left, beside task-two's: $third"
+        $inspection = Get-SnapshotRuns -Folder $snapshots -Name "inspector-task-one"
+        Assert-True -Condition ($inspection -match "task-two:worker") -Because "task-one was inspected while task-two was still worked on: $inspection"
+        foreach ($file in @(Get-ChildItem -LiteralPath $snapshots -Filter *.json)) {
+            $names = @(Get-RunNames -Status (Read-TeamJson -Path $file.FullName))
+            Assert-True -Condition (@($names | Where-Object { $_ -match ":worker$" }).Count -le 2) -Because "never more workers than worker seats ($($file.Name)): $($names -join ',')"
+        }
+        Assert-Equal -Expected "merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected 6 -Actual @($run.Calls).Count -Because "a worker and an inspector each, no run twice"
+        Assert-Equal -Expected 6 -Actual ([regex]::Matches($run.Report, "(?m)^- task-(one|two|three) / (worker|inspector): ")).Count -Because "and every run is in the report's run list: $($run.Report)"
+    }
+
+    Test-Case "the pool: never more runs of a role in flight than the role has seats - on every status the cycle wrote - and the worker seats are in use beside the inspections" {
+        $tasks = @(1..5 | ForEach-Object { New-Task -Id "task-$_" -Area @("src/p$_") })
+        $api = Start-FakeApi -Tasks $tasks
+        $root = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:*=2,inspector:*=2" } -Body {
+            $script:seatRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        Assert-Equal -Expected 0 -Actual $script:seatRun.ExitCode -Because ($script:seatRun.StdOut + $script:seatRun.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $history = @($state.statuses)
+        $most = 0
+        foreach ($document in $history) {
+            $names = @(Get-RunNames -Status $document)
+            $workers = @($names | Where-Object { $_ -match ":worker$" }).Count
+            $inspectors = @($names | Where-Object { $_ -match ":inspector$" }).Count
+            Assert-True -Condition ($workers -le 2) -Because "-MaxParallel 2 is two worker seats: $($names -join ',')"
+            Assert-True -Condition ($inspectors -le 2) -Because "two inspector seats by default: $($names -join ',')"
+            Assert-Equal -Expected @($names).Count -Actual @($names | Sort-Object -Unique).Count -Because "a task has one run at a time: $($names -join ',')"
+            if ($workers -eq 2 -and $inspectors -ge 1) { $most = [Math]::Max($most, @($names).Count) }
+        }
+        Assert-True -Condition ($most -ge 3) -Because "both worker seats were in use while an inspection ran: an inspection does not take a worker's seat ($(@($history).Count) statuses)"
+        Assert-Equal -Expected "merged,merged,merged,merged,merged" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because "and all the work was done"
+    }
+
+    Test-Case "the pool: two tasks with overlapping areas are never in flight together, a third beside them is, and all finish" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area/deep", "src/second")), (New-Task -Id "task-three" -Area @("src/third")))
+        $root = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=3,inspector:task-one=2,worker:task-three=3" } -Body {
+            $script:overlapRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 3 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        Assert-Equal -Expected 0 -Actual $script:overlapRun.ExitCode -Because ($script:overlapRun.StdOut + $script:overlapRun.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $beside = 0
+        foreach ($document in @($state.statuses)) {
+            $names = (Get-RunNames -Status $document) -join ","
+            Assert-True -Condition (-not ($names -match "task-one:" -and $names -match "task-two:")) -Because "the two that share files, in flight together: $names"
+            if ($names -match "task-one:" -and $names -match "task-three:") { $beside++ }
+        }
+        Assert-True -Condition ($beside -ge 1) -Because "the task on other files ran beside the first"
+        Assert-Equal -Expected "merged,merged,merged" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because "and the one that waited was run when the files were free: $($script:overlapRun.Report)"
+    }
+
+    Test-Case "the pool: a task the store put into work beside a run in flight that holds its files waits for that run to end; a task on other files is started beside it at once" {
+        # The store's rules keep two tasks off the same files on the copy THEY see. The lead stops
+        # task-one in the store and puts two tasks into work, one on task-one's files - while the
+        # cycle's worker of task-one is still running. Until that run ends the files are its.
+        $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $sameFiles = New-Task -Id "task-two" -State "assigned" -Area @("src/area/deep")
+        $otherFiles = New-Task -Id "task-three" -State "assigned" -Area @("src/third")
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-zero" -Area @("src/zero")), (New-Task -Id "task-one" -Area @("src/area"))) `
+            -Late @($stopped, $sameFiles, $otherFiles) -LateOnRun "worker:task-one"
+        $root = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=8,worker:task-three=3" } -Body {
+            $script:heldRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 3 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:heldRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $beside = 0
+        foreach ($document in @($state.statuses)) {
+            $names = (Get-RunNames -Status $document) -join ","
+            Assert-True -Condition (-not ($names -match "task-one:worker" -and $names -match "task-two:")) -Because "task-two was started on files a run in flight still held: $names"
+            if ($names -match "task-one:worker" -and $names -match "task-three:worker") { $beside++ }
+        }
+        Assert-True -Condition ($beside -ge 1) -Because "the store was read again while task-one's worker ran, and the task on other files took a free seat beside it: $(@($state.statuses | ForEach-Object { (Get-RunNames -Status $_) -join '+' }) -join ' | ')"
+        $final = @{}; foreach ($task in @($state.tasks)) { $final[[string]$task.id] = [string]$task.state }
+        Assert-Equal -Expected "merged/stopped/merged/merged" -Actual "$($final['task-zero'])/$($final['task-one'])/$($final['task-two'])/$($final['task-three'])" -Because "the lead's stop stands, and the task that waited was run once the files were free: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "task-one: koşu \(worker\) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı") -Because "the stopped task's run was not applied: $($run.Report)"
+    }
+
+    Test-Case "the pool: two approved inspections that end in the same poll are merged one after the other, and both land" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments "-PollMilliseconds 5000"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        $merges = @((Invoke-SandboxGit -Root $root -Arguments @("log", "--merges", "--format=%s", "main..integrate/c1")) -split "`r?`n" | Where-Object { $_.Trim() } | Sort-Object)
+        Assert-Equal -Expected "merge: team/c1/worker-task-one into integrate/c1|merge: team/c1/worker-task-two into integrate/c1" -Actual ($merges -join "|") -Because "two merge commits, one for each"
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        Assert-True -Condition ((Test-Path -LiteralPath (Join-Path $tree "src\a1\task-one.txt")) -and (Test-Path -LiteralPath (Join-Path $tree "src\a2\task-two.txt"))) -Because "both tasks' work is on the integration branch"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $tree -Arguments @("status", "--porcelain")) -Because "and its worktree is clean: no merge was left half done"
+    }
+
+    Test-Case "the pool: seats are per role - with three inspections and three workers runnable, three workers and two inspectors are in flight together, and the third inspection starts when one ends" {
+        # 2026-10-01 22:15, the owner at the Ofis page: three inspections held the cycle's three
+        # slots and every worker seat was empty, with eight tasks assigned.
+        $tasks = @("ins-a", "ins-b", "ins-c" | ForEach-Object { New-Task -Id $_ -State "inspecting" -Area @("src/$_") })
+        $tasks += @("wrk-d", "wrk-e", "wrk-f" | ForEach-Object { New-Task -Id $_ -Area @("src/$_") })
+        $root = New-Sandbox -Tasks $tasks
+        $hooks = Get-PoolHooks -Root $root -Seconds "inspector:ins-a=10,inspector:ins-b=20,worker:*=20"
+        Use-FakeHooks -Environment $hooks -Body { $script:roleRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 3 }
+        $run = $script:roleRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $snapshots = Join-Path $root "snapshots"
+        Assert-Equal -Expected "ins-a:inspector,ins-b:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker" -Actual (Get-SnapshotRuns -Folder $snapshots -Name "worker-wrk-f") `
+            -Because "five runs: the three worker seats are full BESIDE the two inspections; the third inspection waits for an inspector's seat, not a worker's"
+        Assert-Equal -Expected "ins-b:inspector,ins-c:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker" -Actual (Get-SnapshotRuns -Folder $snapshots -Name "inspector-ins-c") `
+            -Because "the third inspection took the seat the first one left, while everything else was still running"
+        Assert-Equal -Expected "merged,merged,merged,merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+    }
+
+    Test-Case "the pool: a changed team/cycle-settings.json is honoured at the next refill - no restart, and the arguments the cycle started with do not bind it" {
+        # 2026-10-01: a setting changed at 16:45 took effect at 19:35, when the cycle that was
+        # running at last had nothing left to do.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")), (New-Task -Id "task-three" -Area @("src/a3")))
+        $hooks = Get-PoolHooks -Root $root -Seconds "worker:task-two=5,worker:task-three=5"
+        $hooks["PAGENTOS_FAKE_CLAUDE_SETTINGS"] = (Join-Path $root "team\cycle-settings.json")
+        $hooks["PAGENTOS_FAKE_CLAUDE_SETTINGS_JSON"] = '{"max_parallel":3}'
+        $hooks["PAGENTOS_FAKE_CLAUDE_SETTINGS_RUN"] = "worker:task-one"
+        Use-FakeHooks -Environment $hooks -Body { $script:settingRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:settingRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $snapshots = Join-Path $root "snapshots"
+        Assert-Equal -Expected "task-one:worker" -Actual (Get-SnapshotRuns -Folder $snapshots -Name "worker-task-one") -Because "started with one worker seat"
+        $third = Get-SnapshotRuns -Folder $snapshots -Name "worker-task-three"
+        Assert-True -Condition ($third -match "task-two:worker" -and $third -match "task-three:worker") -Because "three seats from the refill after the file changed: two workers side by side in a cycle started with -MaxParallel 1: $third"
+        Assert-Equal -Expected "merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        # A file that is no setting changes nothing and is a line in the report, once.
+        $bad = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        Set-SandboxFile -Root $bad -Name "cycle-settings.json" -Json '{"max_parallel":"many"}'
+        Use-FakeHooks -Environment (Get-PoolHooks -Root $bad) -Body { $script:badSetting = Invoke-Cycle -Root $bad -Scenario "approve" -MaxParallel 1 }
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $script:badSetting.Queue | ForEach-Object { $_.state }) -join ",") -Because ($script:badSetting.StdOut + $script:badSetting.StdErr)
+        Assert-True -Condition ((Get-SnapshotRuns -Folder (Join-Path $bad "snapshots") -Name "worker-task-two") -notmatch "task-one:worker") -Because "the parameters stand: one worker seat"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($script:badSetting.Report, "cycle-settings\.json")).Count -Because "said once, not at every refill: $($script:badSetting.Report)"
+    }
+
+    Test-Case "the pool: after -MaxHours the cycle starts nothing new and ends when its runs do - the scheduler's next start runs the current script" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=5" } -Body {
+            $script:hoursRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 -ExtraArguments "-MaxHours 0.0005"
+        }
+        $run = $script:hoursRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "the run in flight finished; 1.8 seconds had passed, so nothing else was started"
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "inspecting" -Actual $one.state -Because "the finished worker's result is recorded; its inspection is the next cycle's"
+        Assert-Equal -Expected 1 -Actual @($one.reports).Count -Because "with its report"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the second task was never started"
+        Assert-True -Condition ($run.Report -match "döngü: çalışma süresi doldu \(-MaxHours") -Because "the report says why it ended with work left: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "and the lock is released for the next start"
+        $again = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2" -MaxParallel 1
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $again.Queue | ForEach-Object { $_.state }) -join ",") -Because "the next cycle carries on from there: $($again.Report)"
+    }
+
+    Test-Case "the pool: with one long run in flight, a task that reaches the store is STARTED before that run ends - the store is read again whenever a run ends, not once per batch" {
+        # ADR-0214 addendum 11 read the store before every PASS; a pass was a batch, so a card
+        # that arrived during a batch was seen when its slowest run ended.
+        $late = New-Task -Id "task-two" -Area @("src/other")
+        $late.created_at = "2026-09-30T00:00:01Z"; $late.updated_at = "2026-09-30T00:00:01Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-zero" -Area @("src/zero")), (New-Task -Id "task-one" -Area @("src/area"))) -Late @($late) -LateOnRun "worker:task-one"
+        $root = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=8,worker:task-two=2" } -Body {
+            $script:lateRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 3 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        Assert-Equal -Expected 0 -Actual $script:lateRun.ExitCode -Because ($script:lateRun.StdOut + $script:lateRun.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $both = @(@($state.statuses) | Where-Object { $names = (Get-RunNames -Status $_) -join ","; $names -match "task-one:worker" -and $names -match "task-two:worker" })
+        Assert-True -Condition (@($both).Count -ge 1) -Because "a status names the late task's worker beside the long run: $(@($state.statuses | ForEach-Object { (Get-RunNames -Status $_) -join '+' }) -join ' | ')"
+        Assert-Equal -Expected "merged,merged,merged" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because "and all three end merged: $($script:lateRun.Report)"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match " 409$" }).Count -Because "nothing was written over a version the cycle had not read"
+        # The store was read again while task-one's worker ran: the run's own task stayed the
+        # cycle's copy, and its result was applied to THAT copy and written when it ended.
+        Assert-Equal -Expected "inspector:task-one,inspector:task-two,inspector:task-zero,worker:task-one,worker:task-two,worker:task-zero" -Actual (@($script:lateRun.Calls | ForEach-Object { "$($_.role):$($_.task)" } | Sort-Object) -join ",") `
+            -Because "every task was worked on once: a re-read does not put the store's 'in_progress' in place of a run in flight"
+    }
+
+    Test-Case "the pool: the usage limit is waited out without blocking - nothing new starts until it lifts, and a run in flight is completed meanwhile" {
+        # The batch loop slept in the wait: a run that ended during it was collected when the
+        # wait was over. The inspector's model is limited here (no fallback); its reset was 80
+        # seconds ago, so with the tool's 90-second margin the cycle waits about ten seconds.
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2"))) -Models (New-ModelSetting -Worker $sonnet -Inspector $opus -Fallback $false)
+        $root = New-Sandbox -Tasks @()
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus; PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES = "inspector"; PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS = "-80"; PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-two=6" }
+        Use-FakeHooks -Environment $hooks -Body {
+            $script:waitRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:waitRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $waiting = @(@((Get-FakeApiState -Api $api).statuses) | Where-Object { $_.usage_limit.state -eq "waiting" })
+        Assert-True -Condition (@($waiting).Count -ge 2) -Because "the wait is in the live status"
+        $during = @($waiting | ForEach-Object { (Get-RunNames -Status $_) -join "+" })
+        Assert-True -Condition ($during -contains "task-two:worker") -Because "task-two's worker was in flight when the wait began: $($during -join ' | ')"
+        Assert-Equal -Expected 0 -Actual @($during | Where-Object { $_ -and $_ -ne "task-two:worker" }).Count -Because "nothing was STARTED while the limit was waited out: $($during -join ' | ')"
+        Assert-True -Condition ($during -contains "") -Because "and the run in flight was completed during the wait, not after it: $($during -join ' | ')"
+        Assert-True -Condition ($run.Report -match "sıfırlanmasına kadar beklendi") -Because $run.Report
+        Assert-Equal -Expected "inspector:task-one,inspector:task-one,inspector:task-two,worker:task-one,worker:task-two" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" } | Sort-Object) -join ",") `
+            -Because "after the wait both inspections were started; the limit that came back a second time is not waited for again"
+        $states = @((Get-FakeApiState -Api $api).tasks | ForEach-Object { "$($_.state)/$([int](Get-TeamProperty -InputObject $_ -Name 'failed_runs' -Default 0))" }) -join ","
+        Assert-Equal -Expected "inspecting/0,inspecting/0" -Actual $states -Because "both tasks wait for their inspection, and the limit is nobody's failure: $($run.Report)"
+    }
+
+    Test-Case "the pool: with nothing ending, the store is still read again every -RefillSeconds - a card stored beside ONE long run is started while it runs" {
+        $late = New-Task -Id "task-two" -Area @("src/other")
+        $late.created_at = "2026-09-30T00:00:01Z"; $late.updated_at = "2026-09-30T00:00:01Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area"))) -Late @($late) -LateOnRun "worker:task-one"
+        $root = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=8,worker:task-two=2" } -Body {
+            $script:tickRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments "-RefillSeconds 1" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        Assert-Equal -Expected 0 -Actual $script:tickRun.ExitCode -Because ($script:tickRun.StdOut + $script:tickRun.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $both = @(@($state.statuses) | Where-Object { $names = (Get-RunNames -Status $_) -join ","; $names -match "task-one:worker" -and $names -match "task-two:worker" })
+        Assert-True -Condition (@($both).Count -ge 1) -Because "no run ended, and the card was still seen and started: $(@($state.statuses | ForEach-Object { (Get-RunNames -Status $_) -join '+' }) -join ' | ')"
+        Assert-Equal -Expected "merged,merged" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because $script:tickRun.Report
+    }
+
+    Test-Case "the pool: the stop flag starts nothing new and lets the runs in flight finish - a seat that frees after the flag stays empty" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")), (New-Task -Id "task-three" -Area @("src/a3")))
+        $flag = Join-Path $root "team\stop.flag"
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_STOPFLAG = $flag; PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-two=6" } -Body {
+            $script:poolStop = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2
+        }
+        $run = $script:poolStop
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one,worker:task-two" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" } | Sort-Object) -join ",") -Because "task-one's seat was free for five seconds after the flag: neither its inspector nor task-three's worker was started"
+        $two = Get-TaskById -Queue $run.Queue -Id "task-two"
+        Assert-Equal -Expected "inspecting/inspecting/assigned" -Actual "$((Get-TaskById -Queue $run.Queue -Id 'task-one').state)/$($two.state)/$((Get-TaskById -Queue $run.Queue -Id 'task-three').state)" -Because "both runs in flight finished and were recorded; the third task never started"
+        Assert-Equal -Expected 1 -Actual @($two.reports).Count -Because "the long run's report is kept"
+        Assert-True -Condition ($run.Report -match 'döngü: sahip/lead durdurdu \(team/stop\.flag\)') -Because $run.Report
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "sahip/lead durdurdu")).Count -Because "said once"
+        Assert-True -Condition (-not (Test-Path -LiteralPath $flag)) -Because "the flag is removed"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released"
+    }
+
+    Test-Case "the pool: two runs that meet the usage limit stop the cycle once - one stop line, both tasks where they were" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -MaxParallel 2 -ExtraArguments '-WaitForUsageLimit:$false'
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one,worker:task-two" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" } | Sort-Object) -join ",") -Because "the two limited runs, and nothing after the limit"
+        Assert-Equal -Expected "assigned,assigned" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because "both tasks went back: $($run.Report)"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "döngü: Max kullanım limiti")).Count -Because "one stop line for one limit, not one per run that met it: $($run.Report)"
+        Assert-Equal -Expected 2 -Actual ([regex]::Matches($run.Report, "(?m)^- task-(one|two) / worker: [^\r\n]*Max kullanım limiti")).Count -Because "and each limited run is in the run list"
+    }
+
+    Test-Case "the pool: a cycle that dies while a run is in flight kills that run - nothing writes to a worktree after the lock is released" {
+        # The integration branch's worktree cannot be made (a file stands where its folder goes):
+        # task-one's merge throws while task-two's worker is still running, and the cycle ends
+        # there, as it always did on an error. The run it leaves behind must not go on working.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root ".claude\worktrees\integrate"))
+        Set-Content -LiteralPath (Join-Path $root ".claude\worktrees\integrate\c1") -Value "not a folder" -Encoding ASCII
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-two=12" } -Body { $script:deadRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
+        $run = $script:deadRun
+        Assert-True -Condition ($run.ExitCode -ne 0) -Because "the cycle ended on the error: $($run.StdOut + $run.StdErr)"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released"
+        Assert-Equal -Expected 0 -Actual @((Read-TeamJson -Path (Join-Path $root "team\status.json")).runs).Count -Because "and the status names no run"
+        # Had it been left alone, task-two's worker would commit its work some seconds from now.
+        $deadline = [datetime]::UtcNow.AddSeconds(16)
+        while ([datetime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 500 }
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $root -Arguments @("log", "--format=%s", "main..team/c1/worker-task-two")) -Because "the run that was in flight was stopped: it committed nothing after the cycle let go of the lock"
+    }
+
+    Test-Case "the pool: the researcher runs beside the workers, not before them, and its idea still waits for the owner" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $hooks = Get-PoolHooks -Root $root -Seconds "researcher:*=5"
+        Use-FakeHooks -Environment $hooks -Body { $script:besideRun = Invoke-Cycle -Root $root -Scenario "approve" -Research }
+        $run = $script:besideRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $during = Get-SnapshotRuns -Folder (Join-Path $root "snapshots") -Name "worker-task-one"
+        Assert-Equal -Expected "cycle:researcher,task-one:worker" -Actual $during -Because "the worker did not wait for the web scan to end"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr + $run.Report)
+        $ideas = @(Get-TeamTasks -Queue $run.Queue | Where-Object { $_.state -eq "awaiting_owner" })
+        Assert-Equal -Expected 1 -Actual @($ideas).Count -Because "the researcher's proposal is queued for the owner: $($run.Report)"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt")) -Because "and its finished run is recorded"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    function Set-WorktreeBlocked {
+        <# A file stands where the task's worktree folder goes: its run cannot be started. #>
+        param([string]$Root, [string]$Id, [string]$CycleId = "c1")
+        $folder = Join-Path $Root ".claude\worktrees\team\$CycleId"
+        [void](New-Item -ItemType Directory -Force -Path $folder)
+        Set-Content -LiteralPath (Join-Path $folder "worker-$Id") -Value "not a folder" -Encoding ASCII
+    }
+
+    Test-Case "the pool: a start that fails with nothing else in flight does not end the cycle - the task is stopped with the reason and the next ones take the seat" {
+        # The inspector's finding on the first pool: Start-PoolRun answered $false, nothing was
+        # started and nothing was in flight, and the loop read that as "nothing can be started":
+        # exit 0 with two assigned tasks never run. The batch loop went on to them.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned" -Area @("src/a1")), (New-Task -Id "task-two" -State "assigned" -Area @("src/a2")), (New-Task -Id "task-three" -State "assigned" -Area @("src/a3")))
+        Set-WorktreeBlocked -Root $root -Id "task-one"
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "stopped,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-True -Condition ([string](Get-TaskById -Queue $run.Queue -Id "task-one").reason -match "koşu başlatılamadı") -Because "the stop says why: $((Get-TaskById -Queue $run.Queue -Id 'task-one').reason)"
+        Assert-Equal -Expected "worker:task-two,inspector:task-two,worker:task-three,inspector:task-three" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "one worker seat: the two that could start, one after the other, and no run for the one that could not"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    Test-Case "the pool: four starts that fail in a row are four stopped tasks, not the end of the cycle - the fifth task is run" {
+        # A failed start is not an idle pass: three of those in a row end the cycle's work.
+        $tasks = @(1..5 | ForEach-Object { New-Task -Id "task-$_" -State "assigned" -Area @("src/f$_") })
+        $root = New-Sandbox -Tasks $tasks
+        foreach ($number in 1..4) { Set-WorktreeBlocked -Root $root -Id "task-$number" }
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "stopped,stopped,stopped,stopped,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker:task-5,inspector:task-5" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "only the task that could start was run"
+    }
+
+    Test-Case "the pool: a start that fails beside a run in flight leaves its seat to the next task at once - not when that run ends" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned" -Area @("src/a1")), (New-Task -Id "task-two" -State "assigned" -Area @("src/a2")), (New-Task -Id "task-three" -State "assigned" -Area @("src/a3")))
+        Set-WorktreeBlocked -Root $root -Id "task-two"
+        $hooks = Get-PoolHooks -Root $root -Seconds "worker:task-one=8"
+        Use-FakeHooks -Environment $hooks -Body { $script:failBesideRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
+        $run = $script:failBesideRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $third = Get-SnapshotRuns -Folder (Join-Path $root "snapshots") -Name "worker-task-three"
+        Assert-Equal -Expected "task-one:worker,task-three:worker" -Actual $third -Because "task-three's worker took the seat task-two could not use, while task-one's was still running"
+        Assert-Equal -Expected "merged,stopped,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+    }
+
+    Test-Case "the pool: a researcher that cannot be started is a line in the report, not the end of the cycle - the task beside it is worked and merged" {
+        # It used to throw out of the refill: the cycle died, and its 'finally' killed every run in flight.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned"))
+        Remove-Item -LiteralPath (Join-Path $root ".claude\agents\researcher.md") -Force
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -Research
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "no researcher ran, and it was tried once"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "araştırmacı: koşu başlatılamadı")).Count -Because "said once, under the stops: $($run.Report)"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt"))) -Because "a run that never started is not the researcher's last run: the next cycle tries again"
+    }
+
+    Test-Case "the pool: a lead split that cannot be started is a line in the report, not the end of the cycle - the proposal stays, the task beside it is merged" {
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"), (New-Task -Id "task-one" -State "assigned"))
+        $before = (Get-TaskById -Queue (Read-TeamJson -Path (Join-Path $root "team\queue.json")) -Id "idea-one").state
+        Remove-Item -LiteralPath (Join-Path $root ".claude\agents\lead.md") -Force
+        $run = Invoke-Cycle -Root $root -Scenario "split" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected $before -Actual (Get-TaskById -Queue $run.Queue -Id "idea-one").state -Because "the proposal is where it was: the next cycle asks again"
+        Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "no lead ran"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "bölme koşusu: idea-one: koşu başlatılamadı")).Count -Because "said once, under the risks - one try a cycle: $($run.Report)"
     }
 }
 finally {

@@ -28,6 +28,17 @@ after it, and uncommitted files are invisible to the inspector (cycle-2026-10-01
 ended with "still running the corpus, I'll commit once it finishes" and the branch was
 empty). Wait for every command you started, commit, and only then report. If a long suite
 cannot finish, commit what is done and mark that suite NOT_RUN.
+**Nothing will wake you.** Your run has NO background commands (the cycle switches them off:
+2026-10-03, five runs of one night ended with "I'll report when the suite finishes" and their
+work was judged empty). Run a long suite in the FOREGROUND and give the Bash call a `timeout`
+long enough for it; split a suite that would pass that limit into slices (by file or `-k`),
+run them one after another, and add the numbers up. Never end a message with "waiting",
+"running in the background" or "I will report when": end it with the report.
+**Never run the WHOLE api unit suite (`pytest tests/unit` with no file named) yourself.** On
+2026-10-03 one such run grew to 14 GB of memory, several at once exhausted the home PC's 48 GB and
+crashed it (the lead's session, the owner's web shell and a gate with it). Run your own test files,
+the guard files your card names and the files that import what you changed; for the whole suite
+write "full unit suite: the lead's gate runs it" - that is accepted evidence, not a NOT_RUN.
 
 Return a ≤ 40-line report: sha (40-hex), files changed (count, all inside the area), tests
 added and their RED→GREEN proof, mutation RED proof, evidence class per claim, what you
