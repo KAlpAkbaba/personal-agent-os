@@ -19,7 +19,9 @@
                   and TeamQueue.ps1's shared files read from ITS text (two lists, one rule);
       cap         two widenings per task, twenty-five entries per area;
       idempotent  the same resolution applied twice changes nothing the second time;
-      d20261001   the two stopped tasks of that cycle, as fixtures.
+      d20261001   the two stopped tasks of that cycle, as fixtures;
+      second-return  the `onceki_bulgular:` line and whether a second RETURN stops the
+                  task (parse, stop, readers, d20261002 fixtures, drift against TeamQueue.ps1).
 
     Run: powershell -NoProfile -File scripts\tests\team-area.tests.ps1
 #>
@@ -736,6 +738,191 @@ Test-Case "d20261001: the same request while an approved card holds intents.py -
     [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "intents.py başka kartta" -Now $now)
     Assert-List -Expected $narrativeArea -Actual $task.area -Because "the area is unchanged"
     Assert-List -Expected @("answer-mode-intent-precision") -Actual $task.depends_on -Because "behind that card"
+}
+
+# ----------------------------------------------------------------------- second-return
+#
+# The second half of ADR-0253's principle (team/proposals/2026-10-03-ikinci-donus-yeni-bulgu.md):
+# a second return whose previous items are closed is a NEW finding and buys one more round;
+# a missing or malformed `onceki_bulgular:` line, an open item or a third return stops.
+
+# A second RETURN as an inspector writes it: findings, the given lines, the verdict last.
+function New-SecondReturnReport {
+    param([string[]]$Lines)
+    return (@("# Denetim: card-one (ikinci)", "", "1. yeni bulgu: kenar durum testsiz.", "") +
+        @($Lines) + @("RETURN (1: kenar durumu için bir test ekle)")) -join "`n"
+}
+
+function New-ReturnedTask {
+    param([string]$Id = "card-one", [int]$Returns)
+    $task = New-Task -Id $Id -State "inspecting"
+    $task | Add-Member -NotePropertyName "returns" -NotePropertyValue $Returns
+    return $task
+}
+
+Test-Case "second-return parse: kapandi above RETURN is Closed" {
+    $prior = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @("onceki_bulgular: kapandi"))
+    Assert-True -Condition $prior.Present -Because "the line is there"
+    Assert-True -Condition $prior.Closed -Because "kapandi closes"
+    Assert-Equal -Expected 0 -Actual @($prior.Open).Count -Because "nothing open"
+    Assert-Equal -Expected "onceki_bulgular: kapandi" -Actual $prior.Raw -Because "the line as written"
+}
+
+Test-Case "second-return parse: wrapped in backticks or bold, the same" {
+    foreach ($line in @('`onceki_bulgular: kapandi`', '**onceki_bulgular: kapandi**', '**onceki_bulgular:** `kapandi`', '  onceki_bulgular :  kapandi  ')) {
+        $prior = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @($line))
+        Assert-True -Condition $prior.Closed -Because "'$line' is kapandi"
+    }
+}
+
+Test-Case "second-return parse: acik [1, 3] is open with the numbers" {
+    $prior = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @("onceki_bulgular: acik [1, 3]"))
+    Assert-True -Condition $prior.Present -Because "the line is there"
+    Assert-Equal -Expected $false -Actual $prior.Closed -Because "acik is not closed"
+    Assert-Equal -Expected "1,3" -Actual (@($prior.Open) -join ",") -Because "the open item numbers"
+    foreach ($line in @("onceki_bulgular: acik", "onceki_bulgular: acik []")) {
+        $bare = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @($line))
+        Assert-Equal -Expected $false -Actual $bare.Closed -Because "'$line' is still acik"
+        Assert-Equal -Expected 0 -Actual @($bare.Open).Count -Because "'$line' names no item"
+    }
+}
+
+Test-Case "second-return parse: the last line wins, in both directions" {
+    $open = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @("onceki_bulgular: kapandi", "", "onceki_bulgular: acik [2]"))
+    Assert-Equal -Expected $false -Actual $open.Closed -Because "kapandi then acik -> acik"
+    Assert-Equal -Expected "2" -Actual (@($open.Open) -join ",") -Because "the last line's items"
+    $closed = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @("onceki_bulgular: acik [2]", "onceki_bulgular: kapandi"))
+    Assert-True -Condition $closed.Closed -Because "acik then kapandi -> kapandi"
+    Assert-Equal -Expected 0 -Actual @($closed.Open).Count -Because "nothing left open"
+}
+
+Test-Case "second-return parse: prose, other letters and anything after the value are not kapandi" {
+    $lines = @(
+        "- onceki_bulgular: kapandi", "> onceki_bulgular: kapandi", "1. onceki_bulgular: kapandi",
+        "onceki_bulgular: kapandi.", "Onceki_bulgular: kapandi", "onceki_bulgular: kapand$([char]0x0131)",
+        "onceki_bulgular: kapandi ama", "Denetleyici der ki onceki_bulgular: kapandi",
+        "onceki_bulgular: acik [1] kapandi", "onceki_bulgular: [kapandi]"
+    )
+    foreach ($line in $lines) {
+        $prior = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @($line))
+        Assert-Equal -Expected $false -Actual $prior.Closed -Because "'$line' is not kapandi"
+    }
+}
+
+Test-Case "second-return parse: no line is not Present and not Closed" {
+    $prior = Get-TeamPriorFindings -Report (New-SecondReturnReport -Lines @())
+    Assert-Equal -Expected $false -Actual $prior.Present -Because "no line"
+    Assert-Equal -Expected $false -Actual $prior.Closed -Because "no line is acik"
+    Assert-Equal -Expected "" -Actual $prior.Raw -Because "nothing written"
+    Assert-Equal -Expected $false -Actual (Get-TeamPriorFindings -Report "").Closed -Because "an empty report"
+}
+
+Test-Case "second-return stop: a first return needs no line - returned" {
+    $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns 0) -Report (New-SecondReturnReport -Lines @())
+    Assert-Equal -Expected "returned" -Actual $decision.State -Because $decision.Reason
+    Assert-Equal -Expected 1 -Actual $decision.Returns -Because "the first return"
+    Assert-Equal -Expected $false -Actual $decision.Extra -Because "an ordinary round"
+}
+
+Test-Case "second-return stop: second return + kapandi - returned, Extra" {
+    $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns 1) -Report (New-SecondReturnReport -Lines @("onceki_bulgular: kapandi"))
+    Assert-Equal -Expected "returned" -Actual $decision.State -Because $decision.Reason
+    Assert-Equal -Expected 2 -Actual $decision.Returns -Because "the second return"
+    Assert-Equal -Expected $true -Actual $decision.Extra -Because "the round is the new rule's"
+    Assert-True -Condition ($decision.Reason -match "kapand" -and $decision.Reason -match "yeni") -Because "the reason names closed items and a new finding: $($decision.Reason)"
+}
+
+Test-Case "second-return stop: second return + acik [1] - stopped, 1 in the reason" {
+    $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns 1) -Report (New-SecondReturnReport -Lines @("onceki_bulgular: acik [1]"))
+    Assert-Equal -Expected "stopped" -Actual $decision.State -Because $decision.Reason
+    Assert-Equal -Expected 2 -Actual $decision.Returns -Because "the second return"
+    Assert-Equal -Expected $false -Actual $decision.Extra -Because "no extra round"
+    Assert-True -Condition ($decision.Reason -match '\b1\b') -Because "the open item is named: $($decision.Reason)"
+}
+
+Test-Case "second-return stop: second return + no line - stopped with today's reason" {
+    $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns 1) -Report (New-SecondReturnReport -Lines @())
+    Assert-Equal -Expected "stopped" -Actual $decision.State -Because "an inspector that forgot the line buys no round"
+    Assert-Equal -Expected "ayni is iki kez geri verildi" -Actual $decision.Reason -Because "today's text, nothing to add"
+    $malformed = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns 1) -Report (New-SecondReturnReport -Lines @("onceki_bulgular: kapandi."))
+    Assert-Equal -Expected "stopped" -Actual $malformed.State -Because "a malformed line is acik"
+}
+
+Test-Case "second-return stop: third return + kapandi - stopped regardless" {
+    foreach ($returns in @(2, 5)) {
+        $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns $returns) -Report (New-SecondReturnReport -Lines @("onceki_bulgular: kapandi"))
+        Assert-Equal -Expected "stopped" -Actual $decision.State -Because "return $($returns + 1): $($decision.Reason)"
+        Assert-Equal -Expected ($returns + 1) -Actual $decision.Returns -Because "counted"
+        Assert-Equal -Expected $false -Actual $decision.Extra -Because "no extra round"
+    }
+}
+
+Test-Case "second-return readers: alan_disi, onceki_bulgular and RETURN in one report do not disturb each other" {
+    $report = New-InspectorReport -Lines @("alan_disi: [$intents, $gateway]", "onceki_bulgular: kapandi")
+    $verdict = Get-TeamVerdict -Report $report
+    Assert-Equal -Expected "RETURN" -Actual $verdict.Verdict -Because "the verdict"
+    Assert-Equal -Expected "1: düzeltme kartın alanı dışında" -Actual $verdict.Detail -Because "the list is the detail"
+    Assert-List -Expected @($intents, $gateway) -Actual (Get-TeamAreaRequest -Report $report -Role "inspector").Files -Because "the request"
+    Assert-True -Condition (Get-TeamPriorFindings -Report $report).Closed -Because "the prior findings"
+}
+
+Test-Case "second-return d20261002: understanding-rules-read-lemmas at its second return with kapandi - returned" {
+    $report = @(
+        "# Denetim: understanding-rules-read-lemmas (ikinci)", "",
+        "The first return's items are closed; one new real finding:", "",
+        "onceki_bulgular: kapandi", "",
+        'RETURN (1: make `_says_dont` hold without punctuation — a bare negative of a known verb before another word says "don''t" unless it is provably the verbal noun — with router tests for the unpunctuated sentences above and ADR decision 4 corrected; 2: add a test that holds the "divides two ways" rule, or remove the claim)'
+    ) -join "`n"
+    Assert-Equal -Expected "RETURN" -Actual (Get-TeamVerdict -Report $report).Verdict -Because "a return"
+    $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Id "understanding-rules-read-lemmas" -Returns 1) -Report $report
+    Assert-Equal -Expected "returned" -Actual $decision.State -Because $decision.Reason
+    Assert-Equal -Expected $true -Actual $decision.Extra -Because "the lead did not have to reopen it"
+}
+
+Test-Case "second-return d20261002: cycle-auto-integrate at its second return with kapandi - returned" {
+    $report = @(
+        "# Denetim: cycle-auto-integrate", "",
+        "Accepted the fix of the start window in principle; the TESTS of it are returned.", "",
+        "**onceki_bulgular:** ``kapandi``", "",
+        "**Verdict:** ``RETURN (1: make the held cases' stand-in start its process BEFORE it reads its input, so a command created running — CREATE_SUSPENDED dropped, or resumed before the assignment without being fed — is RED; prove it with that mutation; 2: assert in the refusal case that the refused command's process is gone, with a bounded wait so a leaked one FAILS rather than hangs)``"
+    ) -join "`n"
+    Assert-Equal -Expected "RETURN" -Actual (Get-TeamVerdict -Report $report).Verdict -Because "a return"
+    $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Id "cycle-auto-integrate" -Returns 1) -Report $report
+    Assert-Equal -Expected "returned" -Actual $decision.State -Because $decision.Reason
+    Assert-Equal -Expected $true -Actual $decision.Extra -Because "the stop was only the second-return rule"
+}
+
+Test-Case "second-return d20261002: a test-only return with acik [2] - stopped" {
+    $report = @(
+        "# Denetim: local-embedder-lru-lock", "",
+        "onceki_bulgular: acik [2]", "",
+        'RETURN (1. make the forced tests deterministic RED for both partial-lock mutants — hold A at `move_to_end` while B stores and evicts, and hold B at `popitem` after its insert while A hits the oldest entry — and show each RED with sha256; 2. pin the store path''s `move_to_end(key)` with a test or remove the line)'
+    ) -join "`n"
+    $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Id "local-embedder-lru-lock" -Returns 1) -Report $report
+    Assert-Equal -Expected "stopped" -Actual $decision.State -Because "an item of the first return is still open"
+    Assert-True -Condition ($decision.Reason -match '\b2\b') -Because "the open item is named: $($decision.Reason)"
+}
+
+Test-Case "second-return drift: the stop reason starts with TeamQueue.ps1's RETURN-branch text, at its return cap" {
+    $queueText = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\lib\TeamQueue.ps1"), [System.Text.Encoding]::UTF8)
+    $cap = [regex]::Match($queueText, '(?m)^\$script:TeamMaxReturns\s*=\s*(\d+)')
+    Assert-True -Condition $cap.Success -Because "TeamQueue.ps1 names its return cap"
+    Assert-Equal -Expected ([int]$cap.Groups[1].Value) -Actual $script:TeamMaxReturns -Because "the loaded cap is the file's"
+    $branch = [regex]::Match($queueText, 'if \(\$returns -ge \$script:TeamMaxReturns\) \{\s*return \[pscustomobject\]@\{ State = "stopped"; Returns = \$returns; Reason = "([^"]+)" \}')
+    Assert-True -Condition $branch.Success -Because "Get-TeamStateAfterInspection's RETURN branch is found"
+    $today = $branch.Groups[1].Value
+    $returns = [int]$cap.Groups[1].Value - 1
+    foreach ($lines in @(@(), @("onceki_bulgular: acik [1, 3]"))) {
+        $decision = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns $returns) -Report (New-SecondReturnReport -Lines $lines)
+        Assert-Equal -Expected "stopped" -Actual $decision.State -Because "at the cap, without kapandi"
+        Assert-True -Condition $decision.Reason.StartsWith($today) -Because "'$($decision.Reason)' starts with '$today'"
+    }
+    $third = Resolve-TeamReturnStop -Task (New-ReturnedTask -Returns ([int]$cap.Groups[1].Value)) -Report (New-SecondReturnReport -Lines @("onceki_bulgular: kapandi"))
+    Assert-True -Condition $third.Reason.StartsWith($today) -Because "the third return's reason too: '$($third.Reason)'"
+    $before = New-ReturnedTask -Returns 1
+    $old = Get-TeamStateAfterInspection -Task $before -Verdict "RETURN"
+    Assert-Equal -Expected "stopped" -Actual $old.State -Because "Get-TeamStateAfterInspection itself is unchanged: two returns stop"
+    Assert-Equal -Expected $today -Actual $old.Reason -Because "with its own text"
 }
 
 # -------------------------------------------------------------------------------- gate
