@@ -23,9 +23,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.artifacts.runtime import ArtifactRuntime
 from app.config import Settings
+from app.ledger.models import ActivityEventRow
 from app.main import create_app
-from app.team import office
+from app.team import approvals, office
 from app.team import store as team_store
 from app.team.models import TeamStateRow
 from tests.identity_support import authenticate, install_identity
@@ -153,9 +155,13 @@ def test_a_status_a_little_ahead_of_the_clock_keeps_the_lock_alive():
 
 
 def test_a_status_older_than_the_lock_does_not_move_its_age():
-    """A status left by the previous run of the same cycle id, machine and pid (pid reuse)."""
-    lock, status = _lock(timedelta(hours=HOURS)), _status(timedelta(hours=HOURS, minutes=5))
-    assert _decide(lock, status)["kind"] == "stale"
+    """A status left by the previous run of the same cycle id, machine and pid (pid reuse, or
+    the cycle restarting itself): the lock taken an hour ago is aged from its own
+    ``acquired_at``, not pulled back to the seven-hour-old status and handed away."""
+    lock, status = _lock(timedelta(hours=1)), _status(SEVEN_HOURS)
+    assert team_store.lock_is_running(lock, NOW, status) is True
+    answer = _decide(lock, status)
+    assert (answer["acquired"], answer["kind"], answer["holder"]) == (False, "held", "MAIL")
 
 
 def test_takeover_dead_is_believed_from_the_holders_machine_only_whatever_the_status_says():
@@ -263,6 +269,21 @@ def test_a_silent_cycle_is_taken_over_through_the_route(owner):
     assert owner.get(OFFICE).json()["cycle"]["running"] is False
 
 
+def test_a_young_lock_beside_an_older_status_of_its_holder_is_held_through_the_route(owner):
+    """The status the previous run of (MAIL, d1, pid 10) left seven hours ago does not age the
+    lock the same holder took an hour ago: another machine is told held."""
+    owner.clock.at = NOW
+    put = owner.put(STATUS, json=_status(SEVEN_HOURS))
+    assert put.status_code == 200, put.text
+    owner.clock.at = NOW - timedelta(hours=1)
+    assert _acquire(owner, "MAIL")["acquired"] is True
+    owner.clock.at = NOW
+    other = _acquire(owner, "OFFICE", pid=4242, cycle_id="d2")
+    assert set(other) == ANSWER_KEYS
+    assert (other["acquired"], other["kind"], other["holder"]) == (False, "held", "MAIL")
+    assert owner.get(LOCK_ROUTE).json()["machine"] == "MAIL"
+
+
 def test_takeover_dead_from_the_holders_machine_still_takes_its_own_lock(owner):
     _cycle_running_for_seven_hours(owner)
     other = _acquire(owner, "OFFICE", pid=4242, cycle_id="d2", dead=True)
@@ -281,3 +302,62 @@ def test_release_is_unchanged_and_answers_the_same_keys(owner):
     assert owner.get(LOCK_ROUTE).json() == {"held": False}
     free = _acquire(owner, "OFFICE", pid=4242, cycle_id="d2")
     assert set(free) == ANSWER_KEYS and (free["acquired"], free["kind"]) == (True, "free")
+
+
+# ------------------------------------------------------------------ the decision route
+
+
+@pytest.fixture()
+def decider(tmp_path, monkeypatch):
+    """The real application on the database store with a ledger, as the Cloud Core runs it."""
+    eng = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    ActivityEventRow.__table__.create(eng)
+    TeamStateRow.__table__.create(eng)
+    settings = Settings(_env_file=None)
+    app = create_app(settings)
+    install_identity(app, settings=settings)
+    artifacts = ArtifactRuntime(settings)
+    artifacts._engine = eng
+    artifacts._session_factory = sessionmaker(bind=eng, expire_on_commit=False)
+    app.state.artifacts = artifacts
+    app.state.team_root = tmp_path / "team"
+    store = team_store.DbStore(sessionmaker(bind=eng, expire_on_commit=False))
+    app.state.team_store = store
+    store.put_task(
+        {
+            "id": "fikir-a",
+            "title": "Fikir a",
+            "roadmap_row": "row",
+            "state": "awaiting_owner",
+            "area": [],
+            "branch": "",
+            "worktree": "",
+            "assignee": "",
+            "reports": [],
+            "budget": {"max_usd": 5},
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-10-01T00:00:00Z",
+            "proposal": "Kısa öneri",
+        },
+        None,
+    )
+    client = TestClient(app)
+    authenticate(app, client, settings=settings)
+    client.clock = _Clock(monkeypatch)
+    monkeypatch.setattr(approvals, "_now", lambda: client.clock.at)
+    yield client
+    eng.dispose()
+
+
+def test_a_decision_during_a_seven_hour_cycle_that_shows_life_says_the_cycle_runs(decider):
+    """The third reader of the lock (approvals.decide): past six hours the decision answered
+    cycle_running false - "bir sonraki döngüde uygulanır" - while the cycle ran."""
+    _cycle_running_for_seven_hours(decider)
+    assert decider.get("/v1/team/approvals").json()["cycle_running"] is True
+    answer = decider.post(
+        "/v1/team/approvals/decision", json={"task_id": "fikir-a", "decision": "approve"}
+    )
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["cycle_running"] is True

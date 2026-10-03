@@ -53,6 +53,14 @@ PostgreSQL). The same machine with another pid is told `ours`, not acquired.
 
 ## Not fixed here
 
+- The third reader, `approvals.decide` (`services/api/app/team/approvals.py:245`), still calls
+  `lock_is_running(lock, at)` without the status: past six hours the decision answers
+  `cycle_running: false` ("bir sonraki döngüde uygulanır") while the cycle runs. The file is
+  outside this card's area; the red test
+  `test_a_decision_during_a_seven_hour_cycle_that_shows_life_says_the_cycle_runs` is committed
+  and the one-line fix is `lock_is_running(lock, at, store.read_status())` there (lines 93 and
+  115 are file-store paths, file mode below).
+
 - File mode (`team/lock.json`, no server): the client decides alone from `acquired_at`, so a
   file-mode cycle older than six hours can still be taken over. Follow-up (after
   cycle-seat-pool): the cycle refreshes its own lock file (or the client applies the same
