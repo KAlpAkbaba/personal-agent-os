@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -79,18 +80,43 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _shell(*arguments: str, timeout: int = 300) -> subprocess.CompletedProcess[str]:
-    shell = _powershell()
-    assert shell is not None
-    return subprocess.run(  # noqa: S603 - a fixed interpreter and this repository's own script
-        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", *arguments],
+def _stop_tree(pid: int) -> None:
+    subprocess.run(  # noqa: S603, S607 - the system's own taskkill, on a process this test started
+        ["taskkill", "/PID", str(pid), "/T", "/F"],
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,  # a hang guard for the test itself, never the assertion
+        timeout=60,
         check=False,
     )
+
+
+def _shell(*arguments: str, timeout: int = 300) -> subprocess.CompletedProcess[str]:
+    """Run Windows PowerShell 5.1 with its output in files, not pipes.
+
+    ``subprocess.run(capture_output=True, timeout=...)`` kills only the direct child and then
+    reads the pipes to their end: a grandchild that inherited them (a guard's child the runner
+    failed to stop) held the test for ten minutes. Files have no end to wait for, and on the
+    timeout the whole tree is stopped.
+    """
+    shell = _powershell()
+    assert shell is not None
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        process = subprocess.Popen(  # noqa: S603 - a fixed interpreter and this repository's own script
+            [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=err,
+        )
+        try:
+            returncode = process.wait(timeout=timeout)  # a hang guard, never the assertion
+        except subprocess.TimeoutExpired:
+            _stop_tree(process.pid)
+            process.wait(timeout=60)
+            raise
+        texts = []
+        for handle in (out, err):
+            handle.seek(0)
+            texts.append(handle.read().decode("utf-8", errors="replace").replace("\r\n", "\n"))
+    return subprocess.CompletedProcess(process.args, returncode, texts[0], texts[1])
 
 
 def _guards(worktree: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -210,9 +236,9 @@ def _sleeper(pid_file: Path, child_pid_file: Path) -> str:
         f"[System.IO.File]::WriteAllText('{pid_file}', \"$PID\")\n"
         "$exe = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'\n"
         "$child = Start-Process -FilePath $exe -NoNewWindow -PassThru "
-        "-ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 600')\n"
+        "-ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 120')\n"
         f"[System.IO.File]::WriteAllText('{child_pid_file}', \"$($child.Id)\")\n"
-        "Start-Sleep -Seconds 600\n"
+        "Start-Sleep -Seconds 120\n"
         "exit 0\n"
     )
 
@@ -433,6 +459,13 @@ def _run_with_a_sleeper(tmp_path: Path, hang_seconds: int) -> tuple[dict, Path, 
     return _result(out), pid_file, child_pid_file, ran.stdout
 
 
+def _reap(*pid_files: Path) -> None:
+    """Stop what a failed run left behind, so a red case does not leave a ten-minute sleeper."""
+    for pid_file in pid_files:
+        if pid_file.exists():
+            _stop_tree(int(pid_file.read_text(encoding="utf-8")))
+
+
 def test_a_hung_guard_is_stopped_with_its_children_and_the_next_one_runs(tmp_path):
     result, pid_file, child_pid_file, _ = _run_with_a_sleeper(tmp_path, 2)
     if not (pid_file.exists() and child_pid_file.exists()):
@@ -440,13 +473,18 @@ def test_a_hung_guard_is_stopped_with_its_children_and_the_next_one_runs(tmp_pat
         # The claim is about a guard that IS running, so it is given the time to be one.
         result, pid_file, child_pid_file, _ = _run_with_a_sleeper(tmp_path, 20)
 
-    assert [(row["id"], row["outcome"]) for row in result["rows"]] == [
-        ("uyuyan", "hung"),
-        ("sonraki", "green"),
-    ]
-    assert result["status"] == "red"
-    assert _process_is_gone(int(pid_file.read_text(encoding="utf-8")))
-    assert _process_is_gone(int(child_pid_file.read_text(encoding="utf-8")))  # the whole tree
+    try:
+        assert [(row["id"], row["outcome"]) for row in result["rows"]] == [
+            ("uyuyan", "hung"),
+            ("sonraki", "green"),
+        ]
+        assert result["status"] == "red"
+        assert _process_is_gone(int(pid_file.read_text(encoding="utf-8")))
+        # the whole tree
+        assert _process_is_gone(int(child_pid_file.read_text(encoding="utf-8")))
+    except AssertionError:
+        _reap(pid_file, child_pid_file)  # only on failure: a green run's pids may be reused
+        raise
 
 
 # ------------------------------------------------ (7) three wordings, three exit codes
