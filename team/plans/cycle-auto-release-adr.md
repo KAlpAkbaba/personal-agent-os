@@ -22,7 +22,11 @@ the lead ran preflight, release, the recovery pin and the checks by hand in a ch
 4. Expand-only is read conservatively: only an ADDED version file is judged; the module minus
    its `downgrade()` must hold no `drop_*(`, `rename_table`, `alter_column` with
    `type_`/`nullable`/`new_column_name`, NOT NULL `add_column` without `server_default`, or SQL
-   that deletes/updates/truncates/drops/renames. A changed, deleted or unreadable migration stops.
+   that deletes/updates/truncates/drops/renames - inside `ALTER TABLE` any `DROP` or `RENAME`
+   (PostgreSQL makes `COLUMN` optional). A changed, deleted or unreadable migration stops; an
+   `execute()`/`exec_driver_sql()` whose argument is not a string literal (a variable, an
+   f-string, a file read) is unreadable. Today two existing versions (0018, 0023) use an f-string
+   execute; both drop a constraint, so stopping on them is right.
 5. Release from a clean detached worktree `.claude/worktrees/release/<sha12>` (never the main
    checkout): `release-cloud-core.ps1 -BlueGreen -Preflight`, then `-BlueGreen`, then over ssh
    `install-recovery-supervisor.sh <40-hex>`, then the probe until RELEASE == APPROVED_SHA ==

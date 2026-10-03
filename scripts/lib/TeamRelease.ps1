@@ -64,6 +64,22 @@ function Get-TeamCallTexts {
     return @($calls.ToArray())
 }
 
+function Test-TeamLiteralSqlCall {
+    <#
+    Whether a call of execute/exec_driver_sql (as Get-TeamCallTexts returns it) passes nothing but
+    string literals - optionally inside one text()/sa.text() - so the SQL it runs is the SQL the
+    reader sees. A name, an f-string, a concatenation, a file read or a second argument is not.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Call)
+    $open = $Call.IndexOf('(')
+    if ($open -lt 0 -or -not $Call.EndsWith(')')) { return $false }
+    $argument = $Call.Substring($open + 1, $Call.Length - $open - 2)
+    $wrapped = [regex]::Match($argument, '^\s*(?:(?:sa|sqlalchemy)\.)?text\s*\(([\s\S]*)\)\s*,?\s*$')
+    if ($wrapped.Success) { $argument = $wrapped.Groups[1].Value }
+    $literal = '[rRuU]?(?:"""[\s\S]*?"""|''''''[\s\S]*?''''''|"(?:[^"\\\n]|\\.)*"|''(?:[^''\\\n]|\\.)*'')'
+    return ($argument -match "^\s*(?:$literal\s*)+,?\s*$")
+}
+
 function Get-TeamMigrationVerdict {
     <#
     .SYNOPSIS
@@ -81,7 +97,10 @@ function Get-TeamMigrationVerdict {
             upgrade calls is read too;
           * a drop_* call (op.drop_column, batch.drop_table, ...), rename_table, an alter_column
             that changes a type, nullability or a name, an add_column that is NOT NULL without a
-            server default, and SQL that deletes, updates, truncates, drops or renames.
+            server default, and SQL that deletes, updates, truncates, drops or renames (inside
+            ALTER TABLE any DROP or RENAME, with or without COLUMN);
+          * an execute()/exec_driver_sql() whose argument is not a string literal (a variable,
+            an f-string, a file read) is unreadable.
     #>
     param([Parameter(Mandatory = $true)][string]$Path, [string]$Status = "A", [AllowNull()][AllowEmptyString()][string]$Text = "")
     $verdict = { param([bool]$Ok, [string]$Why) [pscustomobject]@{ Path = $Path; ExpandOnly = $Ok; Why = $Why } }
@@ -108,9 +127,15 @@ function Get-TeamMigrationVerdict {
     foreach ($call in @(Get-TeamCallTexts -Text $body -Name "add_column")) {
         if ($call -match '\bnullable\s*=\s*False\b' -and $call -notmatch '\bserver_default\s*=') { return (& $verdict $false "add_column NOT NULL, varsayılansız") }
     }
+    # SQL the reader cannot see (a file, a variable, an f-string) is unreadable, and stops.
+    foreach ($call in @(Get-TeamCallTexts -Text $body -Name "execute|exec_driver_sql")) {
+        if (-not (Test-TeamLiteralSqlCall -Call $call)) { return (& $verdict $false "SQL okunamadı (dize olmayan argüman): $(($call -split "`n")[0])") }
+    }
+    # Inside ALTER TABLE, COLUMN is optional: `ALTER TABLE t DROP c` and `RENAME c TO d` are a drop and a rename.
     $sql = @(
         '(?i)\bdelete\s+from\b', '(?i)\bupdate\s+\S+\s+set\b', '(?i)\btruncate\b',
-        '(?i)\bdrop\s+(table|column|index|constraint|schema|type|view)\b', '(?i)\brename\s+(to|column)\b', '(?i)\balter\s+column\b'
+        '(?i)\bdrop\s+(table|column|index|constraint|schema|type|view)\b', '(?i)\brename\s+(to|column)\b', '(?i)\balter\s+column\b',
+        '(?i)\balter\s+table\b[^;]*?\bdrop\b', '(?i)\balter\s+table\b[^;]*?\brename\b'
     )
     foreach ($pattern in $sql) {
         $found = [regex]::Match($body, $pattern)
