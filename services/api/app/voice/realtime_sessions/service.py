@@ -60,6 +60,7 @@ from app.voice.intents import (
     research_topic_of,
     resolve_intent,
 )
+from app.voice.misheard import service as misheard
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.providers_local_router import LOCAL_ROUTER_PROVIDER_NAME
 from app.voice.realtime import RealtimeState
@@ -1045,6 +1046,9 @@ def handle_tool_call(
         _touch(row, now)
         db.commit()
         return _tool_row_payload(call)
+    #: The misheard notebook's 'tool_failed': only a HANDLER that failed (a VoiceError, a
+    #: crash, or a result that earns failed). An unknown tool and the refusals above are not.
+    handler_failed = False
     if spec is None:
         call.status = TOOL_STATUS_FAILED
         call.error_class = VoiceErrorClass.CAPABILITY_MISSING.value
@@ -1054,6 +1058,7 @@ def handle_tool_call(
         try:
             result = spec.handler(tool_ctx, dict(arguments))
         except VoiceError as exc:
+            handler_failed = True
             call.status = TOOL_STATUS_FAILED
             call.error_class = exc.error_class.value
             call.result_json = {"message": exc.message, "details": exc.details}
@@ -1070,6 +1075,7 @@ def handle_tool_call(
             call.completed_at = utcnow()
         except Exception as exc:  # noqa: BLE001 - a tool bug must not kill the session
             logger.exception("voice_tool_handler_crashed", tool=name, call_id=call_id)
+            handler_failed = True
             call.status = TOOL_STATUS_FAILED
             call.error_class = VoiceErrorClass.INTERNAL_BUG.value
             call.result_json = {"message": f"{type(exc).__name__}"}
@@ -1089,6 +1095,7 @@ def handle_tool_call(
                 # a question, failed otherwise - and the failed row keeps the identity
                 # the handler did resolve plus a truthful sentence.
                 status, error_class = terminal_status_for(name, result)
+                handler_failed = status == TOOL_STATUS_FAILED
                 call.status = status
                 call.error_class = error_class
                 call.result_json = (
@@ -1142,8 +1149,98 @@ def handle_tool_call(
             "preamble_chars": len(preamble or ""),
         },
     )
+    if handler_failed:
+        _notebook_tool_failed(db, row, tool=name, now=now)
     db.commit()
     return _tool_row_payload(call, preamble=preamble)
+
+
+# --- the misheard notebook (team/plans/misheard-relay-wiring-adr.md) ----------------------
+
+
+def _listen_only(row: RealtimeSessionRow) -> bool:
+    """Whether this session is in 'sadece dinle': then the notebook records nothing and holds
+    nothing. No listen-only mode exists yet; its future source is ADR-0171 step 3 (the
+    session's own listen-only state), and until it is built this answers False."""
+    return False
+
+
+def _notebook_entry(
+    row: RealtimeSessionRow,
+    ctx: dict[str, Any],
+    *,
+    sentence: str,
+    intent: ResolvedIntent,
+    engine: str | None,
+    heard_at: datetime,
+) -> misheard.HeldSentence:
+    """This turn's sentence with what was known when it was heard. The device is the one the
+    client declared, else the one the session is bound to (ADR-0208's order)."""
+    device_id = row.device_id
+    declared = ctx.get("declared_device_id")
+    if declared:
+        try:
+            device_id = uuid.UUID(str(declared))
+        except ValueError:
+            pass
+    return misheard.HeldSentence(
+        sentence=sentence,
+        mode="local" if row.provider == LOCAL_ROUTER_PROVIDER_NAME else "paid",
+        engine=engine,
+        device_id=device_id,
+        band=intent.band,
+        confidence=intent.confidence,
+        resolved_intent=None if intent.intent is Intent.NONE else intent.intent.value,
+        heard_at=heard_at,
+    )
+
+
+def _notebook_write(
+    db: Session,
+    row: RealtimeSessionRow,
+    entry: misheard.HeldSentence,
+    *,
+    reason: str,
+    now: datetime,
+    tool: str | None = None,
+) -> None:
+    """One call into the store. The caller has FLUSHED its own work (a failing row of its own
+    would make the store's savepoint fail and the session unusable), and nothing the store
+    does - or raises - changes the turn: it is logged by the error's type, never its text
+    (a database error's text carries the sentence)."""
+    try:
+        misheard.record(
+            db,
+            sentence=entry.sentence,
+            mode=entry.mode,
+            reason=reason,
+            session_id=row.id,
+            heard_at=entry.heard_at,
+            now=now,
+            engine=entry.engine,
+            device_id=entry.device_id,
+            band=entry.band,
+            confidence=entry.confidence,
+            resolved_intent=entry.resolved_intent,
+            tool=tool,
+        )
+    except Exception as exc:  # noqa: BLE001 - the notebook never costs the owner a turn
+        logger.warning("misheard_relay_record_failed", error=type(exc).__name__, reason=reason)
+
+
+def _notebook_tool_failed(
+    db: Session, row: RealtimeSessionRow, *, tool: str, now: datetime
+) -> None:
+    """'tool_failed': the sentence held for this session, with the failed tool's name. Its
+    ``heard_at`` is the sentence's own, so a second failure in the same turn - or a sentence
+    already in the notebook for another reason - is the same row (the store's idempotence)."""
+    if _listen_only(row):
+        return
+    entry = misheard.held(row.id, now)
+    if entry is None:
+        return
+    db.flush()
+    _notebook_write(db, row, entry, reason=misheard.REASON_TOOL_FAILED, now=now, tool=tool)
 
 
 REFUSED_DEVICE_SLOT: Final = "device_slot_forbidden"
@@ -1623,6 +1720,8 @@ def record_client_events(
     native_build_focused_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
+    #: The misheard notebook's rows of this request: (the sentence as held, the reason).
+    notebook: list[tuple[misheard.HeldSentence, str]] = []
     for ev in events:
         kind = str(ev.get("kind"))
         if kind not in CLIENT_EVENT_KINDS:
@@ -2011,7 +2110,7 @@ def record_client_events(
             # and the one thing a router cannot notice about itself — the owner objecting
             # to what it just did. `observe` writes a ledger note only for the turn that
             # completes a suspicion, so one misroute is one row.
-            route_telemetry.observe(
+            misroute = route_telemetry.observe(
                 db,
                 intent.intent,
                 matched=intent.matched or None,
@@ -2019,6 +2118,30 @@ def record_client_events(
                 session_id=str(row.id),
                 now=now,
             )
+            # The misheard notebook (team/plans/misheard-relay-wiring-adr.md): which of its
+            # conditions this sentence meets, written at the end of the request once the
+            # relay's own work is flushed. Never the turn's business: nothing below changes
+            # the route, the band, the record or the response.
+            sentence = text.strip()
+            if sentence and not _listen_only(row):
+                # Read BEFORE this turn's sentence replaces it: an objection is about the
+                # sentence that ACTED, never about "hayır".
+                prior = misheard.held(row.id, now)
+                this_turn = _notebook_entry(
+                    row, ctx, sentence=sentence, intent=intent, engine=heard_by, heard_at=now
+                )
+                if misroute is not None and misroute.acted.session_id == str(row.id):
+                    # The ring is process-wide and pairs with the nearest acting turn: the
+                    # held sentence is the acted one only when it was heard at that moment.
+                    if prior is not None and prior.heard_at == misroute.acted.at:
+                        notebook.append((prior, misheard.REASON_OBJECTED))
+                elif decision.question is not None:
+                    notebook.append((this_turn, misheard.REASON_ASKED_QUESTION))
+                elif intent.intent is Intent.NONE and misheard.is_request(
+                    decision.ranked, machine_named
+                ):
+                    notebook.append((this_turn, misheard.REASON_NO_INTENT))
+                misheard.hold(row.id, this_turn, now)
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
             # session row so a tool call arriving moments later can be keyed to the turn
             # it belongs to. Overwritten every utterance on purpose - an intervening
@@ -2412,6 +2535,10 @@ def record_client_events(
     _set_context(row, ctx)
     _touch(row, now)
     _stamp_delivered_briefings(db, pending, now=now)
+    if notebook:
+        db.flush()  # the relay's own work first: the store's savepoint must find none pending
+        for held_entry, reason in notebook:
+            _notebook_write(db, row, held_entry, reason=reason, now=now)
     db.commit()
     return {
         "accepted": accepted,
