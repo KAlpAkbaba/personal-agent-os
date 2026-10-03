@@ -158,6 +158,8 @@ def test_health_ok_shape(monkeypatch) -> None:
         # nothing told the owner about it.
         "notification_ladder",
         "backup_failure_notices",
+        # The measurement recordings' thirty days, held by the server process.
+        "measurement_recordings",
         "audit_retention",
     ]
     clock = body["checks"]["routine_clock"]
