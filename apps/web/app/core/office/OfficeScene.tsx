@@ -1,60 +1,11 @@
 /**
- * The pixel office: one desk and one character per seat the API sends, each seat a button.
- * Pure rendering of `DrawnSeat`s - selection and motion preference come in as props.
+ * The office: a room with one desk and one character per seat the API sends, each seat a
+ * button, and the room's furniture along its walls. Pure rendering of `DrawnSeat`s -
+ * selection and motion preference come in as props. The characters are in officeRobots.tsx.
  */
 
 import type { DrawnSeat } from "./officeModel";
-import { ARMS_A, ARMS_B, DESK, SEATED, STANDING, WARNING, toRects } from "./officeSprites";
-
-function Pixels({ map, x, y }: { map: readonly string[]; x: number; y: number }) {
-  return (
-    <g transform={`translate(${x} ${y})`}>
-      {toRects(map).map((r) => (
-        <rect key={`${r.x}-${r.y}`} x={r.x} y={r.y} width={r.w} height={r.h} fill={r.fill} />
-      ))}
-    </g>
-  );
-}
-
-function Figure({ seat, reducedMotion }: { seat: DrawnSeat; reducedMotion: boolean }) {
-  const typing = seat.pose === "typing";
-  const animated = typing && !reducedMotion;
-  return (
-    <svg
-      className={animated ? "office-figure office-typing" : "office-figure"}
-      viewBox="0 0 40 28"
-      shapeRendering="crispEdges"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <Pixels map={DESK} x={16} y={12} />
-      {seat.plain ? null : seat.pose === "standing" ? (
-        <Pixels map={STANDING} x={1} y={10} />
-      ) : (
-        <>
-          <Pixels map={SEATED} x={3} y={8} />
-          {typing && (
-            <g className="office-arms">
-              <g className="office-arms-a">
-                <Pixels map={ARMS_A} x={3} y={14} />
-              </g>
-              {animated && (
-                <g className="office-arms-b">
-                  <Pixels map={ARMS_B} x={3} y={14} />
-                </g>
-              )}
-            </g>
-          )}
-        </>
-      )}
-      {seat.warning && (
-        <g className="office-warning">
-          <Pixels map={WARNING} x={4} y={0} />
-        </g>
-      )}
-    </svg>
-  );
-}
+import { Figure, RoomDecor } from "./officeRobots";
 
 export default function OfficeScene({
   seats,
@@ -85,9 +36,15 @@ export default function OfficeScene({
           >
             {/* cut with an ellipsis at the cell's width; the title attribute keeps it whole */}
             <span className="office-label" title={seat.label ?? undefined} aria-hidden="true">
-              {seat.label ?? " "}
+              {seat.label ?? " "}
             </span>
-            <Figure seat={seat} reducedMotion={reducedMotion} />
+            <Figure
+              seat={seat.seat}
+              plain={seat.plain}
+              pose={seat.pose}
+              warning={seat.warning}
+              animated={seat.pose === "typing" && !reducedMotion}
+            />
             <span className="office-name" aria-hidden="true">
               {seat.name}
               {seat.badge !== null && <span className="office-count"> · {seat.badge} onay</span>}
@@ -102,6 +59,7 @@ export default function OfficeScene({
             )}
           </button>
         ))}
+        <RoomDecor />
       </div>
     </div>
   );

@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.identity.dependencies import require_owner_session
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import InvalidVocabulary
-from app.team import approvals, models_setting, office
+from app.team import approvals, models_setting, office, trials
 from app.team import store as team_store
 
 router = APIRouter(dependencies=[Depends(require_owner_session)])
@@ -71,6 +71,8 @@ async def list_approvals(request: Request) -> dict[str, Any]:
         lock, at = store.read_lock(), team_store.utcnow()
         return {
             "approvals": approvals.list_pending(queue, root, store),
+            # The third gate: what the owner tries on a real device (``trials``).
+            "trials": trials.list_open(queue),
             "cycle_report": store.newest_report(),
             # For information; whether a decision is taken now is ``decisions_open``.
             "cycle_running": team_store.lock_is_running(lock, at),
@@ -121,6 +123,64 @@ async def decide(body: DecisionRequest, request: Request) -> dict[str, Any]:
             reason=body.reason,
             gate=body.gate,
             channel=body.channel,
+            record=record,
+        )
+
+    try:
+        return await asyncio.to_thread(run)
+    except approvals.Refused as refused:
+        raise HTTPException(refused.status, refused.detail()) from refused
+
+
+class TrialDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    trial_id: str
+    verdict: Literal["oldu", "olmadi"]
+    #: The owner's own words; required for "olmadi" (``trials.decide`` holds the rule).
+    said: str | None = None
+
+
+@router.post("/v1/team/trials/decision")
+async def decide_trial(body: TrialDecisionRequest, request: Request) -> dict[str, Any]:
+    """Oldu / Olmadı on one trial (``trials``). Never writes QUALIFICATION."""
+    store = _store(request)
+    artifacts = request.app.state.artifacts
+
+    def record(facts: dict[str, Any]) -> None:
+        passed = facts["verdict"] == trials.PASSED
+        opened = "" if passed else f"; {facts['fix_task_id']} düzeltme işi açıldı"
+        event = ledger_service.ActivityEvent(
+            event_type=trials.EVENT_TRIAL_PASSED if passed else trials.EVENT_TRIAL_FAILED,
+            subsystem=approvals.SUBSYSTEM_TEAM,
+            action=f"team.trials.{facts['verdict']}",
+            factual_summary=(
+                f"Sahip {facts['task_id']} görevinin {facts['trial_id']} denemesine "
+                f"'{facts['verdict']}' dedi ({facts['machine']}){opened}."
+            ),
+            source="team.trials",
+            source_ref=f"{facts['task_id']}:{facts['trial_id']}:{facts['updated_at']}",
+            detail_json=dict(facts),
+        )
+        try:
+            with artifacts.session() as session:
+                ledger_service.record(session, event)
+        except InvalidVocabulary as error:
+            raise approvals.Refused(
+                503,
+                "ledger_refused",
+                "Ledger bu olayı kabul etmedi; karar yazılmadı.",
+                {"why": str(error)},
+            ) from error
+
+    def run() -> dict[str, Any]:
+        return trials.decide(
+            store,
+            task_id=body.task_id,
+            trial_id=body.trial_id,
+            verdict=body.verdict,
+            said=body.said,
             record=record,
         )
 

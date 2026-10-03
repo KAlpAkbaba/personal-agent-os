@@ -1,7 +1,18 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.7** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.8** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
+
+- **v1.8 (2026-10-03, ADR-0207, PR-C): the ceiling on a write** — no new operation name
+  and no new `contracts` key (§4a). `browser.fill`, `browser.select_option` and
+  `browser.set_checked` accept the same optional `risk_ceiling` as `browser.click`. With
+  it, the worker classifies the WRITE from the element it resolved (its name, whether it
+  submits, whether it sits in a form — the collector's terms of §3c), applies the session
+  policy with that class, refuses above the ceiling exactly as a click is refused, before
+  anything is typed, chosen or ticked, and answers `risk_class` beside `ok`. A payload
+  without the field is served as in v1.7, and the result is v1.7's (`{"ok": true}`). A
+  consumer that sent a ceiling and got no `risk_class` back is talking to a worker from
+  before v1.8, which ignored the field: it must stop acting on that device.
 
 - **v1.7 (2026-09-29, ADR-0207, PR-B): the device's half of the task gate** — two
   refusals, no new operation name (§4a). `browser.click` accepts an optional
@@ -610,6 +621,30 @@ policy, and then refuses when the class is ABOVE the ceiling: `security_scope_er
 The element is not clicked. A value that is not a risk class is a `validation_error`.
 A payload without the field is served as in v1.6. A ceiling never WIDENS anything: the
 session policy is applied first and a ceiling above it opens nothing.
+
+**`risk_ceiling` on `browser.fill`, `browser.select_option` and `browser.set_checked`
+(contract v1.8).** The same field, the same values, the same refusal. When it is present
+the worker describes the element it resolved IN THE COLLECTOR'S TERMS (§3c: the
+accessible `name` an observation would show, `submits`, `in_form` — never a field's
+value, which a click's description falls back to) and classifies the write:
+
+1. a HIGH_IMPACT marker in the name (§4) → `HIGH_IMPACT`;
+2. `submits`, or an EXTERNAL_COMMUNICATION marker in the name → `EXTERNAL_COMMUNICATION`;
+3. an UNNAMED control (no letter or digit in its name) that submits or sits in a form,
+   for `select_option` and `set_checked` → `EXTERNAL_COMMUNICATION` (nothing says what it
+   does, and where it sits says it may send); not for `fill` — typing sends nothing, and
+   what sends the form is judged when IT is pressed;
+4. otherwise → `REVERSIBLE_WRITE`.
+
+A field's role does not make the write reversible: a `<select>` that buys on change is
+named by the page like any button. The worker applies the session policy with that
+class, then the ceiling; above it: `security_scope_error`, `retryable:false`, evidence
+`{"reason":"above_ceiling","risk_class":…,"risk_ceiling":…}` — BEFORE anything is
+typed, chosen or ticked. On success the result is `{"ok": true, "risk_class": …}`.
+Without the field the operation is served as in v1.7: its static class
+(`REVERSIBLE_WRITE`), no description, result `{"ok": true}`. A consumer that sent a
+ceiling and received no `risk_class` is talking to a worker from before contract v1.8
+(it ignored the field and wrote); it must not send that device another write.
 
 **The task deny-list.** `packages/protocol/browser-task-denylist.json` names the sites
 no browser task acts on — banks, government identity, payment providers, password

@@ -48,6 +48,9 @@ OBSERVED = {
 }
 
 
+WRITE_CAPABILITIES = ("browser.fill", "browser.select_option", "browser.set_checked")
+
+
 @pytest.fixture(autouse=True)
 def _fresh_registry() -> None:
     device_port.reset_known_sessions()
@@ -61,6 +64,9 @@ def client(answer: Any = None) -> FakeDeviceCommandClient:
             return CommandSucceeded({"session_id": SESSION, "created": True})
         if call["capability"] == "browser.observe":
             return CommandSucceeded(dict(OBSERVED))
+        if call["capability"] in WRITE_CAPABILITIES:
+            # A v1.8 worker says the class of the element it wrote.
+            return CommandSucceeded({"ok": True, "risk_class": "REVERSIBLE_WRITE"})
         return CommandSucceeded({"ok": True})
 
     return FakeDeviceCommandClient(factory=factory)
@@ -131,17 +137,30 @@ CHANGED = Expectation("page_changed")
         (
             Step(action=ACTION_FILL, ref="e2", value="Merhaba", expect=CHANGED),
             "browser.fill",
-            {"target": {"ref": "e2", "observation_id": "obs-abc"}, "value": "Merhaba"},
+            # v1.8: a write carries the ceiling it was gated at, as a click does.
+            {
+                "target": {"ref": "e2", "observation_id": "obs-abc"},
+                "value": "Merhaba",
+                "risk_ceiling": "REVERSIBLE_WRITE",
+            },
         ),
         (
             Step(action=ACTION_SELECT, ref="e3", value="2", expect=CHANGED),
             "browser.select_option",
-            {"target": {"ref": "e3", "observation_id": "obs-abc"}, "value": "2"},
+            {
+                "target": {"ref": "e3", "observation_id": "obs-abc"},
+                "value": "2",
+                "risk_ceiling": "REVERSIBLE_WRITE",
+            },
         ),
         (
             Step(action=ACTION_CHECK, ref="e4", checked=True, expect=CHANGED),
             "browser.set_checked",
-            {"target": {"ref": "e4", "observation_id": "obs-abc"}, "checked": True},
+            {
+                "target": {"ref": "e4", "observation_id": "obs-abc"},
+                "checked": True,
+                "risk_ceiling": "REVERSIBLE_WRITE",
+            },
         ),
         (
             Step(action=ACTION_SCROLL, direction="to_end", expect=CHANGED),
@@ -344,3 +363,111 @@ def test_a_result_that_carries_a_forbidden_key_is_refused() -> None:
         port(client(answer)).observe(task_id=TASK, key="k1")
     assert refused.value.reason == "forbidden_key"
     assert "abc" not in str(refused.value)
+
+
+# ------------------------------------------------------------------ contract v1.8
+
+WRITE_STEPS = (
+    (Step(action=ACTION_FILL, ref="e2", value="Merhaba", expect=CHANGED), "browser.fill"),
+    (Step(action=ACTION_SELECT, ref="e3", value="2", expect=CHANGED), "browser.select_option"),
+    (Step(action=ACTION_CHECK, ref="e4", checked=True, expect=CHANGED), "browser.set_checked"),
+)
+
+
+@pytest.mark.parametrize(("step", "capability"), WRITE_STEPS)
+@pytest.mark.parametrize("ceiling", ["REVERSIBLE_WRITE", "EXTERNAL_COMMUNICATION", "HIGH_IMPACT"])
+def test_each_write_carries_the_ceiling_it_was_given(
+    step: Step, capability: str, ceiling: str
+) -> None:
+    def answer(**call: Any) -> CommandOutcome:
+        if call["capability"] == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        return CommandSucceeded({"ok": True, "risk_class": ceiling})
+
+    c = client(answer)
+    result = port(c).act(
+        task_id=TASK, key="k1", step=step, observation_id="obs-abc", risk_ceiling=ceiling
+    )
+    name, body = sent(c)[-1]
+    assert name == capability
+    assert body["risk_ceiling"] == ceiling
+    assert result == {"ok": True, "risk_class": ceiling}
+
+
+@pytest.mark.parametrize(
+    ("step", "payload"),
+    [
+        (
+            Step(action=ACTION_CLICK, ref="e1", expect=CHANGED),
+            {"target": {"ref": "e1", "observation_id": "obs-abc"}, "risk_ceiling": "NAVIGATE"},
+        ),
+        (
+            Step(action=ACTION_NAVIGATE, url="https://93.184.216.34/", expect=CHANGED),
+            {"url": "https://93.184.216.34/"},
+        ),
+        (
+            Step(action=ACTION_SCROLL, direction="down", expect=CHANGED),
+            {"direction": "down", "amount_px": 800},
+        ),
+    ],
+)
+def test_click_navigate_and_scroll_are_sent_as_before(step: Step, payload: dict[str, Any]) -> None:
+    c = client()
+    port(c).act(
+        task_id=TASK, key="k1", step=step, observation_id="obs-abc", risk_ceiling="NAVIGATE"
+    )
+    assert sent(c)[-1][1] == {"session_id": SESSION, **payload}
+
+
+@pytest.mark.parametrize(("step", "capability"), WRITE_STEPS)
+def test_a_device_that_does_not_say_the_class_of_a_write_is_a_named_mismatch(
+    step: Step, capability: str
+) -> None:
+    """An agent from before v1.8 ignores the field and writes: it cannot enforce, and the
+    task must not go on acting on it. (That one write was gated by the Cloud Core.)"""
+
+    def old_agent(**call: Any) -> CommandOutcome:
+        if call["capability"] == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        return CommandSucceeded({"ok": True})
+
+    c = client(old_agent)
+    with pytest.raises(BrowserPortError) as refused:
+        port(c).act(
+            task_id=TASK, key="k1", step=step, observation_id="obs-abc", risk_ceiling="HIGH_IMPACT"
+        )
+    assert refused.value.error_class == "capability_missing"
+    assert "v1.8" in str(refused.value)
+    assert sent(c)[-1][0] == capability
+
+
+def test_after_one_unenforced_write_no_further_write_reaches_that_device() -> None:
+    """The loop counts the failed act and may plan another write; the port does not
+    send it. A click is still sent: its ceiling is enforced since v1.7."""
+
+    def old_agent(**call: Any) -> CommandOutcome:
+        if call["capability"] == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        return CommandSucceeded({"ok": True})
+
+    c = client(old_agent)
+    p = port(c)
+    for key in ("k1", "k2"):
+        with pytest.raises(BrowserPortError) as refused:
+            p.act(
+                task_id=TASK,
+                key=key,
+                step=WRITE_STEPS[0][0],
+                observation_id="obs-abc",
+                risk_ceiling="REVERSIBLE_WRITE",
+            )
+        assert refused.value.error_class == "capability_missing"
+    assert [name for name, _ in sent(c)].count("browser.fill") == 1
+    p.act(
+        task_id=TASK,
+        key="k3",
+        step=Step(action=ACTION_CLICK, ref="e1", expect=CHANGED),
+        observation_id="obs-abc",
+        risk_ceiling="REVERSIBLE_WRITE",
+    )
+    assert sent(c)[-1][0] == "browser.click"

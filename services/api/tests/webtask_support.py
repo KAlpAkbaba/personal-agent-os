@@ -7,8 +7,9 @@ nothing:
 
 * a reference is good for the LAST observation only (``ui_state_changed`` otherwise);
 * the value of a field is never in an observation - ``has_value`` / ``empty`` is;
-* every click is classified from the element by the contract's rule and REFUSED when it
-  is above the ceiling the loop gated it at (``security_scope_error``);
+* every click - and since contract v1.8 every fill, select and check - is classified
+  from the element by the contract's rule and REFUSED when it is above the ceiling the
+  loop gated it at (``security_scope_error``);
 * acting on a disabled element, or on one that is gone, fails.
 
 What it records is what the tests assert on: every action that REACHED the site. "The
@@ -198,17 +199,29 @@ class FakeBrowser:
             if el.href and el.effect is None:
                 self._goto(el.href)
             return {"clicked": True}
+        # Contract v1.8: a write is classified from its element too, and refused above
+        # the ceiling BEFORE anything is typed, chosen or ticked.
+        written = Element(
+            ref="x",
+            role=el.role,
+            name=el.name,
+            submits=el.submits,
+            in_form=el.in_form or el.submits,
+        )
+        actual = self.flags.get("device_class") or risk.classify_step(step.action, written)
+        if risk_rank(actual) > risk_rank(risk_ceiling):
+            raise BrowserPortError("security_scope_error", f"{actual} above {risk_ceiling}")
         if step.action in (ACTION_FILL, ACTION_SELECT):
             if el.sensitive:
                 # The loop must never get here; the test reads this tag to prove it.
                 self.done.append(f"TYPED_INTO_SENSITIVE:{el.name}")
             self.fields[el.field_key or el.name] = step.value or ""
             self.done.append(f"fill:{el.name}")
-            return {"ok": True}
+            return {"ok": True, "risk_class": actual}
         if step.action == ACTION_CHECK:
             self.checked[el.field_key or el.name] = bool(step.checked)
             self.done.append(f"check:{el.name}")
-            return {"ok": True}
+            return {"ok": True, "risk_class": actual}
         raise BrowserPortError("capability_missing", step.action)
 
     # ------------------------------------------------------------- helpers

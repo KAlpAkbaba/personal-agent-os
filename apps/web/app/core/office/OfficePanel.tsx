@@ -28,19 +28,44 @@ export default function OfficePanel({ panel }: { panel: Panel | null }) {
       )}
       {panel.task ? (
         <section data-panel="card">
+          <p className="muted">İşin durumu: {panel.task.stateText}</p>
           <h3>{panel.task.title}</h3>
-          <p className="muted">Durum: {panel.task.state}</p>
-          <p>
-            <strong>Hedef</strong>
-            <br />
-            {panel.task.goal}
-          </p>
-          <p>
-            <strong>Kabul</strong>
-            <br />
-            {panel.task.acceptance}
-          </p>
+          {panel.task.since && <p className="muted">Başladı: {panel.task.since}</p>}
           {panel.reason && <p role="status">Neden: {panel.reason}</p>}
+          {panel.outcome && <p>Son rapor: {panel.outcome}</p>}
+          {/* The card text is written for the agents, in English; the owner read its "-> RED."
+              as the task's verdict (ADR-0241 addendum). Closed, whole, never removed. */}
+          <details>
+            <summary>Ajanlar için yazılmış kart metni (İngilizce, teknik)</summary>
+            <p className="muted">
+              Bu metindeki RED / GREEN / PASS / FAIL sözcükleri ajanlara verilmiş test
+              talimatlarıdır, işin sonucu değil. İşin sonucu yukarıdaki durumdur.
+            </p>
+            <p>
+              <strong>Hedef</strong>
+              <br />
+              {panel.task.goal}
+            </p>
+            <p>
+              <strong>Kabul</strong>
+              <br />
+              {panel.task.acceptance}
+            </p>
+            {panel.task.evidence && (
+              <p>
+                <strong>Beklenen kanıt</strong>
+                <br />
+                {panel.task.evidence}
+              </p>
+            )}
+            {panel.agentNote && (
+              <p>
+                <strong>Hakim notu</strong>
+                <br />
+                {panel.agentNote}
+              </p>
+            )}
+          </details>
         </section>
       ) : (
         <p className="muted">Bu koltuğun şu an bir işi yok.</p>

@@ -49,6 +49,8 @@ EVENT_TASK_REJECTED = "team.task.rejected"
 LOCK_STALE_HOURS = team_store.LOCK_STALE_HOURS  # TeamQueue.ps1: $script:TeamLockStaleHours
 TEXT_MAX_CHARS = 20000
 _WRITE_LOCK = threading.Lock()
+#: Shared with ``trials.decide``: one owner decision at a time, whichever gate it is.
+WRITE_LOCK = _WRITE_LOCK
 
 
 @dataclass

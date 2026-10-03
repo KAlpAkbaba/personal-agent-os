@@ -13,16 +13,50 @@
 
 import { useEffect } from "react";
 
+import type { LocalModeSnapshot } from "../lib/voice/localMode";
 import { useLocalVoiceMode } from "../lib/voice/useLocalVoiceMode";
 import { useVoiceSession } from "../lib/voice/useVoiceSession";
 import { useCorePreferences } from "./usePreferences";
-import VoiceControlView from "./VoiceControlView";
+import VoiceControlView, { type LocalModeViewProps } from "./VoiceControlView";
 import { toggleLocalVoice } from "../lib/voice/localToggle";
+
+export type LocalViewWiring = {
+  localVoice: boolean;
+  local: LocalModeSnapshot;
+  start: () => Promise<void>;
+  stop: () => Promise<void>;
+  answerPackQuestion: (yes: boolean) => void;
+  setLocalVoice: (on: boolean) => void;
+  disconnectPaid: () => Promise<void> | void;
+};
+
+/**
+ * The local mode's view props, built in one pure place so the wiring is tested without a
+ * DOM (tests/uistate/voice-control-pack-question.test.tsx). `onAnswerPack` passes the
+ * click straight through: Chrome's `install()` needs the click still on the stack.
+ */
+export function buildLocalViewProps(w: LocalViewWiring): LocalModeViewProps {
+  return {
+    enabled: w.localVoice,
+    snapshot: w.local,
+    // A hand-over, never two live channels (security review 2026-09-19): the channel
+    // being left is ended first - see lib/voice/localToggle.ts.
+    onToggle: (on) =>
+      void toggleLocalVoice(on, {
+        setLocalVoice: w.setLocalVoice,
+        stopLocal: () => w.stop(),
+        disconnectPaid: () => w.disconnectPaid(),
+      }),
+    onStart: () => void w.start(),
+    onStop: () => void w.stop(),
+    onAnswerPack: (yes) => w.answerPackQuestion(yes),
+  };
+}
 
 export default function VoiceControl() {
   const { voice, actions } = useVoiceSession();
   const { localVoice, setLocalVoice } = useCorePreferences();
-  const { local, start, stop } = useLocalVoiceMode();
+  const { local, start, stop, answerPackQuestion } = useLocalVoiceMode();
 
   // Device labels: known before a grant only for previously-granted origins,
   // and refreshed by the store itself after every connect. `actions` is
@@ -37,20 +71,15 @@ export default function VoiceControl() {
       onConnect={() => void actions.connect()}
       onDisconnect={() => void actions.disconnect()}
       onReconnect={() => void actions.reconnect()}
-      local={{
-        enabled: localVoice,
-        snapshot: local,
-        // A hand-over, never two live channels (security review 2026-09-19): the channel
-        // being left is ended first - see lib/voice/localToggle.ts.
-        onToggle: (on) =>
-          void toggleLocalVoice(on, {
-            setLocalVoice,
-            stopLocal: () => stop(),
-            disconnectPaid: () => actions.disconnect(),
-          }),
-        onStart: () => void start(),
-        onStop: () => void stop(),
-      }}
+      local={buildLocalViewProps({
+        localVoice,
+        local,
+        start,
+        stop,
+        answerPackQuestion,
+        setLocalVoice,
+        disconnectPaid: () => actions.disconnect(),
+      })}
     />
   );
 }

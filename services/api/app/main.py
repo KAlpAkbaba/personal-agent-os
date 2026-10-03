@@ -146,6 +146,8 @@ from app.voice.intent_router import (
     CompositeIntentRouter,
     set_intent_router,
 )
+from app.voice.measurement.routes import router as voice_measurement_router
+from app.voice.measurement.service import DailyPurge, Recordings
 from app.voice.misheard import service as misheard_service
 from app.voice.misheard.routes import router as voice_misheard_router
 from app.voice.qualification.routes import router as voice_qualification_router
@@ -648,6 +650,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     db, backup_root=settings.backup_root
                 ),
             ),
+            # The measurement recordings' thirty days are held by this process, never by
+            # a session: purged on the first sweep and then once a day, on the SAME
+            # object store artifacts use (app.voice.measurement.service).
+            "measurement_recordings": DailyPurge(lambda: Recordings(artifacts.store)),
             "audit_retention": lambda: sum(
                 _in_session(
                     artifacts.session,
@@ -891,6 +897,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(alarms_audio_router)
     app.include_router(ambient_router)
     app.include_router(voice_qualification_router)
+    # The owner's reading of the twenty scripted sentences (30 days, his own store).
+    app.include_router(voice_measurement_router)
     app.include_router(release_router)
     app.include_router(devices_router)
     # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): the Cockpit's approval pair for a pending

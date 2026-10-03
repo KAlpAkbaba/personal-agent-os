@@ -19,7 +19,8 @@
                   and TeamQueue.ps1's shared files read from ITS text (two lists, one rule);
       cap         two widenings per task, twenty-five entries per area;
       idempotent  the same resolution applied twice changes nothing the second time;
-      d20261001   the two stopped tasks of that cycle, as fixtures.
+      d20261001   the two stopped tasks of that cycle, as fixtures;
+      roles       the example request line of inspector.md and worker.md, read from disk.
 
     Run: powershell -NoProfile -File scripts\tests\team-area.tests.ps1
 #>
@@ -736,6 +737,77 @@ Test-Case "d20261001: the same request while an approved card holds intents.py -
     [void](Add-TeamAreaWidening -Task $task -Resolution $resolution -By "inspector" -Why "intents.py başka kartta" -Now $now)
     Assert-List -Expected $narrativeArea -Actual $task.area -Because "the area is unchanged"
     Assert-List -Expected @("answer-mode-intent-precision") -Actual $task.depends_on -Because "behind that card"
+}
+
+# ------------------------------------------------------------------------------- roles
+#
+# The role texts and the parser read each other: the example request line each role file
+# shows is taken from the file on disk and parsed for that role, so neither can drift.
+
+function Get-RoleText {
+    param([string]$Role)
+    return [System.IO.File]::ReadAllText((Join-Path $repoRoot ".claude\agents\$Role.md"), [System.Text.Encoding]::UTF8)
+}
+
+function Get-RoleExample {
+    <# The role file's example request line (key, colon, bracketed list, alone on its line) and the paths the test reads from it. #>
+    param([string]$Text, [string]$Key)
+    $found = @([regex]::Matches($Text, '(?m)^[ \t]*(' + [regex]::Escape($Key) + ':[ \t]*\[([^\]\r\n]*)\])[ \t]*\r?$'))
+    if (@($found).Count -eq 0) { throw "no example line '$Key [...]' alone on its line in the role file" }
+    $paths = @($found[0].Groups[2].Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    return [pscustomobject]@{ Line = $found[0].Groups[1].Value; Paths = [string[]]$paths; Index = $found[0].Index }
+}
+
+Test-Case "roles: inspector.md shows an alan_disi example line that parses for the inspector to its paths" {
+    $text = Get-RoleText -Role "inspector"
+    Assert-True -Condition ($text -cmatch 'alan_disi:') -Because "inspector.md names the key alan_disi:"
+    $example = Get-RoleExample -Text $text -Key "alan_disi"
+    Assert-True -Condition (@($example.Paths).Count -gt 0) -Because "the example names at least one file: '$($example.Line)'"
+    $asked = Get-TeamAreaRequest -Report $example.Line -Role "inspector"
+    Assert-True -Condition $asked.Asked -Because "the example '$($example.Line)' is a request"
+    Assert-List -Expected $example.Paths -Actual $asked.Files -Because "the example's paths, as written"
+    Assert-Equal -Expected 0 -Actual @($asked.Bad).Count -Because "no example path is Bad: $(@($asked.Bad) -join ' | ')"
+    foreach ($path in $example.Paths) {
+        Assert-True -Condition ($null -eq (Get-TeamAreaProtection -Path $path)) -Because "the example never wishes for a protected path ('$path')"
+    }
+    Assert-True -Condition (-not (Get-TeamAreaRequest -Report $example.Line -Role "worker").Asked) -Because "the inspector's example is not the worker's key"
+}
+
+Test-Case "roles: worker.md shows an ALAN_ISTEGI example line that parses for the worker to its paths" {
+    $text = Get-RoleText -Role "worker"
+    Assert-True -Condition ($text -cmatch 'ALAN_ISTEGI:') -Because "worker.md names the key ALAN_ISTEGI:"
+    $example = Get-RoleExample -Text $text -Key "ALAN_ISTEGI"
+    Assert-True -Condition (@($example.Paths).Count -gt 0) -Because "the example names at least one file: '$($example.Line)'"
+    $asked = Get-TeamAreaRequest -Report $example.Line -Role "worker"
+    Assert-True -Condition $asked.Asked -Because "the example '$($example.Line)' is a request"
+    Assert-List -Expected $example.Paths -Actual $asked.Files -Because "the example's paths, as written"
+    Assert-Equal -Expected 0 -Actual @($asked.Bad).Count -Because "no example path is Bad: $(@($asked.Bad) -join ' | ')"
+    Assert-True -Condition (-not (Get-TeamAreaRequest -Report $example.Line -Role "inspector").Asked) -Because "the worker's example is not the inspector's key"
+}
+
+Test-Case "roles: inspector.md keeps one verdict last, and its example report gives both readers their answer" {
+    $text = Get-RoleText -Role "inspector"
+    $grammar = '`APPROVE` | `RETURN (list)` | `REJECT (reason)`'
+    Assert-Equal -Expected 1 -Actual ([regex]::Matches($text, [regex]::Escape($grammar))).Count -Because "the verdict grammar is written once, unchanged"
+    Assert-True -Condition ($text -cmatch 'ending with exactly one verdict') -Because "the report still ends with exactly one verdict"
+    Assert-True -Condition ($text -cmatch [regex]::Escape('**Your LAST message is all the cycle reads.**')) -Because "the last-message paragraph is kept"
+    # The example report as the role file shows it: the request line, then the verdict line.
+    $example = Get-RoleExample -Text $text -Key "alan_disi"
+    $after = @(($text.Substring($example.Index) -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    Assert-True -Condition (@($after).Count -ge 2) -Because "a line follows the example request"
+    $verdictLine = $after[1]
+    Assert-True -Condition ($verdictLine -cmatch '^RETURN \((.+)\)$') -Because "the line right after the request is the RETURN verdict: '$verdictLine'"
+    $list = $Matches[1]
+    $report = (@("# Denetim: a-card", "", "1. the fix is outside the card's area.", "", $example.Line, $verdictLine)) -join "`n"
+    $verdict = Get-TeamVerdict -Report $report
+    Assert-Equal -Expected "RETURN" -Actual $verdict.Verdict -Because "the request line does not disturb the verdict"
+    Assert-Equal -Expected $list -Actual $verdict.Detail -Because "the RETURN list reaches the worker"
+    Assert-List -Expected $example.Paths -Actual (Get-TeamAreaRequest -Report $report -Role "inspector").Files -Because "the verdict line does not disturb the request"
+}
+
+Test-Case "roles: worker.md still says a worker never touches a file outside its area" {
+    $text = Get-RoleText -Role "worker"
+    Assert-True -Condition ($text -cmatch 'never touch files outside your area') -Because "the binding sentence is kept"
 }
 
 # -------------------------------------------------------------------------------- gate

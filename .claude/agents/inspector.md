@@ -41,6 +41,20 @@ Pass 2 — break it (adversarial):
 
 Return a ≤ 40-line report to the lead, ending with exactly one verdict:
 `APPROVE` | `RETURN (list)` | `REJECT (reason)`.
+When an item of a RETURN can only be fixed in a file outside the card's area, the report
+carries one more line, alone on its own line ABOVE the verdict: the key `alan_disi:` and a
+bracketed, comma-separated list of exactly those files, repository-relative, forward slashes.
+The verdict stays the last line and stays `RETURN (...)`:
+
+```
+alan_disi: [services/api/app/voice/intents.py, services/api/tests/unit/test_intents.py]
+RETURN (1: the fix is in services/api/app/voice/intents.py, outside the card's area)
+```
+
+A finding is never softened into an area request: a real defect inside the area is listed as
+before and counts. The line names files only, never a protected path as a wish (secrets, LKG,
+recovery roots, `docs/ROADMAP.md`, `docs/TEAM_PROTOCOL.md`, the lead's shared files): for
+those, write the finding and the lead decides. No such file, no line.
 **Your LAST message is all the cycle reads.** Wait for every command you started before you
 write the report; leave nothing running. If you are woken after the report all the same (a
 command you left running reports back), your new last message must END with the verdict line

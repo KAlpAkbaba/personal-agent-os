@@ -7,10 +7,21 @@
 
 .DESCRIPTION
   Input: a JSON-lines dump the lead takes READ-ONLY from production (run with -ShowQuery to
-  print the one SELECT). Two kinds of line:
+  print the three SELECTs). Three kinds of line:
 
     {"kind":"session","session_id":..,"provider":..,"updated_at":..,"last_utterance":{..}}
     {"kind":"audit","at":..,"metadata":{..}}
+    {"kind":"misheard","id":..,"heard_at":..,"sentence":..,"mode":..,"meant":.., ...}
+
+  A 'misheard' line is one row of the misheard notebook (ADR-0254, misheard_utterances): the
+  sentence the recogniser WROTE, in a paid session as well as a local one, and - once the
+  owner has answered - what he meant. It is proposed exactly as a 'session' line is, and
+  carries mode, engine, device_id, reason, resolved_intent, band and confidence; its status is
+  "owner_answered" with `meant` = his words when the row has an answer. The same sentence in
+  lines of either kind is ONE proposal (times_heard summed, the earliest day kept); an answer
+  is never lost to a line without one, and two different answers are both kept (`meant`, then
+  `meant_also`), never merged. intent / tool / application / device stay null even then: a
+  person maps the owner's words to them.
 
   What production keeps, and therefore what can be collected (measured on the code, 2026-10-01):
 
@@ -58,10 +69,12 @@ $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 if ($ShowQuery) {
+    # Three statements, each one read-only SELECT. The third reads the misheard notebook
+    # (ADR-0254) with every column of its CONTRACT, named as the table names them.
     $sql = @"
-select json_build_object('kind','session','session_id',id,'provider',provider,'updated_at',updated_at,'last_utterance',context_json->'last_utterance') from realtime_sessions where context_json->'last_utterance' is not null and updated_at >= now() - interval '$Days days'
-union all
+select json_build_object('kind','session','session_id',id,'provider',provider,'updated_at',updated_at,'last_utterance',context_json->'last_utterance') from realtime_sessions where context_json->'last_utterance' is not null and updated_at >= now() - interval '$Days days';
 select json_build_object('kind','audit','at',created_at,'metadata',metadata_json) from audit_events where action = 'voice_intent_resolved' and created_at >= now() - interval '$Days days';
+select json_build_object('kind','misheard','id',id,'heard_at',heard_at,'sentence',sentence,'mode',mode,'engine',engine,'device_id',device_id,'band',band,'confidence',confidence,'reason',reason,'resolved_intent',resolved_intent,'tool',tool,'session_id',session_id,'meant',meant,'answered_at',answered_at,'expires_at',expires_at) from misheard_utterances where heard_at >= now() - interval '$Days days' order by heard_at;
 "@
     Write-Output "-- READ-ONLY. Run on the Cloud Core's database with: psql -At -f <this file>  > stt-dump.jsonl"
     Write-Output "-- Then: collect-stt-corpus.ps1 -DumpPath stt-dump.jsonl"
@@ -163,6 +176,37 @@ $skipped = [ordered]@{ already_in_corpus = 0; no_sentence_kept = 0; unreadable_l
 $auditTurns = 0
 $byBand = [ordered]@{}
 $byLayer = [ordered]@{}
+$misheardRows = 0
+$misheardAnswered = 0
+$byReason = [ordered]@{}
+$byMode = [ordered]@{}
+
+# A notebook row's day is its UTC day, whatever offset the database's session wrote it in.
+function Get-UtcDay([object]$Value) {
+    $moment = [DateTimeOffset]::MinValue
+    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal
+    if ([DateTimeOffset]::TryParse([string]$Value, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$moment)) {
+        return $moment.ToUniversalTime().ToString("yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    return Get-Day $Value
+}
+
+# What a notebook line adds to a proposal. A 'session' proposal it joins gains what the notebook
+# knows (the first line's, kept). An answer is never lost to a line without one, and two
+# different answers are both kept - the first in `meant`, the rest in `meant_also` - never merged.
+function Add-Notebook($Proposal, $Row, [string]$Meant) {
+    if (-not $Proposal.Contains("mode")) {
+        foreach ($column in "mode", "engine", "device_id", "reason") { $Proposal[$column] = $Row.$column }
+        $Proposal["meant_also"] = @()
+    }
+    if (-not $Meant) { return }
+    if (-not $Proposal.meant) {
+        $Proposal.meant = $Meant
+        $Proposal.status = "owner_answered"
+    } elseif ($Proposal.meant -cne $Meant -and -not ($Proposal.meant_also -ccontains $Meant)) {
+        $Proposal.meant_also = @($Proposal.meant_also) + $Meant
+    }
+}
 
 foreach ($line in [System.IO.File]::ReadAllLines($dumpFull, $utf8)) {
     if (-not $line.Trim()) { continue }
@@ -179,24 +223,72 @@ foreach ($line in [System.IO.File]::ReadAllLines($dumpFull, $utf8)) {
         if ($byLayer.Contains($layer)) { $byLayer[$layer] += 1 } else { $byLayer[$layer] = 1 }
         continue
     }
-    if ($row.kind -ne "session") { $skipped.unreadable_lines += 1; continue }
+    $notebook = $row.kind -eq "misheard"
+    if ($notebook) {
+        # A notebook row: the sentence the recogniser wrote, in either mode, and - once the owner
+        # has answered - what he meant. Counted whether or not it becomes a proposal.
+        $misheardRows += 1
+        $reason = if ($row.reason) { [string]$row.reason } else { "unrecorded" }
+        $mode = if ($row.mode) { [string]$row.mode } else { "unrecorded" }
+        if ($byReason.Contains($reason)) { $byReason[$reason] += 1 } else { $byReason[$reason] = 1 }
+        if ($byMode.Contains($mode)) { $byMode[$mode] += 1 } else { $byMode[$mode] = 1 }
+        # The owner's words letter for letter; only a blank answer is no answer.
+        $meant = $null
+        if ($null -ne $row.meant -and ([string]$row.meant).Trim()) { $meant = [string]$row.meant; $misheardAnswered += 1 }
+        $sentence = if ($row.sentence) { ([string]$row.sentence).Trim() } else { "" }
+    } elseif ($row.kind -eq "session") {
+        $turn = $row.last_utterance
+        $sentence = if ($turn -and $turn.chat_question) { ([string]$turn.chat_question).Trim() } else { "" }
+    } else { $skipped.unreadable_lines += 1; continue }
 
-    $turn = $row.last_utterance
-    $sentence = if ($turn -and $turn.chat_question) { ([string]$turn.chat_question).Trim() } else { "" }
     if (-not $sentence) { $skipped.no_sentence_kept += 1; continue }
     if ($corpus.real.Contains($sentence)) { $skipped.already_in_corpus += 1; continue }
 
-    $day = Get-Day $turn.at
-    if (-not $day) { $day = Get-Day $row.updated_at }
+    if ($notebook) {
+        $day = Get-UtcDay $row.heard_at
+    } else {
+        $day = Get-Day $turn.at
+        if (-not $day) { $day = Get-Day $row.updated_at }
+    }
     if ($proposals.Contains($sentence)) {
+        # One sentence is one proposal, whatever kind of line names it.
         $known = $proposals[$sentence]
         $known.times_heard += 1
         if ($day -and (-not $known.heard_at -or $day -lt $known.heard_at)) { $known.heard_at = $day }
+        if ($notebook) { Add-Notebook $known $row $meant }
         continue
     }
     # A derived rendering production really heard is NOT "already there": it is confirmed.
     $confirms = $null
     if ($corpus.derived.ContainsKey($sentence)) { $confirms = $corpus.derived[$sentence]; $confirmed += 1 }
+    if ($notebook) {
+        $proposals[$sentence] = [ordered]@{
+            rendering       = $sentence
+            origin          = "real"
+            heard_at        = $day
+            times_heard     = 1
+            provider        = $null
+            mode            = $row.mode
+            engine          = $row.engine
+            device_id       = $row.device_id
+            reason          = $row.reason
+            resolved_intent = $row.resolved_intent
+            band            = $row.band
+            confidence      = $row.confidence
+            candidates      = @()
+            confirms_derived_case = $confirms
+            meant           = $null
+            meant_also      = @()
+            # What the corpus case needs, a person maps from the owner's words.
+            intent          = $null
+            tool            = $null
+            application     = $null
+            device          = $null
+            status          = "needs_owner_meaning"
+        }
+        Add-Notebook $proposals[$sentence] $row $meant
+        continue
+    }
     # Assigned as a statement: an empty array out of an if-EXPRESSION is written as {}.
     $candidates = @()
     if ($turn.candidates) { $candidates = @($turn.candidates) }
@@ -231,6 +323,7 @@ $report = [ordered]@{
     proposals    = @($proposals.Values)
     skipped      = $skipped
     audit        = [ordered]@{ turns = $auditTurns; by_band = $byBand; by_layer = $byLayer }
+    misheard     = [ordered]@{ rows = $misheardRows; by_reason = $byReason; by_mode = $byMode; answered = $misheardAnswered }
 }
 
 $outDir = Split-Path -Parent $outFull
@@ -240,4 +333,5 @@ if ($outDir -and -not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Dir
 Write-Output ("collect-stt-corpus: {0} proposal(s), {1} of them a derived case confirmed -> {2}" -f $proposals.Count, $confirmed, $outFull)
 Write-Output ("   skipped: {0} already in the corpus, {1} with no sentence kept, {2} unreadable line(s); {3} audit turn(s) counted" -f `
     $skipped.already_in_corpus, $skipped.no_sentence_kept, $skipped.unreadable_lines, $auditTurns)
+Write-Output ("   notebook: {0} misheard row(s), {1} answered by the owner" -f $misheardRows, $misheardAnswered)
 exit 0

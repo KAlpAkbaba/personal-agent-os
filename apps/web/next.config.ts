@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 /**
@@ -12,11 +13,45 @@ import type { NextConfig } from "next";
  * browser's WebRTC leg still goes straight to the realtime provider with the ephemeral
  * credential; only Cloud Core traffic goes through the rewrite. Unset -> no rewrite, the
  * loopback default applies (dev stack).
+ *
+ * In a PRODUCTION build the rewrite is evaluated by `next build` and stored in the routes
+ * manifest - `next start` does not re-read PAGENTOS_API_UPSTREAM. The image
+ * (infra/docker/web/Dockerfile, ADR "web on the Cloud Core") therefore takes the upstream
+ * as a build argument; it is the compose-internal name of the edge, never a secret.
  */
 const upstream = process.env.PAGENTOS_API_UPSTREAM?.replace(/\/+$/, "");
 
+/**
+ * The container image runs the traced "standalone" server: only the files the production
+ * server needs, not the whole workspace's node_modules. Opt-in (the image sets it) so the
+ * dev server and the quality gate's build are exactly what they were. The workspace's
+ * node_modules lives two directories up (pnpm), so that is the tracing root.
+ */
+const standalone = process.env.PAGENTOS_WEB_STANDALONE === "1";
+
+/**
+ * The dev server on the owner's PC is also opened from his phone over the tailnet
+ * (2026-10-03). Next blocks its dev scripts for any origin but localhost, and the page then
+ * hangs at "Oturum kontrol ediliyor..." with no error on screen. Allowed: the PC's tailnet
+ * address and its MagicDNS names, plus any extra names in PAGENTOS_WEB_DEV_ORIGINS
+ * (comma-separated). Development only: a production build ignores this setting.
+ */
+const devOrigins = [
+  "100.92.148.30",
+  "mail",
+  "*.ts.net",
+  ...(process.env.PAGENTOS_WEB_DEV_ORIGINS ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean),
+];
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  allowedDevOrigins: devOrigins,
+  ...(standalone
+    ? { output: "standalone" as const, outputFileTracingRoot: path.join(process.cwd(), "..", "..") }
+    : {}),
   async rewrites() {
     return upstream ? [{ source: "/api/:path*", destination: `${upstream}/:path*` }] : [];
   },
