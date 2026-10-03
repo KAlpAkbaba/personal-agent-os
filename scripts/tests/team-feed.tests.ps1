@@ -99,6 +99,14 @@ function New-Card {
     }
 }
 
+function New-DependentCard {
+    <# A card that waits for another (its area is src/<id>). #>
+    param([string]$Id, [string[]]$DependsOn)
+    $card = New-Card -Id $Id
+    $card["depends_on"] = @($DependsOn)
+    return $card
+}
+
 function ConvertTo-FeedObjects {
     <# Cards as the script reads them: through JSON, as a file would give them. #>
     param([object[]]$Cards)
@@ -389,6 +397,7 @@ Write-Host "the feeder, in a repository of its own, with a fake in place of the 
 
 $sandboxes = New-Object System.Collections.ArrayList
 $fakeApis = New-Object System.Collections.ArrayList
+$asyncFeeds = New-Object System.Collections.ArrayList
 
 # The fake: it does what the PLAN says (a JSON file the test wrote), and logs how it was started.
 #   (always)      team/lock.json, as the run finds it, is copied beside the log
@@ -405,6 +414,11 @@ $fakeApis = New-Object System.Collections.ArrayList
 #   silent        the run prints something that is not the result document
 #   fail_after    the run does everything above (the feed file is on disk), THEN fails
 #   hang_after    the run does everything above, then never ends: the feeder's deadline kills it
+#   outside_writes ABSOLUTE paths written while the run works: the running cycle's files in the
+#                 main checkout (its reports, a split file, a proposal) - not the run's own
+#   store_puts    { url, token, task }: ANOTHER WRITER creates that task in the store while the
+#                 run works (a PUT with expected_updated_at null, as a create is)
+#   hold_until    a path: the run waits for that file to exist (60 s hang guard) before it ends
 $fakeText = @'
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
@@ -455,6 +469,24 @@ if ((Get-Plan "limited_first") -and $earlier -eq 0) {
     exit 1
 }
 if (Get-Plan "silent") { [Console]::Out.Write("I could not do that."); exit 0 }
+foreach ($outside in @(Get-Plan "outside_writes" | Where-Object { $_ })) {
+    $folder = Split-Path -Parent ([string]$outside)
+    if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+    [System.IO.File]::WriteAllText([string]$outside, "the running cycle wrote this`n", $utf8)
+}
+foreach ($put in @(Get-Plan "store_puts" | Where-Object { $null -ne $_ })) {
+    $client = New-Object System.Net.WebClient
+    $client.Encoding = $utf8
+    $client.Headers.Add("Authorization", "Bearer " + [string]$put.token)
+    $client.Headers.Add("Content-Type", "application/json; charset=utf-8")
+    $body = ConvertTo-Json -InputObject ([ordered]@{ task = $put.task; expected_updated_at = $null }) -Depth 8 -Compress
+    [void]$client.UploadString([string]$put.url, "PUT", $body)
+}
+$hold = Get-Plan "hold_until"
+if ($hold) {
+    $until = [datetime]::UtcNow.AddSeconds(60)
+    while (-not (Test-Path -LiteralPath ([string]$hold)) -and [datetime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 200 }
+}
 
 $feedText = Get-Plan "feed_text"
 if ($null -ne $feedText -and $feedFile) {
@@ -527,10 +559,29 @@ function New-FeedSandbox {
     return [pscustomobject]@{ Root = $root; Work = $work; Runs = 0 }
 }
 
+# Whether the script under test has the feeder's own lock (ADR-0214 addendum, feeder-own-lock).
+# The path is handed over only then: the red run against the script without it must show that
+# script's own answer ("the lock is held", exit 3), not a parameter it does not know.
+$feedHasOwnLock = (Get-Command (Join-Path $repoRoot "scripts\team\feed.ps1")).Parameters.ContainsKey("FeederLockPath")
+
+function Get-FeedArguments {
+    <# The feeder's command line: `& script` inside -Command (the way an owner types it). #>
+    param($Sandbox, [string]$Machine, [string]$ExtraArguments, [string]$QueueUrl, [string]$QueueTokenFile, [string]$FeederLock)
+    return @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+        ("& '" + (Join-Path $Sandbox.Root "scripts\team\feed.ps1") + "' -FeedDate '$feedDate' -Machine '$Machine'" +
+        " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
+        (Join-Path $Sandbox.Work "fake-feed-claude.ps1") + "'" +
+        $(if ($QueueUrl) { " -QueueUrl '$QueueUrl' -QueueToken '$QueueTokenFile'" } else { "" }) +
+        $(if ($FeederLock -and $feedHasOwnLock) { " -FeederLockPath '$FeederLock'" } else { "" }) +
+        $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" }) + "; exit `$LASTEXITCODE")
+    )
+}
+
 function Invoke-Feed {
     param(
         $Sandbox, [hashtable]$Plan = @{}, [string]$Machine = "MAIL", [string]$ExtraArguments = "",
-        [string]$QueueUrl = "", [string]$QueueTokenFile = ""
+        [string]$QueueUrl = "", [string]$QueueTokenFile = "", [string]$FeederLock = ""
     )
     $root = $Sandbox.Root
     $Sandbox.Runs = [int]$Sandbox.Runs + 1
@@ -540,14 +591,7 @@ function Invoke-Feed {
     $env:PAGENTOS_FAKE_FEED_LOG = $log
     $env:PAGENTOS_FAKE_FEED_PLAN = $planPath
     try {
-        $arguments = @(
-            "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-            ("& '" + (Join-Path $root "scripts\team\feed.ps1") + "' -FeedDate '$feedDate' -Machine '$Machine'" +
-            " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
-            (Join-Path $Sandbox.Work "fake-feed-claude.ps1") + "'" +
-            $(if ($QueueUrl) { " -QueueUrl '$QueueUrl' -QueueToken '$QueueTokenFile'" } else { "" }) +
-            $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" }) + "; exit `$LASTEXITCODE")
-        )
+        $arguments = Get-FeedArguments -Sandbox $Sandbox -Machine $Machine -ExtraArguments $ExtraArguments -QueueUrl $QueueUrl -QueueTokenFile $QueueTokenFile -FeederLock $FeederLock
         $result = Invoke-NativeProcess -FilePath $powershell -Arguments $arguments -WorkingDirectory $root `
             -TimeoutSeconds 300 -SuccessExitCodes @(0, 1, 2, 3)
     }
@@ -979,12 +1023,14 @@ try {
     Write-Host "the queue and the lock on the Cloud Core (the cycle's fake listener)"
 
     function Start-FakeApi {
-        param([object[]]$Tasks = @(), $Lock = $null)
+        # -Extra: more of the listener's seed, as it is (`faults`).
+        param([object[]]$Tasks = @(), $Lock = $null, [hashtable]$Extra = @{})
         $work = Join-Path $env:TEMP ("pagentos-feedapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
         [void](New-Item -ItemType Directory -Force -Path $work)
         [void]$sandboxes.Add($work)
         $lockDocument = if ($null -ne $Lock) { $Lock } else { New-TeamLockReleased }
         $seed = [pscustomobject]@{ queue = (New-Queue -Tasks $Tasks); lock = $lockDocument }
+        foreach ($key in @($Extra.Keys)) { $seed | Add-Member -NotePropertyName $key -NotePropertyValue $Extra[$key] }
         [System.IO.File]::WriteAllText((Join-Path $work "seed.json"), (ConvertTo-Json -InputObject $seed -Depth 12), $utf8)
         $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
         $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
@@ -1058,8 +1104,342 @@ try {
         Assert-Equal -Expected 0 -Actual @((Get-FakeApiState -Api $api).reports.PSObject.Properties).Count -Because "no report in the store"
         Assert-True -Condition ($run.Said -match "stop\.flag") -Because "it says why: $($run.Said)"
     }
+
+    # ------------------------------------------------------------------ beside a running cycle
+    Write-Host ""
+    Write-Host "a live cycle of this machine holds the lock: the feeder's own lock, create-only writes (API mode)"
+
+    function New-LiveCycleLock {
+        <# The lock of a cycle of THIS machine that is running: its pid is this test's, alive. #>
+        return [pscustomobject]@{
+            held = $true; machine = "MAIL"; cycle_id = "d20261003"; pid = $PID
+            acquired_at = (Get-TeamTimestamp -Now ([datetime]::UtcNow.AddMinutes(-30)))
+        }
+    }
+
+    function Get-FeederLockPath { param($Box) return (Join-Path $Box.Work "feeder\team-feeder.lock") }
+
+    function Invoke-LiveFeed {
+        param($Box, $Api, [hashtable]$Plan = @{}, [string]$ExtraArguments = "")
+        return (Invoke-Feed -Sandbox $Box -Plan $Plan -QueueUrl $Api.Url -QueueTokenFile $Api.TokenFile -FeederLock (Get-FeederLockPath -Box $Box) -ExtraArguments $ExtraArguments)
+    }
+
+    function Get-Json { param($Value) return (ConvertTo-Json -InputObject $Value -Depth 12 -Compress) }
+
+    function Get-StoreTask {
+        param($State, [string]$Id)
+        $found = @($State.tasks | Where-Object { $null -ne $_ -and [string]$_.id -eq $Id })
+        if (@($found).Count -eq 0) { return $null }
+        return $found[0]
+    }
+
+    function Get-Worktrees {
+        <# The worktrees git knows of in the sandbox, the main one included. #>
+        param($Box)
+        return @((Invoke-SandboxGit -Root $Box.Root -Arguments @("worktree", "list", "--porcelain")) -split "`n" | Where-Object { $_ -match '^worktree ' })
+    }
+
+    function Assert-LockFreeLeftNothing {
+        <# The feeder's own lock file and its throwaway worktree are gone. #>
+        param($Box, [string]$Because)
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-FeederLockPath -Box $Box))) -Because "the feeder's own lock is released ($Because)"
+        Assert-Equal -Expected 1 -Actual @(Get-Worktrees -Box $Box).Count -Because "the throwaway worktree is removed ($Because): $((Get-Worktrees -Box $Box) -join '; ')"
+    }
+
+    $liveCards = @((New-Card -Id "card-a" -Area @("src/card-a")), (New-Card -Id "card-b" -Area @("src/card-b") -Row "browser-use, anywhere (order 2b)"))
+
+    Test-Case "lock-free 1: beside a live cycle of ours the feeder cuts its cards under ITS OWN lock - the cycle's lock is equal before and after, never posted" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $box = New-FeedSandbox
+        $lockBefore = Get-Json -Value (Get-FakeApiState -Api $api).lock
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "one lead run: $($run.Said)"
+        $state = Get-FakeApiState -Api $api
+        foreach ($id in @("card-a", "card-b")) {
+            Assert-Equal -Expected "approved" -Actual ([string](Get-StoreTask -State $state -Id $id).state) -Because "$id is in the store as approved: $($run.Said)"
+        }
+        Assert-Equal -Expected $lockBefore -Actual (Get-Json -Value $state.lock) -Because "the cycle's lock is the cycle's: holder, cycle_id, pid, acquired_at"
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-Equal -Expected 0 -Actual @($requests | Where-Object { $_ -match '^POST /v1/team/queue/lock ' }).Count -Because "the feeder neither took nor released the cycle's lock: $($requests -join '; ')"
+        Assert-True -Condition (([string]$run.Calls[0].cwd).ToLowerInvariant() -ne ([string]$box.Root).ToLowerInvariant() -and ([string]$run.Calls[0].cwd) -match '\\\.claude\\worktrees\\') -Because "the lead worked in a throwaway worktree, not where the cycle works: $($run.Calls[0].cwd)"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $box.Root "team\plans\feed-$feedDate-1.json")) -Because "the accepted feed file is kept in the main checkout"
+        Assert-LockFreeLeftNothing -Box $box -Because "a normal end"
+    }
+
+    Test-Case "lock-free 2: create-only - every PUT is a create (expected_updated_at null) of an id the store did not have; tasks in work are byte-equal, also when the feed names one" {
+        $inWork = @(
+            (New-Task -Id "work-progress" -State "in_progress" -Area @("src/wp")),
+            (New-Task -Id "work-inspecting" -State "inspecting" -Area @("src/wi")),
+            (New-Task -Id "work-returned" -State "returned" -Area @("src/wr")))
+        foreach ($plan in @(
+                @{ Cards = $liveCards; Written = "card-a,card-b" },
+                @{ Cards = @((New-Card -Id "card-a" -Area @("src/card-a")), (New-Card -Id "work-progress" -Area @("src/elsewhere"))); Written = "" })) {
+            $api = Start-FakeApi -Tasks $inWork -Lock (New-LiveCycleLock)
+            $box = New-FeedSandbox
+            $before = Get-FakeApiState -Api $api
+            $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $plan.Cards) } -ExtraArguments "-MinRunnable 6"
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+            $after = Get-FakeApiState -Api $api
+            foreach ($id in @("work-progress", "work-inspecting", "work-returned")) {
+                Assert-Equal -Expected (Get-Json -Value (Get-StoreTask -State $before -Id $id)) -Actual (Get-Json -Value (Get-StoreTask -State $after -Id $id)) -Because "$id is a task in work: never written"
+            }
+            $puts = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match '^PUT /v1/team/queue/tasks/' })
+            $ids = @($puts | ForEach-Object { ($_ -split ' ')[1] -replace '^/v1/team/queue/tasks/', '' })
+            Assert-Equal -Expected $plan.Written -Actual ($ids -join ",") -Because "only new ids are sent: $($puts -join '; ') / $($run.Report)"
+            Assert-Equal -Expected @($plan.Written -split ',' | Where-Object { $_ }).Count -Actual @($puts | Where-Object { $_ -match ' 200$' }).Count -Because "each as a create the store took: $($puts -join '; ')"
+            if (-not $plan.Written) {
+                Assert-True -Condition ($run.Report -match "the id is already in the queue" -and $run.Report -match "work-progress") -Because "the file is refused whole, and says why: $($run.Report)"
+            }
+        }
+        # The body of a create: expected_updated_at is null. The listener answers 409 to a create
+        # that carries a version (a task it does not have) - the 200s above prove the null.
+    }
+
+    Test-Case "lock-free 3: the running cycle's writes in the main checkout neither refuse the feed nor are blamed on it; the run's OWN stray write still refuses it whole" {
+        $cases = @(
+            @{ Name = "the cycle writes its report, a split and a proposal"; Outside = $true; Stray = ""; Accepted = $true },
+            @{ Name = "the lead run writes a stray file where it works"; Outside = $false; Stray = "src/area/README.txt"; Accepted = $false },
+            @{ Name = "both at once"; Outside = $true; Stray = "docs/notes.md"; Accepted = $false }
+        )
+        foreach ($case in $cases) {
+            $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+            $box = New-FeedSandbox
+            $plan = @{ feed_text = (Get-FeedText -Cards $liveCards) }
+            if ($case.Outside) {
+                $plan["outside_writes"] = @(
+                    (Join-Path $box.Root "team\reports\d20261003\worker-task-one.md"),
+                    (Join-Path $box.Root "team\plans\d20261003-split-task-one.json"),
+                    (Join-Path $box.Root "team\proposals\2026-10-03-an-idea.md"))
+            }
+            if ($case.Stray) { $plan["stray"] = $case.Stray }
+            $run = Invoke-LiveFeed -Box $box -Api $api -Plan $plan
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "$($case.Name): $($run.Said)"
+            $state = Get-FakeApiState -Api $api
+            $queued = (@($state.tasks | ForEach-Object { [string]$_.id }) -join ",")
+            if ($case.Accepted) {
+                Assert-Equal -Expected "task-one,card-a,card-b" -Actual $queued -Because "$($case.Name): the feed is accepted: $($run.Report)"
+            }
+            else {
+                Assert-Equal -Expected "task-one" -Actual $queued -Because "$($case.Name): refused whole: $($run.Report)"
+                Assert-True -Condition ($run.Report -match "reddedildi" -and $run.Report -match [regex]::Escape($case.Stray)) -Because "$($case.Name): the run's own write is named: $($run.Report)"
+            }
+            Assert-True -Condition ($run.Report -notmatch "team/reports/d20261003" -and $run.Report -notmatch "split-task-one" -and $run.Report -notmatch "an-idea") -Because "$($case.Name): the cycle's files are not the run's: $($run.Report)"
+            if ($case.Outside) {
+                Assert-True -Condition (Test-Path -LiteralPath (Join-Path $box.Root "team\reports\d20261003\worker-task-one.md")) -Because "the cycle's files are left as they are"
+            }
+            Assert-LockFreeLeftNothing -Box $box -Because $case.Name
+        }
+    }
+
+    Test-Case "lock-free 4: an id another writer created DURING the run is not written - its version stands, the report names it; a card that does not depend on it is written, one that does is not" {
+        foreach ($variant in @(
+                @{ Cards = $liveCards; Written = "card-b" },
+                @{ Cards = @((New-Card -Id "card-a" -Area @("src/card-a")), (New-DependentCard -Id "card-b" -DependsOn "card-a")); Written = "" })) {
+            $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+            $box = New-FeedSandbox
+            $theirs = New-Task -Id "card-a" -Area @("src/theirs")
+            $theirs.title = "the second writer's card-a"
+            $plan = @{ feed_text = (Get-FeedText -Cards $variant.Cards); store_puts = @(@{ url = "$($api.Url)/v1/team/queue/tasks/card-a"; token = "test-token"; task = $theirs }) }
+            $run = Invoke-LiveFeed -Box $box -Api $api -Plan $plan
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+            $state = Get-FakeApiState -Api $api
+            Assert-Equal -Expected (Get-Json -Value $theirs) -Actual (Get-Json -Value (Get-StoreTask -State $state -Id "card-a")) -Because "the second writer's card-a stands: $($run.Report)"
+            $mine = @($state.tasks | Where-Object { @("card-b") -contains [string]$_.id } | ForEach-Object { [string]$_.id }) -join ","
+            Assert-Equal -Expected $variant.Written -Actual $mine -Because "what was written of the rest: $($run.Report)"
+            Assert-True -Condition ($run.Report -match "card-a" -and $run.Report -match "yazılmadı") -Because "the report names the card that was not written: $($run.Report)"
+            Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match '^PUT /v1/team/queue/tasks/card-a 200$' }).Count -Because "card-a was stored once - by its other writer"
+            Assert-LockFreeLeftNothing -Box $box -Because "a card dropped"
+        }
+    }
+
+    Test-Case "lock-free 5: a title another writer queued DURING the run refuses the feed whole - judged against the FRESH queue, not the one read at the start" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $box = New-FeedSandbox
+        $theirs = New-Task -Id "other-one" -Area @("src/other")
+        $theirs.title = "the card card-b"
+        $plan = @{ feed_text = (Get-FeedText -Cards $liveCards); store_puts = @(@{ url = "$($api.Url)/v1/team/queue/tasks/other-one"; token = "test-token"; task = $theirs }) }
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan $plan
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "task-one,other-one" -Actual (@($state.tasks | ForEach-Object { [string]$_.id }) -join ",") -Because "nothing of the feed is written: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "is already the title of other-one") -Because "the fresh judge says why: $($run.Report)"
+        Assert-LockFreeLeftNothing -Box $box -Because "a refused feed"
+    }
+
+    Test-Case "lock-free 6: two feeders at once - ONE lead run, the second exits 3 with no report; a dead feeder's lock is taken over and said; the lock is gone after every end" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $box = New-FeedSandbox
+        $release = Join-Path $box.Work "release-the-first"
+        $firstLog = Join-Path $box.Work "fake-first.log"
+        $planPath = Join-Path $box.Work "plan-first.json"
+        [System.IO.File]::WriteAllText($planPath, (ConvertTo-Json -InputObject ([pscustomobject]@{ feed_text = (Get-FeedText -Cards $liveCards); hold_until = $release }) -Depth 8), $utf8)
+        $env:PAGENTOS_FAKE_FEED_LOG = $firstLog
+        $env:PAGENTOS_FAKE_FEED_PLAN = $planPath
+        try {
+            $arguments = Get-FeedArguments -Sandbox $box -Machine "MAIL" -ExtraArguments "" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile -FeederLock (Get-FeederLockPath -Box $box)
+            $first = Start-Process -FilePath $powershell -ArgumentList (ConvertTo-NativeArgumentLine -Arguments $arguments) -PassThru -WindowStyle Hidden `
+                -RedirectStandardOutput (Join-Path $box.Work "first.out") -RedirectStandardError (Join-Path $box.Work "first.err")
+            [void]$asyncFeeds.Add($first)
+            $handle = $first.Handle
+        }
+        finally {
+            Remove-Item Env:\PAGENTOS_FAKE_FEED_LOG -ErrorAction SilentlyContinue
+            Remove-Item Env:\PAGENTOS_FAKE_FEED_PLAN -ErrorAction SilentlyContinue
+        }
+        try {
+            $deadline = [datetime]::UtcNow.AddSeconds(120)
+            while (-not (Test-Path -LiteralPath $firstLog)) {
+                if ([datetime]::UtcNow -gt $deadline -or $first.HasExited) { throw "the first feeder's lead run did not start: $([System.IO.File]::ReadAllText((Join-Path $box.Work 'first.out')))" }
+                Start-Sleep -Milliseconds 200
+            }
+            $second = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards @((New-Card -Id "card-c" -Area @("src/card-c")))) }
+        }
+        finally {
+            [System.IO.File]::WriteAllText($release, "go", $utf8)
+            if (-not $first.WaitForExit(180000)) { Stop-TeamProcessTree -ProcessId $first.Id; throw "the first feeder did not end within its guard" }
+        }
+        Assert-Equal -Expected 3 -Actual $second.ExitCode -Because "the second feeder stops: $($second.Said)"
+        Assert-True -Condition ($second.Said -match "feeder's own lock") -Because "and says why: $($second.Said)"
+        Assert-Equal -Expected 0 -Actual @($second.Calls).Count -Because "the second started no lead run"
+        Assert-Equal -Expected 1 -Actual @(Get-Content -LiteralPath $firstLog -Encoding UTF8 | Where-Object { $_.Trim() }).Count -Because "exactly one lead run in all"
+        Assert-Equal -Expected 0 -Actual $first.ExitCode -Because "the first ended well: $([System.IO.File]::ReadAllText((Join-Path $box.Work 'first.out')))"
+        $report = [System.IO.File]::ReadAllText((Join-Path $box.Root "team\reports\feed-$feedDate.md"), [System.Text.Encoding]::UTF8)
+        Assert-Equal -Expected 1 -Actual @([regex]::Matches($report, '(?m)^## ')).Count -Because "one section - the first feeder's; the second wrote none: $report"
+        Assert-True -Condition ($report -notmatch "card-c") -Because "the second feeder's card is nowhere"
+        Assert-LockFreeLeftNothing -Box $box -Because "a normal end, the second feeder beside it"
+
+        # A lock left by a feeder that died: taken over, and said.
+        $dead = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\cmd.exe") -ArgumentList "/c exit 0" -PassThru -WindowStyle Hidden
+        if (-not $dead.WaitForExit(30000)) { throw "cmd did not end" }
+        $lockFile = Get-FeederLockPath -Box $box
+        [System.IO.File]::WriteAllText($lockFile, (Get-Json -Value ([ordered]@{ pid = $dead.Id; machine = "MAIL"; acquired_at = (Get-TeamTimestamp) })), $utf8)
+        $taken = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards @((New-Card -Id "card-d" -Area @("src/card-d")))) } -ExtraArguments "-MinRunnable 10"
+        Assert-Equal -Expected 0 -Actual $taken.ExitCode -Because $taken.Said
+        Assert-Equal -Expected 1 -Actual @($taken.Calls).Count -Because "the dead feeder's lock does not stop a run: $($taken.Said)"
+        Assert-True -Condition ($taken.Report -match "besleyici kilidi devralındı" -and $taken.Report -match "pid $($dead.Id)") -Because "and the report says it was taken over: $($taken.Report)"
+        Assert-LockFreeLeftNothing -Box $box -Because "after a takeover"
+
+        # The two other ends: a refused feed, and a lead run that fails.
+        $refused = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards); stray = "docs/notes.md" } -ExtraArguments "-MinRunnable 10"
+        Assert-True -Condition ($refused.Report -match "reddedildi") -Because $refused.Report
+        Assert-LockFreeLeftNothing -Box $box -Because "a refused feed"
+        $failed = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards @((New-Card -Id "card-e" -Area @("src/card-e")))); fail_after = $true } -ExtraArguments "-MinRunnable 10"
+        Assert-True -Condition ($failed.Report -match "lead koşusu: başarısız") -Because $failed.Report
+        Assert-LockFreeLeftNothing -Box $box -Because "a lead run that failed"
+    }
+
+    Test-Case "lock-free 7: no idea row beside a running cycle - the roadmap is byte-equal, no commit, no Edit, and the report says why" {
+        $api = Start-FakeApi -Tasks @((New-ApprovedIdea -Id "idea-one"), (New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $box = New-FeedSandbox
+        $head = Invoke-SandboxGit -Root $box.Root -Arguments @("rev-parse", "HEAD")
+        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $box.Root "docs\ROADMAP.md"))
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards); roadmap_rows = @($ideaRow) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 0 -Actual @($run.Calls[0].ideas).Count -Because "the run is not asked for the row"
+        Assert-True -Condition (([string]$run.Calls[0].tools).Split(",") -notcontains "Edit") -Because "and cannot edit: $($run.Calls[0].tools)"
+        Assert-Equal -Expected ([System.Convert]::ToBase64String($bytes)) -Actual ([System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $box.Root "docs\ROADMAP.md")))) -Because "the roadmap is byte-equal"
+        Assert-Equal -Expected $head -Actual $run.Head -Because "no commit in the checkout a running cycle works from"
+        Assert-True -Condition ($run.Report -match "onaylanan fikir satırı bu koşuda yazılmadı" -and $run.Report -match "döngü çalışıyor") -Because "the report says why: $($run.Report)"
+        Assert-Equal -Expected "approved" -Actual ([string](Get-StoreTask -State (Get-FakeApiState -Api $api) -Id "card-a").state) -Because "the cards are still cut"
+    }
+
+    Test-Case "lock-free 8: the report of a run beside the cycle is a file, and is NOT posted - the Onay Merkezi keeps the cycle's" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $box = New-FeedSandbox
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-True -Condition ($run.Report -match "card-a" -and $run.Report -match "kuyruğa eklendi") -Because "the report file names the cards: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match '^POST /v1/team/queue/reports ' }).Count -Because "no report posted: $((Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-Equal -Expected 0 -Actual @((Get-FakeApiState -Api $api).reports.PSObject.Properties).Count -Because "none in the store"
+    }
+
+    Test-Case "lock-free 9: what is unchanged - a live cycle's lock in FILE mode, and another machine's fresh lock in API mode, still stop it (exit 3)" {
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $run = Invoke-Feed -Sandbox $box -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) } -FeederLock (Get-FeederLockPath -Box $box)
+        Assert-Equal -Expected 3 -Actual $run.ExitCode -Because "file mode has one writer, the lock's holder: $($run.Said)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
+        Assert-True -Condition ($run.Said -match "the lock is held by MAIL") -Because $run.Said
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-FeederLockPath -Box $box))) -Because "the feeder's own lock is an API-mode thing"
+        $other = New-TeamLock -Machine "GMKADIRAKBABA" -CycleId "office" -Now ([datetime]::UtcNow.AddHours(-1))
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock $other
+        $box = New-FeedSandbox
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) }
+        Assert-Equal -Expected 3 -Actual $run.ExitCode -Because "two machines' feeders are not serialised by a local lock: $($run.Said)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
+    }
+
+    Test-Case "lock-free 10: a store that stops answering at the re-read - nothing is written, the feed file is left, exit non-zero, the feeder's lock released" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock) -Extra @{ faults = [pscustomobject]@{ queue_get_after = 1 } }
+        $box = New-FeedSandbox
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) }
+        Assert-True -Condition ($run.ExitCode -ne 0) -Because "a failed feed: $($run.Said)"
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "the run happened: $($run.Said)"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match '^PUT ' }).Count -Because "nothing was written: $((Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $box.Root "team\plans\feed-$feedDate-1.json")) -Because "the feed file stays on disk"
+        Assert-True -Condition ($run.Report -match "yeniden okunamadı") -Because "the report says so: $($run.Report)"
+        Assert-LockFreeLeftNothing -Box $box -Because "a store that went away"
+    }
+
+    Test-Case "lock-free 11: the stop flag beside a live cycle - nothing starts, the flag is left, no lock file" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $box = New-FeedSandbox
+        $flag = Join-Path $box.Root "team\stop.flag"
+        [System.IO.File]::WriteAllText($flag, "stop`n", $utf8)
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
+        Assert-True -Condition (Test-Path -LiteralPath $flag) -Because "the flag is the cycle's"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-FeederLockPath -Box $box))) -Because "no lock was taken"
+    }
+
+    Test-Case "lock-free 12: -DryRun beside a live cycle prints the lock-free plan and writes nothing - no lock file, no worktree, only GETs" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock (New-LiveCycleLock)
+        $box = New-FeedSandbox
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) } -ExtraArguments "-DryRun"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-True -Condition ($run.StdOut -match "lock-free" -and $run.StdOut -match "would start") -Because "it says which path it would take: $($run.StdOut)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-FeederLockPath -Box $box))) -Because "no lock file"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $box.Root ".claude\worktrees"))) -Because "no worktree"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -notmatch '^GET ' }).Count -Because "only GETs: $((Get-FakeApiRequests -Api $api) -join '; ')"
+    }
+
+    Test-Case "lock-free writes: a create the store answers 409 drops that card and every card that depends on it; the others are written, in dependency order" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "card-a" -Area @("src/theirs")))
+        $store = New-TeamApiStore -Url $api.Url -TokenFile $api.TokenFile
+        $cards = ConvertTo-FeedObjects -Cards @(
+            (New-DependentCard -Id "card-d" -DependsOn "card-c"),
+            (New-Card -Id "card-a" -Area @("src/card-a")),
+            (New-DependentCard -Id "card-b" -DependsOn "card-a"),
+            (New-Card -Id "card-c" -Area @("src/card-c")))
+        $made = @(ConvertTo-TeamFeedTasks -Feed $cards -RoadmapRows @(Get-TeamRoadmapRows -Text $roadmapFixture) -Date $feedDate)
+        $before = Get-Json -Value (Get-StoreTask -State (Get-FakeApiState -Api $api) -Id "card-a")
+        $saved = Save-TeamFeedCreates -Store $store -Tasks @($made | ForEach-Object { $_.Task })
+        Assert-Equal -Expected "card-c,card-d" -Actual (@($saved.Written) -join ",") -Because "the cards nobody took, a dependency before its dependant"
+        Assert-Equal -Expected "card-a,card-b" -Actual (@($saved.Dropped | ForEach-Object { $_.Id }) -join ",") -Because "the taken id and the card that waits for it"
+        Assert-True -Condition ([string]$saved.Failed -eq "") -Because "no failure: $($saved.Failed)"
+        Assert-Equal -Expected $before -Actual (Get-Json -Value (Get-StoreTask -State (Get-FakeApiState -Api $api) -Id "card-a")) -Because "the store's card-a is not overwritten"
+        $puts = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match '^PUT ' })
+        Assert-Equal -Expected "PUT /v1/team/queue/tasks/card-a 409|PUT /v1/team/queue/tasks/card-c 200|PUT /v1/team/queue/tasks/card-d 200" -Actual (($puts | Sort-Object) -join "|") -Because"one create each, card-b never sent: $($puts -join '; ')"
+        Assert-True -Condition ([array]::IndexOf($puts, "PUT /v1/team/queue/tasks/card-c 200") -lt [array]::IndexOf($puts, "PUT /v1/team/queue/tasks/card-d 200")) -Because "card-c before card-d: $($puts -join '; ')"
+    }
+
+    Test-Case "lock-free judge: the cards whose id another writer created since the first read are dropped with their dependants; the rest are kept in order" {
+        $first = New-Queue -Tasks @((New-Task -Id "task-one"))
+        $fresh = New-Queue -Tasks @((New-Task -Id "task-one"), (New-Task -Id "card-a" -Area @("src/theirs")))
+        $cards = ConvertTo-FeedObjects -Cards @(
+            (New-Card -Id "card-a"), (New-DependentCard -Id "card-b" -DependsOn "card-a"),
+            (New-DependentCard -Id "card-c" -DependsOn "card-b"), (New-Card -Id "card-d"))
+        $kept = Select-TeamFeedFresh -Feed $cards -Before $first -Fresh $fresh
+        Assert-Equal -Expected "card-d" -Actual (@($kept.Feed | ForEach-Object { $_.id }) -join ",") -Because "only what nobody took and nothing taken waits for"
+        Assert-Equal -Expected "card-a,card-b,card-c" -Actual (@($kept.Dropped | ForEach-Object { $_.Id }) -join ",") -Because "the taken id, then its dependants"
+        $none = Select-TeamFeedFresh -Feed $cards -Before $first -Fresh $first
+        Assert-Equal -Expected 4 -Actual @($none.Feed).Count -Because "nothing taken: nothing dropped"
+    }
 }
 finally {
+    foreach ($feed in $asyncFeeds) { try { if (-not $feed.HasExited) { Stop-TeamProcessTree -ProcessId $feed.Id } } catch { } }
     foreach ($api in $fakeApis) { try { if (-not $api.HasExited) { $api.Kill() } } catch { } }
     foreach ($work in $sandboxes) {
         if (-not (Test-Path -LiteralPath $work)) { continue }
