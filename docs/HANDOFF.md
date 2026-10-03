@@ -19,6 +19,11 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 pin = RELEASE (Danışman pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`7a6531ef`). QUALIFICATION Stage 50.
 Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK. SIRADAKİ entegrasyon: integrate/d20261003
 (döngünün onaylı işleri + branch-guards-runner + model-policy-office-ui).**
+**KAPIDA (Danışman, 2026-10-03 ~21:00 yerel): ONBİRİNCİ ENTEGRASYON, dal `gate/d20261003-6` (worktree `.claude/worktrees/gate14`) =
+lead dalı + integrate/d20261003 (döngünün onaylı 17 işi: ekip panosu, model seçici, koruyucu testler, ölçüm sayfası, Dene listesi,
+test sırası, ...) + `lead/board-wiring` (koşular panoya ulaşır, rol metni). Taslaklar ADR-0273..0282 + ek'ler. Ofis çakışmaları
+(model seçici ile canlı ofis) iki taraf korunarak çözüldü; ofis testleri 110/110; koruma seti 2031 + yeni birim dosyaları. Yeşilse
+hemen yayın + pin.**
 **DEV KABUĞU: ev PC'sindeki `next dev` (:3000) ana kopyanın dal değişimlerinde bozulabiliyor (telefonda 'Oturum kontrol ediliyor'
 takılı, web.err.log'da 'Blocked cross-origin'). Yeniden başlatma: süreç ağacını durdur, `scripts/voice/start-web-voice.ps1 -PnpmPath
 C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd` Start-Process ile, çıktılar %LOCALAPPDATA%/PagentOS/web-shell. Kalıcı adres sunucudaki.**

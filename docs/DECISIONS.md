@@ -23839,3 +23839,13 @@ of `runs.log` (`waited_s` per role and kind) and the gate's `WaitSeconds` and to
 gate's total stays within ~20 % of its time alone and runs rarely wait more than a few minutes,
 keep the seats (or raise again); if `heavy` waits dominate, the number to change is the seats, not
 the capacity - the capacity is the machine's.
+
+**At merge (the Proje Yöneticisi, integration d20261003, eleventh) - ADR-0281.** Approved at the fourth
+inspection (team-board-inspector-4) after the Proje Yöneticisi made the main.py wiring (the real
+application serves the board; the test asks it by request, 401/404) and closed the third inspection's
+findings (a `since` at the calendar's edge is 422, not 500; the PostgreSQL tests on the real wiring).
+The runs reach the board (`lead/board-wiring`): `Start-TeamRun -Environment` gives each run
+`PAGENTOS_TEAM_SEAT` (its role; a worker the smallest free `worker-N` for its life), `PAGENTOS_TEAM_TASK`,
+and with `-QueueUrl` the address and the token file's PATH (never the token); the seat is not written to
+the status document. The role text of this ADR is in the five role files. team-cycle 215/215, team-feed
+80/80; mutations RED (no seat; no token file path).
