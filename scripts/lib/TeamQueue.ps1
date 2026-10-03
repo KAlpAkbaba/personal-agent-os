@@ -762,7 +762,10 @@ function Test-TeamDuty {
 
         # The value as written: Get-TeamProperty would unroll a one-entry list into its entry.
         $grantProperty = $item.PSObject.Properties["grant"]
-        $grantValue = if ($null -ne $grantProperty) { $grantProperty.Value } else { $null }
+        # NOT `$grantValue = if (...) { $grantProperty.Value }`: an if-expression's output is
+        # enumerated, so a one-entry list came out as its entry and was refused as "not a list".
+        $grantValue = $null
+        if ($null -ne $grantProperty) { $grantValue = $grantProperty.Value }
         if ($action -ne "grant_and_return") {
             if ($null -ne $grantValue -and -not ($grantValue -is [array] -and @($grantValue).Count -eq 0)) {
                 [void]$problems.Add("${label}: a grant goes only with grant_and_return")
