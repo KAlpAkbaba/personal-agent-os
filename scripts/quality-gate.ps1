@@ -9,7 +9,23 @@
 
 # -E2E additionally runs the M1 device end-to-end test (opens/closes Notepad
 # in the interactive session; not suitable for headless CI).
-param([switch]$Fast, [switch]$E2E)
+#
+# Test queue (the "test sirasi", scripts/lib/TeamTestSlots.ps1): before each HEAVY step the gate
+# asks the machine's queue for the step's kinds (database / desktop / heavy), WAITS until
+# ONAY - asking every -TestSlotPollSeconds, printing the BEKLE line once a minute - and holds
+# the slot for that step only. The gate goes ahead of every waiting agent, never ahead of a
+# run already going. Its wait is the WaitSeconds column of the summary. -NoTestSlots runs
+# the gate as before, asking nothing. -TestSlotStore is the queue's folder (tests);
+# -StepList <file.ps1> replaces the built-in steps with the file's own Invoke-Step calls
+# (tests of the gate's step machinery: nothing real runs).
+param(
+  [switch]$Fast,
+  [switch]$E2E,
+  [switch]$NoTestSlots,
+  [string]$TestSlotStore = "",
+  [int]$TestSlotPollSeconds = 20,
+  [string]$StepList = ""
+)
 
 # "Continue", not "Stop": docker compose, alembic and next write progress to
 # stderr; under output redirection PS 5.1 would turn those lines into
@@ -39,10 +55,31 @@ $powershell5 = Resolve-Tool "powershell" @("C:\Windows\System32\WindowsPowerShel
 $results = New-Object System.Collections.ArrayList
 $failed = $false
 
+# The library sets StrictMode for its own sake; this script was written without it.
+. (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")
+Set-StrictMode -Off
+$script:SlotStore = if ($TestSlotStore) { $TestSlotStore } else { Get-TestSlotDefaultStore }
+$script:SlotTask = "gate:" + (Split-Path -Leaf $repoRoot)
+
 function Invoke-Step {
-  param([string]$Name, [scriptblock]$Action)
+  # -Kinds: the test-queue kinds this step needs (empty = a light step, no slot).
+  param([string]$Name, [scriptblock]$Action, [string[]]$Kinds = @())
   Write-Host ""
   Write-Host "=== $Name ===" -ForegroundColor Cyan
+  $waited = 0
+  $ticket = $null
+  if (@($Kinds).Count -gt 0 -and -not $NoTestSlots) {
+    try {
+      $grant = Wait-TestSlotGrant -Store $script:SlotStore -Kind $Kinds -Task $script:SlotTask -Role "gate" -What $Name -PollSeconds $TestSlotPollSeconds
+      $waited = $grant.WaitedSeconds
+      [void](Start-TestSlotRun -Store $script:SlotStore -Ticket $grant.Ticket -HolderPid $PID)
+      $ticket = $grant.Ticket
+      Write-Host "TEST SIRASI: ONAY $($grant.Ticket) ($($Kinds -join ',')) after $waited s" -ForegroundColor DarkGray
+    } catch {
+      # The queue is a courtesy between runs, not a gate step: a broken queue never fails the gate.
+      Write-Host "TEST SIRASI: the queue failed ($($_.Exception.Message)); the step runs without a slot" -ForegroundColor Yellow
+    }
+  }
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   $ok = $false
   try {
@@ -50,14 +87,35 @@ function Invoke-Step {
     $ok = $true
   } catch {
     Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
+  } finally {
+    if ($ticket) {
+      try { Complete-TestSlotRun -Store $script:SlotStore -Ticket $ticket -ExitCode $(if ($ok) { "0" } else { "1" }) }
+      catch { Write-Host "TEST SIRASI: release failed ($($_.Exception.Message)); the slot frees when the gate ends" -ForegroundColor Yellow }
+    }
   }
   $sw.Stop()
   [void]$script:results.Add([pscustomobject]@{
     Step = $Name
     Result = $(if ($ok) { "PASS" } else { "FAIL" })
     Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+    WaitSeconds = $waited
   })
   if (-not $ok) { $script:failed = $true }
+}
+
+function Exit-WithSummary {
+  Write-Host ""
+  Write-Host "=== Quality gate summary ===" -ForegroundColor Cyan
+  $script:results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+  $totalWait = 0
+  foreach ($r in $script:results) { $totalWait += $r.WaitSeconds }
+  Write-Host "Test queue wait, total: $totalWait s"
+  if ($script:failed) {
+    Write-Host "QUALITY GATE: FAIL" -ForegroundColor Red
+    exit 1
+  }
+  Write-Host "QUALITY GATE: PASS" -ForegroundColor Green
+  exit 0
 }
 
 function Assert-ExitCode {
@@ -74,6 +132,11 @@ function Find-Dotnet {
     }
   }
   throw "dotnet SDK not found"
+}
+
+if ($StepList) {
+  . $StepList
+  Exit-WithSummary
 }
 
 # ---------------------------------------------------------------- fast checks
@@ -177,7 +240,7 @@ Invoke-Step "Other services lint (ruff)" {
   }
 }
 
-Invoke-Step "API unit tests" {
+Invoke-Step "API unit tests" -Kinds heavy {
   if (-not $uv) { throw "uv not found" }
   Push-Location $apiRoot
   try {
@@ -199,7 +262,7 @@ Invoke-Step "API unit tests" {
 # eight lines on a green run, measured.
 $script:DotnetTestLogger = "console;verbosity=minimal"
 
-Invoke-Step "Windows agent build + tests" {
+Invoke-Step "Windows agent build + tests" -Kinds heavy {
   $dotnet = Find-Dotnet
   $env:DOTNET_ROOT = Split-Path -Parent $dotnet
   Push-Location (Join-Path $repoRoot "devices/windows-agent")
@@ -242,13 +305,13 @@ Invoke-Step "Staged-update qualification (real candidate binary, sandbox engine)
 # ---------------------------------------------------------------- full checks
 
 if (-not $Fast) {
-  Invoke-Step "Dev stack up (docker compose)" {
+  Invoke-Step "Dev stack up (docker compose)" -Kinds database {
     if (-not $powershell5) { throw "powershell.exe not found" }
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\dev-up.ps1")
     Assert-ExitCode "dev-up.ps1"
   }
 
-  Invoke-Step "Alembic upgrade head" {
+  Invoke-Step "Alembic upgrade head" -Kinds database {
     Push-Location $apiRoot
     try {
       & $uv run alembic upgrade head
@@ -256,7 +319,7 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
-  Invoke-Step "API integration tests" {
+  Invoke-Step "API integration tests" -Kinds database,heavy {
     Push-Location $apiRoot
     try {
       & $uv run pytest tests/integration -q -m integration
@@ -369,7 +432,7 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
-  Invoke-Step "Browser agent lint + tests" {
+  Invoke-Step "Browser agent lint + tests" -Kinds heavy {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\browser")
     try {
@@ -422,7 +485,7 @@ if (-not $Fast) {
     Assert-ExitCode "cloud release tests"
   }
 
-  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" {
+  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" -Kinds heavy {
     # M18.4 (spec §6): the idle colour is brought up on the new sha, verified, switched to,
     # the old colour drained; rollback is the switch in reverse. Proven under a fake docker
     # that knows the two colours and the edge; the first real handoff is the next release.
@@ -480,13 +543,13 @@ if (-not $Fast) {
   }
 
   if ($E2E) {
-    Invoke-Step "M1 device E2E (Notepad)" {
+    Invoke-Step "M1 device E2E (Notepad)" -Kinds desktop {
       & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\e2e-m1-device.ps1") -SkipBuild
       Assert-ExitCode "e2e-m1-device.ps1"
     }
   }
 
-  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
+  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" -Kinds heavy {
     # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
     # fake in place of the model and a git repository made for the test.
     if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
@@ -523,6 +586,15 @@ if (-not $Fast) {
     Assert-ExitCode "team-area tests"
   }
 
+  Invoke-Step "Agent team test queue (PS5.1, real wrapper processes, temp stores)" {
+    # The owner's idea of 2026-10-02 (ONAY / BEKLE before a heavy run): the queue's rules with
+    # real wrapper processes and a store per case, and this gate's own use of it (-StepList).
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-test-slots.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-test-slots tests"
+  }
+
   Invoke-Step "Agent team integrate step (PS5.1 + git, fake gate, no model)" {
     # ADR-0260: scripts/team/integrate.ps1 gates a merged integration branch and puts exactly
     # the gated commit on main - against a sandbox repository, a fake gate, a fake lead and
@@ -532,6 +604,15 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
     Assert-ExitCode "team-integrate tests"
+  }
+
+  Invoke-Step "Agent team board client (PS5.1, fake board, no model)" {
+    # The team's board (the owner's idea, 2026-10-03): scripts/team/board.ps1 posts and reads
+    # notes against a fake board on 127.0.0.1; an unreachable board is a warning and exit 0.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-board.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-board tests"
   }
 
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
@@ -562,7 +643,7 @@ if (-not $Fast) {
     Assert-ExitCode "web-tailnet-https tests"
   }
 
-  Invoke-Step "Web shell build" {
+  Invoke-Step "Web shell build" -Kinds heavy {
     $pnpm = Resolve-Tool "pnpm" @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
     if (-not $pnpm) { throw "pnpm not found" }
     Push-Location $repoRoot
@@ -574,7 +655,7 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
-  Invoke-Step "Web shell lint, unit tests and types (oxlint, vitest, tsc)" {
+  Invoke-Step "Web shell lint, unit tests and types (oxlint, vitest, tsc)" -Kinds heavy {
     # CI's web job, here: GitHub Actions is off (2026-09-19), so this gate is the only place
     # the web suite is ever run before a release. After the build, as in ci.yml: tsconfig
     # includes the types `next build` generates.
@@ -594,13 +675,4 @@ if (-not $Fast) {
 
 # -------------------------------------------------------------------- summary
 
-Write-Host ""
-Write-Host "=== Quality gate summary ===" -ForegroundColor Cyan
-$results | Format-Table -AutoSize | Out-String | Write-Host
-
-if ($failed) {
-  Write-Host "QUALITY GATE: FAIL" -ForegroundColor Red
-  exit 1
-}
-Write-Host "QUALITY GATE: PASS" -ForegroundColor Green
-exit 0
+Exit-WithSummary

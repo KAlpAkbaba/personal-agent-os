@@ -9,10 +9,12 @@
 import { useState } from "react";
 
 import ProposalDetail from "./ProposalDetail";
+import TrialsList from "./TrialsList";
 import {
   GATE_TR,
   decide,
   decisionsOpen,
+  waitingCount,
   type ApprovalsView,
   type PendingApproval,
 } from "./approvalsApi";
@@ -134,6 +136,7 @@ export default function ApprovalsList({ view, onDone }: { view: ApprovalsView; o
   const locked = !decisionsOpen(view);
   return (
     <>
+      <p data-count="waiting">Sizi bekleyen: {waitingCount(view)}</p>
       {notice && <p className="muted">{notice}</p>}
       {view.approvals.length === 0 && <p className="muted">Bekleyen onay yok.</p>}
       {view.approvals.length > 0 && (
@@ -143,6 +146,7 @@ export default function ApprovalsList({ view, onDone }: { view: ApprovalsView; o
           ))}
         </ul>
       )}
+      <TrialsList trials={view.trials ?? []} locked={locked} />
       {view.cycle_report && (
         <section data-section="cycle-report">
           <h2>Döngü raporu · {view.cycle_report.file}</h2>

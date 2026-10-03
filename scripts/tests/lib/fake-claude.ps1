@@ -35,6 +35,8 @@
       PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS  the reset, seconds from now (default 3600)
       PAGENTOS_FAKE_CLAUDE_RAN_MODEL       "<role>=<id>": that role's modelUsage names <id>
           whatever --model said, as a tool that substituted the model itself would print
+      PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES  roles whose run FAILS with a long report that
+          quotes the limit words in its middle (model-policy-floor: not the limit)
 
     The pool's hooks (cycle-seat-pool), independent of the scenario as well - described where
     they are read: PAGENTOS_FAKE_CLAUDE_SECONDS (how long each run takes),
@@ -214,6 +216,15 @@ if ($scenario -eq "silent") {
 if ($scenario -eq "slow") {
     Start-Sleep -Seconds 600
     exit 0
+}
+# model-policy-floor: PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES (comma separated) - that role's run
+# FAILS for another reason, and its long result text QUOTES the limit words in its middle.
+$quotingRoles = @(([string]$env:PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($quotingRoles -contains $role) {
+    $quote = "Report: the suite failed - 'usage limit reached' was not read as the limit`n`nThe suite failed. Its output:`n  expected 'Claude AI usage limit reached' to be read as the limit`n  You've hit your Opus limit " + [char]0x00B7 + " resets 8:40pm`n`nverdict: failed"
+    $session = [DateTimeOffset]::UtcNow.AddHours(3).ToUnixTimeSeconds()
+    Write-Answer -Text $quote -Cost 0.25 -IsError $true -EventLine (Get-LimitEvent -Status "allowed" -Type "five_hour" -ResetsAt $session)
+    exit 1
 }
 # The model policy: a run on a model the test named as limited answers what the real tool answers.
 $limitedModels = @(([string]$env:PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })

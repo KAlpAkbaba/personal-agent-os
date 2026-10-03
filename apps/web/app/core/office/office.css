@@ -82,6 +82,12 @@
   color: var(--office-gold);
 }
 
+/* a long line (the newest downgrade) wraps inside the bar at phone width */
+.office-topbar > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .office-offline {
   color: #ffb39b;
   font-weight: 600;
@@ -690,4 +696,32 @@
   .office-decor-vacuum {
     animation: none;
   }
+}
+
+/* A seat whose live run is on another model than configured (the model policy). */
+.office-lowered {
+  font-size: 0.7rem;
+  color: var(--core-amber, #f0a53a);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* yedek model: açık / kapalı - a real toggle in the top bar. */
+.office-toggle {
+  font: inherit;
+  padding: 0 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.office-toggle[aria-pressed="true"] {
+  border-color: var(--core-amber, #f0a53a);
+}
+
+.office-panel select {
+  max-width: 100%;
+  font: inherit;
 }

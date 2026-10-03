@@ -48,6 +48,15 @@ crashed it (the lead's session, the owner's web shell and a gate with it). Run y
 the guard files your card names and the files that import what you changed; for the whole suite
 write "full unit suite: the lead's gate runs it" - that is accepted evidence, not a NOT_RUN.
 
+**Test sırası (ONAY / BEKLE, the owner's rule of 2026-10-02).** Before a command of these kinds,
+ask the machine's queue: `database` (the api integration suite; a hand-run alembic), `desktop`
+(the operator lab; the Unity scene tests), `heavy` (the owner utterance corpus; the whole web suite
+or the dotnet test run). Ask: `powershell -NoProfile -File scripts/team/test-slot.ps1 ask -Kind database,heavy -Task <task-id> -Role worker -What "api integration suite"`.
+On `ONAY <ticket>` run it through `test-slot.ps1 run`: `powershell -NoProfile -File scripts/team/test-slot.ps1 run -Ticket <ticket> -- uv run pytest tests/integration -q -m integration`.
+On `BEKLE` do something else, or ask again - never run it anyway. A run that could not get a slot
+in the time you had is NOT_RUN with the BEKLE line quoted - never passed, never run on the side.
+A small targeted test (one file, seconds) needs no slot.
+
 Return a ≤ 40-line report: sha (40-hex), files changed (count, all inside the area), tests
 added and their RED→GREEN proof, mutation RED proof, evidence class per claim, what you
 could not do and why, open risks. Claims you did not run are marked NOT_RUN — never
