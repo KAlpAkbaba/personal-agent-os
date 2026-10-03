@@ -31,6 +31,7 @@ a model with no rows degrades to the keyword/structured candidates, never to a c
 from __future__ import annotations
 
 import math
+import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -184,6 +185,13 @@ class LocalEmbedder:
     truncated: bool = field(init=False, default=False)
     _model: _EmbeddingModel = field(init=False, repr=False)
     _cache: OrderedDict[str, list[float]] = field(default_factory=OrderedDict, init=False)
+    #: Guards ``_cache`` and ``calls``: the understanding index is built on its own thread
+    #: through this object while request threads embed with it (ADR-0245). Held for the
+    #: cache's own operations only, never across the model call. A stored vector is never
+    #: mutated (every caller gets a copy), so it is copied outside the lock.
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
     calls: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
@@ -229,10 +237,15 @@ class LocalEmbedder:
 
     def embed(self, text: str) -> list[float]:
         key = text.strip()[:MAX_INPUT_CHARS]
-        cached = self._cache.get(key)
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._cache.move_to_end(key)
         if cached is not None:
-            self._cache.move_to_end(key)
             return list(cached)
+        # The model runs OUTSIDE the lock: one slow embedding must not make every other
+        # thread wait. Two threads that miss on the same text both compute it - the same
+        # vector twice, stored once.
         raw = self._raw_embed(key or " ")
         if len(raw) != self.native_dim:
             raise EmbeddingProviderError(
@@ -241,10 +254,12 @@ class LocalEmbedder:
         vector = raw[: self.dim] if self.truncated else raw
         norm = math.sqrt(sum(x * x for x in vector))
         vector = [x / norm for x in vector] if norm > 0.0 else vector
-        self.calls += 1
-        self._cache[key] = vector
-        if len(self._cache) > CACHE_SIZE:
-            self._cache.popitem(last=False)
+        with self._lock:
+            self.calls += 1
+            self._cache[key] = vector
+            self._cache.move_to_end(key)
+            if len(self._cache) > CACHE_SIZE:
+                self._cache.popitem(last=False)
         return list(vector)
 
 
