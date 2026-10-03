@@ -783,9 +783,10 @@ function Read-TeamRunResult {
     $said = ""
     if ($null -ne $document) {
         $text = [string](Get-TeamProperty -InputObject $document -Name "result" -Default "")
-        $said = $text
         $cost = [double](Get-TeamProperty -InputObject $document -Name "total_cost_usd" -Default 0)
         $isError = [bool](Get-TeamProperty -InputObject $document -Name "is_error" -Default $false)
+        # Only an ERROR result is the tool speaking; a report is the run's own words.
+        if ($isError) { $said = $text }
         $subtype = [string](Get-TeamProperty -InputObject $document -Name "subtype" -Default "")
         # The model that really ran: side models (a small one for titles) appear beside it,
         # so it is the entry that cost the most.
@@ -814,10 +815,9 @@ function Read-TeamRunResult {
         }
     }
     else {
+        # Prose instead of a document is not the tool's limit shape: the run's transcript may
+        # hold any sentence at all (the limit is then read from stderr alone).
         $why = "the run printed no result document (exit $ExitCode)"
-        # Prose instead of a document: only its beginning is the tool's own word. The rest of a
-        # stream is the run's transcript, which may hold any sentence at all.
-        $said = if ($raw.Length -gt 2000) { $raw.Substring(0, 2000) } else { $raw }
     }
     # A model the tool ran in place of the one asked for (it can switch a session off Fable
     # by itself; CLAUDE_CODE_NO_MODEL_FALLBACK is best effort). Only a model of the chain is
@@ -825,19 +825,26 @@ function Read-TeamRunResult {
     if ($Model -and (Test-TeamModelId -Model $ranModel) -and $ranModel -cne $Model) { $substituted = $true }
     if (-not $ok) {
         # Owner decision 2026-09-30: the ONE stop the team has is the subscription's usage
-        # limit. It is read from the result's words and from stderr - never from the rest of
-        # the stream.
-        $said = $said + "`n" + ([string]$StdErr)
+        # limit. It is read only from the tool's own error shape (ADR-0214 addendum 10): a
+        # rejected event, an error result whose text STARTS with the tool's limit sentence, or
+        # stderr's first line being it. A failed run that merely QUOTES those words (a test's
+        # output, a report about limits) is a plain failure - its model is not barred.
+        $sentencePattern = "(?i)^\s*(You.ve hit your (\w+ ){0,3}limit|You.re out of (extra usage|usage credits)|(Claude AI )?usage limit reached)"
+        $sentence = ""
+        $firstSaid = [string](@($said -split "`r?`n")[0])
+        $firstErr = [string](@(([string]$StdErr).TrimStart() -split "`r?`n")[0])
+        if ($firstSaid -match $sentencePattern) { $sentence = $firstSaid }
+        elseif ($firstErr -match $sentencePattern) { $sentence = $firstErr }
         $rejected = ($null -ne $lastEvent -and [string](Get-TeamProperty -InputObject $lastEvent -Name "status" -Default "") -eq "rejected")
-        if ($rejected -or $said -match "(?i)hit your (\w+ )?limit|usage limit|limit reached|out of (extra usage|usage credits)") {
+        if ($rejected -or $sentence) {
             $usageLimited = $true
             $why = "Max kullanım limiti"
             if ($rejected) {
                 $limitType = [string](Get-TeamProperty -InputObject $lastEvent -Name "rateLimitType" -Default "")
                 $resetsAt = ConvertFrom-TeamEpoch -Seconds (Get-TeamProperty -InputObject $lastEvent -Name "resetsAt")
             }
-            if (-not $resetsAt -and $said -match "limit reached\|(\d{10})") { $resetsAt = ConvertFrom-TeamEpoch -Seconds ([long]$Matches[1]) }
-            $closes = Get-TeamLimitScope -Type $limitType -Text $said
+            if (-not $resetsAt -and $sentence -match "limit reached\|(\d{10})") { $resetsAt = ConvertFrom-TeamEpoch -Seconds ([long]$Matches[1]) }
+            $closes = Get-TeamLimitScope -Type $limitType -Text $sentence
             $limitScope = $closes.Scope
             $limitedModel = $closes.Model
         }
@@ -1081,29 +1088,51 @@ function Get-TeamOkOutcome {
     return "tamam"
 }
 
+function Get-TeamStrongerModel {
+    <# The stronger of two models (a text that is not a model loses; both not models: ""). #>
+    param([string]$First, [string]$Second)
+    $one = Get-TeamModelRank -Model $First
+    $two = Get-TeamModelRank -Model $Second
+    if ($one -lt 0) { return $(if ($two -ge 0) { $Second } else { "" }) }
+    if ($two -lt 0 -or $one -le $two) { return $First }
+    return $Second
+}
+
 function Get-TeamWorkerModel {
-    <# The model the task's last FINISHED worker run really used ("" when no entry says: a
-       run from before the policy - Get-TeamInspectionFloor then takes the configured worker
-       model). The reader of Get-TeamOkOutcome. #>
+    <# The STRONGEST model among the task's FINISHED worker runs that name one ("" when no
+       entry says: a run from before the policy - Get-TeamInspectionFloor then takes the
+       configured worker model). Not the last run's: a branch written on Fable, returned and
+       reworked on Sonnet is still mostly Fable's work (ADR-0214 addendum 10). The reader of
+       Get-TeamOkOutcome. #>
     param($Task)
     $model = ""
     foreach ($report in @(Get-TeamProperty -InputObject $Task -Name "reports" -Default @())) {
         if ([string](Get-TeamProperty -InputObject $report -Name "role" -Default "") -ne "worker") { continue }
         $outcome = [string](Get-TeamProperty -InputObject $report -Name "outcome" -Default "")
-        if ($outcome -cmatch '^tamam \(model ([A-Za-z0-9._-]+)\)$' -and (Test-TeamModelId -Model $Matches[1])) { $model = $Matches[1] }
+        if ($outcome -cmatch '^tamam \(model ([A-Za-z0-9._-]+)\)$' -and (Test-TeamModelId -Model $Matches[1])) { $model = Get-TeamStrongerModel -First $model -Second $Matches[1] }
     }
     return $model
 }
 
 function Get-TeamInspectionFloor {
     <# The model an inspection of this task is never started below, and never takes a verdict
-       below: the one the worker's run really used; when no entry says (a worker that finished
-       before the policy, a task queued by hand), the model the setting gives the worker -
-       an unknown is not "any model will do". Recorded says which of the two it is. #>
+       below: the STRONGEST model among the task's finished worker runs (a task keeps one
+       branch for its life, so these are the runs of its current branch). An entry that names
+       no model (a worker that finished before the policy) counts as the model the setting
+       gives the worker; no entry at all (a task queued by hand) is that model too - an
+       unknown is not "any model will do". Recorded is true when the floor is a model an
+       entry named. #>
     param($Task, [Parameter(Mandatory = $true)]$Setting)
     $recorded = Get-TeamWorkerModel -Task $Task
-    if ($recorded) { return [pscustomobject]@{ Model = $recorded; Recorded = $true } }
-    return [pscustomobject]@{ Model = [string]$Setting.roles.worker; Recorded = $false }
+    $configured = [string]$Setting.roles.worker
+    $unnamed = @(@(Get-TeamProperty -InputObject $Task -Name "reports" -Default @()) | Where-Object {
+            [string](Get-TeamProperty -InputObject $_ -Name "role" -Default "") -eq "worker" -and
+            [string](Get-TeamProperty -InputObject $_ -Name "outcome" -Default "") -ceq "tamam"
+        })
+    if ($recorded -and (@($unnamed).Count -eq 0 -or (Get-TeamStrongerModel -First $recorded -Second $configured) -ceq $recorded)) {
+        return [pscustomobject]@{ Model = $recorded; Recorded = $true }
+    }
+    return [pscustomobject]@{ Model = $configured; Recorded = $false }
 }
 
 function Get-TeamRoleTools {

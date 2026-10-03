@@ -45,8 +45,9 @@
     defaults). A run that comes back with the usage limit is started again at once on the
     next model down the chain (`"fallback": true`), and the report says 'model düşürüldü';
     a limited model starts no run until its reset (`team/limits.json` keeps that across
-    cycles). The inspector is never started on a model weaker than the one the worker's run
-    really used: when every model at least that strong is limited, the inspection waits.
+    cycles). The inspector is never started on a model weaker than the STRONGEST one the
+    task's worker runs really used (not the last run's: ADR-0214 addendum 10): when every
+    model at least that strong is limited, the inspection waits.
 
 .PARAMETER Model
     The model of a role the setting does not name (one of the three ids). The setting wins.
@@ -645,8 +646,9 @@ function Register-Limit {
 
 function Select-RunModel {
     <# The model a run of this role starts on now (Get-TeamRunModel); Model is $null when it
-       must wait. The inspector's floor is the model the worker's run of that task really used,
-       and the configured worker model when its entry does not say (Get-TeamInspectionFloor). #>
+       must wait. The inspector's floor is the strongest model the task's worker runs really
+       used, an entry that does not say counting as the configured worker model
+       (Get-TeamInspectionFloor). #>
     param([string]$Role, $Task = $null)
     $configured = [string](Get-TeamProperty -InputObject $script:modelSetting.roles -Name $Role -Default "")
     if (-not $configured) { $configured = [string]$script:modelSetting.roles.worker }
