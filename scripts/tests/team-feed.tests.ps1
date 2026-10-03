@@ -1405,6 +1405,22 @@ try {
         Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -notmatch '^GET ' }).Count -Because "only GETs: $((Get-FakeApiRequests -Api $api) -join '; ')"
     }
 
+    Test-Case "lock-free 13: a live FEEDER of ours holds the lock (cycle feed-<date>) - not a cycle, so exit 3, no lead run, no report, no lock file" {
+        $feederHeld = New-LiveCycleLock
+        $feederHeld.cycle_id = "feed-$feedDate"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock $feederHeld
+        $box = New-FeedSandbox
+        $lockBefore = Get-Json -Value (Get-FakeApiState -Api $api).lock
+        $run = Invoke-LiveFeed -Box $box -Api $api -Plan @{ feed_text = (Get-FeedText -Cards $liveCards) }
+        Assert-Equal -Expected 3 -Actual $run.ExitCode -Because "a second feeder beside a feeder would be a second lead run: $($run.Said)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no lead run"
+        Assert-True -Condition ($run.Said -match "the lock is held by MAIL") -Because $run.Said
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $box.Root "team\reports"))) -Because "no report on disk"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(PUT|POST|DELETE|PATCH) " }).Count -Because "no write at all: $((Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-Equal -Expected $lockBefore -Actual (Get-Json -Value (Get-FakeApiState -Api $api).lock) -Because "the feeder's lock is untouched"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-FeederLockPath -Box $box))) -Because "no feeder lock file"
+    }
+
     Test-Case "lock-free writes: a create the store answers 409 drops that card and every card that depends on it; the others are written, in dependency order" {
         $api = Start-FakeApi -Tasks @((New-Task -Id "card-a" -Area @("src/theirs")))
         $store = New-TeamApiStore -Url $api.Url -TokenFile $api.TokenFile

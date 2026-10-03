@@ -18,8 +18,10 @@ update from a stale version are 409 `stale_write`). No server change is made.
    the pid alive) AND the queue is the Cloud Core's (`-QueueUrl`), the feeder takes the
    **lock-free path**. Everything else is today's path, byte for byte: a free / stale / dead
    lock is taken as `feed-<date>` (so the tick's cycle cannot start under a feed in flight) and
-   the idea row may be committed; another machine's fresh lock, and a live cycle's lock in
-   FILE mode (one writer: the lock's holder), still stop it with exit 3.
+   the idea row may be committed; another machine's fresh lock, a live cycle's lock in
+   FILE mode (one writer: the lock's holder), and a live FEEDER of ours (holder cycle_id
+   `feed-*`: it holds the team lock, not the feeder's own lock, so a second lead run beside it
+   would cut the same rows again) still stop it with exit 3, no lead run, no report.
 2. **The feeder's own lock.** A machine-local file outside the repository
    (`$env:LOCALAPPDATA\PagentOS\team-feeder.lock`, `-FeederLockPath` for the tests), created
    exclusively and kept open for the run (readable, not deletable), holding pid, machine and
@@ -70,10 +72,23 @@ fresh queue narrows this; it does not close it.
 
 ## Evidence
 
-`scripts/tests/team-feed.tests.ps1` (cases "lock-free 1..12", "lock-free writes",
+`scripts/tests/team-feed.tests.ps1` (cases "lock-free 1..13", "lock-free writes",
 "lock-free judge"; red first against the unchanged script), five mutation REDs,
 `services/api/tests/integration/test_team_feed_lockfree_postgres.py` (real routes + DbStore on
 the dev stack's PostgreSQL, real feed.ps1, fake lead). No server change, no migration, no
-setting; `tick.ps1` is unchanged, so the scheduled task needs no re-registration. A running
-cycle keeps the code it started with; the change is live from the first tick after the
-release, for the feeder process only.
+setting; `tick.ps1` is unchanged, so the scheduled task needs no re-registration.
+
+## Known gap: no production caller reaches this path yet
+
+Nothing on the build PC starts `feed.ps1` while a cycle runs. The scheduled task
+`\PagentOS Team Nightly Cycle` runs `tick.ps1` with `-MultipleInstances IgnoreNew`
+(`register-nightly.ps1`), and `tick.ps1` waits for its cycle child (`Start-Process -Wait`), so
+every tick that falls inside a running cycle is ignored; `cycle.ps1` never calls `feed.ps1`.
+The lock-free path is therefore reachable only by hand today, and the queue can still run dry
+beside idle seats. This addendum does NOT make the change "live from the first tick after the
+release" - that claim is withdrawn. Follow-up card for the lead to open:
+**`feeder-trigger-beside-cycle`** - start `feed.ps1 -QueueUrl ...` while a cycle runs (either
+`cycle.ps1` calls it in a child process when fewer tasks are runnable than worker seats, with a
+deadline, or a separate scheduled task that is not blocked by the tick's IgnoreNew); area
+`scripts/team/cycle.ps1` or `scripts/team/register-nightly.ps1` + its tests. PROVEN_REAL for
+this addendum waits for that card.

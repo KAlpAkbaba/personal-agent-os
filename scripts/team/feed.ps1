@@ -245,7 +245,10 @@ if ($decision.Kind -eq "ours") {
 # A live cycle of THIS machine, and the store is the Cloud Core's: the feeder works beside it,
 # under its own lock (the store makes every task write conditional). With the files there is
 # one writer, the lock's holder; another machine's cycle is not serialised by a local lock.
-$lockFree = ($useApi -and $decision.Kind -eq "ours")
+# A live FEEDER of ours (cycle feed-<date>) is not a cycle: it never took the feeder's own lock,
+# so a second lead run beside it would cut the same rows again - it stops as before.
+$holderCycle = if ($null -ne $lock) { [string](Get-TeamProperty -InputObject $lock -Name "cycle_id" -Default "") } else { "" }
+$lockFree = ($useApi -and $decision.Kind -eq "ours" -and $holderCycle -notlike "feed-*")
 if (-not $decision.MayRun -and -not $lockFree) {
     # Said, not reported: the lock is a cycle's, every 30 minutes while it runs, and the report
     # the Onay Merkezi shows must stay that cycle's.
