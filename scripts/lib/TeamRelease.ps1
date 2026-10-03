@@ -160,6 +160,83 @@ function Get-TeamCallObjection {
     return ""
 }
 
+function Get-TeamTopLevelAssignCount {
+    <# How many '=' of masked statement code assign (outside brackets; not ==, !=, <=, >=). #>
+    param([AllowEmptyString()][string]$Code = "")
+    $n = 0
+    $depth = 0
+    for ($i = 0; $i -lt $Code.Length; $i++) {
+        $c = $Code[$i]
+        if ("([{".IndexOf($c) -ge 0) { $depth++ }
+        elseif (")]}".IndexOf($c) -ge 0) { if ($depth -gt 0) { $depth-- } }
+        elseif ($c -eq '=' -and $depth -eq 0) {
+            $before = if ($i -gt 0) { $Code[$i - 1] } else { ' ' }
+            $after = if ($i + 1 -lt $Code.Length) { $Code[$i + 1] } else { ' ' }
+            if ("=!<>:".IndexOf($before) -lt 0 -and $after -ne '=') { $n++ }
+        }
+    }
+    return $n
+}
+
+function Get-TeamCallPieces {
+    <#
+    The top-level arguments of a masked argument list, read one by one: Star when it is a * or
+    ** spread (its names cannot be read), Keyword ("" for a positional one) and Value, trimmed.
+    #>
+    param([AllowEmptyString()][string]$Masked = "")
+    $out = New-Object System.Collections.ArrayList
+    foreach ($piece in @(Get-TeamPythonArguments -Masked $Masked)) {
+        $text = $Masked.Substring($piece.Start, $piece.End - $piece.Start).Trim()
+        $named = [regex]::Match($text, '^([A-Za-z_]\w*)\s*=(?!=)([\s\S]*)$')
+        $keyword = ""
+        $value = $text
+        if ($named.Success) { $keyword = $named.Groups[1].Value; $value = $named.Groups[2].Value.Trim() }
+        [void]$out.Add([pscustomobject]@{ Star = $text.StartsWith("*"); Keyword = $keyword; Value = $value })
+    }
+    return @($out.ToArray())
+}
+
+function Get-TeamAddColumnObjection {
+    <#
+    Why masked op.add_column(...) arguments may add a column the old colour cannot live with, or
+    "" when the column is plainly nullable or defaulted. Read from the sa.Column call's OWN
+    top-level keywords: nullable must be the bare literal True (or False beside a server_default),
+    a server_default must not be None or sa.null(), primary_key must be absent or False. A spread,
+    a column that is not a direct sa.Column(...) call, or any other value is not read: in doubt, no.
+    #>
+    param([AllowEmptyString()][string]$Masked = "")
+    $column = $null
+    $index = 0
+    foreach ($p in @(Get-TeamCallPieces -Masked $Masked)) {
+        if ($p.Star) { return "add_column içinde açılım (* / **)" }
+        if ($p.Keyword -ceq "column" -or (-not $p.Keyword -and $index -eq 1)) { $column = $p.Value }
+        elseif ($p.Keyword -and $p.Keyword -cnotmatch '^(table_name|schema)$') { return "add_column içinde tanınmayan anahtar: $($p.Keyword)" }
+        if (-not $p.Keyword) { $index++ }
+    }
+    $call = if ($column) { [regex]::Match($column, '^(?:sa|sqlalchemy)\.Column\s*\(') } else { $null }
+    if (-not $call -or -not $call.Success -or -not $column.EndsWith(")")) { return "add_column sütunu doğrudan bir sa.Column(...) değil" }
+    $inner = $column.Substring($call.Length, $column.Length - $call.Length - 1)
+    $depth = 0
+    foreach ($ch in $inner.ToCharArray()) {
+        if ("([{".IndexOf($ch) -ge 0) { $depth++ } elseif (")]}".IndexOf($ch) -ge 0) { $depth--; if ($depth -lt 0) { return "add_column sütunu doğrudan bir sa.Column(...) değil" } }
+    }
+    $nullable = ""
+    $defaulted = $false
+    foreach ($p in @(Get-TeamCallPieces -Masked $inner)) {
+        if ($p.Star) { return "sa.Column içinde açılım (* / **)" }
+        if ($p.Keyword -ceq "nullable") {
+            if ($p.Value -cnotmatch '^(True|False)$') { return "nullable düz bir True/False değil: $($p.Value)" }
+            $nullable = $p.Value
+        }
+        elseif ($p.Keyword -ceq "server_default") {
+            $defaulted = ($p.Value -and $p.Value -cne "None" -and $p.Value -cnotmatch '^(?:sa|sqlalchemy)\s*\.\s*null\s*\(\s*\)$')
+        }
+        elseif ($p.Keyword -ceq "primary_key" -and $p.Value -cne "False") { return "add_column birincil anahtar" }
+    }
+    if ($nullable -ceq "True" -or $defaulted) { return "" }
+    return "add_column ne nullable=True ne server_default"
+}
+
 function ConvertTo-TeamTableToken {
     <# A table argument as a comparable token: s:<literal> or n:<name>; "" when it is neither. #>
     param([AllowEmptyString()][string]$Raw = "")
@@ -199,15 +276,18 @@ function Get-TeamMigrationVerdict {
         that each found one more SQL form a deny-list let through; the owner's rule, ADR-0214
         addendum 9: an irreversible migration is not released by itself). upgrade() may hold
         ONLY, each as a bare statement:
-          * op.create_table(...), op.create_index(...);
-          * op.add_column(...) with nullable=True or a server_default (and no primary key);
+          * op.create_table(...), op.create_index(...) (not unique, no spread);
+          * op.add_column(...) whose sa.Column has its OWN bare nullable=True or a server_default
+            that is not None/sa.null() (no primary key, no spread: Get-TeamAddColumnObjection);
           * op.create_foreign_key(...) whose source table this upgrade creates;
           * pass and a docstring.
         Their arguments may call only schema builders (Get-TeamCallObjection). The module
         around it may hold only imports, constant assignments, docstrings and the two defs;
         downgrade() is not read (it drops what the upgrade added). EVERYTHING else is not
         expand-only: op.execute (even 'SELECT 1'), any raw SQL, any other op, an ORM write, a
-        helper, a loop, a variable in upgrade(), an f-string, an unrecognised import of op/sa.
+        helper, a loop, a variable in upgrade(), an f-string, an unrecognised import of op/sa,
+        a star import, a ':=' anywhere, a module-level assignment to op/sa/upgrade/downgrade or
+        to more than one target.
         Only an ADDED file is judged (status 'A'); a changed, deleted or unreadable one stops.
     #>
     param([Parameter(Mandatory = $true)][string]$Path, [string]$Status = "A", [AllowNull()][AllowEmptyString()][string]$Text = "")
@@ -217,6 +297,8 @@ function Get-TeamMigrationVerdict {
     $mask = Get-TeamPythonMask -Text $Text
     if (-not $mask.Closed) { return (& $verdict $false "göç okunamadı (kapanmayan dize)") }
     $masked = $mask.Masked
+    # A walrus binds a name anywhere, op and sa among them: not read.
+    if ($masked.Contains(":=")) { return (& $verdict $false "':=' ile bir ad bağlanıyor") }
     $docstring = '^(?:[rRuU]{0,2}("""|''''''|"|'')x*\1\s*)+$'
     # The names the allowed calls go through must be what they seem: op is alembic's, sa is SQLAlchemy.
     $bindings = @('^import\s+sqlalchemy(?:\s+as\s+sa)?$', '^from\s+alembic\s+import\s+\(?\s*(?:op|context)(?:\s*,\s*(?:op|context))*\s*,?\s*\)?$',
@@ -243,6 +325,7 @@ function Get-TeamMigrationVerdict {
         if ($code -cmatch $docstring) { continue }
         if (-not $s.Indented) {
             if ($code -cmatch '^(import|from)\s') {
+                if ($code.Contains("*")) { return (& $verdict $false "yıldızlı içe aktarma bilinmeyen adlar bağlıyor: $first") }
                 if ($code -cmatch '\b(op|sa|sqlalchemy|postgresql)\b' -and @($bindings | Where-Object { $code -cmatch $_ }).Count -eq 0) {
                     return (& $verdict $false "op/sa tanınmayan biçimde bağlanıyor: $first")
                 }
@@ -250,7 +333,9 @@ function Get-TeamMigrationVerdict {
             }
             $assign = [regex]::Match($code, '^([A-Za-z_]\w*)\s*(?::[^=]*)?=(?!=)')
             if ($assign.Success) {
-                if ($assign.Groups[1].Value -cmatch '^(op|sa|sqlalchemy|postgresql)$') { return (& $verdict $false "op/sa yeniden bağlanıyor: $first") }
+                if ($assign.Groups[1].Value -cmatch '^(op|sa|sqlalchemy|postgresql|upgrade|downgrade)$') { return (& $verdict $false "op/sa/upgrade/downgrade yeniden bağlanıyor: $first") }
+                # One target only: in 'X = op = 1' the later targets are bound too.
+                if ((Get-TeamTopLevelAssignCount -Code $code) -ne 1) { return (& $verdict $false "birden çok hedefe atama: $first") }
                 $why = Get-TeamCallObjection -Code $code
                 if ($why) { return (& $verdict $false "$why ($first)") }
                 continue
@@ -281,10 +366,13 @@ function Get-TeamMigrationVerdict {
         ForEach-Object { Get-TeamTableArgument -Raw $_.Raw -Masked $_.Masked -Position 0 -Keyword "table_name" } | Where-Object { $_ })
     foreach ($c in $calls.ToArray()) {
         if ($c.Name -eq "add_column") {
-            $nullable = ($c.Masked -cmatch '\bnullable\s*=\s*True\b' -and $c.Masked -cnotmatch '\bnullable\s*=\s*False\b')
-            $defaulted = ($c.Masked -cmatch '\bserver_default\s*=\s*(?!None\b)\S')
-            if ($c.Masked -cmatch '\bprimary_key\s*=\s*True\b' -or -not ($nullable -or $defaulted)) {
-                return (& $verdict $false "add_column ne nullable=True ne server_default: $($c.First)")
+            $why = Get-TeamAddColumnObjection -Masked $c.Masked
+            if ($why) { return (& $verdict $false "${why}: $($c.First)") }
+        }
+        if ($c.Name -eq "create_index") {
+            foreach ($p in @(Get-TeamCallPieces -Masked $c.Masked)) {
+                if ($p.Star) { return (& $verdict $false "create_index içinde açılım (* / **): $($c.First)") }
+                if ($p.Keyword -ceq "unique" -and $p.Value -cne "False") { return (& $verdict $false "create_index unique (eski rengin satırlarını reddedebilir): $($c.First)") }
             }
         }
         if ($c.Name -eq "create_foreign_key") {

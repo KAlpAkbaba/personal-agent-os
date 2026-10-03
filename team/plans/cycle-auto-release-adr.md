@@ -68,3 +68,10 @@ usual way), constants, docstrings and the two defs; `downgrade()` is not read. A
 including every `op.execute` - stops and leaves the release to the Danışman/owner. The real
 0065 migration passes. Cost: a hand-written-SQL migration (an extension, a `CREATE INDEX
 CONCURRENTLY`) is always released by a person; that is the intended trade.
+
+Return 4 (Denetleyici-4): the allow-list reads structure, not text. A star import, a `:=`
+anywhere and a module-level assignment to `op`/`sa`/`upgrade`/`downgrade` or to more than one
+target stop. `add_column` passes only on the `sa.Column(...)`'s OWN top-level keywords - bare
+`nullable=True`, or a `server_default` that is not `None`/`sa.null()`; a `*`/`**` spread, a
+non-literal `nullable`, a primary key or a column that is not a direct `sa.Column(...)` stops.
+`create_index(..., unique=<not False>)` stops (it may reject rows the old colour writes).
