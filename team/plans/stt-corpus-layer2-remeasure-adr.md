@@ -1,7 +1,8 @@
 # ADR-0224 addendum (to be numbered by the lead): the STT corpus measured with layer 2 as production configures it
 
-Status: measured 2026-10-03 (run 2026-10-03T01:50:59Z) at `05ca60596cf4f8ffa54c6be3a47d40b5410527d1`
-(clean tree; an earlier run at `0dd1dc75` gave the same verdicts case for case).
+Status: measured 2026-10-03 (run 2026-10-03T08:15:49Z) at `dd3373ae1c9e6b21c17753af1e02783c289b91cd`
+(API tree clean; earlier runs at `0dd1dc75` and `05ca6059` gave the same verdicts case for case,
+and the in-process repeat run did too).
 
 ## The number
 - With the engine production builds since ADR-0245: **73 / 106 = 68.9 %**. Without it (addendum 4):
@@ -26,7 +27,7 @@ embedder. The embedder is wrapped in a counter only (vectors untouched) to prove
 
 ## Machine and model
 The home PC's CPU (i7-14700KF), `local-minishlab/potion-multilingual-128M`, index built in
-403.7 ms, 106 cases in 51.0 s. Same model and same exemplars file as the Cloud Core; the Cloud
+360.5 ms, 106 cases in 114.8 s (51.0 s on a quieter machine). Same model and same exemplars file as the Cloud Core; the Cloud
 Core's own CPU run is NOT_RUN.
 
 ## What is measured

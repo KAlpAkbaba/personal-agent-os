@@ -1,11 +1,13 @@
 # stt-corpus-layer2-remeasure: what the measurement found, and the candidate cards
 
-Run: 2026-10-03 (2026-10-03T01:50:59Z), code at `05ca60596cf4f8ffa54c6be3a47d40b5410527d1`
-(clean tree; branch `team/d20261003/worker-stt-corpus-layer2-remeasure`, base main `e9f8c2d6` +
+Run: 2026-10-03 (2026-10-03T08:15:49Z), code at `dd3373ae1c9e6b21c17753af1e02783c289b91cd`
+(API tree clean; branch `team/d20261003/worker-stt-corpus-layer2-remeasure`, base main `e9f8c2d6` +
 lead record `75f04e05`). Machine: the home PC (i7-14700KF, CPU). Engine:
 `local-minishlab/potion-multilingual-128M`, provider `local`, semantic, 1427 shipped exemplars,
-index built inline in 403.7 ms; the 106 cases with the engine took 51.0 s. An earlier run at
-`0dd1dc75` (2026-10-02T23:57:34Z) gave the same numbers case for case.
+index built inline in 360.5 ms; the 106 cases with the engine took 114.8 s (the machine was
+shared with other worker seats; 51.0 s on a quieter run). The repeat run gave the same verdict
+for every case. Earlier runs at `0dd1dc75` (2026-10-02T23:57:34Z) and `05ca6059`
+(2026-10-03T01:50:59Z) gave the same numbers case for case.
 Evidence: `docs/evidence/stt-corpus-layer2-remeasure.{json,md}`.
 
 ## Headline

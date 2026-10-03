@@ -1,6 +1,6 @@
 # STT corpus, layer 2 as production configures it
 
-Generated 2026-10-03T01:50:59.632899Z at 05ca60596cf4f8ffa54c6be3a47d40b5410527d1. Engine: local-minishlab/potion-multilingual-128M (local, 1427 exemplars, index built in 403.7 ms).
+Generated 2026-10-03T08:15:49.482100Z at dd3373ae1c9e6b21c17753af1e02783c289b91cd. Engine: local-minishlab/potion-multilingual-128M (local, 1427 exemplars, index built in 360.5 ms).
 
 - without the engine: **73 / 106 = 68.9 %**
 - with the engine:    **73 / 106 = 68.9 %**

@@ -1,11 +1,11 @@
 {
   "suite": "SttLayer2Remeasure",
-  "generated_at": "2026-10-03T01:50:59.632899Z",
-  "source_sha": "05ca60596cf4f8ffa54c6be3a47d40b5410527d1",
+  "generated_at": "2026-10-03T08:15:49.482100Z",
+  "source_sha": "dd3373ae1c9e6b21c17753af1e02783c289b91cd",
   "no_engine": {
     "suite": "SttUtteranceSuite",
     "corpus_version": 1,
-    "generated_at": "2026-10-03T01:50:59.632899Z",
+    "generated_at": "2026-10-03T08:15:49.482100Z",
     "total_cases": 106,
     "correct": 73,
     "acted": 72,
@@ -4630,7 +4630,7 @@
   "production_engine": {
     "suite": "SttUtteranceSuite",
     "corpus_version": 1,
-    "generated_at": "2026-10-03T01:50:59.633899Z",
+    "generated_at": "2026-10-03T08:15:49.483101Z",
     "total_cases": 106,
     "correct": 73,
     "acted": 72,
@@ -10904,8 +10904,8 @@
     "semantic": true,
     "model_id": "local-minishlab/potion-multilingual-128M",
     "exemplars": 1427,
-    "build_ms": 403.7,
-    "corpus_seconds": 51.0
+    "build_ms": 360.5,
+    "corpus_seconds": 114.8
   },
   "repeat_run": {
     "status": "RUN",
