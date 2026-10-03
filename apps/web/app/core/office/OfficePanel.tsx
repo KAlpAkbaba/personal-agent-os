@@ -1,8 +1,52 @@
 /** The right panel for the clicked seat. Everything shown comes from `buildPanel`. */
 
-import type { Panel } from "./officeModel";
+import type { ModelId, ModelRole } from "./officeApi";
+import { NEXT_RUN_NOTE, type Panel, type PanelModel } from "./officeModel";
 
-export default function OfficePanel({ panel }: { panel: Panel | null }) {
+export type ChooseModel = (role: ModelRole, model: ModelId) => void;
+
+function ModelSelector({
+  model,
+  notice,
+  onChoose,
+}: {
+  model: PanelModel;
+  notice: string | null;
+  onChoose?: ChooseModel;
+}) {
+  return (
+    <section data-panel="model">
+      <label>
+        Model{" "}
+        <select
+          value={model.value}
+          onChange={(event) => onChoose?.(model.role, event.target.value as ModelId)}
+        >
+          {model.options.map((option) => (
+            <option key={option.id} value={option.id} disabled={option.disabled}>
+              {option.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {model.lowered && <p role="status">{model.lowered}</p>}
+      {model.shared && <p className="muted">{model.shared}</p>}
+      {model.refusal && <p className="muted">{model.refusal}</p>}
+      <p className="muted">{NEXT_RUN_NOTE}</p>
+      {notice && <p role="alert">{notice}</p>}
+    </section>
+  );
+}
+
+export default function OfficePanel({
+  panel,
+  modelNotice = null,
+  onChooseModel,
+}: {
+  panel: Panel | null;
+  modelNotice?: string | null;
+  onChooseModel?: ChooseModel;
+}) {
   if (!panel) {
     return (
       <aside className="office-panel" data-office="panel">
@@ -14,6 +58,9 @@ export default function OfficePanel({ panel }: { panel: Panel | null }) {
     <aside className="office-panel" data-office="panel" data-panel-seat={panel.seat}>
       <h2>{panel.role}</h2>
       <p className="muted">Durum: {panel.stateText}</p>
+      {panel.model && (
+        <ModelSelector model={panel.model} notice={modelNotice} onChoose={onChooseModel} />
+      )}
       {panel.runs.length > 0 && (
         <section data-panel="runs">
           <h3>Koşan işler ({panel.runs.length})</h3>
