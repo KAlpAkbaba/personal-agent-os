@@ -504,6 +504,16 @@ if (-not $Fast) {
     Assert-ExitCode "team-feed tests"
   }
 
+  Invoke-Step "Agent team tick not held by orphans (PS5.1, no model)" {
+    # 2026-10-03: a `tail -f` an agent run left behind held the scheduled tick (Start-Process
+    # -Wait waits for every descendant) and no cycle ran for two hours. The tick waits for its
+    # script's own process and stops what is left in the job it owns - fakes in place of both.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-tick.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-tick tests"
+  }
+
   Invoke-Step "Agent team area widening rules (PS5.1, no model)" {
     # A fix outside a card's area: the request line of a report, the widen / wait / refuse
     # judgement and the protected paths (scripts/lib/TeamArea.ps1) - functions only.

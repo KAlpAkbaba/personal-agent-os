@@ -15,15 +15,22 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `e9f8c2d6034346651b9d456f491d8bae2cc93164` (2026-10-02 23:32 UTC = 3 Ekim 02:32 yerel, api-blue), LKG `65cd94ff`,
-pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`9a88b3c8`, 69 dk). QUALIFICATION Stage 47. Ana kopya
+**ÜRETİM: main `661a5efe4a4989a0996fb3264302264c8c977bfa` (2026-10-03 01:14 UTC = 04:14 yerel, api-green), LKG `e9f8c2d6`,
+pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5b39ec`, 65 dk). QUALIFICATION Stage 48. Ana kopya
 `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+**DÖNGÜ `d20261003` (pid 42348) 04:16 yerelde yeni kodla başladı: koşularda arka plan komutu YOK, tek komut 1 saate kadar
+(ADR-0214 ek 16). 04:15'e kadar ekip DURMUŞTU: önceki döngü bittiği halde 02:00 zamanlayıcı süreci, bir ajanın bıraktığı
+`tail -f` + `grep` yüzünden kapanmadı, zamanlayıcı her turu atladı - lead ikisini durdurdu, görevi elle başlattı. Kalıcı
+düzeltme kartı `tick-not-held-by-orphans` (ÖNCELİKLİ). DİKKAT: Ofis "0/6" ya da durum belgesi eski pid gösterirse önce
+`Get-ScheduledTaskInfo` (LastTaskResult 0x800710E0 = önceki tur hâlâ açık) ve yetim süreçlere bak.**
 **SAHİBİN KURALI (2026-10-03 00:07): "bundan sonra kapısı yeşil olanlar otomatik canlıya geçsin, beklemesinler" - denetimden geçen
 iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (`team/stop.flag`). Ek 9'un üç istisnası
 (compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor.**
 **HAVUZ ÇALIŞIYOR (PROVEN_REAL, 47.4): döngü `d20261003` 23:00 UTC'de (02:00 yerel) havuz koduyla başladı (pid 46484): 6 çalışan +
 2 denetleyici aynı anda, biten koşunun koltuğu diğerleri sürerken doluyor. `-MaxHours 4`: döngü 4 saatte bir kendini güncel betiğe
 bırakır (kilit de böylece 6 saate yaklaşmaz). Kapı yanında yavaşlarsa `team/cycle-settings.json`.**
+**KAPIDA (lead, 03:05 yerel): YEDİNCİ ENTEGRASYON, dal `gate/d20261003-3` (worktree `.claude/worktrees/gate10`) = lead dalı (ADR-0214
+ek 16 dahil) + `local-embedder-lru-lock` (ADR-0256). Yeşilse onaysız yayın.**
 **03:00 yerel - ERKEN BİTEN KOŞULAR (ADR-0214 ek 16): havuzun ilk saatinde beş koşu "test arka planda koşuyor, bitince
 raporlarım" diyerek bitti; `claude -p` hiç uyandırılmaz, iş boş sayıldı (görevler yanlışlıkla durdu/döndü - lead üçünü sayılmadan
 geri koydu). DÜZELTME lead dalında (`Start-TeamRun`: `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `BASH_MAX_TIMEOUT_MS=3600000`;
