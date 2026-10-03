@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -320,6 +321,27 @@ def test_without_the_local_model_production_engine_refuses_and_writes_nothing(
 # --- (9) the report ---------------------------------------------------------------------------
 
 
+def _source_sha() -> str | None:
+    """The commit this run's code is; ' (dirty)' when the API tree differs from it."""
+    api = Path(__file__).resolve().parents[2]
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=api, capture_output=True, text=True, timeout=30
+        )
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--", "."],
+            cwd=api,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if head.returncode != 0:
+        return None
+    return head.stdout.strip() + (" (dirty)" if dirty.stdout.strip() else "")
+
+
 def _write_evidence(build_engine) -> list[Path]:
     """Build the engine FIRST (a refusal writes nothing), then write where the env says."""
     built = build_engine()
@@ -331,6 +353,7 @@ def _write_evidence(build_engine) -> list[Path]:
         repeat_differing=_RUNS.get("repeat.differing"),
         layer2_seconds=_RUNS.get("layer2.seconds"),
         corpus_version=STT_CORPUS_VERSION,
+        source_sha=_source_sha(),
     )
     if not target:
         return []
@@ -363,8 +386,10 @@ def test_the_report_holds_both_runs_the_engine_and_the_classes(tmp_path, monkeyp
     assert report["moved"] == compare_runs(_no_engine(), _layer2())
     assert "by_layer" in report["no_engine"] and "by_layer" in report["production_engine"]
     assert report["production_engine"]["layer_two_engine"].startswith("local-")
+    assert report["source_sha"] is None or report["source_sha"][:40] == _source_sha()[:40]
     text = Path(target).with_suffix(".md").read_text(encoding="utf-8")
     assert f"{report['production_engine']['correct']} / 106" in text
+    assert str(report["source_sha"] or "an unknown commit") in text
 
 
 # --- (7) nothing leaks: runs LAST in this file -----------------------------------------------

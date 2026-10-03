@@ -638,6 +638,7 @@ def failure_classes(results: Sequence[SttResult | _Row]) -> list[dict[str, Any]]
 LAYER2_REPORT_KEYS: Final[tuple[str, ...]] = (
     "suite",
     "generated_at",
+    "source_sha",
     "no_engine",
     "production_engine",
     "moved",
@@ -658,13 +659,16 @@ def build_layer2_report(
     corpus_version: int,
     repeat_differing: list[str] | None = None,
     layer2_seconds: float | None = None,
+    source_sha: str | None = None,
 ) -> dict[str, Any]:
     """The two runs of the corpus, the cases that moved, the largest failure classes of the
-    production-engine run, and how the engine was built."""
+    production-engine run, and how the engine was built. ``source_sha``: the commit the run's
+    code is (the caller reads it; None when it cannot)."""
     classes = failure_classes(with_engine)
     return {
         "suite": LAYER2_SUITE,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "source_sha": source_sha,
         "no_engine": build_stt_report(no_engine, corpus_version=corpus_version),
         "production_engine": build_stt_report(
             with_engine, corpus_version=corpus_version, layer_two_engine=engine.report.model_id
@@ -707,7 +711,8 @@ def layer2_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# STT corpus, layer 2 as production configures it",
         "",
-        f"Generated {report['generated_at']}. Engine: {report['engine']['model_id']} "
+        f"Generated {report['generated_at']} at {report['source_sha'] or 'an unknown commit'}. "
+        f"Engine: {report['engine']['model_id']} "
         f"({report['engine']['provider']}, {report['engine']['exemplars']} exemplars, "
         f"index built in {report['engine']['build_ms']} ms).",
         "",
