@@ -214,6 +214,18 @@ Test-Case "ALTER TABLE ... RENAME <col> TO without the COLUMN keyword is not exp
     }
 }
 
+Test-Case "upper-case SQL with an I in it (DROP INDEX / CONSTRAINT / VIEW) stops on a tr-TR machine too" {
+    $culture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        # tr-TR: (?i) folds 'I' to dotless 'ı', so "INDEX" was not "index" (the owner's PC runs this step).
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo("tr-TR")
+        foreach ($body in @("op.execute('DROP INDEX ix_tasks_state')", "op.execute('DROP VIEW v_tasks')", "op.execute('DROP CONSTRAINT ck_x')")) {
+            $verdict = Get-UpgradeVerdict -Body $body
+            Assert-True -Condition (-not $verdict.ExpandOnly) -Because "$body drops something"
+        }
+    } finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $culture }
+}
+
 # SQL ALTER is judged by an ALLOW-list: in doubt, not expand-only (inspector return 2, 2026-10-03).
 Test-Case "SQL ALTER TABLE ... ALTER <col> TYPE / SET NOT NULL without the COLUMN keyword is not expand-only" {
     foreach ($body in @("op.execute('ALTER TABLE tasks ALTER legacy_col TYPE bigint')", 'op.execute("alter table tasks alter legacy_col set data type bigint")',

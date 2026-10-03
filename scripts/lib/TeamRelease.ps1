@@ -80,6 +80,55 @@ function Test-TeamLiteralSqlCall {
     return ($argument -match "^\s*(?:$literal\s*)+,?\s*$")
 }
 
+function Get-TeamLiteralSqlText {
+    <#
+    The SQL a literal execute call (Test-TeamLiteralSqlCall) runs: its string literals joined as
+    Python joins adjacent ones. $null when the call is not literal.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Call)
+    if (-not (Test-TeamLiteralSqlCall -Call $Call)) { return $null }
+    $argument = $Call.Substring($Call.IndexOf('(') + 1)
+    $pieces = '[rRuU]?(?:"""([\s\S]*?)"""|''''''([\s\S]*?)''''''|"((?:[^"\\\n]|\\.)*)"|''((?:[^''\\\n]|\\.)*)'')'
+    $text = New-Object System.Text.StringBuilder
+    foreach ($m in [regex]::Matches($argument, $pieces)) {
+        foreach ($g in @(1, 2, 3, 4)) { if ($m.Groups[$g].Success) { [void]$text.Append($m.Groups[$g].Value) } }
+    }
+    return $text.ToString()
+}
+
+function Get-TeamAlterVerdict {
+    <#
+    Why one SQL text's ALTERs are not expand-only, or "" when every one is. An ALLOW-list - in
+    doubt, not expand-only: an ALTER is expand-only only as
+      * ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c <type> [NULL | DEFAULT ...], one or more,
+        where NOT NULL or PRIMARY KEY comes with a DEFAULT (as the add_column rule), and no
+        constraint, reference or generated column;
+      * ALTER TYPE e ADD VALUE [IF NOT EXISTS] 'v' [BEFORE | AFTER 'w'].
+    Anything else (ALTER <col> TYPE, SET NOT NULL, RENAME VALUE, ALTER SEQUENCE, ...) is not.
+    The SQL is upper-cased INVARIANTLY and matched case-sensitively: under tr-TR, (?i) folds
+    'I' to dotless 'ı' and "PRIMARY" would not match "primary".
+    #>
+    param([AllowEmptyString()][string]$Sql = "")
+    $ident = '(?:"[^"]+"|[A-Z_]\w*)'
+    $name = "$ident(?:\.$ident)?"
+    foreach ($m in [regex]::Matches($Sql.ToUpperInvariant(), '\bALTER\s+[^;]*')) {
+        $statement = ($m.Value -replace '\s+', ' ').Trim()
+        $why = "SQL: expand-only olmayan ya da tanınmayan ALTER: $statement"
+        if ($statement -cmatch "^ALTER TYPE $name ADD VALUE (IF NOT EXISTS )?'[^']*'( (BEFORE|AFTER) '[^']*')?$") { continue }
+        $table = [regex]::Match($statement, "^ALTER TABLE (?:IF EXISTS )?(?:ONLY )?$name (.+)$")
+        if (-not $table.Success) { return $why }
+        $actions = $table.Groups[1].Value
+        while ($actions -cmatch '\([^()]*\)') { $actions = $actions -replace '\([^()]*\)', '' }
+        foreach ($action in @($actions -split ',')) {
+            $a = $action.Trim()
+            if ($a -cnotmatch "^ADD (COLUMN )?(IF NOT EXISTS )?(?!(CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN|EXCLUDE)\b)$ident [\w\s.""'\[\]:+-]+$") { return $why }
+            if ($a -cmatch '\b(ALTER|DROP|RENAME|SET|USING|REFERENCES|GENERATED)\b') { return $why }
+            if ($a -cmatch '\bNOT NULL\b|\bPRIMARY KEY\b' -and $a -cnotmatch '\bDEFAULT\b') { return "SQL: ADD COLUMN NOT NULL, varsayılansız: $statement" }
+        }
+    }
+    return ""
+}
+
 function Get-TeamMigrationVerdict {
     <#
     .SYNOPSIS
@@ -99,6 +148,8 @@ function Get-TeamMigrationVerdict {
             that changes a type, nullability or a name, an add_column that is NOT NULL without a
             server default, and SQL that deletes, updates, truncates, drops or renames (inside
             ALTER TABLE any DROP or RENAME, with or without COLUMN);
+          * an ALTER in an execute()'s SQL that is not on the allow-list (Get-TeamAlterVerdict:
+            ADD of a nullable or defaulted column, ADD VALUE to an enum - nothing else);
           * an execute()/exec_driver_sql() whose argument is not a string literal (a variable,
             an f-string, a file read) is unreadable.
     #>
@@ -128,8 +179,10 @@ function Get-TeamMigrationVerdict {
         if ($call -match '\bnullable\s*=\s*False\b' -and $call -notmatch '\bserver_default\s*=') { return (& $verdict $false "add_column NOT NULL, varsayılansız") }
     }
     # SQL the reader cannot see (a file, a variable, an f-string) is unreadable, and stops.
+    $literalSql = New-Object System.Collections.ArrayList
     foreach ($call in @(Get-TeamCallTexts -Text $body -Name "execute|exec_driver_sql")) {
         if (-not (Test-TeamLiteralSqlCall -Call $call)) { return (& $verdict $false "SQL okunamadı (dize olmayan argüman): $(($call -split "`n")[0])") }
+        [void]$literalSql.Add((Get-TeamLiteralSqlText -Call $call))
     }
     # Inside ALTER TABLE, COLUMN is optional: `ALTER TABLE t DROP c` and `RENAME c TO d` are a drop and a rename.
     $sql = @(
@@ -137,9 +190,15 @@ function Get-TeamMigrationVerdict {
         '(?i)\bdrop\s+(table|column|index|constraint|schema|type|view)\b', '(?i)\brename\s+(to|column)\b', '(?i)\balter\s+column\b',
         '(?i)\balter\s+table\b[^;]*?\bdrop\b', '(?i)\balter\s+table\b[^;]*?\brename\b'
     )
+    # CultureInvariant: under tr-TR (?i) folds 'I' to 'ı' and "DROP INDEX" would not be "drop index".
     foreach ($pattern in $sql) {
-        $found = [regex]::Match($body, $pattern)
+        $found = [regex]::Match($body, $pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
         if ($found.Success) { return (& $verdict $false "SQL: $($found.Value)") }
+    }
+    # What the deny-list above let through, an ALTER must still be on the allow-list.
+    foreach ($sqlText in $literalSql.ToArray()) {
+        $alter = Get-TeamAlterVerdict -Sql $sqlText
+        if ($alter) { return (& $verdict $false $alter) }
     }
     return (& $verdict $true "")
 }

@@ -56,3 +56,13 @@ added); counting the maintenance window on the home PC's clock (two clocks for o
 - `team/release-blocked.json` should be git-ignored (a machine-local marker), like team/reports/.
 - Exit codes: 0 released/nothing; 2 protocol; 3 lock; 5 stopped by a rule; 6 failed (marker);
   7 preflight failed; 12 unexpected/queue write.
+
+**Addendum (inspector return 2, 2026-10-03): SQL ALTER is judged by an ALLOW-list.** A
+deny-list kept missing PostgreSQL forms where a keyword is optional (`ALTER TABLE t ALTER c
+TYPE`, `SET NOT NULL`, `ADD c int NOT NULL`, `ALTER TYPE e RENAME VALUE`). Now every ALTER in an
+execute()'s literal SQL must be one of: `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c <type>`
+(NOT NULL / PRIMARY KEY only with DEFAULT; no constraint, reference or generated column) or
+`ALTER TYPE e ADD VALUE ...`. Anything else stops - in doubt, not expand-only. Found on the way:
+on a tr-TR machine (the owner's PC) `(?i)` folds 'I' to dotless 'ı', so upper-case `DROP
+INDEX/CONSTRAINT/VIEW` slipped the deny-list; it now matches CultureInvariant, and the
+allow-list upper-cases invariantly and matches case-sensitively.
