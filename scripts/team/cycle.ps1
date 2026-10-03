@@ -777,8 +777,23 @@ try {
             $label = if ($null -ne $Task) { [string]$Task.id } else { "cycle" }
             $runTemp = Join-Path $tempRoot ("{0}-{1}-{2}" -f $label, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
         }
-        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp
-        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp); model = $runModel }
+        # The run's seat on the team's board: its role, and for a worker the smallest number no
+        # live worker run holds - kept for the run's life (the board knows worker-1..9). The seat
+        # is not part of the status document (the status route refuses unknown run fields).
+        $seat = $Role
+        if ($Role -eq "worker") {
+            $held = @($script:liveRuns | Where-Object { $_.role -eq "worker" } | ForEach-Object { [string]$_.seat })
+            $seat = ""
+            for ($n = 1; $n -le 9; $n++) { if ($held -notcontains "worker-$n") { $seat = "worker-$n"; break } }
+        }
+        $taskLabel = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" })
+        $boardEnvironment = @{ PAGENTOS_TEAM_SEAT = $seat; PAGENTOS_TEAM_TASK = $taskLabel }
+        if ($useApi) {
+            $boardEnvironment["PAGENTOS_TEAM_URL"] = $QueueUrl
+            $boardEnvironment["PAGENTOS_TEAM_TOKEN_FILE"] = $QueueToken
+        }
+        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp -Environment $boardEnvironment
+        $live = [pscustomobject]@{ task = $taskLabel; role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $seat }
         [void]$script:liveRuns.Add($live)
         $loweredFrom = ""
         if ([bool]$Pick.Lowered) {

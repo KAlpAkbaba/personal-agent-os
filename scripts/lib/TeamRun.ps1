@@ -309,7 +309,8 @@ function Start-TeamRun {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$Prompt,
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
-        [string]$TempDirectory = ""
+        [string]$TempDirectory = "",
+        [hashtable]$Environment = @{}
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FilePath
@@ -343,6 +344,12 @@ function Start-TeamRun {
     if ($TempDirectory) {
         [void](New-Item -ItemType Directory -Force -Path $TempDirectory)
         foreach ($name in @("TEMP", "TMP", "TMPDIR")) { $psi.EnvironmentVariables[$name] = $TempDirectory }
+    }
+    # What the run needs to reach the team's board (ADR team-board): the address, the token
+    # file's PATH (never the token), its seat and its task. Empty values are not set.
+    foreach ($name in @($Environment.Keys)) {
+        $value = [string]$Environment[$name]
+        if ($value) { $psi.EnvironmentVariables[[string]$name] = $value }
     }
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEndAsync()

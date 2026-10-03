@@ -2197,6 +2197,34 @@ try {
     # the same poll and are completed one after the other - the batch's shape, on purpose.
     $onePoll = "-PollMilliseconds 6000"
 
+    Test-Case "each run is told how to reach the team's board: its seat, its task, the address and the token file's path" {
+        # The board (ADR team-board, the owner's idea of 2026-10-03): board.ps1 reads
+        # PAGENTOS_TEAM_URL / PAGENTOS_TEAM_TOKEN_FILE; a note names its seat (worker-1..9).
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"))
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $byRole = @{}; foreach ($call in $run.Calls) { $byRole[[string]$call.role] = $call }
+        Assert-Equal -Expected "worker-1" -Actual ([string]$byRole["worker"].team_seat) -Because "a worker run sits at worker-1 when no other worker runs"
+        Assert-Equal -Expected "inspector" -Actual ([string]$byRole["inspector"].team_seat) -Because "the inspector's seat"
+        foreach ($call in $run.Calls) {
+            Assert-Equal -Expected "task-one" -Actual ([string]$call.team_task) -Because "$($call.role): the task it works on"
+            Assert-Equal -Expected $api.Url -Actual ([string]$call.team_url) -Because "$($call.role): the board's address is the queue's"
+            Assert-Equal -Expected $api.TokenFile -Actual ([string]$call.team_token_file) -Because "$($call.role): the token file's PATH"
+            Assert-True -Condition (([string]$call.team_token_file) -ne (Get-Content -Raw -LiteralPath $api.TokenFile).Trim()) -Because "never the token itself"
+        }
+        # without the API (files), no address is handed out, and the seat still is
+        $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $files = Invoke-Cycle -Root $plain -Scenario "approve"
+        foreach ($call in $files.Calls) {
+            Assert-Equal -Expected "" -Actual ([string]$call.team_url) -Because "no queue URL, no board address"
+            Assert-True -Condition ([bool][string]$call.team_seat) -Because "the seat is set: $($call.role)"
+        }
+        # the status the cycle writes carries no seat field (the status route refuses unknown run fields)
+        $state = Get-FakeApiState -Api $api
+        Assert-True -Condition ((ConvertTo-Json -InputObject $state.status -Depth 8 -Compress) -notmatch '"seat"') -Because "no seat in the status document"
+    }
+
     Test-Case "in API mode the cycle takes the lock through the API, writes the task's states there, posts the report, and leaves the files alone" {
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"))
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
