@@ -357,20 +357,28 @@ def test_on_the_session_settings_build_the_real_provider_and_one_request_is_sent
     assert _note(engine)["narrator"] == "model"
 
 
-def test_on_the_real_provider_swallows_a_transport_timeout_into_its_own_error_class(
-    wired, built, monkeypatch
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (httpx.ReadTimeout("timed out"), "timeout"),
+        (httpx.ConnectError("connection refused"), ERROR_CHAT_UNAVAILABLE),
+    ],
+    ids=["timeout", "refused"],
+)
+def test_on_the_real_provider_tells_a_transport_timeout_from_an_unreachable_model(
+    wired, built, monkeypatch, error, reason
 ):
-    """KNOWN GAP, pinned: ``AnthropicChatProvider.answer`` catches every ``httpx.HTTPError``
-    (a timeout among them) and returns ``chat_unavailable`` - so over the REAL provider a
-    timeout is recorded under that class, not as "timeout". Telling them apart is
-    ``app/assistant_chat.py``'s to do (outside this task's area). The fallback itself holds:
-    the rule text is spoken, one attempt is made, and the note names the rule narrator."""
+    """``AnthropicChatProvider.answer`` returns a transport timeout as its own class
+    (ADR-0255 'Not closed here' A, closed): over the REAL provider "the model was too slow"
+    reads ``timeout`` and "the model could not be reached" still reads ``chat_unavailable``.
+    The fallback holds either way: the rule text is spoken, one attempt is made, and the
+    note names the rule narrator."""
     client, _identity, runtime, _sideband, _issued, engine = wired
     attempts: list[float] = []
 
     def times_out(url, headers, body, timeout_s):
         attempts.append(timeout_s)
-        raise httpx.ReadTimeout("timed out")
+        raise error
 
     monkeypatch.setattr("app.assistant_chat._http_send", times_out)
     runtime.register_live(settings=_settings(enabled=True))
@@ -382,7 +390,7 @@ def test_on_the_real_provider_swallows_a_transport_timeout_into_its_own_error_cl
     assert attempts == [20.0], "one attempt, bounded by assistant_chat_timeout_s"
     assert result["query"]["kind"] == QUERY_NARRATIVE and expected in _told(engine)
     note = _note(engine)
-    assert (note["narrator"], note["narrator_reason"]) == ("rule", ERROR_CHAT_UNAVAILABLE)
+    assert (note["narrator"], note["narrator_reason"]) == ("rule", reason)
 
 
 def test_on_without_a_key_the_rule_narrator_answers_and_the_note_says_no_provider(wired, sent):
