@@ -54,7 +54,7 @@ $script:TestSlotKindTable = @(
         Kind     = "heavy"
         Capacity = 3
         Examples = "the whole api unit suite (56 min alone, 2 h 02 beside three others on 2026-10-02); the owner utterance corpus (11 min alone, 62 beside the gate); the whole web suite (build + vitest); the dotnet build + test of the Windows agent; the api integration suite; a suite over two minutes in the gate of 2026-10-03 (team-cycle.tests.ps1 820 s, cloud-release-bluegreen.tests.ps1 481 s, the browser agent lint + tests 213 s)"
-        Reason   = "20 cores / 28 threads / 48 GB: three whole-suite runs fit without slowing each other much; the fourth is where 2026-10-02's 3.5-hour gate came from"
+        Reason   = "a ceiling, not a fit: four at once is where 2026-10-02's 3.5-hour gate came from, but three do not run free - one whole api unit run grew to 14 GB on 2026-10-03 (3 x 14 = 42 of 48 GB) and two whole unit runs side by side measured +27 % and +30 % over their times alone; the roles leave the whole unit suite to the lead's gate, and the lead decides the number from runs.log"
     }
 )
 $script:TestSlotTicketMinutes = 5

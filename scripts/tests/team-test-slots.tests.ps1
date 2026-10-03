@@ -442,6 +442,11 @@ Test-Case "12 the role files name the rule, and the example commands they show p
         foreach ($word in @('`database`', '`desktop`', '`heavy`', 'ONAY', 'BEKLE', 'test-slot.ps1 run', 'NOT_RUN')) {
             Assert-True ($text.Contains($word)) "$role.md names $word"
         }
+        # the same files forbid the whole api unit suite to the roles (the 14 GB crash of 2026-10-03):
+        # the slot rule must not offer it as a run to ask for
+        $rule = [regex]::Match($text, '(?s)\*\*Test sırası.*?needs no slot\.').Value
+        Assert-True ($rule.Length -gt 0) "$role.md has the Test sırası rule"
+        Assert-True (-not ($rule -match 'whole\s+api\s+unit\s+suite')) "$role.md's slot rule does not list the whole api unit suite as a heavy run"
         $examples = @([regex]::Matches($text, '`(powershell [^`]*test-slot\.ps1 (?:ask|run) [^`]*)`') | ForEach-Object { $_.Groups[1].Value })
         Assert-True (@($examples | Where-Object { $_ -match 'test-slot\.ps1 ask ' }).Count -ge 1) "$role.md shows an ask example"
         Assert-True (@($examples | Where-Object { $_ -match 'test-slot\.ps1 run ' }).Count -ge 1) "$role.md shows a run example"

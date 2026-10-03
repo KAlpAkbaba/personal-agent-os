@@ -28,7 +28,7 @@ ran_s, exit) so the numbers below can be decided from data.
 |---|---|---|---|
 | `database` | 1 | anything that migrates, resets or writes the dev stack's shared PostgreSQL: the api integration suite, a hand-run alembic, the gate's dev-up + alembic | one shared database: a second writer pulls the floor from under the first |
 | `desktop` | 1 | the foreground window or the GPU: the operator lab, the Unity scene tests, a headed browser, the M1 E2E | one foreground, one GPU: two steal focus from each other and both fail |
-| `heavy` | 3 | many cores for minutes: the whole api unit suite, the owner utterance corpus, the web build + suite, the dotnet build + test, the integration suite, a suite over two minutes in the gate of 2026-10-03 (team-cycle 820 s, cloud-release-bluegreen 481 s, the browser agent 213 s) | three whole-suite runs fit on 28 threads; the fourth is where the 3.5-hour gate came from |
+| `heavy` | 3 | many cores for minutes: the whole api unit suite, the owner utterance corpus, the web build + suite, the dotnet build + test, the integration suite, a suite over two minutes in the gate of 2026-10-03 (team-cycle 820 s, cloud-release-bluegreen 481 s, the browser agent 213 s) | a ceiling, not a fit: four at once is where the 3.5-hour gate came from, but three do NOT run free - one whole api unit run grew to 14 GB on 2026-10-03 (3 x 14 = 42 of 48 GB; several at once crashed the PC), and two whole unit runs side by side measured +27 % and +30 % over their times alone. The roles no longer run the whole unit suite (the lead's gate does); whether 3 stays is the lead's call from `runs.log` |
 
 A request may need several kinds (the integration suite: `database,heavy`) and gets all or none.
 Kinds are counted in the table's order. A waiter that could be granted now has its kinds kept for
@@ -64,8 +64,18 @@ files and runs their example commands through the real script with `-DryRun`.
 
 It is a rule the agents follow, not a cage. A run started without asking is not stopped, and
 nothing is ever killed or refused for being long. The log and the inspector's report are how a
-miss is seen. The killed wrapper's own command is not followed: if a tool kills only the wrapper,
-its child may run on after the slot is freed (the slot follows the wrapper by design).
+miss is seen.
+
+A killed wrapper's command keeps running after its slot is freed (proven by the inspector's probe
+on 84639f8a: the wrapper was killed, the next ask was ONAY, and the 25 s child wrote its marker
+afterwards). The slot follows the wrapper by design and nothing is killed; so if a tool kills only
+the wrapper and not its process tree, the queue can admit a new heavy run while the orphaned one
+still loads the machine. The log shows it as `exit=holder-gone`.
+
+The gate's wait has no upper bound. It asks every 20 s for as long as the holder is alive; a run
+that is alive but hung holds its kinds, and the gate waits on it. In practice an agent's tool
+timeout kills that wrapper and frees the slot; a hung holder outside any tool limit would stall the
+gate until someone ends it (its BEKLE line, printed once a minute, names who holds it).
 
 It separates the MACHINE's shared things, not a worktree's files: two runs of the same suite in
 ONE worktree still collide (measured 2026-10-03: the worker's demonstration run beside the gate
