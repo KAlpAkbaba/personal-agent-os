@@ -12,6 +12,9 @@ command and answers it.
 * Every ``browser.click`` carries ``risk_ceiling``: the class the gate allowed. The
   worker classifies the click from the element it resolved and refuses above the
   ceiling, so a step that turns out to be more than it looked is never performed.
+  Since contract v1.8 so do ``fill``, ``select_option`` and ``set_checked``; a write
+  answered without ``risk_class`` came from a worker that ignored the ceiling, and the
+  task stops there (``capability_missing``).
 * A URL is validated in full here (names resolved) before it is sent; the device
   validates again before it acts.
 
@@ -58,16 +61,24 @@ CAPABILITY_TAB_NEW: Final = "browser.tab_new"
 CONTRACT_OBSERVE: Final = 1
 DEFAULT_TIMEOUT_S: Final = 60.0
 _REASON: Final = re.compile(r"\(([a-z_]+)\)")
+#: Contract v1.8: the writes that carry ``risk_ceiling`` and answer ``risk_class``.
+_WRITES: Final = frozenset({ACTION_FILL, ACTION_SELECT, ACTION_CHECK})
 
 _lock = threading.Lock()
 #: (device, session) pairs this process has opened. Lost on a restart, which is safe:
 #: ``session_open`` on a live session answers ``created: false`` and no tab is opened.
 _OPEN: set[tuple[str, str]] = set()
+#: Devices whose worker answered a write without ``risk_class`` (before contract v1.8).
+#: No further write is SENT to them: the loop counts a failed act and may plan another
+#: write, and that one must not reach a worker that cannot refuse it. Lost on a restart,
+#: which costs one more Cloud-gated write before the device is known again.
+_NO_WRITE_CEILING: set[str] = set()
 
 
 def reset_known_sessions() -> None:
     with _lock:
         _OPEN.clear()
+        _NO_WRITE_CEILING.clear()
 
 
 def session_id_for(task_id: str) -> str:
@@ -209,12 +220,33 @@ class DeviceTaskBrowser:
         elif step.action == ACTION_CLICK:
             payload = {"target": target, "risk_ceiling": risk_ceiling}
         elif step.action in (ACTION_FILL, ACTION_SELECT):
-            payload = {"target": target, "value": step.value or ""}
+            payload = {"target": target, "value": step.value or "", "risk_ceiling": risk_ceiling}
         elif step.action == ACTION_CHECK:
-            payload = {"target": target, "checked": bool(step.checked)}
+            payload = {
+                "target": target,
+                "checked": bool(step.checked),
+                "risk_ceiling": risk_ceiling,
+            }
         else:  # pragma: no cover - CAPABILITY_OF and this chain name the same actions
             raise BrowserPortError("validation_error", "unhandled action", reason="action")
-        return self._with_session(task_id, key, capability, payload)
+        device = str(self._device_id)
+        cannot_enforce = BrowserPortError(
+            "capability_missing",
+            f"the device's browser worker does not enforce a ceiling on {capability} "
+            "(contract v1.8)",
+        )
+        if step.action in _WRITES:
+            with _lock:
+                if device in _NO_WRITE_CEILING:
+                    raise cannot_enforce
+        result = self._with_session(task_id, key, capability, payload)
+        if step.action in _WRITES and not result.get("risk_class"):
+            # A worker from before v1.8 ignores the ceiling and writes. That one write was
+            # gated here; the next must not be sent to a device that cannot refuse it.
+            with _lock:
+                _NO_WRITE_CEILING.add(device)
+            raise cannot_enforce
+        return result
 
 
 __all__ = [

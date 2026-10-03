@@ -578,7 +578,9 @@ _DESCRIBE_OBSERVED_JS = (
   path.unshift(steps.join(' > '));
   const key = path.join(' >> ');
   const hit = all.find((r) => r.path.join(' >> ') === key);
-  return hit ? { tag: hit.tag, role: hit.role, name: hit.name } : {};
+  return hit
+    ? { tag: hit.tag, role: hit.role, name: hit.name, submits: hit.submits, in_form: hit.in_form }
+    : {};
 }
 """
 )
@@ -1925,6 +1927,47 @@ class Worker:
             "resolved": {"tag": resolved.tag, "role": resolved.role, "name": resolved.name},
         }
 
+    async def _write_class(
+        self, state: SessionState, spec: TargetSpec, payload: dict[str, Any], action: str
+    ) -> policy.RiskClass | None:
+        """Contract v1.8: the class of a write, decided BEFORE it is made - or ``None``
+        when the payload names no ceiling (served exactly as v1.7).
+
+        The element is described in the COLLECTOR's terms (``_DESCRIBE_OBSERVED_JS``):
+        the name an observation shows, ``submits`` and ``in_form``. Never the click's
+        description, whose ``name`` falls back to a field's value - that would classify
+        a write by what is typed into it. An element the collector does not list is
+        described as nameless and wired: it is classified as one that may send.
+        """
+        capability = f"browser.{action}"
+        ceiling = payload.get("risk_ceiling")
+        if ceiling is None:
+            return None
+        page = state.browser_session.backend.current_page
+        locator = spec.to_locator(_frame_root(page, payload.get("frame"))).first
+        try:
+            await locator.wait_for(state="attached", timeout=payload.get("timeout_ms", 5_000))
+            described = await locator.evaluate(_DESCRIBE_OBSERVED_JS)
+        except Exception as exc:
+            raise map_playwright_error(
+                exc, phase=Phase.RESOLVE, op=action, evidence={"target": spec.as_dict()}
+            ) from exc
+        if not described:
+            described = {"name": "", "submits": False, "in_form": True}
+        risk_class = policy.classify_write(
+            observe.clean_name(described.get("name")),
+            bool(described.get("submits")),
+            bool(described.get("in_form")),
+            action,
+        )
+        policy.enforce(state.policy_allowed, risk_class, capability=capability)
+        policy.enforce_ceiling(risk_class, ceiling, capability=capability)
+        return risk_class
+
+    @staticmethod
+    def _written(risk_class: policy.RiskClass | None) -> dict[str, Any]:
+        return {"ok": True} if risk_class is None else {"ok": True, "risk_class": str(risk_class)}
+
     async def _op_fill(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         _refuse_on_denied_site(state, "browser.fill")
         value = payload.get("value")
@@ -1932,12 +1975,10 @@ class Worker:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR, "fill: 'value' must be a string", retryable=False
             )
-        await state.browser_session.fill(
-            await self._bound_target(state, payload.get("target")),
-            value,
-            frame=payload.get("frame"),
-        )
-        return {"ok": True}
+        spec = await self._bound_target(state, payload.get("target"))
+        risk_class = await self._write_class(state, spec, payload, "fill")
+        await state.browser_session.fill(spec, value, frame=payload.get("frame"))
+        return self._written(risk_class)
 
     async def _op_select_option(
         self, state: SessionState, payload: dict[str, Any]
@@ -1950,12 +1991,10 @@ class Worker:
                 "select_option: 'value' must be a string",
                 retryable=False,
             )
-        await state.browser_session.select_option(
-            await self._bound_target(state, payload.get("target")),
-            value=value,
-            frame=payload.get("frame"),
-        )
-        return {"ok": True}
+        spec = await self._bound_target(state, payload.get("target"))
+        risk_class = await self._write_class(state, spec, payload, "select_option")
+        await state.browser_session.select_option(spec, value=value, frame=payload.get("frame"))
+        return self._written(risk_class)
 
     async def _op_set_checked(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         _refuse_on_denied_site(state, "browser.set_checked")
@@ -1966,12 +2005,10 @@ class Worker:
                 "set_checked: 'checked' must be a boolean",
                 retryable=False,
             )
-        await state.browser_session.set_checked(
-            await self._bound_target(state, payload.get("target")),
-            checked,
-            frame=payload.get("frame"),
-        )
-        return {"ok": True}
+        spec = await self._bound_target(state, payload.get("target"))
+        risk_class = await self._write_class(state, spec, payload, "set_checked")
+        await state.browser_session.set_checked(spec, checked, frame=payload.get("frame"))
+        return self._written(risk_class)
 
     async def _op_scroll(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         direction = payload.get("direction", "down")

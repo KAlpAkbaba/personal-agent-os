@@ -105,9 +105,53 @@ def load(row: WebTaskRow) -> TaskState:
     return TaskState.from_dict(dict(row.state_json or {}))
 
 
+def _retained(document: dict[str, Any]) -> dict[str, Any]:
+    """What of the page a stored state keeps (ADR-0207 PR-C).
+
+    * Ended (done / failed / cancelled - an abandoned task is failed): nothing. There is
+      no next round to act on it, and the page may be the owner's mail.
+    * Waiting for the owner, and not fresh: the address, the title and the elements (what
+      was asked about), never the text. The loop observes anew after the owner's word -
+      ``observation_fresh`` is false in every wait - so no reader needs it.
+    * Running: all of it. The next round acts on it instead of observing twice.
+
+    A NEW document is returned; the one passed in is never edited in place.
+    """
+    status = document.get("status")
+    observation = document.get("observation")
+    if status in TERMINAL:
+        return {**document, "observation": None, "observation_fresh": False}
+    if (
+        status == STATUS_WAITING_OWNER
+        and isinstance(observation, dict)
+        and not document.get("observation_fresh")
+        and observation.get("text")
+    ):
+        return {**document, "observation": {**observation, "text": ""}}
+    return document
+
+
+def scrub_observations(db: Session, now: datetime | None = None) -> int:
+    """Clear the observation of every ended task that still holds one (rows written before
+    the retention rule). Idempotent: a second call finds nothing. Returns the count."""
+    rows = db.execute(select(WebTaskRow).where(WebTaskRow.status.in_(tuple(TERMINAL)))).scalars()
+    cleared = 0
+    for row in rows:
+        document = dict(row.state_json or {})
+        if document.get("observation") is None and not document.get("observation_fresh"):
+            continue
+        # The status column is the truth for a row; the document may predate it.
+        row.state_json = {**document, "observation": None, "observation_fresh": False}
+        cleared += 1
+    if cleared:
+        db.commit()
+        logger.info("web_task_observations_scrubbed", rows=cleared, at=(now or _now()).isoformat())
+    return cleared
+
+
 def _write(row: WebTaskRow, state: TaskState, *, now: datetime | None = None) -> None:
     moment = now or _now()
-    row.state_json = state.as_dict()
+    row.state_json = _retained(state.as_dict())
     row.status = state.status
     row.round_index = state.round_index
     row.failure = state.failure
@@ -200,6 +244,9 @@ def start_task_db(
         raise WebTaskError("goal_too_long", f"a goal is at most {MAX_GOAL_CHARS} characters")
     moment = now or _now()
     running = active_task(db, now=moment)
+    # Rows that ended before the retention rule still hold a page; the next task clears
+    # them. (A timed sweep from the app's lifespan is the named follow-up.)
+    scrub_observations(db, moment)
     if running is not None:
         raise WebTaskError(
             "task_in_flight", "another browser task is in flight", task_id=str(running.id)
@@ -460,6 +507,7 @@ __all__ = [
     "outcome",
     "request_cancel_db",
     "run_round_db",
+    "scrub_observations",
     "start_task_db",
     "task_dict",
     "workflow_id_for",
