@@ -13,6 +13,16 @@
     `team/plans/<cycle>-split-<id>.json`, and THIS script validates it (Test-TeamSplit) and
     queues the tasks as `approved`, or refuses the whole split and says why in the report.
 
+    A task the cycle STOPPED (two returns, 'alan dışı dosya', a conflict on the integration
+    branch, two failed runs) is the Proje Yöneticisi's, not the owner's (pm-duty-stopped, the
+    owner of 2026-10-03): when the lead seat is free, one duty run of the same safe shape as a
+    split (role file lead.md, Read/Grep/Glob/Write) is handed the stopped tasks and writes
+    `team/plans/<cycle>-duty-<n>.json`; THIS script validates it (Test-TeamDuty) and applies it
+    whole - return, grant_and_return (the area widened by the granted paths), escalate (the task
+    stays stopped, "Danışman'a iletildi: ") - or refuses it whole and says why in the report. A
+    task is handed once per stop; a return beside a task that holds the same files is not
+    forced. A split and a duty run never run at once: there is one lead seat.
+
     It never waits for a human. It ends when nothing in the queue can run - every task is at
     a gate, done or stopped - or when a cap is reached, and it writes
     `team/reports/<cycle-id>.md` in Turkish either way.
@@ -88,6 +98,10 @@
     say when, the cycle stops and says so in the report - the next cycle with the same
     -CycleId continues where it left off.
 
+.PARAMETER NoDuty
+    No duty run of the Proje Yöneticisi for stopped tasks in this cycle (it is on by default);
+    a stopped task then waits for a person, as it did before pm-duty-stopped.
+
 .PARAMETER ClaudePrefixArguments
     Arguments placed before the ones this script builds. The tests use it to put a fake
     in place of the model: -ClaudePath powershell.exe -ClaudePrefixArguments -File,fake.ps1
@@ -141,6 +155,9 @@ param(
     # The first step of a cycle by itself: the researcher writes its proposals, they are
     # queued for the owner, and NO task is run or moved - not even an approved one.
     [switch]$ResearchOnly,
+    # The Proje Yöneticisi's duty for stopped tasks (pm-duty-stopped) is on in every cycle;
+    # -NoDuty turns it off.
+    [switch]$NoDuty,
     [switch]$DryRun,
     # The Cloud Core's queue (pilot-02): with -QueueUrl the queue, the lock and the report go
     # through /v1/team/queue there, so an approval can be given with this PC off and the other
@@ -157,6 +174,11 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamQueue.ps1")
+# The lead-protected list a duty decision's grant is judged against (pm-duty-stopped). A copy of
+# the scripts without it (a test's sandbox of other steps) runs as before: Test-TeamDuty then
+# refuses every decision file - it fails closed, it does not guess.
+$teamAreaLibrary = Join-Path $repoRoot "scripts\lib\TeamArea.ps1"
+if (Test-Path -LiteralPath $teamAreaLibrary) { . $teamAreaLibrary }
 . (Join-Path $repoRoot "scripts\lib\TeamRun.ps1")
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 
@@ -742,7 +764,11 @@ try {
             $Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @(),
             # What Select-RunModel answered for this run: the model to start on, and the one it
             # should have been (a run started below it is a lowering, and is written down).
-            [Parameter(Mandatory = $true)]$Pick
+            [Parameter(Mandatory = $true)]$Pick,
+            # A run of no single task (the Proje Yöneticisi's duty): its name in the status, on
+            # the board and in its report files ("cycle" when not given), and what it was handed.
+            [string]$Label = "",
+            $Duty = $null
         )
         $roleFile = Join-Path $agentsRoot "$Role.md"
         if (-not (Test-Path -LiteralPath $roleFile)) { throw "there is no role file for '$Role': $roleFile" }
@@ -773,11 +799,11 @@ try {
                 foreach ($subject in $subjects) { $prompt += "`n- " + ([string]$subject).Trim() }
             }
         }
+        $taskLabel = $(if ($null -ne $Task) { [string]$Task.id } elseif ($Label) { $Label } else { "cycle" })
         $runTemp = ""
         $tempRoot = Read-TeamRunTempRoot -Path $settingsPath
         if ($tempRoot) {
-            $label = if ($null -ne $Task) { [string]$Task.id } else { "cycle" }
-            $runTemp = Join-Path $tempRoot ("{0}-{1}-{2}" -f $label, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
+            $runTemp = Join-Path $tempRoot ("{0}-{1}-{2}" -f $taskLabel, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
         }
         # The run's seat on the team's board: its role, and for a worker the smallest number no
         # live worker run holds - kept for the run's life (the board knows worker-1..9). The seat
@@ -788,7 +814,6 @@ try {
             $seat = ""
             for ($n = 1; $n -le 9; $n++) { if ($held -notcontains "worker-$n") { $seat = "worker-$n"; break } }
         }
-        $taskLabel = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" })
         $boardEnvironment = @{ PAGENTOS_TEAM_SEAT = $seat; PAGENTOS_TEAM_TASK = $taskLabel }
         if ($useApi) {
             $boardEnvironment["PAGENTOS_TEAM_URL"] = $QueueUrl
@@ -810,7 +835,7 @@ try {
         return [pscustomobject]@{
             Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel
             LoweredFrom = $loweredFrom; Where = $WorkingDirectory; Prompt = $Prompt; ExcludeTools = @($ExcludeTools)
-            RunTemp = $runTemp
+            RunTemp = $runTemp; Label = $Label; Duty = $Duty
         }
     }
 
@@ -822,7 +847,8 @@ try {
         $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline
         Remove-TeamRunTemp -Path ([string]$Started.RunTemp)
         $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model ([string]$Started.Model)
-        $taskId = if ($null -ne $Started.Task) { [string]$Started.Task.id } else { "cycle" }
+        # The run's own name: its task, a duty run's label, or "cycle" (the researcher).
+        $taskId = [string]$Started.Live.task
         $number = 1
         while (Test-Path -LiteralPath (Join-Path $cycleDir "$taskId-$($Started.Role)-$number.json")) { $number++ }
         $stem = Join-Path $cycleDir "$taskId-$($Started.Role)-$number"
@@ -964,6 +990,17 @@ try {
     $splitTried = @{}
     $ownTries = @{}
     $postedIdeas = @{}
+    # The Proje Yöneticisi's duty (pm-duty-stopped). $dutyHanded: a stopped task's id -> the
+    # updated_at it had when a duty run was handed it (handed once per stop; an entry goes when
+    # the task is no longer stopped, so its next stop is a new one). $dutyTimes: how often a task
+    # was handed in this cycle (three at most: a hang guard on paid runs). $dutyWaits: a return
+    # the protocol refused beside a task holding the same files, applied by THIS script when
+    # that task leaves the work. $dutyCapNoted: the third hand-over is said once.
+    $dutyHanded = @{}
+    $dutyTimes = @{}
+    $dutyWaits = @{}
+    $dutyCapNoted = @{}
+    $dutyMaxTimes = 3
     # A cap, the stop flag or the usage limit ended the cycle: nothing new starts.
     $capped = $false
     # Refills in a row that moved a state and started nothing, with nothing in flight. One or
@@ -1095,6 +1132,203 @@ try {
         return [pscustomobject]@{ Runnable = @($runnable.ToArray()); Moved = $moved }
     }
 
+    # ---------------------------------------------------------------- the Proje Yöneticisi's duty
+    # pm-duty-stopped (the owner, 2026-10-03: "proje yöneticisi koltuğu var zaten, sadece rolü ve
+    # şemayı üzerine alması gerekmez mi?"). A stopped task used to wait until a person noticed it on
+    # the Ofis page. Now the lead seat, when it is free, takes a duty run of the split's safe shape.
+
+    function Get-DutyCandidates {
+        <# The stopped tasks to hand a duty run now. Set aside: a task whose write the store refused
+           (until it is read again), one the cycle gave up on, one whose return waits for another
+           task's files, one handed $dutyMaxTimes times in this cycle (said once), and one that has
+           had -MaxRunsPerTask runs - its worker could not be started again in this cycle. #>
+        foreach ($id in @($script:dutyHanded.Keys)) {
+            $now = @(Get-TeamTasks -Queue $script:queue | Where-Object { [string]$_.id -eq $id })
+            if (@($now).Count -eq 0 -or [string]$now[0].state -ne "stopped") { $script:dutyHanded.Remove($id) }
+        }
+        $skip = @{}
+        foreach ($id in @($script:staleIds.Keys) + @($script:abandoned.Keys) + @($script:dutyWaits.Keys)) { $skip[[string]$id] = $true }
+        foreach ($id in @($script:runCount.Keys)) { if ([int]$script:runCount[$id] -ge $MaxRunsPerTask) { $skip[[string]$id] = $true } }
+        foreach ($id in @($script:dutyTimes.Keys)) {
+            if ([int]$script:dutyTimes[$id] -lt $script:dutyMaxTimes) { continue }
+            $skip[[string]$id] = $true
+            $task = @(Get-TeamTasks -Queue $script:queue | Where-Object { [string]$_.id -eq $id -and [string]$_.state -eq "stopped" })
+            if (@($task).Count -gt 0 -and -not $script:dutyCapNoted.ContainsKey($id) -and [string]$script:dutyHanded[$id] -cne [string]$task[0].updated_at) {
+                $script:dutyCapNoted[$id] = $true
+                Add-CycleNote -List "risks" -Text "nöbet: ${id}: bu döngüde $($script:dutyMaxTimes) kez Proje Yöneticisi'ne verildi ve yine durdu; bu döngüde bir daha verilmiyor - Danışman'ın"
+            }
+        }
+        return @(Get-TeamDutyCandidates -Queue $script:queue -Handed $script:dutyHanded -Skip $skip)
+    }
+
+    function Start-DutyRun {
+        <# ONE lead run for the stopped tasks of $Item.Duty. They are handed at once, whether the
+           run could be started or not: a stop is handed once. $false when it could not start. #>
+        param($Item)
+        $tasks = @($Item.Duty)
+        $number = 1
+        while (Test-Path -LiteralPath (Join-Path $repoRoot ("team\plans\$CycleId-duty-$number.json"))) { $number++ }
+        $label = "duty-$number"
+        $relative = "team/plans/$CycleId-duty-$number.json"
+        $listed = New-Object System.Collections.ArrayList
+        foreach ($task in $tasks) {
+            $id = [string]$task.id
+            $script:dutyHanded[$id] = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
+            $script:dutyTimes[$id] = 1 + [int]$script:dutyTimes[$id]
+            [void]$listed.Add([pscustomobject]@{ Id = $id; Updated = $script:dutyHanded[$id] })
+        }
+        $script:ownTries["$label/lead"] = 1 + [int]$script:ownTries["$label/lead"]
+        try {
+            $folder = Join-Path $repoRoot "team\plans"
+            if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+            $card = New-TeamDutyCard -Tasks $tasks -CycleId $CycleId -DutyFile $relative
+            $duty = [pscustomobject]@{ File = $relative; Label = $label; Tasks = @($listed.ToArray()) }
+            [void]$script:pool.Add((Start-RoleRun -Task $null -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit") -Pick $Item.Pick -Label $label -Duty $duty))
+            return $true
+        }
+        catch {
+            Add-CycleNote -List "risks" -Text "nöbet koşusu ($label): koşu başlatılamadı: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    function Get-DutyReturnBlock {
+        <# Why a stopped task cannot go back to its worker with this area now, or $null. A task in
+           work that holds the same files (Get-TeamAreaHolders: the one rule), or any rule of the
+           queue the move would break (Test-TeamQueue) - never forced, never a broken queue. #>
+        param($Task, [string[]]$Area)
+        $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $Task -Depth 12 -Compress)
+        Set-TeamProperty -InputObject $copy -Name "area" -Value ([string[]]@($Area))
+        Set-TeamProperty -InputObject $copy -Name "state" -Value "returned"
+        $tasks = @(Get-TeamTasks -Queue $script:queue | ForEach-Object { if ([string]$_.id -eq [string]$Task.id) { $copy } else { $_ } })
+        $trial = [pscustomobject]@{ version = (Get-TeamProperty -InputObject $script:queue -Name "version" -Default 1); tasks = $tasks }
+        $holders = @(Get-TeamAreaHolders -Task $copy -Queue $trial)
+        if (@($holders).Count -gt 0) {
+            return [pscustomobject]@{ Holders = @($holders); Text = "alan çakışması: $(@($holders) -join ', '); o iş bitince" }
+        }
+        $broken = @(Test-TeamQueue -Queue $trial)
+        if (@($broken).Count -gt 0) {
+            return [pscustomobject]@{ Holders = @(); Text = "kuyruk kuralı: " + (([string]$broken[0]) -replace '\s+', ' ') }
+        }
+        return $null
+    }
+
+    function Set-DutyReturned {
+        <# The move itself: the area, the state, the reason, the time. The task is no longer
+           stopped, so its next stop is a new one. #>
+        param($Task, [string[]]$Area, [string]$Reason)
+        Set-TeamProperty -InputObject $Task -Name "area" -Value ([string[]]@($Area))
+        Set-TeamProperty -InputObject $Task -Name "state" -Value "returned"
+        Set-TeamProperty -InputObject $Task -Name "reason" -Value $Reason
+        Set-TeamProperty -InputObject $Task -Name "updated_at" -Value (Get-TeamTimestamp)
+        $script:dutyHanded.Remove([string]$Task.id)
+    }
+
+    function Invoke-DutyDecision {
+        <# One decision of a file Test-TeamDuty passed, on the cycle's copy of the queue. A task
+           that changed since it was handed (somebody else decided, or the store has another
+           version) is left alone and said. #>
+        param($Decision, [object[]]$Listed)
+        $id = [string]$Decision.task
+        $action = [string]$Decision.action
+        $reason = ([string]$Decision.reason).Trim()
+        $was = @(@($Listed) | Where-Object { [string]$_.Id -ceq $id })
+        $found = @(Get-TeamTasks -Queue $script:queue | Where-Object { [string]$_.id -ceq $id })
+        if (@($found).Count -eq 0 -or @($was).Count -eq 0 -or [string]$found[0].state -ne "stopped" -or
+            [string]$found[0].updated_at -cne [string]$was[0].Updated -or $script:staleIds.ContainsKey($id) -or (Test-TaskMovedInStore -Task $found[0])) {
+            Add-CycleNote -List "risks" -Text "nöbet: ${id}: Proje Yöneticisi karar verirken iş değişti; karar ($action) uygulanmadı"
+            return
+        }
+        $task = $found[0]
+        if ($action -eq "escalate") {
+            Set-TeamProperty -InputObject $task -Name "reason" -Value ((Get-TeamDutyPrefix -Kind "escalated") + $reason)
+            Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+            $script:dutyHanded[$id] = [string]$task.updated_at
+            $short = ($reason -replace '\s+', ' ')
+            if ($short.Length -gt 300) { $short = $short.Substring(0, 300) + " [...]" }
+            Add-CycleNote -List "risks" -Text "Danışman'a iletildi: ${id}: $short"
+            return
+        }
+        $area = New-Object System.Collections.ArrayList
+        foreach ($entry in @(Get-TeamProperty -InputObject $task -Name "area" -Default @())) { [void]$area.Add([string]$entry) }
+        if ($action -eq "grant_and_return") {
+            foreach ($grant in @($Decision.PSObject.Properties["grant"].Value)) {
+                $path = (ConvertTo-TeamAreaPath -Text ([string]$grant)).Path
+                if (-not (Test-TeamPathInsideArea -Path $path -Area ([string[]]$area.ToArray()))) { [void]$area.Add($path) }
+            }
+        }
+        $newArea = [string[]]$area.ToArray()
+        $returned = (Get-TeamDutyPrefix -Kind "returned") + $reason
+        $blocked = Get-DutyReturnBlock -Task $task -Area $newArea
+        if ($null -ne $blocked) {
+            # Not forced: the task stays stopped, and says why. Held by a task in work, the
+            # return is THIS script's to make when that task leaves the work (Resolve-DutyWaits).
+            Set-TeamProperty -InputObject $task -Name "reason" -Value "$returned ($($blocked.Text))"
+            Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+            $script:dutyHanded[$id] = [string]$task.updated_at
+            if (@($blocked.Holders).Count -gt 0) {
+                $script:dutyWaits[$id] = [pscustomobject]@{ Updated = [string]$task.updated_at; Area = $newArea; Reason = $returned }
+                $waitNote = "bekliyor: $id -> $(@($blocked.Holders) -join ', ') aynı dosyaları bırakınca (Proje Yöneticisi geri verdi)"
+                if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
+            }
+            return
+        }
+        Set-DutyReturned -Task $task -Area $newArea -Reason $returned
+    }
+
+    function Resolve-DutyWaits {
+        <# The returns the protocol refused beside a task holding the same files: made now when
+           nobody holds them any more. One that somebody else moved meanwhile is theirs. $true
+           when a task moved. #>
+        $moved = $false
+        foreach ($id in @($script:dutyWaits.Keys)) {
+            $wait = $script:dutyWaits[$id]
+            $found = @(Get-TeamTasks -Queue $script:queue | Where-Object { [string]$_.id -ceq $id })
+            if (@($found).Count -eq 0 -or [string]$found[0].state -ne "stopped" -or [string]$found[0].updated_at -cne [string]$wait.Updated) {
+                $script:dutyWaits.Remove($id)
+                continue
+            }
+            if ($script:staleIds.ContainsKey($id)) { continue }
+            if ($null -ne (Get-DutyReturnBlock -Task $found[0] -Area ([string[]]$wait.Area))) { continue }
+            Set-DutyReturned -Task $found[0] -Area ([string[]]$wait.Area) -Reason ([string]$wait.Reason)
+            $script:dutyWaits.Remove($id)
+            $moved = $true
+        }
+        return $moved
+    }
+
+    function Complete-Duty {
+        <# The duty run ended: THIS script judges the file it wrote (Test-TeamDuty) and applies it
+           whole, or refuses it whole and says why. #>
+        param($Started, $Done)
+        $duty = $Started.Duty
+        $label = [string]$duty.Label
+        $next = Resume-OwnRun -Started $Started -Done $Done -Key "$label/lead"
+        if ($next -eq "restarted") { return }
+        if ($next -eq "waiting") {
+            # Handed back: the limit is waited out and the tasks are handed again when it lifts.
+            foreach ($listed in @($duty.Tasks)) {
+                $script:dutyHanded.Remove([string]$listed.Id)
+                $script:dutyTimes[[string]$listed.Id] = [Math]::Max(0, [int]$script:dutyTimes[[string]$listed.Id] - 1)
+            }
+            return
+        }
+        if (-not $Done.Ok) {
+            Add-CycleNote -List "risks" -Text "nöbet koşusu (${label}): $($Done.Outcome)"
+            return
+        }
+        $read = Read-TeamDutyFile -Path (Join-Path $repoRoot ([string]$duty.File -replace '/', '\'))
+        $why = @()
+        if (-not $read.Ok) { $why = @($read.Why) }
+        else { $why = @(Test-TeamDuty -Decisions @($read.Decisions) -Listed @(@($duty.Tasks) | ForEach-Object { [string]$_.Id }) -Queue $script:queue) }
+        if (@($why).Count -gt 0) {
+            Add-CycleNote -List "risks" -Text ("nöbet kararı reddedildi (${label}): " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
+            return
+        }
+        foreach ($decision in @($read.Decisions)) { Invoke-DutyDecision -Decision $decision -Listed @($duty.Tasks) }
+        Save-PoolQueue -What "nöbet: $label"
+    }
+
     function Start-PoolRun {
         <# One candidate of a refill, started in the seat it was given. $false when it could
            not be started: a task is stopped with the reason, a run the cycle makes for itself
@@ -1120,6 +1354,10 @@ try {
                 Add-ResearchProposals
                 return $false
             }
+        }
+        if ($role -eq "lead" -and $null -ne $Item.PSObject.Properties["Duty"]) {
+            # The Proje Yöneticisi's duty for stopped tasks (pm-duty-stopped).
+            return (Start-DutyRun -Item $Item)
         }
         if ($role -eq "lead") {
             # The lead's split. A proposal that serves a roadmap row is approved in advance
@@ -1189,7 +1427,16 @@ try {
         # -ResearchOnly: the researcher writes its proposals, they are queued for the owner, and
         # NO task is run or moved - not even an approved one.
         if (-not $ResearchOnly) {
+            # A return the Proje Yöneticisi made that waited for another task's files: made now
+            # when they are free, before the queue is looked at - its worker may start in this refill.
+            $dutyMoved = $false
+            if (-not $NoDuty) { $dutyMoved = [bool](Resolve-DutyWaits) }
             if (@($script:pool | Where-Object { $_.Role -eq "lead" }).Count -eq 0) {
+                # One lead seat: the duty for stopped tasks first (work that waits), then a split.
+                if (-not $NoDuty) {
+                    $stuck = @(Get-DutyCandidates)
+                    if (@($stuck).Count -gt 0) { [void]$candidates.Add([pscustomobject]@{ Task = $null; Role = "lead"; Pick = $null; Duty = @($stuck) }) }
+                }
                 foreach ($proposal in @(Get-TeamSplitCandidates -Queue $script:queue)) {
                     # A refused split leaves the proposal where it was; the next cycle asks again.
                     if ($script:splitTried.ContainsKey([string]$proposal.id)) { continue }
@@ -1197,8 +1444,8 @@ try {
                 }
             }
             $look = Get-RunnableTasks
-            $pass.Moved = [bool]$look.Moved
-            if ($look.Moved) { Save-PoolQueue -What "durum taşımaları" }
+            $pass.Moved = ([bool]$look.Moved -or $dutyMoved)
+            if ($pass.Moved) { Save-PoolQueue -What "durum taşımaları" }
             foreach ($item in @($look.Runnable)) {
                 # A move the store refused: the task was written by somebody else between our read
                 # and this write (the lead stopped it, the owner decided). It is not run on our copy.
@@ -1239,7 +1486,7 @@ try {
         param($Started, $Again)
         if ($null -eq $Again.Model -or [string]$Again.Model -eq [string]$Started.Model -or (Test-StopRequested)) { return $false }
         try {
-            [void]$script:pool.Add((Start-RoleRun -Task $Started.Task -Role $Started.Role -WorkingDirectory $Started.Where -Prompt $Started.Prompt -ExcludeTools $Started.ExcludeTools -Pick $Again))
+            [void]$script:pool.Add((Start-RoleRun -Task $Started.Task -Role $Started.Role -WorkingDirectory $Started.Where -Prompt $Started.Prompt -ExcludeTools $Started.ExcludeTools -Pick $Again -Label $Started.Label -Duty $Started.Duty))
             return $true
         }
         catch {
@@ -1473,7 +1720,10 @@ try {
         $done = Complete-RoleRun -Started $Started
         switch ([string]$Started.Role) {
             "researcher" { Complete-Research -Started $Started -Done $done }
-            "lead" { Complete-Split -Started $Started -Done $done }
+            "lead" {
+                if ($null -ne $Started.Duty) { Complete-Duty -Started $Started -Done $done }
+                else { Complete-Split -Started $Started -Done $done }
+            }
             default { Complete-TaskRun -Started $Started -Done $done }
         }
     }

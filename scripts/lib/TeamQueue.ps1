@@ -642,6 +642,168 @@ function ConvertTo-TeamSplitTasks {
     return @($made.ToArray())
 }
 
+# ------------------------------------------------------------------ the Proje Yöneticisi's duty
+# (pm-duty-stopped, the owner of 2026-10-03: "Böyle bulgular bulunduğunda konuyu proje
+# yöneticisine iletsinler, proje yöneticisi de sana iletsin.") A task the cycle stopped wakes ONE
+# lead run that writes a decision file; as with a split, THIS side judges the file and takes it
+# whole or refuses it whole. The lead-protected paths are TeamArea.ps1's list - one list; without
+# it loaded nothing is accepted.
+
+# What a decision writes in front of the reason. A stopped task whose reason starts with the
+# first is the Danışman's: it is never handed to a duty run again until somebody else moves it.
+$script:TeamDutyEscalated = "Danışman'a iletildi: "
+$script:TeamDutyReturned = "Proje Yöneticisi: "
+$script:TeamDutyActions = @("return", "grant_and_return", "escalate")
+$script:TeamDutyMaxGrants = 5
+$script:TeamDutyMaxReason = 1200
+$script:TeamDutyMaxTasks = 8
+
+function Get-TeamDutyPrefix {
+    <# The text a decision puts in front of a reason: 'escalated' or 'returned'. #>
+    param([Parameter(Mandatory = $true)][ValidateSet("escalated", "returned")][string]$Kind)
+    if ($Kind -eq "escalated") { return $script:TeamDutyEscalated }
+    return $script:TeamDutyReturned
+}
+
+function Get-TeamDutyCandidates {
+    <#
+    .SYNOPSIS
+        The stopped tasks a duty run of the Proje Yöneticisi is handed now, in queue order.
+
+    .DESCRIPTION
+        A task in `stopped` - but not one the Danışman already has (its reason starts with
+        "Danışman'a iletildi: "), not one in -Skip (ids the caller set aside), and not one
+        handed at THIS stop: -Handed maps an id to the updated_at it had when it was handed, so
+        a task stopped again later (a new updated_at) is handed again. At most -Max a run; the
+        rest are handed when it ends.
+    #>
+    param($Queue, [hashtable]$Handed = @{}, [hashtable]$Skip = @{}, [int]$Max = $script:TeamDutyMaxTasks)
+    $found = New-Object System.Collections.ArrayList
+    foreach ($task in @(Get-TeamTasks -Queue $Queue)) {
+        if (@($found).Count -ge $Max) { break }
+        if ([string](Get-TeamProperty -InputObject $task -Name "state" -Default "") -ne "stopped") { continue }
+        $id = [string](Get-TeamProperty -InputObject $task -Name "id" -Default "")
+        if (-not $id -or $Skip.ContainsKey($id)) { continue }
+        $reason = [string](Get-TeamProperty -InputObject $task -Name "reason" -Default "")
+        if ($reason.StartsWith($script:TeamDutyEscalated, [System.StringComparison]::Ordinal)) { continue }
+        $stamp = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
+        if ($Handed.ContainsKey($id) -and [string]$Handed[$id] -ceq $stamp) { continue }
+        [void]$found.Add($task)
+    }
+    return @($found.ToArray())
+}
+
+function Read-TeamDutyFile {
+    <#
+    .SYNOPSIS
+        The file a duty run wrote: { "decisions": [ ... ] }. The answer says whether it could
+        be read, and why not.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $refuse = { param([string]$Why) return [pscustomobject]@{ Ok = $false; Decisions = @(); Why = $Why } }
+    if (-not (Test-Path -LiteralPath $Path)) { return (& $refuse "the Proje Yöneticisi wrote no decision file: $Path") }
+    try {
+        $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+        if (-not $text.Trim()) { return (& $refuse "the decision file is empty: $Path") }
+        $document = ConvertFrom-Json -InputObject $text
+    }
+    catch { return (& $refuse "the decision file is not JSON: $($_.Exception.Message)") }
+    if ($document -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $document.PSObject.Properties["decisions"]) {
+        return (& $refuse "the decision file is not an object holding 'decisions'")
+    }
+    return [pscustomobject]@{ Ok = $true; Decisions = @($document.decisions | Where-Object { $null -ne $_ }); Why = "" }
+}
+
+function Test-TeamDuty {
+    <#
+    .SYNOPSIS
+        Every reason a duty run's decisions are refused, as sentences; empty when they are
+        sound. Taken whole or refused whole: one bad decision and NOTHING is applied.
+
+    .DESCRIPTION
+        Each decision is an object { task, action, grant, reason }:
+          * task    one of -Listed (the stopped tasks this run was handed), once;
+          * action  return | grant_and_return | escalate (as written, lower case);
+          * grant   only with grant_and_return: a list of 1 to 5 plainly written
+                    repository-relative paths (ConvertTo-TeamAreaPath: no '..', no drive, no
+                    leading slash, no empty or dotted segment), none lead-protected
+                    (Get-TeamAreaProtection), and the area stays within 25 entries;
+          * reason  Turkish text for the worker, not blank, at most 1200 characters.
+    #>
+    param($Decisions, [string[]]$Listed = @(), [Parameter(Mandatory = $true)]$Queue)
+    $problems = New-Object System.Collections.ArrayList
+    # The protected list is TeamArea.ps1's; without it a grant cannot be judged, and a judge
+    # that cannot judge refuses.
+    foreach ($needed in @("ConvertTo-TeamAreaPath", "Get-TeamAreaProtection")) {
+        if ($null -eq (Get-Command -Name $needed -CommandType Function -ErrorAction SilentlyContinue)) {
+            [void]$problems.Add("the protected-path list (scripts/lib/TeamArea.ps1) is not loaded: no decision is accepted")
+            return @($problems.ToArray())
+        }
+    }
+    $items = @($Decisions | Where-Object { $null -ne $_ })
+    if (@($items).Count -eq 0) { [void]$problems.Add("the decision file holds no decision"); return @($problems.ToArray()) }
+    $seen = @{}
+    foreach ($item in $items) {
+        if ($item -isnot [System.Management.Automation.PSCustomObject]) {
+            [void]$problems.Add("an entry of the decision file is not a decision object")
+            continue
+        }
+        $id = [string](Get-TeamProperty -InputObject $item -Name "task" -Default "")
+        $label = if ($id) { $id } else { "(a decision without a task)" }
+        if (@($Listed) -cnotcontains $id) { [void]$problems.Add("${label}: not one of the stopped tasks this run was given") }
+        if ($id -and $seen.ContainsKey($id)) { [void]$problems.Add("${label}: more than one decision for one task") }
+        $seen[$id] = $true
+        $actionValue = Get-TeamProperty -InputObject $item -Name "action" -Default ""
+        $action = if ($actionValue -is [string]) { $actionValue } else { "" }
+        if ($script:TeamDutyActions -cnotcontains $action) { [void]$problems.Add("${label}: '$actionValue' is not an action (return, grant_and_return, escalate)") }
+        $reasonValue = Get-TeamProperty -InputObject $item -Name "reason" -Default ""
+        if ($reasonValue -isnot [string] -or -not $reasonValue.Trim()) { [void]$problems.Add("${label}: the reason is empty") }
+        elseif ($reasonValue.Trim().Length -gt $script:TeamDutyMaxReason) { [void]$problems.Add("${label}: the reason is $($reasonValue.Trim().Length) characters; at most $script:TeamDutyMaxReason") }
+
+        # The value as written: Get-TeamProperty would unroll a one-entry list into its entry.
+        $grantProperty = $item.PSObject.Properties["grant"]
+        $grantValue = if ($null -ne $grantProperty) { $grantProperty.Value } else { $null }
+        if ($action -ne "grant_and_return") {
+            if ($null -ne $grantValue -and -not ($grantValue -is [array] -and @($grantValue).Count -eq 0)) {
+                [void]$problems.Add("${label}: a grant goes only with grant_and_return")
+            }
+            continue
+        }
+        if ($null -ne $grantValue -and $grantValue -isnot [array]) {
+            [void]$problems.Add("${label}: the grant must be a list of paths")
+            continue
+        }
+        $grants = @($grantValue | Where-Object { $null -ne $_ })
+        if (@($grants).Count -lt 1 -or @($grants).Count -gt $script:TeamDutyMaxGrants) {
+            [void]$problems.Add("${label}: grant_and_return names 1 to $script:TeamDutyMaxGrants paths, not $(@($grants).Count)")
+            continue
+        }
+        $task = @(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -ceq $id })
+        $area = if (@($task).Count -gt 0) { @(Get-TeamProperty -InputObject $task[0] -Name "area" -Default @() | ForEach-Object { [string]$_ }) } else { @() }
+        $added = New-Object System.Collections.ArrayList
+        foreach ($grant in $grants) {
+            $path = if ($grant -is [string]) { ConvertTo-TeamAreaPath -Text $grant } else { $null }
+            if ($null -eq $path -or -not $path.Inside) {
+                [void]$problems.Add("${label}: the grant '$grant' is not a plain repository-relative path")
+                continue
+            }
+            $entry = Get-TeamAreaProtection -Path $path.Path
+            if ($null -ne $entry) {
+                [void]$problems.Add("${label}: the grant '$($path.Path)' is a lead-protected path ($($entry.Name)); the Danışman decides it")
+                continue
+            }
+            if (-not (Test-TeamPathInsideArea -Path $path.Path -Area $area) -and @($added) -notcontains (Get-TeamAreaKey -Area $path.Path)) {
+                [void]$added.Add((Get-TeamAreaKey -Area $path.Path))
+            }
+        }
+        $total = @($area).Count + @($added).Count
+        if ($total -gt $script:TeamMaxAreaEntries) {
+            [void]$problems.Add("${label}: the grant takes the area to $total entries; a task is at most $script:TeamMaxAreaEntries")
+        }
+    }
+    return @($problems.ToArray())
+}
+
 function Get-TeamVerdict {
     <#
     .SYNOPSIS
