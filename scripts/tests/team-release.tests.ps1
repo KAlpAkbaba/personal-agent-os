@@ -576,6 +576,7 @@ try {
         Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_ -match '^ssh\|pin' }).Count -Because "no pin after a failed release"
         Assert-Equal -Expected $box.Served -Actual $run.HostState.release -Because "the host is what the release script's own rollback left"
         Assert-True -Condition ($run.Report -match "geri alındı") -Because $run.Report
+        Remove-Item -LiteralPath (Join-Path $box.Host "calls.log") -Force
         $again = Invoke-Release -Box $box
         Assert-Stopped -Run $again -Words "release-blocked.json"
     }

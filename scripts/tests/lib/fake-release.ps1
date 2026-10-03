@@ -46,7 +46,7 @@ function Add-HostCall { param([string]$Line) [System.IO.File]::AppendAllText((Jo
 $all = @($args)
 if ($all.Count -gt 0 -and [string]$all[0] -eq "ssh") {
     $command = [string]$all[$all.Count - 1]
-    if ($command -match 'install-recovery-supervisor\.sh\s+([0-9a-f]{40})') {
+    if ($command -match "install-recovery-supervisor\.sh'?\s+([0-9a-f]{40})") {
         $sha = $Matches[1]
         Add-HostCall "ssh|pin|$sha"
         [Console]::Error.WriteLine("install-recovery-supervisor: waiting for the operation lock")
