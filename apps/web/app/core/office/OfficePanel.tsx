@@ -60,7 +60,7 @@ export default function OfficePanel({ panel }: { panel: Panel | null }) {
             )}
             {panel.agentNote && (
               <p>
-                <strong>Hakim notu</strong>
+                <strong>Proje Yöneticisinin notu</strong>
                 <br />
                 {panel.agentNote}
               </p>

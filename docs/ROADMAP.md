@@ -537,7 +537,7 @@ The project is developed by a **team of Claude agents** working in cycles, not b
 session. Roles, gates and the cycle are binding in `docs/TEAM_PROTOCOL.md`; role
 definitions live in `.claude/agents/`. In short:
 
-- **Lead (Proje Hakimi)** owns this roadmap and the definition of done, splits work,
+- **Lead (Proje Yöneticisi)** owns this roadmap and the definition of done, splits work,
   assigns it, sends incomplete or wrong work back, merges, reports to the owner.
 - **Researcher** knows the whole project, scans the world for what to add, proposes to the
   owner; only owner-approved ideas reach the lead. Roadmap changes are proposed by the
