@@ -21,13 +21,13 @@ Karar ve komut satırı yeni, saf bir kütüphanede: `scripts/lib/TeamResume.ps1
 | `Get-TeamResumeArgs -Plan -Model` | `Arguments = --resume <hedef> --model <model>`, `Prompt` = kısa devam istemi; fresh plan -> throw |
 | `Get-TeamProjectDirName -Path` | Claude Code'un proje klasör adı |
 | `Get-TeamSessionFilePath -AccountDir -ProjectDir -SessionId` | `<hesap>\projects\<proje>\<uuid>.jsonl` |
-| `Remove-TeamRunSessionFiles -Paths -AccountDirs` | `Removed`, `Refused`, `Missing` |
+| `Remove-TeamRunSessionFiles -Paths -AccountDirs` | `Removed`, `RemovedDirs` (`<uuid>\` klasörleri), `Refused`, `Missing` |
 
 Kural (`Select-TeamResumePlan`), sırayla; ilk tutan 'fresh' döner:
 1. `StopReason` tam olarak `usage_limit` değil -> 'baştan: durma nedeni kullanım limiti değil (<neden>)'. Hata, zaman aşımı, boş: hep baştan.
 2. `RunSession` boş / geçerli uuid değil -> 'baştan: koşunun kayıtlı oturumu yok'.
-3. `Role` boş ya da `SessionRole`'den farklı -> 'baştan: oturum <rol> rolünün, ...'.
-4. `ElapsedSeconds < MinSeconds` -> 'baştan: koşu 10 dakikadan kısa (<n> sn)'.
+3. `Role` boş ya da `SessionRole`'den farklı -> 'baştan: oturum <rol> rolünün, ...' (ikisi de boşsa da baştan).
+4. `ElapsedSeconds < MinSeconds` -> 'baştan: koşu 10 dakikadan kısa (<n> sn)'. Tam 600 sn devam eder (>=).
 5. Hesap değişti (`SameAccount=$false`) ve `SessionFile` boş ya da dosya yok -> 'baştan: hesap değişti, oturum dosyası bulunamadı'.
 Aksi halde 'resume': aynı hesapta hedef uuid; hesap değiştiyse .jsonl'in TAM yolu.
 Reason: `devam etti (oturum <uuid>, <Part+1>. parça[, öbür hesabın dosyasından])`.
@@ -75,6 +75,14 @@ listesindeki her oturumun dosyası `Remove-TeamRunSessionFiles` ile silinir. Yal
 benzer adlı kardeş dizin (`.claude-hesap1-copy`) dışarıdır; sürücü kökü hesap dizini sayılmaz. Diğer her yol
 silinmez, `Write-Warning` ile söylenir ve `Refused`'a yazılır.
 
+Oturum klasörü: Claude Code `<uuid>.jsonl`'in yanına `<uuid>\tool-results\` klasörü yazar (araç çıktıları, yani depo
+içeriği). Bu klasör `--no-session-persistence` ile de yazılır (gözlem 2026-10-04, denetçi: `.claude-hesap2\projects\E--AI-…`
+altında 15 klasör, hiç `.jsonl` yok). Bu yüzden silme, kabul edilen (`.jsonl`, hesap dizini altında) bir yolun adı geçerli bir
+uuid ise yanındaki `<uuid>\` klasörünü de özyinelemeli siler; `.jsonl` dosyası yoksa da (`Missing`) klasör silinir. Klasör yolu
+kabul edilmiş `.jsonl` yolundan türetildiği için aynı hesap dizini sınırının içindedir; uuid adı taşımayan `.jsonl`'in yanındaki
+klasör silinmez; klasörün kendisi bir bağlantı noktasıysa (junction/symlink) silinmez, `Refused`'a yazılır; içindeki bağlantılar
+`[System.IO.Directory]::Delete` ile hedefleri izlenmeden kaldırılır. Silinen klasörler `RemovedDirs`'te döner.
+
 ## Bağlama kartı: tam satır listesi (TeamRun.ps1 / cycle.ps1 / quality-gate.ps1 serbest kalınca)
 
 1. `scripts/lib/TeamRun.ps1:283` - `Get-TeamRunArguments`'a `[string]$SessionId = ""` ve `[string[]]$ResumeArguments = @()`
@@ -86,11 +94,19 @@ silinmez, `Write-Warning` ile söylenir ve `Refused`'a yazılır.
    `Set-TeamProperty -InputObject $Task -Name "run_session" -Value @{ id = $sessionId; role = $Role; account = <hesap dizini>; part = <n> }`
    ile yazılır; `run_sessions` (liste) kapanışta silme için biriktirilir.
 3. `scripts/team/cycle.ps1:1235` (`Resume-LimitedRun`) - `Start-RoleRun`'dan önce:
-   `$plan = Select-TeamResumePlan -RunSession $Started.SessionId -ElapsedSeconds <bitiş-başlangıç> -StopReason ($(if ($Done.UsageLimited) {'usage_limit'} else {'other'})) -SameAccount (<yeni hesap> -eq $Started.Account) -SessionFile (Get-TeamSessionFilePath -AccountDir $Started.Account -ProjectDir (Get-TeamProjectDirName -Path $Started.Where) -SessionId $Started.SessionId) -Role $Started.Role -SessionRole $Started.Role -Part <n>`.
+   `$rs = $Task.run_session` (2. satırda yazılan kayıt; oturumun SAHİBİ) ve
+   `$plan = Select-TeamResumePlan -RunSession $rs.id -ElapsedSeconds <bitiş-başlangıç> -StopReason ($(if ($Done.UsageLimited) {'usage_limit'} else {'other'})) -SameAccount (<yeni hesap> -eq $rs.account) -SessionFile (Get-TeamSessionFilePath -AccountDir $rs.account -ProjectDir (Get-TeamProjectDirName -Path $Started.Where) -SessionId $rs.id) -Role <başlatılacak koşunun rolü: $Again.Role> -SessionRole $rs.role -Part $rs.part`.
+   İki rol AYRI kaynaktan gelir: `-Role` başlatılacak koşudan, `-SessionRole` kartın `run_session.role` alanından.
+   İkisine aynı değeri (`$Started.Role`) vermek rol denetimini her zaman tutturur, denetleyici işçinin oturumunu sürdürebilir hale gelir - YAPILMAZ.
+   `run_session` yoksa (eski kart) `-RunSession ""` -> 'fresh'.
    'resume' ise `$r = Get-TeamResumeArgs -Plan $plan -Model $Again.Model` ve `Start-RoleRun ... -Prompt $r.Prompt -ResumeArguments $r.Arguments`;
    'fresh' ise bugünkü satır. Her iki durumda `Add-CycleNote -List "risks"` değil, kartın rapor satırına `$plan.Reason`.
    Çağıranlar (1261, 1370) `-Done` geçirmeli (bugün yalnız `$Started`, `$Again`).
-4. `scripts/team/cycle.ps1` kart kapanışı (merged/stopped yazılan yerler) - `Remove-TeamRunSessionFiles -Paths <run_sessions'tan Get-TeamSessionFilePath> -AccountDirs <hesap havuzu dizinleri>`; `Refused` risk notuna.
+4. `scripts/team/cycle.ps1` kart kapanışı (merged/stopped yazılan yerler) - `Remove-TeamRunSessionFiles -Paths <run_sessions'tan Get-TeamSessionFilePath> -AccountDirs <hesap havuzu dizinleri>`;
+   bu çağrı `<uuid>.jsonl` ile birlikte yanındaki `<uuid>\` klasörünü (`tool-results\`) de siler, `.jsonl` hiç yazılmamış olsa bile; ayrı çağrı gerekmez.
+   `Removed` + `RemovedDirs` sayısı kartın kapanış satırına, `Refused` risk notuna. Geçiş dönemi: bugüne kadar `--no-session-persistence`
+   ile birikmiş `tool-results` klasörlerinin (`.jsonl`'siz, kimlikleri kayıtsız) temizliği bu satırın işi DEĞİL; bağlama kartı
+   bunu ayrı bir tek seferlik adım olarak (hesap dizinlerinde `projects\<ekip worktree klasörü>\<uuid>\`) önerir.
 5. `scripts/tests/team-cycle.tests.ps1:674` - `Assert-True ($line -match "--no-session-persistence") -Because "a fresh run"` ->
    `Assert-True ($line -match "--session-id [0-9a-f-]{36}( |$)") -Because "a kept, named session"` ve
    `Assert-True ($line -notmatch "--no-session-persistence")`; yeni vaka: `-ResumeArguments` verilince `--resume` var, `--session-id` yok, tek `--model`.
@@ -99,5 +115,6 @@ silinmez, `Write-Warning` ile söylenir ve `Refused`'a yazılır.
 
 ## Kanıt
 
-PROVEN_AUTOMATED: `scripts/tests/team-resume.tests.ps1` (10 vaka, TEMP kum havuzu), 4 mutasyon RED.
+PROVEN_AUTOMATED: `scripts/tests/team-resume.tests.ps1` (12 vaka, TEMP kum havuzu), 7 mutasyon RED (resume dalı kapalı,
+eşik 0, rol denetimi kapalı, yol sınırı kapalı, `-lt` -> `-le` (tam 600 sn), boş-rol denetimi kapalı, oturum klasörü silmesi kapalı).
 PROVEN_REAL: YOK (bağlama kartı girince sonraki gerçek limit olayında döngü raporunda 'devam etti (oturum ...)').

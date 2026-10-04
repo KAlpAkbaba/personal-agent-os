@@ -21,7 +21,7 @@
 
     Pure functions: no process is started here (no claude, no git). The ONE side effect is
     Remove-TeamRunSessionFiles's deletion, and only of a '.jsonl' under a given account
-    directory (KVKK: a session file carries the repository's content).
+    directory and its '<uuid>\' tool-results folder (KVKK: both carry the repository's content).
 
     Dot-source; StrictMode-safe; Windows PowerShell 5.1.
 #>
@@ -147,8 +147,10 @@ function Remove-TeamRunSessionFiles {
         Delete a closed card's session files (KVKK: they carry the repository's content).
     .DESCRIPTION
         THE side effect of this file. A path is deleted only when it ends in '.jsonl' and,
-        resolved in full ('..' included), lies under one of -AccountDirs. Any other path is
-        left alone with a warning. Returns Removed, Refused and Missing (the full paths).
+        resolved in full ('..' included), lies under one of -AccountDirs. With a '<uuid>.jsonl'
+        goes the '<uuid>\' folder beside it (tool-results), whether the .jsonl exists or not.
+        Any other path is left alone with a warning. Returns Removed, RemovedDirs, Refused and
+        Missing (the full paths).
     #>
     [CmdletBinding()]
     param(
@@ -166,6 +168,7 @@ function Remove-TeamRunSessionFiles {
     $removed = New-Object System.Collections.ArrayList
     $refused = New-Object System.Collections.ArrayList
     $missing = New-Object System.Collections.ArrayList
+    $removedDirs = New-Object System.Collections.ArrayList
     foreach ($path in @($Paths)) {
         if (-not $path) { continue }
         $full = [System.IO.Path]::GetFullPath($path)
@@ -178,9 +181,26 @@ function Remove-TeamRunSessionFiles {
             [void]$refused.Add($full)
             continue
         }
+        # The session's <uuid>\ folder (tool-results: tool output, the repository's content) lies
+        # beside its .jsonl, and is written even under --no-session-persistence with no .jsonl.
+        $id = [System.IO.Path]::GetFileNameWithoutExtension($full)
+        if (Test-TeamRunSessionId -SessionId $id) {
+            $folder = Join-Path ([System.IO.Path]::GetDirectoryName($full)) $id
+            if (Test-Path -LiteralPath $folder -PathType Container) {
+                if (([System.IO.File]::GetAttributes($folder) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    Write-Warning "oturum klasörü silinmedi (bağlantı noktası): $folder"
+                    [void]$refused.Add($folder)
+                }
+                else {
+                    # Directory.Delete removes a link inside, never what it points to.
+                    [System.IO.Directory]::Delete($folder, $true)
+                    [void]$removedDirs.Add($folder)
+                }
+            }
+        }
         if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { [void]$missing.Add($full); continue }
         [System.IO.File]::Delete($full)
         [void]$removed.Add($full)
     }
-    return [pscustomobject]@{ Removed = @($removed.ToArray()); Refused = @($refused.ToArray()); Missing = @($missing.ToArray()) }
+    return [pscustomobject]@{ Removed = @($removed.ToArray()); RemovedDirs = @($removedDirs.ToArray()); Refused = @($refused.ToArray()); Missing = @($missing.ToArray()) }
 }

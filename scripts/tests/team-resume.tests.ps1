@@ -86,6 +86,13 @@ try {
         Assert-True -Condition ($plan.Reason -match "10 dakikadan kısa") -Because "the reason names the threshold: $($plan.Reason)"
     }
 
+    Test-Case "plan (b2): exactly 600 s is ten minutes: it goes on (>= MinSeconds), 599 s does not" {
+        $plan = Select-TeamResumePlan -RunSession $session -ElapsedSeconds 600 -StopReason "usage_limit" -SameAccount $true -SessionFile "" -Role "worker" -SessionRole "worker"
+        Assert-Equal -Expected "resume" -Actual $plan.Mode -Because "the threshold itself resumes: $($plan.Reason)"
+        $short = Select-TeamResumePlan -RunSession $session -ElapsedSeconds 599 -StopReason "usage_limit" -SameAccount $true -SessionFile "" -Role "worker" -SessionRole "worker"
+        Assert-Equal -Expected "fresh" -Actual $short.Mode -Because "one second short"
+    }
+
     Test-Case "plan (c): a limit with no recorded session starts afresh" {
         $plan = Select-TeamResumePlan -RunSession "" -ElapsedSeconds 2000 -StopReason "usage_limit" -SameAccount $true -SessionFile "" -Role "worker" -SessionRole "worker"
         Assert-Equal -Expected "fresh" -Actual $plan.Mode -Because "no run_session"
@@ -121,6 +128,9 @@ try {
         Assert-Equal -Expected "resume" -Actual $own.Mode -Because "its own earlier session"
         $noRole = Select-TeamResumePlan -RunSession $session -ElapsedSeconds 2000 -StopReason "usage_limit" -SameAccount $true -SessionFile "" -Role "inspector" -SessionRole ""
         Assert-Equal -Expected "fresh" -Actual $noRole.Mode -Because "a session of no known role is nobody's"
+        # Both empty are equal, and still nobody's: a run that names no role resumes nothing.
+        $neither = Select-TeamResumePlan -RunSession $session -ElapsedSeconds 2000 -StopReason "usage_limit" -SameAccount $true -SessionFile "" -Role "" -SessionRole ""
+        Assert-Equal -Expected "fresh" -Actual $neither.Mode -Because "no role on either side: $($neither.Reason)"
     }
 
     Test-Case "plan: the part number counts on, and a 'fresh' plan gives no resume arguments" {
@@ -184,6 +194,33 @@ try {
         Assert-True -Condition (Test-Path -LiteralPath $sibling) -Because "a look-alike sibling is outside"
         Assert-Equal -Expected 1 -Actual @($result.Removed).Count -Because "one file deleted"
         Assert-Equal -Expected 4 -Actual @($result.Refused).Count -Because "four refused (the '..' path among them)"
+    }
+
+    Test-Case "remove (j): the session's <uuid>\tool-results folder goes with its .jsonl, even with no .jsonl left; no other folder" {
+        $account = Join-Path $sandbox ".claude-hesap3"
+        $project = Join-Path $account "projects\E--repo"
+        $other = "7f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
+        # With its .jsonl, and without one (--no-session-persistence still writes tool-results).
+        foreach ($id in @($session, $other)) {
+            $results = Join-Path $project "$id\tool-results"
+            [void](New-Item -ItemType Directory -Path $results -Force)
+            [System.IO.File]::WriteAllText((Join-Path $results "out.txt"), "repo content`n", $utf8)
+        }
+        [System.IO.File]::WriteAllText((Join-Path $project "$session.jsonl"), "{}`n", $utf8)
+        # A .jsonl that is not named by a uuid takes no folder with it.
+        $plain = Join-Path $project "notes"
+        [void](New-Item -ItemType Directory -Path $plain -Force)
+        [System.IO.File]::WriteAllText((Join-Path $project "notes.jsonl"), "{}`n", $utf8)
+        # A uuid folder outside every account directory stays.
+        $outsideDir = Join-Path $sandbox "elsewhere3\$session\tool-results"
+        [void](New-Item -ItemType Directory -Path $outsideDir -Force)
+        $paths = @((Join-Path $project "$session.jsonl"), (Join-Path $project "$other.jsonl"), (Join-Path $project "notes.jsonl"), (Join-Path $sandbox "elsewhere3\$session.jsonl"))
+        $result = Remove-TeamRunSessionFiles -Paths $paths -AccountDirs @($account) -WarningAction SilentlyContinue
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $project $session))) -Because "the session's folder is gone with its .jsonl"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $project $other))) -Because "the folder goes even when the .jsonl was never written"
+        Assert-True -Condition (Test-Path -LiteralPath $plain) -Because "a folder not named by a uuid stays"
+        Assert-True -Condition (Test-Path -LiteralPath $outsideDir) -Because "outside every account directory"
+        Assert-Equal -Expected 2 -Actual @($result.RemovedDirs).Count -Because "two session folders deleted"
     }
 }
 finally {
