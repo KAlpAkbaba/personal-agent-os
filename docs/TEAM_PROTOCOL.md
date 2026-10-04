@@ -35,8 +35,9 @@ researcher scan → OWNER approves ideas → lead splits & assigns
   → cycle report → next cycle
 ```
 
-- One cycle = one run of `scripts/team/cycle.ps1`. It ends at the first owner gate it meets
-  or when the queue is empty; it never waits for a human inside a run.
+- There are no cycles any more, only **the loop** (owner, 2026-10-03: "Döngüyü kaldırabiliriz.
+  Direkt bir sirkülasyon şeklinde getirebiliriz."; section 3b). The picture above is the path
+  of ONE task; the loop runs many such paths side by side and never waits for a human.
 - The owner's three gates and only three: **idea approval**, **release approval**,
   **real-world evidence + final verdict**. Anything else that seems to need him is a protocol
   gap: the lead writes it down in the report instead of asking.
@@ -60,6 +61,37 @@ researcher scan → OWNER approves ideas → lead splits & assigns
 4. The nightly cycle is registered (02:00 Europe/Istanbul, the pilot's caps).
 5. While the Onay Merkezi lives on the home PC the owner approves there; moving the queue,
    the lock and the Onay Merkezi to the Cloud Core is a task of pilot-02.
+
+### 3b. The loop and the seats (team-engine, owner rules of 2026-10-03)
+
+- **One continuous process** (`scripts/team/cycle.ps1 -Continuous`, `-MaxHours 0`) fills the seats
+  as they free; it never drains at an hour boundary. Its heartbeat is `team/logs/loop.json`
+  (`loop_id`, pid, `heartbeat_at`); the live status carries `loop_id` and `loop_started_at`.
+- **The tick is a watchdog only** (`tick.ps1 -Watchdog`, every 30 minutes): a live loop -> it starts
+  the feeder detached and exits at once; no live loop (no file, its process gone, or a heartbeat
+  older than 10 minutes) -> it runs the feeder and starts the loop detached. It never waits for
+  the loop.
+- **New code is taken over by a handover, not a restart**: `team/handover.flag`, or the loop's own
+  scripts changing on disk, makes the loop stop dispatching, write its live runs (pid, seat,
+  task, start, output files) to `team/logs/loop-handover.json`, exit WITHOUT killing them and
+  start its successor, which adopts them and fills only the free seats. `team/stop.flag` still
+  ends the loop once its runs have ended.
+- **The day is a folder, not a restart**: with `-DailyId` the loop switches the report folder,
+  the report and the integration branch `integrate/dYYYYMMDD` at local midnight; the runs in
+  flight are recorded in the new day's report. The researcher's hours are a timer inside the loop.
+- **A returned task goes back to the worker that built it** (owner's rule): the worker seats are
+  named `worker-1..N`; the loop remembers each task's seat and the Claude session of its run
+  (`team/logs/seats.json`). A returned task is offered only to that seat, as its very next run,
+  before any new task; the fixing run RESUMES that session (`--resume`). A session that cannot be
+  resumed falls back to a fresh run with the inspector's report, and the report says so. An
+  approval frees the seat at once. A seat that is gone keeps its claim for 60 minutes, then any
+  worker takes the return. The live status lists `returns` with their `owner_seat`.
+- **The integration branch follows its base**: before an approved task is merged, the base's
+  commits the integration branch lacks are merged in first (`merge: <base> <sha> into
+  integrate/<id>`). A conflict THERE is not the task's: it stays approved and waiting, the lead
+  is told in one line ("entegrasyon dalı <base> dalını alamadı: <files>") and the next refill
+  tries again. The loop's integrate worktree is the loop's: the lead prepares integration
+  changes in another worktree and fast-forwards the branch.
 
 ## 4. Work splitting (no conflicts by construction)
 
@@ -95,7 +127,8 @@ Researcher proposes → owner approves → lead writes and commits. Nobody else 
 - State lives on disk: `team/queue.json` (tasks and their states), `team/reports/<cycle>.md`,
   HANDOFF.md ("Şu an üzerinde çalışılan"), BUILD_STATE.json.
 - Every agent run is a fresh `claude -p` process with only its role file + its task; it
-  returns a ≤ 40-line report. Raw logs go to files, never into another agent's context.
+  returns a ≤ 40-line report. One exception (section 3b): the run that fixes a returned task
+  resumes the session of the worker run that built it. Raw logs go to files, never into another agent's context.
 - Every step is idempotent: existing branch/worktree/file → skip; a killed run resumes from
   the queue on the next trigger.
 - Budgets (owner decision 2026-09-30, ADR-0214 addendum 3): NO money cap per cycle or per
@@ -145,8 +178,9 @@ Researcher proposes → owner approves → lead writes and commits. Nobody else 
   the strongest, worker / integrator / researcher the next); a run that hits a usage limit is
   retried one model down and the report says so; the inspector never runs on a model weaker
   than the worker's.
-- **The cycle runs all day** (addendum 6): every 30 minutes, one at a time, one integration
-  branch a day, the researcher at most every six hours.
+- **The loop runs all day** (addendum 6, made continuous by team-engine, section 3b): one loop
+  at a time, the 30-minute tick only restarts a dead one, one integration branch a day, the
+  researcher at most every six hours.
 
 - **Nobody idles; the roadmap feeds the queue; an approved idea becomes a roadmap line**
   (addendum 8): the cycle is never paused for the lead's gate; when fewer runnable tasks
