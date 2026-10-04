@@ -1,3 +1,4 @@
+# ruff: noqa: E501 - the fake docker below is one literal program
 """Unit tests: the REAL ``scripts/voice/tts-measure.ps1`` under Windows PowerShell 5.1
 (tts-freya-measure; team/plans/tts-freya-measure-adr.md).
 
@@ -32,7 +33,7 @@ TOOL = REPO / "tools" / "tts-measure"
 API_DIR = Path(app_package.__file__).resolve().parent.parent
 RUN_DEADLINE_S = 240
 
-FAKE_DOCKER = r'''
+FAKE_DOCKER = r"""
 import json, os, re, struct, sys, time
 args = sys.argv[1:]
 with open(os.environ["FAKE_DOCKER_LOG"], "a", encoding="utf-8") as log:
@@ -73,7 +74,7 @@ for raw in sys.stdin.buffer.read().decode("utf-8").splitlines():
         f.write(header + data)
     print(json.dumps({"index": row["index"], "chars": len(row["text"]), "audio_ms": 1000.0, "synth_ms": 800.0, "first_audio_ms": 800.0, "streamed": False, "peak_rss_mb": 1600.0, "retries": 0}))
 sys.exit(0)
-'''
+"""
 
 
 def _powershell() -> str | None:
@@ -133,7 +134,11 @@ def _run(
     docker = tmp_path / "docker.cmd"
     docker.write_text(
         "\r\n".join(
-            ["@echo off", f'"{sys.executable}" "{tmp_path / "fake_docker.py"}" %*', "exit /b %ERRORLEVEL%"]
+            [
+                "@echo off",
+                f'"{sys.executable}" "{tmp_path / "fake_docker.py"}" %*',
+                "exit /b %ERRORLEVEL%",
+            ]
         )
         + "\r\n",
         encoding="ascii",
@@ -153,10 +158,14 @@ def _run(
         }
     )
     common = [
-        "-EvidenceDir", str(evidence),
-        "-Docker", str(docker),
-        "-Python", sys.executable,
-        "-MinFreeGB", "0",
+        "-EvidenceDir",
+        str(evidence),
+        "-Docker",
+        str(docker),
+        "-Python",
+        sys.executable,
+        "-MinFreeGB",
+        "0",
     ]
     every = [*arguments, *common]
     if mode == "file":
