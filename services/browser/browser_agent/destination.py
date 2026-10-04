@@ -56,7 +56,7 @@ _NUMERIC_HOST = re.compile(r"(0x[0-9a-f]+|[0-9]+)(\.(0x[0-9a-f]+|[0-9]+))*")
 _FORBIDDEN_HOST_SUFFIXES = (".local", ".internal", ".localhost", ".home.arpa")
 _FORBIDDEN_HOSTS = frozenset({"localhost", "metadata.google.internal"})
 # Tailscale/CGNAT: not global, but spelled out because it is the one range this policy
-# exists for (Cloud Core's own API is 100.90.158.26).
+# exists for (the Cloud Core's own API is a tailnet address).
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 _NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
 _NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
@@ -103,7 +103,8 @@ def address_is_forbidden(address: str) -> bool:
     """Allow-list (return 3 of browser-redirect-guard): an address is public only when it -
     and every IPv4 address embedded in it - is global and outside 100.64.0.0/10. Anything
     else, an unparseable string included, is forbidden. A deny-list of ranges had a hole for
-    every new spelling (``::ffff:100.90.158.26`` was admitted, GHSA-gwph-fp79-379w class)."""
+    every new spelling (an IPv4-mapped tailnet address ``::ffff:<100.64.0.0/10 host>`` was
+    admitted, GHSA-gwph-fp79-379w class)."""
     try:
         ip = ipaddress.ip_address(address.split("%", 1)[0])
     except ValueError:
