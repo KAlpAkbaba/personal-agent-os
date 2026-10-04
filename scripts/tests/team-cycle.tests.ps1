@@ -650,6 +650,82 @@ Test-Case "settings: team/cycle-settings.json names the seats of a running cycle
 }
 
 Write-Host ""
+Write-Host "the worker seats (team-engine): a returned task goes back to the seat that built it"
+
+function New-SeatedRun {
+    param([string]$Id, [string]$Role, [string]$Seat, [string]$State = "assigned")
+    $run = New-SeatRun $Id $Role
+    $run.Task.state = $State
+    $run | Add-Member -NotePropertyName Seat -NotePropertyValue $Seat
+    return $run
+}
+
+function Get-SeatedFill {
+    <# "role:task@seat" of every run a refill starts. #>
+    param([object[]]$Candidates, [object[]]$InFlight = @(), [hashtable]$Seats = @{ worker = 2; inspector = 2; integrator = 1 }, [hashtable]$Claims = @{})
+    $chosen = @(Select-TeamSeatFill -Candidates $Candidates -InFlight $InFlight -Seats $Seats -Claims $Claims)
+    return (@($chosen | ForEach-Object { "$($_.Role):" + $(if ($null -ne $_.Task) { [string]$_.Task.id } else { "cycle" }) + "@" + [string](Get-TeamProperty -InputObject $_ -Name "Seat" -Default "") }) -join ",")
+}
+
+Test-Case "engine seats: a worker run is given a named seat, the lowest that is free; the other roles sit on their role's seat" {
+    Assert-Equal -Expected "worker:task-a@worker-1,worker:task-b@worker-2,inspector:task-c@inspector" -Actual (Get-SeatedFill -Candidates @((New-SeatRun "task-a" "worker"), (New-SeatRun "task-b" "worker"), (New-SeatRun "task-c" "inspector"))) -Because "two worker seats by name, the inspector on its own"
+    Assert-Equal -Expected "worker:task-b@worker-1" -Actual (Get-SeatedFill -Candidates @((New-SeatRun "task-b" "worker")) -InFlight @((New-SeatedRun "task-x" "worker" "worker-2"))) -Because "worker-2 is taken by a run in flight: worker-1"
+    Assert-Equal -Expected "" -Actual (Get-SeatedFill -Candidates @((New-SeatRun "task-b" "worker")) -InFlight @((New-SeatedRun "task-x" "worker" "worker-1"), (New-SeatedRun "task-y" "worker" "worker-2"))) -Because "both named seats are taken"
+}
+
+Test-Case "engine seats: a returned task is offered ONLY to its owner seat - worker-2's return waits while worker-1 is free, and no other seat takes it" {
+    $claims = @{ "task-b" = "worker-2" }
+    $returned = New-SeatRun "task-b" "worker"; $returned.Task.state = "returned"
+    Assert-Equal -Expected "worker:task-b@worker-2" -Actual (Get-SeatedFill -Candidates @($returned) -Claims $claims) -Because "worker-1 is the lowest free seat, but the return is worker-2's"
+    Assert-Equal -Expected "" -Actual (Get-SeatedFill -Candidates @($returned) -Claims $claims -InFlight @((New-SeatedRun "task-e" "worker" "worker-2"))) -Because "worker-2 is busy with a new task: the return waits for it - worker-1, free, never takes it"
+}
+
+Test-Case "engine seats: a seat that owns a return never starts a new task - the return is its very next run, before anything of the queue" {
+    $claims = @{ "task-b" = "worker-2" }
+    $returned = New-SeatRun "task-b" "worker"; $returned.Task.state = "returned"
+    $fresh = @((New-SeatRun "task-f" "worker"), (New-SeatRun "task-g" "worker"))
+    Assert-Equal -Expected "worker:task-b@worker-2,worker:task-f@worker-1" -Actual (Get-SeatedFill -Candidates @($fresh + $returned) -Claims $claims) -Because "the return first, on its seat; the first new task on the other"
+    Assert-Equal -Expected "worker:task-f@worker-1" -Actual (Get-SeatedFill -Candidates @($fresh + $returned) -Claims $claims -InFlight @((New-SeatedRun "task-e" "worker" "worker-2"))) -Because "worker-2 busy: the new task takes worker-1, the return waits for worker-2"
+    Assert-Equal -Expected "worker:task-b@worker-2" -Actual (Get-SeatedFill -Candidates @($fresh + $returned) -Claims $claims -InFlight @((New-SeatedRun "task-e" "worker" "worker-1"))) -Because "worker-2 frees while worker-1 works: the return, not the first new task of the queue"
+    $wide = @{ worker = 3; inspector = 2; integrator = 1 }
+    Assert-Equal -Expected "worker:task-f@worker-1" -Actual (Get-SeatedFill -Candidates @($fresh + $returned) -Claims $claims -Seats $wide -InFlight @((New-SeatedRun "task-e" "worker" "worker-2"), (New-SeatedRun "task-h" "worker" "worker-3"))) -Because "a seat that owns no return takes new work"
+}
+
+Test-Case "engine seats: a claim lives while its seat is there; a seat that is gone keeps it for sixty minutes, then the return goes to any worker" {
+    $now = [datetime]::Parse("2026-10-03T12:00:00Z", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+    Assert-Equal -Expected "present" -Actual (Get-TeamSeatClaim -OwnerSeat "worker-2" -WorkerSeats 2 -Now $now).State -Because "worker-2 of two seats is there"
+    Assert-Equal -Expected "none" -Actual (Get-TeamSeatClaim -OwnerSeat "" -WorkerSeats 2 -Now $now).State -Because "no owner seat: as today"
+    Assert-Equal -Expected "none" -Actual (Get-TeamSeatClaim -OwnerSeat "inspector" -WorkerSeats 2 -Now $now).State -Because "only a worker seat owns a return"
+    $first = Get-TeamSeatClaim -OwnerSeat "worker-3" -WorkerSeats 2 -Now $now
+    Assert-Equal -Expected "waiting" -Actual $first.State -Because "the seat count was lowered just now"
+    Assert-Equal -Expected $now -Actual $first.GoneSince -Because "it went now"
+    Assert-Equal -Expected "waiting" -Actual (Get-TeamSeatClaim -OwnerSeat "worker-3" -WorkerSeats 2 -GoneSince $now.AddMinutes(-59) -Now $now).State -Because "59 minutes: still its"
+    $late = Get-TeamSeatClaim -OwnerSeat "worker-3" -WorkerSeats 2 -GoneSince $now.AddMinutes(-61) -Now $now
+    Assert-Equal -Expected "released" -Actual $late.State -Because "61 minutes: any worker"
+    Assert-Equal -Expected 61 -Actual $late.Minutes -Because "the minutes, for the reason"
+    Assert-Equal -Expected "present" -Actual (Get-TeamSeatClaim -OwnerSeat "worker-3" -WorkerSeats 3 -GoneSince $now.AddMinutes(-61) -Now $now).State -Because "a seat that is back has its claim back"
+}
+
+Test-Case "engine seats: a returned task with no owner seat is taken by any free seat, as today" {
+    $returned = New-SeatRun "task-b" "worker"; $returned.Task.state = "returned"
+    Assert-Equal -Expected "worker:task-b@worker-1" -Actual (Get-SeatedFill -Candidates @($returned)) -Because "no claim: the lowest free seat"
+}
+
+Test-Case "engine run: the session a run printed is kept; a worker run keeps its session on disk and a return is resumed with --resume <id>" {
+    $stream = @('{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"abc-123"}', '{"duration_api_ms":1,"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.1,"session_id":"abc-123"}') -join "`n"
+    Assert-Equal -Expected "abc-123" -Actual (Read-TeamRunResult -StdOut $stream -ExitCode 0).SessionId -Because "the result's session_id"
+    Assert-Equal -Expected "" -Actual (Read-TeamRunResult -StdOut "prose" -ExitCode 0).SessionId -Because "no document, no session"
+    $worker = @(Get-TeamRunArguments -RoleFile (Join-Path $repoRoot ".claude\agents\worker.md") -KeepSession -ResumeSession "abc-123") -join " "
+    Assert-True -Condition ($worker -notmatch "--no-session-persistence") -Because "a worker's session is kept, or it cannot be resumed: $worker"
+    Assert-True -Condition ($worker -match "--resume abc-123( |$)") -Because "the return resumes it: $worker"
+    $fresh = @(Get-TeamRunArguments -RoleFile (Join-Path $repoRoot ".claude\agents\inspector.md")) -join " "
+    Assert-True -Condition ($fresh -match "--no-session-persistence" -and $fresh -notmatch "--resume") -Because "every other run stays fresh: $fresh"
+    $threw = $false
+    try { [void](Get-TeamRunArguments -RoleFile (Join-Path $repoRoot ".claude\agents\worker.md") -KeepSession -ResumeSession "x; rm -rf") } catch { $threw = $true }
+    Assert-True -Condition $threw -Because "a session id that is not one never reaches a command line"
+}
+
+Write-Host ""
 Write-Host "a run"
 
 $roles = Join-Path $repoRoot ".claude\agents"
@@ -671,6 +747,7 @@ Test-Case "a run is capped, fresh, and cannot start agents of its own" {
     $line = $arguments -join " "
     Assert-Equal -Expected "-File" -Actual $arguments[0] -Because "the prefix comes first"
     Assert-True -Condition ($line -match "--max-budget-usd 2\.5( |$)") -Because "the cap, with a point: $line"
+    # team-engine: a fresh run is still every run but a worker's (whose session a return resumes).
     Assert-True -Condition ($line -match "--no-session-persistence") -Because "a fresh run"
     # model-policy-cycle: the reset time and the two percentages are only in the line stream
     # (`rate_limit_event`), never in the single `--output-format json` document.
@@ -3369,6 +3446,335 @@ try {
         Assert-Equal -Expected $before -Actual (Get-TaskById -Queue $run.Queue -Id "idea-one").state -Because "the proposal is where it was: the next cycle asks again"
         Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "no lead ran"
         Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "bölme koşusu: idea-one: koşu başlatılamadı")).Count -Because "said once, under the risks - one try a cycle: $($run.Report)"
+    }
+
+    # ------------------------------------------------------------------ the team engine (team-engine)
+    Write-Host ""
+    Write-Host "the team engine: the return goes back to its worker, the loop does not drain, the integration branch follows its base"
+
+    function Set-SeatRecords {
+        <# team/logs/seats.json of a sandbox: what an earlier run of the loop left. #>
+        param([string]$Root, [hashtable]$Records)
+        $tasks = [ordered]@{}
+        foreach ($id in @($Records.Keys | Sort-Object)) { $tasks[$id] = [pscustomobject]$Records[$id] }
+        $folder = Join-Path $Root "team\logs"
+        [void](New-Item -ItemType Directory -Force -Path $folder)
+        Write-TeamJson -Path (Join-Path $folder "seats.json") -Document ([ordered]@{ version = 1; tasks = $tasks })
+    }
+    function New-ReturnedTask {
+        param([string]$Id, [string[]]$Area)
+        $task = New-Task -Id $Id -State "returned" -Area $Area
+        $task | Add-Member -NotePropertyName reason -NotePropertyValue "the test is missing"
+        $task | Add-Member -NotePropertyName returns -NotePropertyValue 1
+        $task.reports = @([pscustomobject]@{ cycle = "c0"; role = "inspector"; at = "2026-10-03T10:00:00Z"; file = "team/reports/c0/x.md"; summary = @("RETURN (the test is missing)") })
+        return $task
+    }
+    function Get-WorkerCalls {
+        param($Run, [string]$Id)
+        return @($Run.Calls | Where-Object { $_.role -eq "worker" -and $_.task -eq $Id })
+    }
+
+    Test-Case "engine: a returned task is taken by the seat that built it, with --resume and its stored session - worker-1 free beside it takes nothing" {
+        $root = New-Sandbox -Tasks @((New-ReturnedTask -Id "task-b" -Area @("src/b")))
+        Set-SeatRecords -Root $root -Records @{ "task-b" = @{ owner_seat = "worker-2"; session_id = "sess-old-b" } }
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $calls = Get-WorkerCalls -Run $run -Id "task-b"
+        Assert-Equal -Expected 1 -Actual @($calls).Count -Because "one fixing run"
+        Assert-Equal -Expected "worker-2" -Actual $calls[0].seat -Because "the owner seat, not the lowest free one"
+        Assert-Equal -Expected "sess-old-b" -Actual $calls[0].resume -Because "the run that fixes it resumes the session that built it"
+        Assert-True -Condition ([bool]$calls[0].came_back -and [bool]$calls[0].came_back_report) -Because "with the reason and the inspector's report in its prompt"
+        Assert-True -Condition ([bool]$calls[0].keeps_session) -Because "and keeps its session for the next return"
+        $inspector = @($run.Calls | Where-Object { $_.role -eq "inspector" })
+        Assert-True -Condition (-not [bool]$inspector[0].keeps_session) -Because "an inspection stays a fresh run"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-b").state -Because $run.Report
+    }
+
+    Test-Case "engine: worker-2 busy with a new task when its return comes - the return is worker-2's very next run, worker-1 takes the new work, nothing new starts on worker-2 meanwhile" {
+        $ids = @("task-a", "task-b", "task-d", "task-e", "task-f", "task-g")
+        $root = New-Sandbox -Tasks @($ids | ForEach-Object { New-Task -Id $_ -State "assigned" -Area @("src/$_") })
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_RETURN_ONCE = "task-b"; PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-d=4,worker:task-e=12,worker:task-f=6" }
+        Use-FakeHooks -Environment $hooks -Body { $script:busyRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -RunMinutes 5 }
+        $run = $script:busyRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $workers = @($run.Calls | Where-Object { $_.role -eq "worker" } | Sort-Object -Property at)
+        $onTwo = @($workers | Where-Object { $_.seat -eq "worker-2" } | ForEach-Object { $_.task }) -join ","
+        Assert-Equal -Expected "task-b,task-e,task-b" -Actual $onTwo -Because "worker-2 built task-b, took a new task while it was inspected, then fixed task-b - and nothing else: $(@($workers | ForEach-Object { "$($_.task)@$($_.seat)" }) -join ' ')"
+        $b = @(Get-WorkerCalls -Run $run -Id "task-b" | Sort-Object -Property at)
+        $e = @(Get-WorkerCalls -Run $run -Id "task-e")[0]
+        Assert-Equal -Expected 2 -Actual @($b).Count -Because "built once, fixed once"
+        Assert-Equal -Expected $b[0].session -Actual $b[1].resume -Because "the fix resumed the session of the run that built it"
+        Assert-True -Condition ($b[1].at -ge ($e.at + [TimeSpan]::FromSeconds(11.5).Ticks)) -Because "the fix waited for worker-2's run of task-e to end"
+        Assert-Equal -Expected "worker-1" -Actual (@(Get-WorkerCalls -Run $run -Id "task-f")[0]).seat -Because "worker-1 took the new task while the return waited for worker-2"
+        Assert-Equal -Expected "merged,merged,merged,merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because $run.Report
+    }
+
+    Test-Case "engine: a session that cannot be resumed falls back to a fresh run with the report, says so, and is nobody's failure" {
+        $root = New-Sandbox -Tasks @((New-ReturnedTask -Id "task-b" -Area @("src/b")))
+        Set-SeatRecords -Root $root -Records @{ "task-b" = @{ owner_seat = "worker-1"; session_id = "sess-gone" } }
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_RESUME_FAILS = "1" } -Body { $script:resumeRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:resumeRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $calls = @(Get-WorkerCalls -Run $run -Id "task-b" | Sort-Object -Property at)
+        Assert-Equal -Expected "sess-gone|" -Actual ((@($calls) | ForEach-Object { $_.resume }) -join "|") -Because "the resume was tried, then a fresh run"
+        Assert-True -Condition ([bool]$calls[1].fallback_said -and [bool]$calls[1].came_back_report) -Because "the fresh run is told, and has the inspector's report"
+        Assert-Equal -Expected "worker-1" -Actual $calls[1].seat -Because "on the same seat"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-b"
+        Assert-Equal -Expected "merged" -Actual $task.state -Because $run.Report
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0)) -Because "a session the tool no longer has is nobody's failure"
+        Assert-True -Condition ($run.Report -match "task-b: worker-1 önceki oturumunu sürdüremedi") -Because "the report says so: $($run.Report)"
+    }
+
+    Test-Case "engine: an approval holds nothing - the worker takes the next task while its work is inspected, on the same seat" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-a" -State "assigned" -Area @("src/a")), (New-Task -Id "task-c" -State "assigned" -Area @("src/c")))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "inspector:task-a=6" } -Body { $script:freeRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:freeRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $a = @(Get-WorkerCalls -Run $run -Id "task-a")[0]
+        $c = @(Get-WorkerCalls -Run $run -Id "task-c")[0]
+        $inspection = @($run.Calls | Where-Object { $_.role -eq "inspector" -and $_.task -eq "task-a" })[0]
+        Assert-Equal -Expected "worker-1|worker-1" -Actual "$($a.seat)|$($c.seat)" -Because "one seat, two tasks"
+        Assert-True -Condition ($c.at -lt ($inspection.at + [TimeSpan]::FromSeconds(6).Ticks)) -Because "the worker did not idle while its work was inspected"
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because $run.Report
+        $records = Read-TeamJson -Path (Join-Path $root "team\logs\seats.json")
+        Assert-Equal -Expected "worker-1" -Actual $records.tasks.'task-a'.owner_seat -Because "the seat that built it is recorded"
+        Assert-Equal -Expected $a.session -Actual $records.tasks.'task-a'.session_id -Because "with the session its run printed"
+    }
+
+    Test-Case "engine: an owner seat gone for 61 minutes releases the return to any worker and the reason says why; gone for 10 it waits" {
+        $gone = (Get-TeamTimestamp -Now ([datetime]::UtcNow.AddMinutes(-61)))
+        $root = New-Sandbox -Tasks @((New-ReturnedTask -Id "task-b" -Area @("src/b")))
+        Set-SeatRecords -Root $root -Records @{ "task-b" = @{ owner_seat = "worker-3"; session_id = "sess-b"; seat_gone_at = $gone } }
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
+        $calls = @(Get-WorkerCalls -Run $run -Id "task-b")
+        Assert-Equal -Expected 1 -Actual @($calls).Count -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker-1" -Actual $calls[0].seat -Because "any worker"
+        Assert-Equal -Expected "" -Actual $calls[0].resume -Because "another worker does not resume worker-3's session"
+        Assert-True -Condition ($run.Report -match "task-b: worker-3 61 dakikadır yok; geri dönen iş herhangi bir çalışana verildi") -Because "the reason: $($run.Report)"
+
+        $root = New-Sandbox -Tasks @((New-ReturnedTask -Id "task-b" -Area @("src/b")))
+        Set-SeatRecords -Root $root -Records @{ "task-b" = @{ owner_seat = "worker-3"; session_id = "sess-b"; seat_gone_at = (Get-TeamTimestamp -Now ([datetime]::UtcNow.AddMinutes(-10))) } }
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "worker-3 has 50 minutes left on its claim: $($run.Report)"
+        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-b").state -Because "it waits"
+        Assert-True -Condition ($run.Report -match "bekliyor: task-b -> worker-3") -Because $run.Report
+    }
+
+    Test-Case "engine: a returned task with no seat record is taken by the first free seat, fresh - as today" {
+        $root = New-Sandbox -Tasks @((New-ReturnedTask -Id "task-b" -Area @("src/b")))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2
+        $calls = @(Get-WorkerCalls -Run $run -Id "task-b")
+        Assert-Equal -Expected "worker-1|" -Actual "$($calls[0].seat)|$($calls[0].resume)" -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-b").state -Because $run.Report
+    }
+
+    # ---- integrate-follows-release
+    function Add-SandboxCommit {
+        param([string]$Root, [string]$Path, [string]$Text, [string]$Message)
+        $file = Join-Path $Root ($Path -replace '/', '\')
+        [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $file))
+        [System.IO.File]::WriteAllText($file, $Text, (New-Object System.Text.UTF8Encoding($false)))
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("commit", "-q", "-m", $Message))
+        return (Invoke-SandboxGit -Root $Root -Arguments @("rev-parse", "HEAD"))
+    }
+    function New-IntegrationTree {
+        <# integrate/c1 cut from main now, in the worktree the cycle merges in. #>
+        param([string]$Root)
+        $tree = Join-Path $Root ".claude\worktrees\integrate\c1"
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("worktree", "add", "-b", "integrate/c1", $tree, "main"))
+        return $tree
+    }
+    function Get-IntegrationLog {
+        param([string]$Root)
+        return @((Invoke-SandboxGit -Root $Root -Arguments @("log", "--first-parent", "--format=%s", "main..integrate/c1")) -split "`r?`n" | Where-Object { $_.Trim() })
+    }
+
+    Test-Case "integrate: a base commit made after the integration branch was cut is merged in first, then the task" {
+        $root = New-Sandbox -Tasks @()
+        $tree = New-IntegrationTree -Root $root
+        [void](Add-SandboxCommit -Root $tree -Path "src/x/one.txt" -Text "one" -Message "an earlier task")
+        $released = Add-SandboxCommit -Root $root -Path "docs/release.txt" -Text "released" -Message "the release"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("branch", "team/c1/worker-task-two", "main"))
+        $tasktree = Join-Path $root "tt"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", $tasktree, "team/c1/worker-task-two"))
+        [void](Add-SandboxCommit -Root $tasktree -Path "src/two/two.txt" -Text "two" -Message "task two")
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-task-two" -Base "main" -Follow
+        Assert-True -Condition ($merge.Merged -and -not $merge.BaseConflict) -Because "merged: $($merge.Detail)"
+        $log = Get-IntegrationLog -Root $root
+        Assert-Equal -Expected "merge: team/c1/worker-task-two into integrate/c1" -Actual $log[0] -Because "the task last"
+        Assert-Equal -Expected "merge: main $released into integrate/c1" -Actual $log[1] -Because "the base first, by name and sha: $($log -join ' | ')"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $tree "docs\release.txt")) -Because "the release is on the integration branch"
+        $again = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-task-two" -Base "main" -Follow
+        Assert-True -Condition ([bool]$again.Already) -Because "nothing is merged twice"
+    }
+
+    function New-StaleBaseSandbox {
+        <# The measured case: integrate/c1 has an earlier task's change; main took the same change
+           another way (the release) and moved on; the task is built on main and edits beside it. #>
+        param([string]$IntegrateLast = "int", [string]$MainLast = "int", [switch]$Task)
+        $root = New-Sandbox -Tasks $(if ($Task) { @((New-Task -Id "task-two" -State "assigned" -Area @("src/f"))) } else { @() })
+        [void](Add-SandboxCommit -Root $root -Path "src/f/task-two.txt" -Text "l1`nl2`n" -Message "the file")
+        $tree = New-IntegrationTree -Root $root
+        [void](Add-SandboxCommit -Root $tree -Path "src/f/task-two.txt" -Text "l1`n$IntegrateLast`n" -Message "an earlier task, merged into integrate")
+        [void](Add-SandboxCommit -Root $root -Path "src/f/task-two.txt" -Text "l1`n$MainLast`n" -Message "the release brings it to main")
+        [void](Add-SandboxCommit -Root $root -Path "docs/release.txt" -Text "released" -Message "the release record")
+        return $root
+    }
+
+    Test-Case "integrate: a task that only conflicts with the stale base merges cleanly once the base is in" {
+        $root = New-StaleBaseSandbox
+        [void](Invoke-SandboxGit -Root $root -Arguments @("branch", "team/c1/worker-task-two", "main"))
+        $tasktree = Join-Path $root "tt"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", $tasktree, "team/c1/worker-task-two"))
+        [void](Add-SandboxCommit -Root $tasktree -Path "src/f/task-two.txt" -Text "l1`nint`nwork on task-two`n" -Message "task two")
+        $stale = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-task-two" -Base "main"
+        Assert-True -Condition (-not $stale.Merged) -Because "without the base it conflicts (the 2026-10-03 17:00 case)"
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-task-two" -Base "main" -Follow
+        Assert-True -Condition ($merge.Merged) -Because "with the base first it is clean: $($merge.Detail)"
+    }
+
+    Test-Case "integrate: a base the integration branch cannot take stops no task - it waits approved, the lead is told, and the next run merges it without a second inspection" {
+        $root = New-StaleBaseSandbox -IntegrateLast "int" -MainLast "main-own" -Task
+        $q = Read-TeamJson -Path (Join-Path $root "team\queue.json"); $q.tasks[0].area = @("src/a"); Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document $q
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $task = Get-TaskById -Queue $run.Queue -Id "task-two"
+        Assert-Equal -Expected "inspecting" -Actual $task.state -Because "approved and waiting for its merge - never stopped, never returned: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "entegrasyon dalı main dalını alamadı: src/f/task-two\.txt") -Because "one line for the lead: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "entegrasyon dalında çakışma") -Because "not the task's conflict"
+        Assert-Equal -Expected 1 -Actual @($run.Calls | Where-Object { $_.role -eq "inspector" }).Count -Because "inspected once"
+        # The lead takes the base in by hand (in another worktree, then the integration branch moves).
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        $null = Invoke-TeamGit -WorkingDirectory $tree -Arguments @("merge", "--no-ff", "-m", "lead: main into integrate", "main")
+        [System.IO.File]::WriteAllText((Join-Path $tree "src\f\task-two.txt"), "l1`nboth`n")
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", "lead: resolved"))
+        $second = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $second.Queue -Id "task-two").state -Because ($second.StdOut + $second.Report)
+        Assert-Equal -Expected 0 -Actual @($second.Calls).Count -Because "the approved task was merged, not inspected again"
+    }
+
+    Test-Case "integrate: a conflict that remains after the base is in is the task's - it goes back as today" {
+        # The base moved on elsewhere (it merges in cleanly); integrate/c1 itself has a line the task's own line meets.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-two" -State "assigned" -Area @("src/f")))
+        [void](Add-SandboxCommit -Root $root -Path "src/f/task-two.txt" -Text "l1`nl2`n" -Message "the file")
+        $tree = New-IntegrationTree -Root $root
+        [void](Add-SandboxCommit -Root $tree -Path "src/f/task-two.txt" -Text "l1`nl2`nanother task's line`n" -Message "an earlier task, merged into integrate")
+        [void](Add-SandboxCommit -Root $root -Path "docs/release.txt" -Text "released" -Message "the release record")
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-two"
+        Assert-Equal -Expected "returned" -Actual $task.state -Because ($run.StdOut + $run.Report)
+        Assert-Equal -Expected "entegrasyon dalında çakışma" -Actual $task.reason -Because "the real conflict"
+        Assert-True -Condition ((Get-IntegrationLog -Root $root) -contains ("merge: main " + (Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "main")) + " into integrate/c1")) -Because "the base went in first and stays"
+    }
+
+    # ---- continuous-team-loop
+    Test-Case "loop: past four hours of (fake) time nothing drains - -MaxHours is 0 by default" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned" -Area @("src/a1")), (New-Task -Id "task-two" -State "assigned" -Area @("src/a2")))
+        Use-FakeHooks -Environment @{ PAGENTOS_CYCLE_CLOCK_OFFSET_HOURS = "5" } -Body { $script:longRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:longRun
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.Report)
+        Assert-True -Condition ($run.Report -notmatch "çalışma süresi doldu") -Because "no drain: $($run.Report)"
+    }
+
+    function Read-SharedText {
+        param([string]$Path)
+        if (-not (Test-Path -LiteralPath $Path)) { return "" }
+        $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try { return (New-Object System.IO.StreamReader($stream)).ReadToEnd() } finally { $stream.Dispose() }
+    }
+
+    function Start-CycleProcess {
+        <# The cycle as a process of its own (Invoke-Cycle waits for it; a handover needs it not to). #>
+        param([string]$Root, [string]$Extra = "", [int]$MaxParallel = 3)
+        $command = "& '" + (Join-Path $Root "scripts\team\cycle.ps1") + "' -CycleId 'c1' -MaxParallel $MaxParallel -Machine 'MAIL' -NoResearch -RefillSeconds 1 $Extra" +
+            " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" + (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'; exit `$LASTEXITCODE"
+        $process = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ('"' + ($command -replace '"', '\"') + '"')) `
+            -WorkingDirectory $Root -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $Root "loop-1.out") -RedirectStandardError (Join-Path $Root "loop-1.err")
+        [void]$process.Handle
+        return $process
+    }
+
+    Test-Case "loop: a handover while three runs are live - the old loop exits without killing them, the new one adopts all three and fills the free seat in its first refill" {
+        $tasks = @(1..4 | ForEach-Object { New-Task -Id "task-$_" -State "assigned" -Area @("src/h$_") })
+        $root = New-Sandbox -Tasks $tasks
+        $log = Join-Path $root "fake.log"
+        $hooks = @{
+            PAGENTOS_FAKE_CLAUDE_SCENARIO = "approve"; PAGENTOS_FAKE_CLAUDE_LOG = $log
+            PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-1=10,worker:task-2=10,worker:task-3=10"
+            PAGENTOS_FAKE_CLAUDE_STOPFLAG = (Join-Path $root "team\handover.flag"); PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE = "worker"; PAGENTOS_FAKE_CLAUDE_STOPFLAG_TASK = "task-1"
+            PAGENTOS_FAKE_CLAUDE_SETTINGS = (Join-Path $root "team\cycle-settings.json"); PAGENTOS_FAKE_CLAUDE_SETTINGS_RUN = "worker:task-1"; PAGENTOS_FAKE_CLAUDE_SETTINGS_JSON = '{"max_parallel":4}'
+        }
+        $old = $null
+        Use-FakeHooks -Environment $hooks -Body { $script:oldLoop = Start-CycleProcess -Root $root -MaxParallel 3 }
+        $old = $script:oldLoop
+        try {
+            Assert-True -Condition ($old.WaitForExit(90000)) -Because "the old loop exits on the handover"
+            $oldEnded = [datetime]::UtcNow
+            $successorFile = Join-Path $root "team\logs\loop-successor.txt"
+            Assert-True -Condition (Test-Path -LiteralPath $successorFile) -Because ("the old loop started its successor: " + (Read-SharedText -Path (Join-Path $root "loop-1.out")))
+            $successor = Get-Process -Id ([int]([System.IO.File]::ReadAllText($successorFile).Trim())) -ErrorAction SilentlyContinue
+            if ($null -ne $successor) { Assert-True -Condition ($successor.WaitForExit(120000)) -Because "the new loop ends when the work is done" }
+            $calls = @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_.Trim() } | ForEach-Object { ConvertFrom-Json -InputObject $_ })
+            $first = @($calls | Where-Object { $_.role -eq "worker" -and $_.task -eq "task-1" })[0]
+            Assert-True -Condition ($oldEnded.Ticks -lt ($first.at + [TimeSpan]::FromSeconds(10).Ticks)) -Because "the old loop was gone before its runs ended: they were not killed with it"
+            $workers = @($calls | Where-Object { $_.role -eq "worker" })
+            Assert-Equal -Expected "task-1,task-2,task-3,task-4" -Actual ((@($workers | ForEach-Object { $_.task }) | Sort-Object) -join ",") -Because "each worker ran once - no run was started twice"
+            $fourth = @($workers | Where-Object { $_.task -eq "task-4" })[0]
+            Assert-Equal -Expected "worker-4" -Actual $fourth.seat -Because "the adopted runs kept worker-1..3; the free seat was filled - no seat double-booked"
+            Assert-True -Condition ($fourth.at -lt ($first.at + [TimeSpan]::FromSeconds(10).Ticks)) -Because "the free seat was filled while the adopted runs were still live"
+            $queue = Read-TeamJson -Path (Join-Path $root "team\queue.json")
+            Assert-Equal -Expected "merged,merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $queue | ForEach-Object { $_.state }) -join ",") -Because "the adopted runs' reports were read and their tasks went on"
+            foreach ($task in (Get-TeamTasks -Queue $queue)) {
+                Assert-Equal -Expected 1 -Actual @(@($task.reports) | Where-Object { $_.role -eq "worker" }).Count -Because "$($task.id): its worker's report recorded once"
+            }
+            $report = [System.IO.File]::ReadAllText((Join-Path $root "team\reports\c1.md"), [System.Text.Encoding]::UTF8)
+            Assert-True -Condition ($report -match "devralındı: 3 koşu") -Because "the new loop says what it adopted: $report"
+        }
+        finally { foreach ($p in @($old)) { try { if ($null -ne $p -and -not $p.HasExited) { Stop-TeamProcessTree -ProcessId $p.Id } } catch { } } }
+    }
+
+    Test-Case "loop: local midnight switches the day's report folder with no restart and no lost run" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned" -Area @("src/m1")))
+        $hooks = @{ PAGENTOS_TEAM_LOCAL_CLOCK_START = "2026-10-03T23:59:56"; PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=7" }
+        Use-FakeHooks -Environment $hooks -Body { $script:midnightRun = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "" -ExtraArguments "-DailyId" }
+        $run = $script:midnightRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $before = Join-Path $root "team\reports\d20261003.md"
+        $after = Join-Path $root "team\reports\d20261004.md"
+        Assert-True -Condition ((Test-Path -LiteralPath $before) -and (Test-Path -LiteralPath $after)) -Because "a report for each day: $(@(Get-ChildItem -LiteralPath (Join-Path $root 'team\reports') -Name) -join ', ')"
+        $text = [System.IO.File]::ReadAllText($after, [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($text -match "(?m)^- task-one / worker: " -and $text -match "(?m)^- task-one / inspector: ") -Because "the run that crossed midnight is in the new day's report, and nothing was lost: $text"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the task went on"
+        Assert-Equal -Expected "integrate/d20261004" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").integration_branch -Because "the new day's integration branch"
+    }
+
+    Test-Case "loop: a continuous loop does not end when idle, the researcher's timer fires again inside it, and the stop flag ends it" {
+        $root = New-Sandbox -Tasks @()
+        $stop = Join-Path $root "team\stop.flag"
+        $log = Join-Path $root "fake.log"
+        $process = $null
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SCENARIO = "approve"; PAGENTOS_FAKE_CLAUDE_LOG = $log } -Body {
+            $script:timerLoop = Start-CycleProcess -Root $root -MaxParallel 1 -Extra "-Continuous -ResearchEveryHours 0.002 -Research"
+        }
+        $process = $script:timerLoop
+        try {
+            $deadline = [datetime]::UtcNow.AddSeconds(90)
+            while ([datetime]::UtcNow -lt $deadline) {
+                $count = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_ -match '"role":"researcher"' }).Count } else { 0 }
+                if ($count -ge 2) { break }
+                Assert-True -Condition (-not $process.HasExited) -Because ("an idle continuous loop stays: " + (Read-SharedText -Path (Join-Path $root "loop-1.out")))
+                Start-Sleep -Milliseconds 500
+            }
+            Assert-True -Condition ($count -ge 2) -Because "the researcher ran again once its hours (7 s) had passed"
+            Set-Content -LiteralPath $stop -Value "stop" -Encoding ASCII
+            Assert-True -Condition ($process.WaitForExit(60000)) -Because "the stop flag ends a continuous loop"
+            $heartbeat = Read-TeamJson -Path (Join-Path $root "team\logs\loop.json")
+            Assert-True -Condition ([string]$heartbeat.loop_id -match "^loop-") -Because "the loop names itself: $($heartbeat.loop_id)"
+            Assert-Equal -Expected $false -Actual ([bool]$heartbeat.running) -Because "and says it ended"
+        }
+        finally { if ($null -ne $process -and -not $process.HasExited) { Stop-TeamProcessTree -ProcessId $process.Id } }
     }
 }
 finally {

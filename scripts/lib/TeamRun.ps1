@@ -119,22 +119,43 @@ function Merge-TeamBranch {
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$CycleId,
         [Parameter(Mandatory = $true)][string]$Branch,
-        [string]$Base = "main"
+        [string]$Base = "main",
+        # integrate-follows-release (2026-10-03 17:00: two approved tasks stopped 'entegrasyon
+        # dalında çakışma' because integrate/<day> lacked the release the lead had merged into
+        # the base): the base's commits the integration branch lacks are merged in FIRST. A
+        # conflict there is not the task's: nothing is merged, and BaseConflict says so.
+        [switch]$Follow
     )
     $integration = "integrate/$CycleId"
     $tree = New-TeamWorktree -RepoRoot $RepoRoot -Branch $integration -Base $Base
+    $answer = { param($Merged, $Already, $Conflict, $Detail, $BaseConflict = $false, $BaseFiles = @(), $BaseMerged = "")
+        [pscustomobject]@{ Merged = $Merged; Already = $Already; Conflict = $Conflict; Integration = $integration; Detail = $Detail; BaseConflict = $BaseConflict; BaseFiles = @($BaseFiles); BaseMerged = $BaseMerged } }
     $ancestor = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge-base", "--is-ancestor", $Branch, "HEAD")
-    if ($ancestor.ExitCode -eq 0) {
-        return [pscustomobject]@{ Merged = $true; Already = $true; Conflict = $false; Integration = $integration; Detail = "" }
+    if ($ancestor.ExitCode -eq 0) { return (& $answer $true $true $false "") }
+    $baseMerged = ""
+    if ($Follow) {
+        $tip = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("rev-parse", "--verify", "--quiet", "$Base^{commit}")
+        $sha = $tip.StdOut.Trim()
+        if ($tip.Success -and $sha) {
+            $behind = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge-base", "--is-ancestor", $sha, "HEAD")
+            if ($behind.ExitCode -eq 1) {
+                $taken = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--no-ff", "-m", "merge: $Base $sha into $integration", $sha)
+                if (-not $taken.Success) {
+                    $unmerged = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("diff", "--name-only", "--diff-filter=U")
+                    $files = @($unmerged.StdOut -split "`r?`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+                    [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--abort"))
+                    return (& $answer $false $false $false (($taken.StdOut + "`n" + $taken.StdErr).Trim()) $true $files "")
+                }
+                $baseMerged = $sha
+            }
+        }
     }
     $message = "merge: $Branch into $integration"
     $merge = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--no-ff", "-m", $message, $Branch)
-    if ($merge.Success) {
-        return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; Integration = $integration; Detail = "" }
-    }
+    if ($merge.Success) { return (& $answer $true $false $false "" $false @() $baseMerged) }
     [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--abort"))
     $detail = ($merge.StdOut + "`n" + $merge.StdErr).Trim()
-    return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail }
+    return (& $answer $false $false $true $detail $false @() $baseMerged)
 }
 
 function Undo-TeamMerge {
@@ -268,8 +289,13 @@ function Get-TeamRunArguments {
         [string[]]$PrefixArguments = @(),
         # Tools the role file grants but THIS run must not have (the lead's split run: no
         # Bash, no Edit). They are left out of --allowedTools and named in --disallowedTools.
-        [string[]]$ExcludeTools = @()
+        [string[]]$ExcludeTools = @(),
+        # team-engine: a worker's session is kept on disk (no --no-session-persistence), so the
+        # run that fixes a returned task can resume it with --resume <id>.
+        [switch]$KeepSession,
+        [string]$ResumeSession = ""
     )
+    if ($ResumeSession -and $ResumeSession -cnotmatch '^[A-Za-z0-9-]{1,80}$') { throw "'$ResumeSession' is not a session id: no run is resumed with it" }
     $tools = @(Get-TeamRoleTools -RoleFile $RoleFile)
     if (@($tools).Count -eq 0) { throw "the role file grants no tools: $RoleFile" }
     # A run never starts agents of its own: the cycle is what dispatches.
@@ -279,8 +305,10 @@ function Get-TeamRunArguments {
     # The line stream, not the single document: the usage limit's type, its reset and the two
     # percentages are only in the stream's `rate_limit_event` (model-policy-cycle). Never
     # --fallback-model: it does not fire on a usage limit and would lower a run without a word.
+    foreach ($argument in @("-p", "--output-format", "stream-json", "--verbose")) { [void]$arguments.Add($argument) }
+    if (-not $KeepSession) { [void]$arguments.Add("--no-session-persistence") }
+    if ($ResumeSession) { [void]$arguments.Add("--resume"); [void]$arguments.Add($ResumeSession) }
     foreach ($argument in @(
-            "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
             "--append-system-prompt-file", $RoleFile,
             "--allowedTools", ($tools -join ","),
             "--permission-mode", "acceptEdits"
@@ -358,6 +386,121 @@ function Start-TeamRun {
     }
 }
 
+function ConvertTo-TeamBatchArgument {
+    <# One argument of a run's command file, always quoted. A batch file expands '%' (doubled it is
+       one); trailing backslashes are doubled so the closing quote stays a quote. A quote or a
+       line break has no safe form there: refused. #>
+    param([string]$Text)
+    if ($Text -match '["\r\n]') { throw "an argument with a quote or a line break does not go into a run's command file: $Text" }
+    $body = $Text -replace '%', '%%'
+    if ($body -match '(\\+)$') { $body = $body + $Matches[1] }
+    return '"' + $body + '"'
+}
+
+function Start-TeamDetachedRun {
+    <#
+    .SYNOPSIS
+        Start one role run whose output goes to FILES, so it outlives the process that started it.
+
+    .DESCRIPTION
+        continuous-team-loop (the owner, 2026-10-03: "Döngüyü kaldırabiliriz"): a loop that hands
+        over to new code exits WITHOUT killing its runs, and the new loop adopts them. A run whose
+        output is a pipe to the old loop would lose it - so here the tool runs inside a command
+        file: its standard input is the prompt file, its output, errors and exit code go to
+        <Stem>.out / .err / .code. The process is cmd.exe; killing it kills the tree. The
+        environment is Start-TeamRun's (no model fallback, no background tasks, an hour per
+        foreground call, the run's temp folder) plus -Environment.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Prompt,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$Stem,
+        [string]$TempDirectory = "",
+        [hashtable]$Environment = @{}
+    )
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $folder = Split-Path -Parent $Stem
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+    $files = [pscustomobject]@{ Prompt = "$Stem.prompt.txt"; Out = "$Stem.out"; Err = "$Stem.err"; Code = "$Stem.code"; Command = "$Stem.cmd" }
+    [System.IO.File]::WriteAllText($files.Prompt, $Prompt, $utf8)
+    $line = (@(@($FilePath) + @($Arguments) | ForEach-Object { ConvertTo-TeamBatchArgument -Text ([string]$_) })) -join " "
+    $quoted = { param($Path) ConvertTo-TeamBatchArgument -Text $Path }
+    # chcp 65001 first: the lines after it (paths) are read as UTF-8, and so is the run's output.
+    $batch = @(
+        "@echo off",
+        "chcp 65001 > nul",
+        ("$line < " + (& $quoted $files.Prompt) + " > " + (& $quoted $files.Out) + " 2> " + (& $quoted $files.Err)),
+        ("> " + (& $quoted $files.Code) + " echo %ERRORLEVEL%")
+    ) -join "`r`n"
+    [System.IO.File]::WriteAllText($files.Command, $batch + "`r`n", $utf8)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path (Join-Path $env:SystemRoot "System32") "cmd.exe"
+    $psi.Arguments = '/d /v:off /c ""' + $files.Command + '""'
+    $psi.UseShellExecute = $false
+    # cmd's own three handles are pipes of this process (drained, stdin closed): nothing of the
+    # starter's console or output is handed down to the run.
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = (Resolve-Path -LiteralPath $WorkingDirectory).Path
+    $psi.EnvironmentVariables["CLAUDE_CODE_NO_MODEL_FALLBACK"] = "1"
+    $psi.EnvironmentVariables["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+    $psi.EnvironmentVariables["BASH_MAX_TIMEOUT_MS"] = "3600000"
+    if ($TempDirectory) {
+        [void](New-Item -ItemType Directory -Force -Path $TempDirectory)
+        foreach ($name in @("TEMP", "TMP", "TMPDIR")) { $psi.EnvironmentVariables[$name] = $TempDirectory }
+    }
+    foreach ($name in @($Environment.Keys)) { $psi.EnvironmentVariables[[string]$name] = [string]$Environment[$name] }
+    $process = [System.Diagnostics.Process]::Start($psi)
+    [void]$process.Handle   # the exit code stays readable after it ends
+    $process.StandardInput.Close()
+    [void]$process.StandardOutput.ReadToEndAsync()
+    [void]$process.StandardError.ReadToEndAsync()
+    return [pscustomobject]@{
+        Process = $process; StdOut = $null; StdErr = $null; Started = [datetime]::UtcNow; Pid = $process.Id
+        Stem = $Stem; OutFile = $files.Out; ErrFile = $files.Err; CodeFile = $files.Code
+    }
+}
+
+function New-TeamAdoptedRun {
+    <# A run another loop started (Start-TeamDetachedRun), taken over by its pid and its files. A
+       process that is gone - or a pid now used by a process younger than the run - is a run
+       that has ended: its files say how. #>
+    param([Parameter(Mandatory = $true)][int]$ProcessId, [Parameter(Mandatory = $true)][string]$Stem, [Parameter(Mandatory = $true)][datetime]$Started)
+    $process = $null
+    try {
+        $found = [System.Diagnostics.Process]::GetProcessById($ProcessId)
+        [void]$found.Handle
+        if ($found.StartTime.ToUniversalTime() -le $Started.ToUniversalTime().AddSeconds(30)) { $process = $found }
+    }
+    catch { $process = $null }
+    return [pscustomobject]@{
+        Process = $process; StdOut = $null; StdErr = $null; Started = $Started; Pid = $ProcessId
+        Stem = $Stem; OutFile = "$Stem.out"; ErrFile = "$Stem.err"; CodeFile = "$Stem.code"
+    }
+}
+
+function Read-TeamSharedText {
+    <# A file another process may still hold open, read whole as UTF-8; "" when it is not there. #>
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return "" }
+    $stream = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try { return (New-Object System.IO.StreamReader($stream, (New-Object System.Text.UTF8Encoding($false)))).ReadToEnd() }
+    finally { $stream.Dispose() }
+}
+
+function Remove-TeamRunFiles {
+    <# A detached run's own files, once what they held has been kept. Best effort. #>
+    param([string]$Stem)
+    if (-not $Stem) { return }
+    foreach ($suffix in @(".prompt.txt", ".cmd", ".out", ".err", ".code")) {
+        Remove-Item -LiteralPath "$Stem$suffix" -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-TeamRunTemp {
     <#
     .SYNOPSIS
@@ -388,6 +531,8 @@ function Test-TeamRunOver {
         pool). Wait-TeamRun then collects such a run at once, killing it if it is still going.
     #>
     param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline)
+    # An adopted run whose process was already gone (New-TeamAdoptedRun) has ended.
+    if ($null -eq $Run.Process) { return $true }
     if ($Run.Process.HasExited) { return $true }
     return ([datetime]::UtcNow -ge $Deadline.ToUniversalTime())
 }
@@ -403,6 +548,28 @@ function Wait-TeamRun {
     # run); WaitForExit(-1) waits for ever, and a span that large would not fit an int.
     $remainingMs = ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds
     $remaining = if ($remainingMs -ge [int]::MaxValue) { -1 } else { [int][Math]::Max(0, $remainingMs) }
+    if ($null -ne $Run.PSObject.Properties["OutFile"]) {
+        # A detached run (Start-TeamDetachedRun, New-TeamAdoptedRun): its output is in files.
+        $timedOut = $false
+        if ($null -ne $Run.Process) {
+            $timedOut = -not $Run.Process.WaitForExit($remaining)
+            if ($timedOut) {
+                Stop-TeamProcessTree -ProcessId $Run.Process.Id
+                [void]$Run.Process.WaitForExit(15000)
+            }
+        }
+        $codeText = (Read-TeamSharedText -Path ([string]$Run.CodeFile)).Trim()
+        $exitCode = -1
+        if ($timedOut) { $exitCode = -1 }
+        elseif ($codeText -match '^-?\d+$') { $exitCode = [int]$codeText }
+        elseif ($null -ne $Run.Process) { try { $exitCode = $Run.Process.ExitCode } catch { $exitCode = -1 } }
+        $seconds = [int]([datetime]::UtcNow - $Run.Started).TotalSeconds
+        if ($null -ne $Run.Process) { $Run.Process.Dispose() }
+        return [pscustomobject]@{
+            ExitCode = $exitCode; StdOut = (Read-TeamSharedText -Path ([string]$Run.OutFile)); StdErr = (Read-TeamSharedText -Path ([string]$Run.ErrFile))
+            TimedOut = $timedOut; Seconds = $seconds
+        }
+    }
     $exited = $Run.Process.WaitForExit($remaining)
     $timedOut = -not $exited
     if ($timedOut) {

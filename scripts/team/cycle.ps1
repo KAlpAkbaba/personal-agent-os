@@ -71,10 +71,17 @@
     their own (-MaxInspectors, -MaxIntegrators, one, one).
 
 .PARAMETER MaxHours
-    A cycle process runs the script and the arguments it started with, and a cycle that has
-    work does not end by itself. After this many hours (default 4; 0 is never) it starts
-    nothing new and ends when its runs do: the scheduler's next start carries on, with the
-    current script.
+    After this many hours the process starts nothing new and ends when its runs do. 0 (the
+    default since the owner's rule of 2026-10-03, "Döngüyü kaldırabiliriz") is never: the
+    cycle boundary is gone. New code is taken over by a HANDOVER instead (team/handover.flag,
+    or - with -Continuous - the scripts' hash changing): the loop stops dispatching, writes its
+    live runs to team/logs/loop-handover.json, exits WITHOUT killing them and starts its
+    successor, which adopts them. The parameter stays for tests.
+
+.PARAMETER Continuous
+    The loop (continuous-team-loop): it does not end when nothing can run - it waits for the
+    next refill. It ends on team/stop.flag (when its runs have ended) or hands over. The
+    watchdog (tick.ps1 -Watchdog) starts it with this switch.
 
 .PARAMETER RefillSeconds
     The seats are filled whenever a run ends, and at least this often while nothing ends - a
@@ -108,7 +115,8 @@ param(
     [double]$RunMaxUsd = 0,
     [double]$RunMinutes = 0,
     [int]$CycleMinutes = 0,
-    [double]$MaxHours = 4,
+    [double]$MaxHours = 0,
+    [switch]$Continuous,
     [int]$RefillSeconds = 120,
     # How often the runs in flight are looked at. Nothing blocks on one run.
     [int]$PollMilliseconds = 250,
@@ -160,8 +168,26 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
-if (-not $CycleId) { $CycleId = $(if ($DailyId) { "d" + (Get-Date).ToString("yyyyMMdd") } else { "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }) }
-if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is lower-case letters, digits, '.' and '-': '$CycleId'" }
+# The clock of this process. Two test hooks, both inert unless set: PAGENTOS_CYCLE_CLOCK_OFFSET_HOURS
+# makes the loop believe it started that many hours ago (a loop past four hours, in seconds), and
+# PAGENTOS_TEAM_LOCAL_CLOCK_START ("yyyy-MM-ddTHH:mm:ss", local) is the local time at this moment,
+# running on from there (local midnight, in seconds).
+$processStart = [datetime]::UtcNow
+$localClockStart = $null
+if ([string]$env:PAGENTOS_TEAM_LOCAL_CLOCK_START -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$') {
+    $localClockStart = [datetime]::ParseExact([string]$env:PAGENTOS_TEAM_LOCAL_CLOCK_START, "yyyy-MM-ddTHH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+function Get-LoopLocalNow {
+    if ($null -ne $script:localClockStart) { return $script:localClockStart.Add([datetime]::UtcNow - $script:processStart) }
+    return (Get-Date)
+}
+# The day's id (continuous-team-loop): with -DailyId and no -CycleId the loop follows the local
+# day - at midnight the report folder, the report and the integration branch of the new day
+# begin, with no restart. A -CycleId given is kept for the whole run.
+$followDay = ([bool]$DailyId -and -not $CycleId)
+$dayId = if ($CycleId) { $CycleId } elseif ($DailyId) { "d" + (Get-LoopLocalNow).ToString("yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture) } else { "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }
+if ($dayId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is lower-case letters, digits, '.' and '-': '$dayId'" }
+$lockCycleId = $dayId
 if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
 if ($MaxInspectors -lt 1 -or $MaxIntegrators -lt 1) { throw "-MaxInspectors and -MaxIntegrators are at least 1" }
 if ($MaxHours -lt 0 -or $RefillSeconds -lt 1 -or $PollMilliseconds -lt 10) { throw "-MaxHours is 0 or more, -RefillSeconds at least 1, -PollMilliseconds at least 10" }
@@ -179,7 +205,7 @@ $limitsPath = Join-Path $TeamRoot "limits.json"
 $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
 $reportsRoot = Join-Path $TeamRoot "reports"
-$cycleDir = Join-Path $reportsRoot $CycleId
+$cycleDir = Join-Path $reportsRoot $dayId
 $agentsRoot = Join-Path $repoRoot ".claude\agents"
 
 $useApi = [bool]$QueueUrl
@@ -355,8 +381,9 @@ if (@($problems).Count -gt 0) {
 }
 
 $started = [datetime]::UtcNow
+if ([string]$env:PAGENTOS_CYCLE_CLOCK_OFFSET_HOURS -match '^\d{1,3}$') { $started = $started.AddHours(-[int]$env:PAGENTOS_CYCLE_CLOCK_OFFSET_HOURS) }
 $cycle = [pscustomobject]@{
-    cycle_id   = $CycleId
+    cycle_id   = $dayId
     machine    = $Machine
     started_at = (Get-TeamTimestamp -Now $started)
     ended_at   = ""
@@ -399,6 +426,55 @@ $staleIds = @{}
 # three of them (the try of a dropped run is handed back, so nothing else would end it).
 $droppedRuns = @{}
 $abandoned = @{}
+# team-engine. The worker seats' memory (team/logs/seats.json: which seat built a task, the
+# session of that run); the loop's own file (team/logs/loop.json: its id, pid and heartbeat - what
+# the watchdog reads); the handover file a loop that hands over leaves for its successor.
+$logsDir = Join-Path $TeamRoot "logs"
+$seatsPath = Join-Path $logsDir "seats.json"
+$loopPath = Join-Path $logsDir "loop.json"
+$handoverPath = Join-Path $logsDir "loop-handover.json"
+$handoverFlagPath = Join-Path $TeamRoot "handover.flag"
+$seatRecords = Read-TeamSeatRecords -Path $seatsPath
+$loopId = "loop-" + ($Machine -replace '[^A-Za-z0-9-]', '').ToLowerInvariant() + "-" + $processStart.ToString("yyyyMMddHHmmss") + "-$PID"
+$scriptsHash = Get-TeamScriptsHash -RepoRoot $repoRoot
+# Set when this loop hands over: its runs are left running, its successor adopts them.
+$handingOver = $false
+$loopEnded = $false
+$lockRefreshedAt = [datetime]::UtcNow
+
+function Save-SeatRecords {
+    try { Save-TeamSeatRecords -Path $script:seatsPath -Records $script:seatRecords }
+    catch {
+        $note = "çalışan koltuklarının kaydı yazılamadı (team/logs/seats.json): $($_.Exception.Message)"
+        if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+    }
+}
+
+function Set-SeatRecord {
+    <# What the loop remembers of a task's worker seat; a field not named stays. #>
+    param([string]$Id, [string]$Seat = $null, [string]$Session = $null, [string]$GoneAt = $null)
+    $record = $script:seatRecords[$Id]
+    if ($null -eq $record) { $record = [pscustomobject]@{ owner_seat = ""; session_id = ""; seat_gone_at = "" }; $script:seatRecords[$Id] = $record }
+    if ($PSBoundParameters.ContainsKey("Seat")) { $record.owner_seat = $Seat }
+    if ($PSBoundParameters.ContainsKey("Session")) { $record.session_id = $Session }
+    if ($PSBoundParameters.ContainsKey("GoneAt")) { $record.seat_gone_at = $GoneAt }
+    Save-SeatRecords
+}
+
+function Write-LoopFile {
+    <# team/logs/loop.json: this loop, alive (its heartbeat) or ended. Never a reason to stop. #>
+    param([bool]$Running = $true)
+    try {
+        $document = [ordered]@{
+            loop_id = $script:loopId; machine = $Machine; pid = $PID; running = $Running; continuous = [bool]$Continuous
+            started_at = (Get-TeamTimestamp -Now $script:processStart); heartbeat_at = (Get-TeamTimestamp); day_id = $script:dayId
+            runs = @($script:liveRuns | ForEach-Object { [ordered]@{ task = $_.task; role = $_.role; seat = [string](Get-TeamProperty -InputObject $_ -Name "seat" -Default ""); started_at = $_.started_at } })
+        }
+        if (-not (Test-Path -LiteralPath $script:logsDir)) { [void](New-Item -ItemType Directory -Force -Path $script:logsDir) }
+        Write-TeamJson -Path $script:loopPath -Document $document
+    }
+    catch { }
+}
 # The model policy (ADR-0214 addendum 7). $modelSetting is read below, once the report can be
 # written. $limitedModels is what the runs said is limited: model id -> { until, type, seen_at };
 # a model in it starts no run until its reset. It lives across cycles in team/limits.json (an
@@ -419,6 +495,16 @@ $limitStop = $false
 # The usage limit is being waited out until then (UTC): the pool starts nothing, the runs in
 # flight go on. $null = no wait.
 $limitWaitUntil = $null
+
+function ConvertTo-LoopLiteral {
+    <# A value as PowerShell source: what a handover writes on its successor's command line. #>
+    param($Value)
+    if ($Value -is [System.Management.Automation.SwitchParameter]) { return $(if ($Value.IsPresent) { '$true' } else { '$false' }) }
+    if ($Value -is [bool]) { return $(if ($Value) { '$true' } else { '$false' }) }
+    if ($Value -is [array]) { return "@(" + ((@($Value) | ForEach-Object { ConvertTo-LoopLiteral -Value $_ }) -join ",") + ")" }
+    if ($Value -is [int] -or $Value -is [double] -or $Value -is [long]) { return ([System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)) }
+    return "'" + ([string]$Value -replace "'", "''") + "'"
+}
 
 function Add-CycleNote {
     param([string]$List, [string]$Text)
@@ -464,7 +550,7 @@ function Get-LimitsDocument {
 function New-CycleStatus {
     param([bool]$Legacy = $false)
     $document = [ordered]@{
-        cycle_id      = $CycleId
+        cycle_id      = $dayId
         machine       = $Machine
         pid           = $PID
         started_at    = [string]$script:cycle.started_at
@@ -483,6 +569,8 @@ function New-CycleStatus {
 
 function Write-CycleStatus {
     $script:statusWrittenAt = [datetime]::UtcNow
+    # The loop's heartbeat goes with the status: the watchdog starts a loop only when it is old.
+    if (-not $script:loopEnded) { Write-LoopFile }
     try {
         if ($useApi) {
             try { Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Legacy $script:statusLegacy) }
@@ -516,13 +604,13 @@ function Test-StopRequested {
 function Save-Report {
     $script:cycle.ended_at = (Get-TeamTimestamp)
     if (-not (Test-Path -LiteralPath $reportsRoot)) { [void](New-Item -ItemType Directory -Force -Path $reportsRoot) }
-    $text = New-TeamCycleReport -CycleId $CycleId -Queue $script:queue -Cycle $script:cycle
-    $path = Join-Path $reportsRoot "$CycleId.md"
+    $text = New-TeamCycleReport -CycleId $dayId -Queue $script:queue -Cycle $script:cycle
+    $path = Join-Path $reportsRoot "$dayId.md"
     [System.IO.File]::WriteAllText($path, $text + "`n", (New-Object System.Text.UTF8Encoding($false)))
     if ($useApi) {
         # The file above is the report; the store keeps its text so the Onay Merkezi on the Cloud
         # Core can show it. A post that fails does not lose the report.
-        try { Send-TeamReportApi -Store $apiStore -Name "$CycleId.md" -Text $text }
+        try { Send-TeamReportApi -Store $apiStore -Name "$dayId.md" -Text $text }
         catch { Write-Host "the report was not posted to the queue store: $($_.Exception.Message)" }
     }
     return $path
@@ -662,6 +750,18 @@ function Select-RunModel {
 
 # ------------------------------------------------------------------ the lock
 
+# A loop that handed over to this one is still releasing its lock: it is waited for (a minute at
+# most) - its runs are not, they are adopted below.
+$handover = $null
+if (Test-Path -LiteralPath $handoverPath) {
+    try { $handover = Read-TeamJson -Path $handoverPath } catch { $handover = $null }
+    $fromPid = [int](Get-TeamProperty -InputObject $handover -Name "from_pid" -Default 0)
+    if ($fromPid -gt 0 -and $fromPid -ne $PID) {
+        $until = [datetime]::UtcNow.AddSeconds(60)
+        while ([datetime]::UtcNow -lt $until -and $null -ne (Get-Process -Id $fromPid -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 200 }
+    }
+}
+
 $lock = $null
 if ($useApi) { $lock = Get-TeamLockApi -Store $apiStore }
 elseif (Test-Path -LiteralPath $lockPath) { $lock = Read-TeamJson -Path $lockPath }
@@ -697,7 +797,7 @@ if ($DryRun) {
 }
 
 if ($useApi) {
-    $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId -TakeoverDead ($decision.Kind -eq "dead")
+    $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $script:lockCycleId -TakeoverDead ($decision.Kind -eq "dead")
     if (-not [bool]$taken.acquired) {
         # The other machine took it between our read and our write.
         Add-CycleNote -List "stops" -Text "kilit $($taken.holder) makinesinde ($($taken.since)); bu döngü hiçbir şey çalıştırmadı"
@@ -706,7 +806,7 @@ if ($useApi) {
         exit 3
     }
 }
-else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $CycleId -Now $started) }
+else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $script:lockCycleId -Now $started) }
 
 try {
     Write-CycleStatus
@@ -740,8 +840,12 @@ try {
             $Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @(),
             # What Select-RunModel answered for this run: the model to start on, and the one it
             # should have been (a run started below it is a lowering, and is written down).
-            [Parameter(Mandatory = $true)]$Pick
+            [Parameter(Mandatory = $true)]$Pick,
+            # team-engine: the seat the run sits on (worker-N, or its role), the session a return
+            # resumes, and the line a fresh run is told when that session could not be resumed.
+            [string]$Seat = "", [string]$ResumeSession = "", [string]$FallbackNote = ""
         )
+        if (-not $Seat) { $Seat = $Role }
         $roleFile = Join-Path $agentsRoot "$Role.md"
         if (-not (Test-Path -LiteralPath $roleFile)) { throw "there is no role file for '$Role': $roleFile" }
         # A run cap of 0 is no cap at all: then the task's budget.max_usd is an estimate for
@@ -759,11 +863,13 @@ try {
         }
         $runModel = [string]$Pick.Model
         if (-not (Test-TeamModelId -Model $runModel)) { throw "'$runModel' is not a model: no run is started on it" }
-        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $runModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
+        # A worker's session is kept (a return resumes it); every other run stays fresh.
+        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $runModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools `
+            -KeepSession:($Role -eq "worker") -ResumeSession $ResumeSession
         if ($Prompt) { $prompt = $Prompt }
-        elseif ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
+        elseif ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $dayId }
         else {
-            $prompt = "# Run ($Role, cycle $CycleId)`n`nWork as your role file says. Write your proposals under team/proposals/. " +
+            $prompt = "# Run ($Role, cycle $dayId)`n`nWork as your role file says. Write your proposals under team/proposals/. " +
             "Return your report as your final message, at most 40 lines, naming each file you wrote."
             $subjects = @($ResearchBrief | Where-Object { ([string]$_).Trim() })
             if (@($subjects).Count -gt 0) {
@@ -777,8 +883,13 @@ try {
             $label = if ($null -ne $Task) { [string]$Task.id } else { "cycle" }
             $runTemp = Join-Path $tempRoot ("{0}-{1}-{2}" -f $label, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
         }
-        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp
-        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp); model = $runModel }
+        if ($FallbackNote) { $prompt += "`n`n## " + $FallbackNote }
+        $label = if ($null -ne $Task) { [string]$Task.id } else { "cycle" }
+        # Its output goes to files under the day's folder, so a handover never cuts it off.
+        $stem = Join-Path (Join-Path $cycleDir "running") ("{0}-{1}-{2}" -f $label, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = $label }
+        $run = Start-TeamDetachedRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp -Stem $stem -Environment $environment
+        $live = [pscustomobject]@{ task = $label; role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $Seat }
         [void]$script:liveRuns.Add($live)
         $loweredFrom = ""
         if ([bool]$Pick.Lowered) {
@@ -793,8 +904,71 @@ try {
         return [pscustomobject]@{
             Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel
             LoweredFrom = $loweredFrom; Where = $WorkingDirectory; Prompt = $Prompt; ExcludeTools = @($ExcludeTools)
-            RunTemp = $runTemp
+            RunTemp = $runTemp; Seat = $Seat; ResumeSession = $ResumeSession; FallbackNote = $FallbackNote
         }
+    }
+
+    function Add-AdoptedRuns {
+        <# continuous-team-loop: the runs a loop that handed over left running, taken as this loop's
+           own - waited on by pid, their files read when they end, their seats busy meanwhile. #>
+        if ($null -eq $script:handover) { return }
+        $adopted = 0
+        foreach ($entry in @(Get-TeamProperty -InputObject $script:handover -Name "runs" -Default @())) {
+            $taskId = [string](Get-TeamProperty -InputObject $entry -Name "task" -Default "")
+            $role = [string](Get-TeamProperty -InputObject $entry -Name "role" -Default "")
+            $stem = [string](Get-TeamProperty -InputObject $entry -Name "stem" -Default "")
+            if (-not $role -or -not $stem) { continue }
+            $task = $null
+            if ($taskId -and $taskId -ne "cycle") {
+                $task = @(Get-TeamTasks -Queue $script:queue | Where-Object { [string]$_.id -eq $taskId })[0]
+                if ($null -eq $task) {
+                    Add-CycleNote -List "risks" -Text "devralınamadı: $taskId/$role - iş kuyrukta yok; koşusu (pid $([int]$entry.pid)) kendi başına biter"
+                    continue
+                }
+            }
+            $begun = ConvertFrom-TeamTimestamp -Text ([string](Get-TeamProperty -InputObject $entry -Name "started_at" -Default ""))
+            if ($null -eq $begun) { $begun = [datetime]::UtcNow }
+            $run = New-TeamAdoptedRun -ProcessId ([int](Get-TeamProperty -InputObject $entry -Name "pid" -Default 0)) -Stem $stem -Started $begun
+            $model = [string](Get-TeamProperty -InputObject $entry -Name "model" -Default "")
+            $seat = [string](Get-TeamProperty -InputObject $entry -Name "seat" -Default $role)
+            $live = [pscustomobject]@{ task = $(if ($null -ne $task) { $taskId } else { "cycle" }); role = $role; started_at = (Get-TeamTimestamp -Now $begun); model = $model; seat = $seat }
+            [void]$script:liveRuns.Add($live)
+            $deadline = if ($RunMinutes -gt 0) { $begun.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
+            [void]$script:pool.Add([pscustomobject]@{
+                    Task = $task; Role = $role; Run = $run; Deadline = $deadline; Live = $live; Model = $model
+                    LoweredFrom = [string](Get-TeamProperty -InputObject $entry -Name "lowered_from" -Default ""); Where = [string](Get-TeamProperty -InputObject $entry -Name "where" -Default $repoRoot)
+                    Prompt = [string](Get-TeamProperty -InputObject $entry -Name "prompt" -Default ""); ExcludeTools = @(Get-TeamProperty -InputObject $entry -Name "exclude_tools" -Default @())
+                    RunTemp = [string](Get-TeamProperty -InputObject $entry -Name "run_temp" -Default ""); Seat = $seat
+                    ResumeSession = [string](Get-TeamProperty -InputObject $entry -Name "resume_session" -Default ""); FallbackNote = ""
+                })
+            if ($null -ne $task -and @("worker", "inspector", "integrator") -contains $role) {
+                if (-not $script:runCount.ContainsKey($taskId)) { $script:runCount[$taskId] = 0 }
+                $script:runCount[$taskId] = $script:runCount[$taskId] + 1
+            }
+            if ($role -eq "researcher") { $script:researchPending = $false }
+            if ($role -eq "lead" -and $null -ne $task) { $script:splitTried[$taskId] = $true }
+            $adopted++
+        }
+        Add-CycleNote -List "risks" -Text ("devralındı: $adopted koşu (önceki döngü pid " + [int](Get-TeamProperty -InputObject $script:handover -Name "from_pid" -Default 0) + ", " + [string](Get-TeamProperty -InputObject $script:handover -Name "loop_id" -Default "?") + ")")
+        Remove-Item -LiteralPath $script:handoverPath -Force -ErrorAction SilentlyContinue
+        Write-CycleStatus
+    }
+
+    function Save-Handover {
+        <# continuous-team-loop: this loop hands over to new code. What is in flight is written for the
+           successor (pid, seat, task, start, files) - it is never killed. #>
+        $entries = @($script:pool | ForEach-Object {
+                [ordered]@{
+                    task = $(if ($null -ne $_.Task) { [string]$_.Task.id } else { "cycle" }); role = [string]$_.Role; seat = [string]$_.Seat
+                    pid = [int]$_.Run.Pid; stem = [string]$_.Run.Stem; started_at = (Get-TeamTimestamp -Now $_.Run.Started)
+                    model = [string]$_.Model; lowered_from = [string]$_.LoweredFrom; where = [string]$_.Where; prompt = [string]$_.Prompt
+                    exclude_tools = @($_.ExcludeTools); run_temp = [string]$_.RunTemp; resume_session = [string]$_.ResumeSession
+                    report = ("team/reports/$($script:dayId)/" + $(if ($null -ne $_.Task) { [string]$_.Task.id } else { "cycle" }) + "-" + [string]$_.Role)
+                }
+            })
+        if (-not (Test-Path -LiteralPath $script:logsDir)) { [void](New-Item -ItemType Directory -Force -Path $script:logsDir) }
+        Write-TeamJson -Path $script:handoverPath -Document ([ordered]@{ from_pid = $PID; loop_id = $script:loopId; written_at = (Get-TeamTimestamp); runs = @($entries) })
+        Add-CycleNote -List "risks" -Text ("devredildi: $(@($entries).Count) koşu uçuşta bırakıldı; yeni döngü onları devralır")
     }
 
     function Complete-RoleRun {
@@ -804,6 +978,7 @@ try {
         param($Started)
         $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline
         Remove-TeamRunTemp -Path ([string]$Started.RunTemp)
+        if ($null -ne $Started.Run.PSObject.Properties["Stem"]) { Remove-TeamRunFiles -Stem ([string]$Started.Run.Stem) }
         $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model ([string]$Started.Model)
         $taskId = if ($null -ne $Started.Task) { [string]$Started.Task.id } else { "cycle" }
         $number = 1
@@ -844,13 +1019,14 @@ try {
                 model = [string]$Started.Model; ran_model = $ranModel; lowered_from = [string]$Started.LoweredFrom
                 substituted = [bool]$result.Substituted
             })
-        $relative = "team/reports/$CycleId/$taskId-$($Started.Role)-$number"
+        $relative = "team/reports/$dayId/$taskId-$($Started.Role)-$number"
         return [pscustomobject]@{
             Ok = ($result.Ok -and -not $finished.TimedOut); Text = $result.Text; Outcome = $outcome
             File = $(if ($result.Text) { "$relative.md" } else { "$relative.json" }); CostUsd = $result.CostUsd
             UsageLimited = [bool]$result.UsageLimited; ResetsAt = [string]$result.ResetsAt
             LimitScope = [string]$result.LimitScope; LimitedModel = [string]$result.LimitedModel; LimitType = [string]$result.LimitType
             Model = [string]$Started.Model; RanModel = $ranModel; Substituted = [bool]$result.Substituted
+            SessionId = [string]$result.SessionId; Why = [string]$result.Why
         }
     }
 
@@ -883,7 +1059,7 @@ try {
     function Add-TaskReport {
         param($Task, [string]$Role, $Done)
         $entry = [pscustomobject]@{
-            cycle    = $CycleId
+            cycle    = $dayId
             role     = $Role
             at       = (Get-TeamTimestamp)
             file     = $Done.File
@@ -947,6 +1123,8 @@ try {
     $splitTried = @{}
     $ownTries = @{}
     $postedIdeas = @{}
+    # The approved tasks of this refill whose merge waits (Test-TeamAwaitingMerge).
+    $mergeWaiting = New-Object System.Collections.ArrayList
     # A cap, the stop flag or the usage limit ended the cycle: nothing new starts.
     $capped = $false
     # Refills in a row that moved a state and started nothing, with nothing in flight. One or
@@ -1036,6 +1214,9 @@ try {
             # Its write was refused and the store could not be read again yet: it is not ours.
             # Or three of its runs were dropped: this cycle starts nothing more for it.
             if ($script:staleIds.ContainsKey($id) -or $script:abandoned.ContainsKey($id)) { continue }
+            # Approved, waiting for its merge (the integration branch could not take its base):
+            # merged by the refill, never inspected a second time.
+            if (Test-TeamAwaitingMerge -Task $task) { [void]$script:mergeWaiting.Add($task); continue }
             $next = Get-TeamNextRole -Task $task
             if ($next.Kind -ne "rest" -and $next.Kind -ne "gate") {
                 # A task whose dependencies are not on main yet waits, and says so once.
@@ -1078,6 +1259,70 @@ try {
         return [pscustomobject]@{ Runnable = @($runnable.ToArray()); Moved = $moved }
     }
 
+    function Get-ReturnClaims {
+        <# team-engine: task id -> the worker seat that owns it, for each returned task of this
+           refill whose owner's claim lives (Get-TeamSeatClaim). A seat that went away keeps its
+           claim for sixty minutes - when it went is remembered in team/logs/seats.json, so a
+           handover does not restart the count - and after that the task is anybody's. #>
+        param([object[]]$Candidates)
+        $claims = @{}
+        $now = [datetime]::UtcNow
+        foreach ($item in @($Candidates)) {
+            if ([string]$item.Role -ne "worker" -or $null -eq $item.Task -or [string]$item.Task.state -ne "returned") { continue }
+            $id = [string]$item.Task.id
+            $known = Get-TeamTaskSeat -Task $item.Task -Records $script:seatRecords
+            $claim = Get-TeamSeatClaim -OwnerSeat $known.Seat -WorkerSeats ([int]$script:seats.worker) -GoneSince (ConvertFrom-TeamTimestamp -Text $known.GoneAt) -Now $now
+            switch ($claim.State) {
+                "present" {
+                    if ($known.GoneAt) { Set-SeatRecord -Id $id -GoneAt "" }
+                    $claims[$id] = $claim.Seat
+                }
+                "waiting" {
+                    if (-not $known.GoneAt) { Set-SeatRecord -Id $id -GoneAt (Get-TeamTimestamp -Now $claim.GoneSince) }
+                    $claims[$id] = $claim.Seat
+                    $waitNote = "bekliyor: $id -> $($claim.Seat) (koltuk şu an yok; en çok $([int]$script:TeamSeatGraceMinutes) dakika onu bekler)"
+                    if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
+                }
+                "released" {
+                    $note = "${id}: $($claim.Seat) $($claim.Minutes) dakikadır yok; geri dönen iş herhangi bir çalışana verildi"
+                    if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+                }
+            }
+        }
+        return $claims
+    }
+
+    function Invoke-TaskMerge {
+        <# An approved task into the integration branch (integrate-follows-release): the base's
+           new commits first, then the task. $true when the task's state moved. A base the
+           integration branch cannot take is NOT the task's fault: it stays approved and waiting
+           (`inspecting` with the inspector's APPROVE as its last report), the lead is told in one
+           line, and the next refill tries again. A conflict of the task itself, with the base
+           in, sends it back as it always did. #>
+        param($Task)
+        $merge = Merge-TeamBranch -RepoRoot $repoRoot -CycleId $dayId -Branch ([string]$Task.branch) -Base $Base -Follow
+        if ([bool]$merge.BaseConflict) {
+            $files = (@($merge.BaseFiles) | Select-Object -First 5) -join ", "
+            $note = "entegrasyon dalı $Base dalını alamadı: $files ($($Task.id) onaylı, birleştirilmeyi bekliyor; lead entegrasyon dalını başka bir çalışma kopyasında günceller)"
+            if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+            return $false
+        }
+        if ($merge.Merged) {
+            Set-TeamProperty -InputObject $Task -Name "state" -Value "merged"
+            Set-TeamProperty -InputObject $Task -Name "integration_branch" -Value $merge.Integration
+            Set-TeamProperty -InputObject $Task -Name "updated_at" -Value (Get-TeamTimestamp)
+            return [pscustomobject]@{ Moved = $true; Fresh = (-not [bool]$merge.Already) }
+        }
+        $script:cycle.conflicts = [int]$script:cycle.conflicts + 1
+        $script:cycle.returned = [int]$script:cycle.returned + 1
+        $back = Get-TeamStateAfterInspection -Task $Task -Verdict "RETURN"
+        Set-TeamProperty -InputObject $Task -Name "returns" -Value $back.Returns
+        Set-TeamProperty -InputObject $Task -Name "state" -Value $back.State
+        Set-TeamProperty -InputObject $Task -Name "reason" -Value "entegrasyon dalında çakışma"
+        Set-TeamProperty -InputObject $Task -Name "updated_at" -Value (Get-TeamTimestamp)
+        return [pscustomobject]@{ Moved = $true; Fresh = $false }
+    }
+
     function Start-PoolRun {
         <# One candidate of a refill, started in the seat it was given. $false when it could
            not be started: a task is stopped with the reason, a run the cycle makes for itself
@@ -1113,13 +1358,13 @@ try {
             $script:splitTried[$proposalId] = $true
             $script:ownTries["$proposalId/lead"] = 1 + [int]$script:ownTries["$proposalId/lead"]
             try {
-                $splitRelative = "team/plans/$CycleId-split-$proposalId.json"
+                $splitRelative = "team/plans/$dayId-split-$proposalId.json"
                 $splitPath = Join-Path $repoRoot ($splitRelative -replace '/', '\')
                 # A file left by an earlier run is not this run's answer.
                 if (Test-Path -LiteralPath $splitPath) { Remove-Item -LiteralPath $splitPath -Force }
                 $splitFolder = Split-Path -Parent $splitPath
                 if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
-                $card = New-TeamSplitCard -Task $task -Queue $script:queue -CycleId $CycleId -SplitFile $splitRelative
+                $card = New-TeamSplitCard -Task $task -Queue $script:queue -CycleId $dayId -SplitFile $splitRelative
                 # The lead's run follows the setting and the chain like any role's.
                 [void]$script:pool.Add((Start-RoleRun -Task $task -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit") -Pick $Item.Pick))
                 return $true
@@ -1132,12 +1377,25 @@ try {
         }
         $script:runCount[[string]$task.id] = $script:runCount[[string]$task.id] + 1
         $where = $repoRoot
+        $seat = [string](Get-TeamProperty -InputObject $Item -Name "Seat" -Default $role)
+        $resume = ""
+        if ($role -eq "worker") {
+            $known = Get-TeamTaskSeat -Task $task -Records $script:seatRecords
+            if ([string]$task.state -eq "returned" -and $known.Seat -eq $seat -and $known.Session) {
+                # The seat that built it fixes it, in its own session (the owner's rule of 2026-10-03).
+                $resume = $known.Session
+            }
+            elseif ($known.Seat -ne $seat) {
+                # Built here (or its owner's claim ran out): this seat owns it from now on.
+                Set-SeatRecord -Id ([string]$task.id) -Seat $seat -Session "" -GoneAt ""
+            }
+        }
         try {
             if ($role -eq "worker" -or $role -eq "inspector") {
                 $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
                 if (-not $branch) {
                     $slug = ([string]$task.id)
-                    $branch = Get-TeamBranchName -CycleId $CycleId -Role "worker" -Slug $slug
+                    $branch = Get-TeamBranchName -CycleId $dayId -Role "worker" -Slug $slug
                     Set-TeamProperty -InputObject $task -Name "branch" -Value $branch
                 }
                 $tree = New-TeamWorktree -RepoRoot $repoRoot -Branch $branch -Base $Base
@@ -1146,7 +1404,7 @@ try {
             }
             if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "in_progress" }
             Set-TeamProperty -InputObject $task -Name "assignee" -Value $role
-            [void]$script:pool.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $where -Pick $Item.Pick))
+            [void]$script:pool.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $where -Pick $Item.Pick -Seat $seat -ResumeSession $resume))
             return $true
         }
         catch {
@@ -1179,9 +1437,17 @@ try {
                     [void]$candidates.Add([pscustomobject]@{ Task = $proposal; Role = "lead"; Pick = $null })
                 }
             }
+            $script:mergeWaiting.Clear()
             $look = Get-RunnableTasks
             $pass.Moved = [bool]$look.Moved
             if ($look.Moved) { Save-PoolQueue -What "durum taşımaları" }
+            # integrate-follows-release: an approved task whose base could not be taken in is merged
+            # now that the base may have moved (the lead took it in, or the base merges cleanly now).
+            $mergedNow = $false
+            foreach ($waiting in @($script:mergeWaiting.ToArray())) {
+                if (Invoke-TaskMerge -Task $waiting) { $pass.Moved = $true; $mergedNow = $true }
+            }
+            if ($mergedNow) { Save-PoolQueue -What "bekleyen birleştirmeler" }
             foreach ($item in @($look.Runnable)) {
                 # A move the store refused: the task was written by somebody else between our read
                 # and this write (the lead stopped it, the owner decided). It is not run on our copy.
@@ -1207,7 +1473,7 @@ try {
             $item.Pick = $pick
             [void]$open.Add($item)
         }
-        $fill = @(Select-TeamSeatFill -Candidates @($open.ToArray()) -InFlight @($script:pool.ToArray()) -Seats $script:seats)
+        $fill = @(Select-TeamSeatFill -Candidates @($open.ToArray()) -InFlight @($script:pool.ToArray()) -Seats $script:seats -Claims (Get-ReturnClaims -Candidates @($open.ToArray())))
         foreach ($item in $fill) {
             if (Start-PoolRun -Item $item) { $pass.Started = $pass.Started + 1 } else { $pass.Failed = $pass.Failed + 1 }
         }
@@ -1275,7 +1541,7 @@ try {
             Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: $($Done.Outcome)"
             return
         }
-        $splitPath = Join-Path $repoRoot ("team\plans\$CycleId-split-$proposalId.json")
+        $splitPath = Join-Path $repoRoot ("team\plans\$dayId-split-$proposalId.json")
         $read = Read-TeamSplitFile -Path $splitPath
         $why = @()
         if (-not $read.Ok) { $why = @($read.Why) }
@@ -1342,6 +1608,24 @@ try {
                 Add-CycleNote -List "risks" -Text "${id}: hüküm alınmadı - araç denetimi $($done.Model) yerine $($done.RanModel) ile koşturdu; bu, işçinin modelinden ($($floor.Model)) zayıf"
             }
         }
+        if ($role -eq "worker" -and $done.SessionId -and [string](Get-TeamTaskSeat -Task $task -Records $script:seatRecords).Seat -eq [string]$Started.Seat) {
+            # The session of the run that built (or fixed) it: what its next return resumes.
+            Set-SeatRecord -Id $id -Session ([string]$done.SessionId)
+        }
+        if ($role -eq "worker" -and [string]$Started.ResumeSession -and -not $done.Ok -and -not $done.UsageLimited) {
+            # The session could not be resumed (expired, missing, an error): the same seat starts a
+            # fresh run with the card - the reason and the inspector's report - and is told so. Not a
+            # failure of the task and not a try spent; once only (the fresh run resumes nothing).
+            $why = ([string]$done.Why -replace '\s+', ' ').Trim()
+            Add-CycleNote -List "risks" -Text "${id}: $($Started.Seat) önceki oturumunu sürdüremedi ($why); taze koşu raporla başlatıldı"
+            try {
+                $note = "Önceki oturumu sürdürülemedi ($why): bu taze bir koşu. Dal, neden ve denetleyicinin raporu elinde; raporunda bunu söyle."
+                [void]$script:pool.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $Started.Where -Pick ([pscustomobject]@{ Model = $Started.Model; Lowered = $false; Intended = "" }) -Seat ([string]$Started.Seat) -FallbackNote $note))
+                Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+                return
+            }
+            catch { Add-CycleNote -List "risks" -Text "${id}: taze koşu başlatılamadı: $($_.Exception.Message)" }
+        }
         Add-TaskReport -Task $task -Role $role -Done $done
 
         if ($done.UsageLimited) {
@@ -1406,20 +1690,10 @@ try {
                 Set-TeamProperty -InputObject $task -Name "returns" -Value $after.Returns
                 $reason = if ($verdict.Detail) { $verdict.Detail } else { $after.Reason }
                 if ($after.State -eq "merged") {
-                    $merge = Merge-TeamBranch -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) -Base $Base
-                    if ($merge.Merged) {
-                        $freshMerge = -not [bool]$merge.Already
-                        Set-TeamProperty -InputObject $task -Name "state" -Value "merged"
-                        Set-TeamProperty -InputObject $task -Name "integration_branch" -Value $merge.Integration
-                    }
-                    else {
-                        $script:cycle.conflicts = [int]$script:cycle.conflicts + 1
-                        $script:cycle.returned = [int]$script:cycle.returned + 1
-                        $back = Get-TeamStateAfterInspection -Task $task -Verdict "RETURN"
-                        Set-TeamProperty -InputObject $task -Name "returns" -Value $back.Returns
-                        Set-TeamProperty -InputObject $task -Name "state" -Value $back.State
-                        Set-TeamProperty -InputObject $task -Name "reason" -Value "entegrasyon dalında çakışma"
-                    }
+                    # The base first, then the task (Invoke-TaskMerge). A base the integration branch
+                    # cannot take leaves the task approved and waiting: never stopped, never returned.
+                    $merging = Invoke-TaskMerge -Task $task
+                    if ($merging -isnot [bool]) { $freshMerge = [bool]$merging.Fresh }
                 }
                 else {
                     if ($after.State -eq "returned") { $script:cycle.returned = [int]$script:cycle.returned + 1 }
@@ -1440,7 +1714,7 @@ try {
             # Refused right after the merge: it is still the branch's last commit, and it is
             # taken back. (Not when the merge was "already there": that commit is not ours.)
             $undone = $false
-            if ($freshMerge) { $undone = Undo-TeamMerge -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) }
+            if ($freshMerge) { $undone = Undo-TeamMerge -RepoRoot $repoRoot -CycleId $dayId -Branch ([string]$task.branch) }
             Add-RefusedMergeNote -Task $task -Undone $undone
         }
         elseif (-not $writtenNow -and [string]$task.state -eq "merged") { [void]$script:unwrittenMerges.Add([pscustomobject]@{ Task = $task; Before = $beforeResult }) }
@@ -1461,7 +1735,87 @@ try {
         }
     }
 
+    # ------------------------------------------------------------ the loop (continuous-team-loop)
+    # The owner, 2026-10-03: "Döngüyü kaldırabiliriz. Direkt bir sirkülasyon şeklinde getirebiliriz."
+    # The four things the cycle boundary did are kept without it: new code is taken over by a
+    # HANDOVER (the runs are adopted, not drained), the day's report folder switches at local
+    # midnight, the researcher's hours are a timer inside the loop, and a dead loop is restarted
+    # by the watchdog (tick.ps1 -Watchdog) - which reads the heartbeat in team/logs/loop.json.
+    $researchEnabled = (-not $NoResearch) -or [bool]$ResearchOnly
+    $hashCheckedAt = [datetime]::UtcNow
+
+    function Test-LoopStays {
+        <# -Continuous: nothing to do is no reason to end; a stop, a cap or the limit's stop is. #>
+        return ([bool]$Continuous -and -not $script:capped -and -not $script:limitStop -and -not (Test-StopRequested))
+    }
+
+    function Test-HandoverRequested {
+        <# team/handover.flag (the lead, or a release), or - in a continuous loop - the scripts this
+           process runs changed on disk (looked at every 30 s at most). #>
+        if (Test-Path -LiteralPath $script:handoverFlagPath) { return $true }
+        if (-not $Continuous -or ([datetime]::UtcNow - $script:hashCheckedAt).TotalSeconds -lt 30) { return $false }
+        $script:hashCheckedAt = [datetime]::UtcNow
+        try { return ((Get-TeamScriptsHash -RepoRoot $repoRoot) -cne $script:scriptsHash) } catch { return $false }
+    }
+
+    function Switch-LoopDay {
+        <# Local midnight with -DailyId: the old day's report is written, and the day's id, its
+           report folder and its integration branch become the new day's. Nothing restarts; the
+           runs in flight go on and are recorded in the new day's report. #>
+        if (-not $followDay) { return }
+        $today = "d" + (Get-LoopLocalNow).ToString("yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture)
+        if ($today -ceq $script:dayId) { return }
+        $old = $script:dayId
+        Add-CycleNote -List "gaps" -Text "gün değişti: $old -> $today; uçuştaki koşular sürdü, kayıtları yeni günün raporunda"
+        [void](Save-Report)
+        $script:dayId = $today
+        $script:cycleDir = Join-Path $reportsRoot $today
+        if (-not (Test-Path -LiteralPath $script:cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $script:cycleDir) }
+        foreach ($list in @("runs", "stops", "risks", "gaps")) { $script:cycle.$list = @() }
+        $script:cycle.cycle_id = $today
+        $script:cycle.started_at = (Get-TeamTimestamp)
+        $script:cycle.spent_usd = 0.0
+        $script:cycle.conflicts = 0
+        $script:cycle.returned = 0
+        Add-CycleNote -List "gaps" -Text "gün başladı: $old gününden süren döngü ($($script:loopId))"
+        Write-CycleStatus
+    }
+
+    function Update-LoopTimers {
+        <# The researcher every -ResearchEveryHours, inside one loop (0: once, at its start). #>
+        if (-not $Continuous -or -not $researchEnabled -or $ResearchEveryHours -le 0 -or $script:researchPending) { return }
+        if (@($script:pool | Where-Object { $_.Role -eq "researcher" }).Count -gt 0) { return }
+        $last = $null
+        if (Test-Path -LiteralPath $researchMarker) { $last = ConvertFrom-TeamTimestamp -Text ([System.IO.File]::ReadAllText($researchMarker).Trim()) }
+        if ($null -ne $last -and ([datetime]::UtcNow - $last).TotalHours -lt $ResearchEveryHours) { return }
+        $script:researchPending = $true
+        $script:ownTries["cycle/researcher"] = 0
+    }
+
+    function Update-LockLease {
+        <# A lock older than six hours is anybody's: a loop that lives for days renews its own every
+           thirty minutes (file mode: rewritten; the store: taken again by its own machine). #>
+        if (([datetime]::UtcNow - $script:lockRefreshedAt).TotalMinutes -lt 30) { return }
+        $script:lockRefreshedAt = [datetime]::UtcNow
+        try {
+            if ($useApi) {
+                $again = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $script:dayId -TakeoverDead $true
+                if ([bool]$again.acquired) { $script:lockCycleId = $script:dayId }
+                else { Add-CycleNote -List "risks" -Text "kilit yenilenemedi: $($again.holder) ($($again.since))" }
+            }
+            else {
+                Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $script:dayId)
+                $script:lockCycleId = $script:dayId
+            }
+        }
+        catch {
+            $note = "kilit yenilenemedi: $($_.Exception.Message)"
+            if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+        }
+    }
+
     Send-IdeaTexts
+    Add-AdoptedRuns
     $refillDue = $true
     $nextRefill = [datetime]::UtcNow
     while ($true) {
@@ -1479,6 +1833,15 @@ try {
             $usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
             Write-CycleStatus
             $refillDue = $true
+        }
+        Switch-LoopDay
+        Update-LoopTimers
+        Update-LockLease
+        # New code: this loop stops dispatching and hands its live runs to its successor.
+        if (Test-HandoverRequested) {
+            Save-Handover
+            $handingOver = $true
+            break
         }
         # Nothing ended: the store and the settings are still looked at every -RefillSeconds.
         if ([datetime]::UtcNow -ge $nextRefill) { $refillDue = $true }
@@ -1503,21 +1866,31 @@ try {
                     if ($idlePasses -ge 3) {
                         # Nothing is runnable in such a refill, so ending here loses no work - and it is said.
                         $why = if (@($staleIds.Keys).Count -gt 0) { "depo aynı yazmayı üst üste reddetti (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + ")" } else { "üst üste üç turda yalnız durum taşındı, hiçbir koşu başlamadı" }
-                        Add-CycleNote -List "risks" -Text ($why + "; döngünün iş turu burada bitti")
-                        break
+                        $idleNote = $why + $(if ($Continuous) { "; akış bir sonraki tura kadar bekledi" } else { "; döngünün iş turu burada bitti" })
+                        if (@($cycle.risks) -notcontains $idleNote) { Add-CycleNote -List "risks" -Text $idleNote }
+                        # A continuous loop waits for the next refill instead (the store may move).
+                        if (-not (Test-LoopStays)) { break }
+                        $idlePasses = 0
                     }
-                    if (Test-CapReached) { break }
-                    # What moved may have made something runnable: looked at again at once.
-                    $refillDue = $true
-                    continue
+                    else {
+                        if (Test-CapReached) { break }
+                        # What moved may have made something runnable: looked at again at once.
+                        $refillDue = $true
+                        continue
+                    }
                 }
-                # Every run that could start waits for a model: the limit is waited out (a known
-                # reset), or the cycle stops with the line (nobody said when).
-                $waits = (-not $capped -and $pass.Blocked -gt 0 -and (Set-LimitWait -ResetsAt ([string]$pass.BlockedReset)))
-                # The end: nothing is in flight and nothing can be started.
-                if (-not $waits) { break }
+                else {
+                    # Every run that could start waits for a model: the limit is waited out (a known
+                    # reset), or the cycle stops with the line (nobody said when).
+                    $waits = (-not $capped -and $pass.Blocked -gt 0 -and (Set-LimitWait -ResetsAt ([string]$pass.BlockedReset)))
+                    # The end: nothing is in flight and nothing can be started - unless this is the
+                    # loop, which waits for the next refill.
+                    if (-not $waits -and -not (Test-LoopStays)) { break }
+                }
             }
         }
+        # A continuous loop asked to stop ends once its runs have ended.
+        if ($Continuous -and @($pool).Count -eq 0 -and -not (Test-LoopStays)) { break }
         # Only the limit is waited for, and this process has had its hours: the next start waits.
         if (@($pool).Count -eq 0 -and $null -ne $limitWaitUntil -and $MaxHours -gt 0 -and ([datetime]::UtcNow - $started).TotalHours -ge $MaxHours) {
             [void](Test-CapReached)
@@ -1537,25 +1910,47 @@ try {
     if (Test-Path -LiteralPath $stopFlagPath) { Remove-Item -LiteralPath $stopFlagPath -Force -ErrorAction SilentlyContinue }
     $merged = @(Get-TeamTasks -Queue $queue | Where-Object { $_.state -eq "merged" })
     if (@($merged).Count -gt 0) {
-        Add-CycleNote -List "gaps" -Text "integrate/$CycleId üzerinde tam kapı ve main'e birleştirme bu betikte yok; lead yapar, sonra işler 'awaiting_release' olur"
+        Add-CycleNote -List "gaps" -Text "integrate/$dayId üzerinde tam kapı ve main'e birleştirme bu betikte yok; lead yapar, sonra işler 'awaiting_release' olur"
     }
     $path = Save-Report
-    Write-Host "cycle $CycleId ended; report: $path"
+    Write-Host "cycle $dayId ended; report: $path"
 }
 finally {
     # Nothing is in flight any more, whatever ended the cycle: a run still working when the
     # cycle dies (an error in the middle of the pool) is killed - its worktree must not be
     # written to after the lock is released. Its task is taken up again by the next cycle.
-    foreach ($orphan in @($pool.ToArray())) {
-        try { if (-not $orphan.Run.Process.HasExited) { Stop-TeamProcessTree -ProcessId $orphan.Run.Process.Id } } catch { }
+    # On a handover they are NOT killed: they are the successor's (continuous-team-loop).
+    if (-not $handingOver) {
+        foreach ($orphan in @($pool.ToArray())) {
+            try { if ($null -ne $orphan.Run.Process -and -not $orphan.Run.Process.HasExited) { Stop-TeamProcessTree -ProcessId $orphan.Run.Process.Id } } catch { }
+        }
     }
     $pool.Clear()
     $liveRuns.Clear()
     Write-CycleStatus
     if ($useApi) {
-        try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId }
+        try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $script:lockCycleId }
         catch { Write-Host "the lock was not released in the queue store: $($_.Exception.Message)" }
     }
     else { Write-TeamJson -Path $lockPath -Document (New-TeamLockReleased) }
+    $loopEnded = $true
+    Write-LoopFile -Running $false
+}
+if ($handingOver) {
+    # The successor: this very script, as it is on disk NOW (the new code), with the arguments
+    # this process was given. It waits for this process to end, takes the lock and adopts the runs.
+    Remove-Item -LiteralPath $handoverFlagPath -Force -ErrorAction SilentlyContinue
+    $words = New-Object System.Collections.ArrayList
+    foreach ($name in @($PSBoundParameters.Keys)) { [void]$words.Add("-" + $name + ":" + (ConvertTo-LoopLiteral -Value $PSBoundParameters[$name])) }
+    $command = "& " + (ConvertTo-LoopLiteral -Value $PSCommandPath) + " " + ($words.ToArray() -join " ") + "; exit `$LASTEXITCODE"
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+    $shell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    try {
+        # Hidden and through the shell: the successor inherits no handle of this process.
+        $successor = Start-Process -FilePath $shell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru
+        [System.IO.File]::WriteAllText((Join-Path $logsDir "loop-successor.txt"), [string]$successor.Id)
+        Write-Host "handed over to pid $($successor.Id): its runs were left running"
+    }
+    catch { Write-Host "the successor could not be started ($($_.Exception.Message)): the watchdog starts one; the handover file waits for it" }
 }
 exit 0

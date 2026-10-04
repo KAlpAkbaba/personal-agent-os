@@ -391,27 +391,66 @@ function Select-TeamSeatFill {
             of its task - the queue's rules cannot see it once the store says otherwise.
 
         A candidate that is passed over does not hold back the ones behind it.
+
+        The worker seats have names (team-engine, the owner's rule of 2026-10-03): worker-1 ..
+        worker-N, and every chosen candidate gets `Seat` - the lowest worker seat that is free,
+        or its role's name for the other roles. -Claims maps a task id to the worker seat that
+        OWNS it (a returned task, Get-TeamSeatClaim says the claim lives): such a candidate is
+        offered that seat and no other, before anything else of the queue; while it waits, its
+        seat takes no new task - the return is that seat's very next run.
     #>
-    param([object[]]$Candidates = @(), [object[]]$InFlight = @(), [Parameter(Mandatory = $true)][hashtable]$Seats)
+    param([object[]]$Candidates = @(), [object[]]$InFlight = @(), [Parameter(Mandatory = $true)][hashtable]$Seats, [hashtable]$Claims = @{})
     $onFiles = @("worker", "inspector")
     $taken = @{}
     $busy = @{}
     $held = New-Object System.Collections.ArrayList
+    # Worker seat names in use, and the seats a waiting return holds for itself.
+    $occupied = @{}
+    $reserved = @{}
     foreach ($run in @($InFlight)) {
         $role = [string]$run.Role
         $taken[$role] = 1 + [int]$taken[$role]
+        $name = [string](Get-TeamProperty -InputObject $run -Name "Seat" -Default "")
+        if ($name) { $occupied[$name] = $true }
         if ($null -eq $run.Task) { continue }
         $busy[[string]$run.Task.id] = $true
         if ($onFiles -contains $role) { [void]$held.Add($run.Task) }
     }
-    $chosen = New-Object System.Collections.ArrayList
+    $claimed = New-Object System.Collections.ArrayList
+    $rest = New-Object System.Collections.ArrayList
     foreach ($candidate in @($Candidates)) {
+        $owner = ""
+        if ([string]$candidate.Role -eq "worker" -and $null -ne $candidate.Task -and $Claims.ContainsKey([string]$candidate.Task.id)) { $owner = [string]$Claims[[string]$candidate.Task.id] }
+        if ($owner) { $reserved[$owner] = [string]$candidate.Task.id; [void]$claimed.Add($candidate) } else { [void]$rest.Add($candidate) }
+    }
+    $workerLimit = if ($Seats.ContainsKey("worker")) { [int]$Seats["worker"] } else { 1 }
+    $chosen = New-Object System.Collections.ArrayList
+    foreach ($candidate in @(@($claimed.ToArray()) + @($rest.ToArray()))) {
         $role = [string]$candidate.Role
         $task = $candidate.Task
         $id = if ($null -ne $task) { [string]$task.id } else { "" }
         if ($id -and $busy.ContainsKey($id)) { continue }
         $limit = if ($Seats.ContainsKey($role)) { [int]$Seats[$role] } else { 1 }
         if ([int]$taken[$role] -ge $limit) { continue }
+        $seat = $role
+        if ($role -eq "worker") {
+            $seat = ""
+            $owner = if ($id -and $Claims.ContainsKey($id)) { [string]$Claims[$id] } else { "" }
+            if ($owner) {
+                # Its own seat, or nothing: another seat never takes a return that is owned.
+                $index = Get-TeamWorkerSeatIndex -Seat $owner
+                if ($index -ge 1 -and $index -le $workerLimit -and -not $occupied.ContainsKey($owner)) { $seat = $owner }
+            }
+            else {
+                for ($number = 1; $number -le $workerLimit; $number++) {
+                    $name = "worker-$number"
+                    if ($occupied.ContainsKey($name) -or $reserved.ContainsKey($name)) { continue }
+                    $seat = $name
+                    break
+                }
+            }
+            if (-not $seat) { continue }
+        }
         if ($null -ne $task -and $onFiles -contains $role) {
             $shared = $false
             foreach ($other in $held) {
@@ -427,9 +466,155 @@ function Select-TeamSeatFill {
         }
         $taken[$role] = 1 + [int]$taken[$role]
         if ($id) { $busy[$id] = $true }
+        if ($role -eq "worker") { $occupied[$seat] = $true }
+        Set-TeamProperty -InputObject $candidate -Name "Seat" -Value $seat
         [void]$chosen.Add($candidate)
     }
     return @($chosen.ToArray())
+}
+
+# ------------------------------------------------------------------ the worker seats' memory
+#
+# team-engine (the owner's rule of 2026-10-03): a task remembers the worker seat that built it
+# and the session of that run; a returned task goes back to that seat, which resumes the
+# session. The team store's task record is closed (queue.schema.json: additionalProperties
+# false; the Cloud Core refuses a task with a field it does not know), so the cycle keeps this
+# memory in team/logs/seats.json on its machine - the loop's own run-time state, like
+# team/limits.json. A task the store records with `owner_seat` / `session_id` (once the schema
+# has them) is read from the task first.
+
+$script:TeamSeatGraceMinutes = 60
+
+function Get-TeamWorkerSeatIndex {
+    <# 2 for "worker-2"; 0 for anything that is not a worker seat. #>
+    param([string]$Seat)
+    if ([string]$Seat -cmatch '^worker-([1-9]\d?)$') { return [int]$Matches[1] }
+    return 0
+}
+
+function Get-TeamSeatClaim {
+    <#
+    .SYNOPSIS
+        Whether the seat that built a returned task still owns it.
+
+    .DESCRIPTION
+        none     - no worker seat is recorded: the task is anybody's, as before;
+        present  - the seat is one of the WorkerSeats the loop has now: only it may take the task;
+        waiting  - the seat is gone (the seat count was lowered) since GoneSince, for less than
+                   sixty minutes: the task waits for it;
+        released - gone for sixty minutes or more: any worker takes it, and the reason says so.
+        GoneSince is $null while the seat is there, and the moment it was first seen gone after.
+    #>
+    param([string]$OwnerSeat, [int]$WorkerSeats, $GoneSince = $null, [datetime]$Now = [datetime]::UtcNow, [double]$GraceMinutes = $script:TeamSeatGraceMinutes)
+    $index = Get-TeamWorkerSeatIndex -Seat $OwnerSeat
+    if ($index -le 0) { return [pscustomobject]@{ State = "none"; Seat = ""; GoneSince = $null; Minutes = 0 } }
+    if ($index -le $WorkerSeats) { return [pscustomobject]@{ State = "present"; Seat = $OwnerSeat; GoneSince = $null; Minutes = 0 } }
+    $since = if ($GoneSince -is [datetime]) { $GoneSince } else { $Now }
+    $minutes = ($Now - $since).TotalMinutes
+    $state = if ($minutes -ge $GraceMinutes) { "released" } else { "waiting" }
+    return [pscustomobject]@{ State = $state; Seat = $OwnerSeat; GoneSince = $since; Minutes = [int][Math]::Floor($minutes) }
+}
+
+function Read-TeamSeatRecords {
+    <# team/logs/seats.json as a hashtable: task id -> { owner_seat, session_id, seat_gone_at }. A
+       file that is not there or not the shape is no memory (said by nobody: the tasks are then
+       anybody's, as before). #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $records = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $records }
+    try { $document = Read-TeamJson -Path $Path } catch { return $records }
+    $tasks = Get-TeamProperty -InputObject $document -Name "tasks"
+    if ($tasks -isnot [System.Management.Automation.PSCustomObject]) { return $records }
+    foreach ($property in $tasks.PSObject.Properties) {
+        if ([string]$property.Name -cnotmatch '^[a-z0-9][a-z0-9-]{2,63}$') { continue }
+        $value = $property.Value
+        $records[[string]$property.Name] = [pscustomobject]@{
+            owner_seat   = [string](Get-TeamProperty -InputObject $value -Name "owner_seat" -Default "")
+            session_id   = [string](Get-TeamProperty -InputObject $value -Name "session_id" -Default "")
+            seat_gone_at = [string](Get-TeamProperty -InputObject $value -Name "seat_gone_at" -Default "")
+        }
+    }
+    return $records
+}
+
+function Save-TeamSeatRecords {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][hashtable]$Records)
+    $tasks = [ordered]@{}
+    foreach ($id in @($Records.Keys | Sort-Object)) { $tasks[$id] = $Records[$id] }
+    $folder = Split-Path -Parent $Path
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+    Write-TeamJson -Path $Path -Document ([ordered]@{ version = 1; tasks = $tasks })
+}
+
+function Get-TeamTaskSeat {
+    <# The seat that built a task and its session: the task's own fields when the store has them,
+       else the loop's record. Empty strings when nobody knows. #>
+    param([Parameter(Mandatory = $true)]$Task, [hashtable]$Records = @{})
+    $seat = [string](Get-TeamProperty -InputObject $Task -Name "owner_seat" -Default "")
+    $session = [string](Get-TeamProperty -InputObject $Task -Name "session_id" -Default "")
+    $gone = ""
+    $record = $Records[[string]$Task.id]
+    if ($null -ne $record) {
+        if (-not $seat) { $seat = [string]$record.owner_seat }
+        if (-not $session) { $session = [string]$record.session_id }
+        $gone = [string]$record.seat_gone_at
+    }
+    if ($session -cnotmatch '^[A-Za-z0-9-]{1,80}$') { $session = "" }
+    return [pscustomobject]@{ Seat = $seat; Session = $session; GoneAt = $gone }
+}
+
+function Test-TeamAwaitingMerge {
+    <# A task the inspector APPROVED whose merge could not be made yet (the integration branch
+       could not take its base, integrate-follows-release): still `inspecting` - the protocol has
+       no state of its own for it - with an inspector's finished report that ends in APPROVE as
+       its last report. The cycle merges it; it never starts a second inspection for it. #>
+    param([Parameter(Mandatory = $true)]$Task)
+    if ([string](Get-TeamProperty -InputObject $Task -Name "state" -Default "") -ne "inspecting") { return $false }
+    $reports = @(Get-TeamProperty -InputObject $Task -Name "reports" -Default @())
+    if (@($reports).Count -eq 0) { return $false }
+    $last = $reports[@($reports).Count - 1]
+    if ([string](Get-TeamProperty -InputObject $last -Name "role" -Default "") -ne "inspector") { return $false }
+    if ([string](Get-TeamProperty -InputObject $last -Name "outcome" -Default "") -notlike "tamam*") { return $false }
+    $summary = @(Get-TeamProperty -InputObject $last -Name "summary" -Default @()) -join "`n"
+    return ((Get-TeamVerdict -Report $summary).Verdict -eq "APPROVE")
+}
+
+# ------------------------------------------------------------------ the loop (continuous-team-loop)
+
+function Get-TeamScriptsHash {
+    <# One SHA-256 over the scripts a loop runs: when it changes under a running loop, the loop
+       hands over to a new process running the new code (it never restarts its runs). #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    $files = @("scripts\team\cycle.ps1", "scripts\lib\TeamQueue.ps1", "scripts\lib\TeamRun.ps1", "scripts\lib\NativeProcess.ps1", "scripts\lib\HttpJson.ps1")
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $all = New-Object System.Text.StringBuilder
+        foreach ($file in $files) {
+            $path = Join-Path $RepoRoot $file
+            $bytes = if (Test-Path -LiteralPath $path) { [System.IO.File]::ReadAllBytes($path) } else { [byte[]]@() }
+            [void]$all.Append($file + ":" + [BitConverter]::ToString($sha.ComputeHash($bytes)) + ";")
+        }
+        return ([BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($all.ToString()))) -replace '-', '').ToLowerInvariant()
+    }
+    finally { $sha.Dispose() }
+}
+
+function Test-TeamLoopAlive {
+    <#
+    .SYNOPSIS
+        Whether a loop is running on this machine, from team/logs/loop.json: it says it runs,
+        its process is alive and its heartbeat is younger than -StaleMinutes. The watchdog
+        (tick.ps1 -Watchdog) starts a loop only when this is false.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path, [double]$StaleMinutes = 10, [datetime]$Now = [datetime]::UtcNow)
+    if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{ Alive = $false; Why = "no loop file" } }
+    try { $loop = Read-TeamJson -Path $Path } catch { return [pscustomobject]@{ Alive = $false; Why = "the loop file is not JSON" } }
+    if (-not [bool](Get-TeamProperty -InputObject $loop -Name "running" -Default $false)) { return [pscustomobject]@{ Alive = $false; Why = "the last loop ended" } }
+    $holder = [int](Get-TeamProperty -InputObject $loop -Name "pid" -Default 0)
+    if ($holder -le 0 -or $null -eq (Get-Process -Id $holder -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Alive = $false; Why = "its process ($holder) is gone" } }
+    $beat = ConvertFrom-TeamTimestamp -Text ([string](Get-TeamProperty -InputObject $loop -Name "heartbeat_at" -Default ""))
+    if ($null -eq $beat -or ($Now.ToUniversalTime() - $beat).TotalMinutes -ge $StaleMinutes) { return [pscustomobject]@{ Alive = $false; Why = "its heartbeat is older than $StaleMinutes minutes" } }
+    return [pscustomobject]@{ Alive = $true; Why = "pid $holder, heartbeat $([string]$loop.heartbeat_at)" }
 }
 
 function Read-TeamCycleSettings {
@@ -753,6 +938,7 @@ function Read-TeamRunResult {
     $ranModel = ""
     $substituted = $false
     $resultLine = ""
+    $sessionId = ""
     $document = $null
     $lastEvent = $null
     $windows = @{ fable = $null; all = $null; session = $null }
@@ -800,6 +986,9 @@ function Read-TeamRunResult {
     if ($null -ne $document) {
         $text = [string](Get-TeamProperty -InputObject $document -Name "result" -Default "")
         $said = $text
+        # team-engine: the session a return resumes (`--resume <id>`). Kept only when it is one.
+        $sessionId = [string](Get-TeamProperty -InputObject $document -Name "session_id" -Default "")
+        if ($sessionId -cnotmatch '^[A-Za-z0-9-]{1,80}$') { $sessionId = "" }
         $cost = [double](Get-TeamProperty -InputObject $document -Name "total_cost_usd" -Default 0)
         $isError = [bool](Get-TeamProperty -InputObject $document -Name "is_error" -Default $false)
         $subtype = [string](Get-TeamProperty -InputObject $document -Name "subtype" -Default "")
@@ -863,7 +1052,7 @@ function Read-TeamRunResult {
         LimitType = $limitType; LimitScope = $limitScope; LimitedModel = $limitedModel
         RanModel = $ranModel; Substituted = $substituted
         Windows = [pscustomobject]@{ fable = $windows["fable"]; all = $windows["all"]; session = $windows["session"] }
-        ResultLine = $resultLine; EventLines = @($eventLines.ToArray())
+        ResultLine = $resultLine; EventLines = @($eventLines.ToArray()); SessionId = $sessionId
     }
 }
 

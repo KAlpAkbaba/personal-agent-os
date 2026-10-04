@@ -85,7 +85,11 @@ $model = ""
 $format = ""
 $verbose = $false
 $fallbackFlag = $false
+$resume = ""
+$keepsSession = $true
 for ($i = 0; $i -lt $Rest.Length; $i++) {
+    if ($Rest[$i] -eq "--resume") { $resume = $Rest[$i + 1] }
+    if ($Rest[$i] -eq "--no-session-persistence") { $keepsSession = $false }
     if ($Rest[$i] -eq "--output-format") { $format = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--verbose") { $verbose = $true }
     if ($Rest[$i] -eq "--fallback-model") { $fallbackFlag = $true }
@@ -102,8 +106,11 @@ $here = (Get-Location).ProviderPath
 # What a test leaves in its temp folder: the cycle must remove the run's own folder afterwards.
 if ($env:TEMP -and (Test-Path -LiteralPath $env:TEMP)) { try { [System.IO.File]::WriteAllText((Join-Path $env:TEMP "fake-run-left-this.txt"), "x") } catch { } }
 
+# The team engine's hooks (team-engine): the run's session id (a resumed run keeps the one it
+# resumed, as the tool does), the seat the cycle gave it, and when it started.
+$runSession = if ($resume) { $resume } else { "sess-$taskId-$role-" + [guid]::NewGuid().ToString("N").Substring(0, 8) }
 if ($log) {
-    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; temp_env = [string]$env:TEMP; tmp_env = [string]$env:TMP; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
+    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; seat = [string]$env:PAGENTOS_TEAM_SEAT; resume = $resume; keeps_session = $keepsSession; session = $runSession; at = [DateTime]::UtcNow.Ticks; pid = $PID; fallback_said = ($card -match 'oturumu sürdürülemedi'); came_back_report = ($card -match 'The last report on this task \(inspector\)'); budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; temp_env = [string]$env:TEMP; tmp_env = [string]$env:TMP; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
     Add-SharedLine -Path $log -Line ($entry | ConvertTo-Json -Compress)
 }
 
@@ -129,7 +136,7 @@ function Write-Answer {
     <# The result, as one document or as the stream's lines, whichever the run asked for. #>
     param([string]$Text, [double]$Cost, [bool]$IsError, [string]$EventLine)
     if ($format -ne "stream-json") {
-        $document = [pscustomobject]@{ type = "result"; subtype = "success"; is_error = $IsError; result = $Text; total_cost_usd = $Cost }
+        $document = [pscustomobject]@{ type = "result"; subtype = "success"; is_error = $IsError; result = $Text; total_cost_usd = $Cost; session_id = $runSession }
         [Console]::Out.Write(($document | ConvertTo-Json -Compress))
         return
     }
@@ -137,10 +144,10 @@ function Write-Answer {
     if ($ranModel) { $usage[$ranModel] = [ordered]@{ inputTokens = 10; outputTokens = 5; costUSD = $Cost } }
     $result = [ordered]@{
         duration_api_ms = 1200; type = "result"; subtype = "success"; is_error = $IsError; result = $Text
-        total_cost_usd = $Cost; modelUsage = $usage
+        total_cost_usd = $Cost; modelUsage = $usage; session_id = $runSession
     }
     $lines = @(
-        (([ordered]@{ type = "system"; subtype = "init"; model = $model; session_id = "s" }) | ConvertTo-Json -Compress),
+        (([ordered]@{ type = "system"; subtype = "init"; model = $model; session_id = $runSession }) | ConvertTo-Json -Compress),
         $EventLine,
         ($result | ConvertTo-Json -Compress -Depth 6)
     )
@@ -189,7 +196,9 @@ if ($heartbeat -and $statusFile -and $role -eq "worker") {
 }
 $stopFlag = [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG
 $stopRole = if ($env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE) { [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE } else { "worker" }
-if ($stopFlag -and $role -eq $stopRole) { Set-Content -LiteralPath $stopFlag -Value "stop" -Encoding ASCII }
+#   PAGENTOS_FAKE_CLAUDE_STOPFLAG_TASK: only that task's run of the role creates it (team-engine: one handover, not one per run).
+$stopTask = [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_TASK
+if ($stopFlag -and $role -eq $stopRole -and (-not $stopTask -or $stopTask -eq $taskId)) { Set-Content -LiteralPath $stopFlag -Value "stop" -Encoding ASCII }
 # cycle-seat-pool hooks, independent of the scenario too:
 #   PAGENTOS_FAKE_CLAUDE_SETTINGS + _SETTINGS_JSON + _SETTINGS_RUN ("<role>:<task>"): that run writes the
 #     text to the file - somebody changes team/cycle-settings.json while the cycle works;
@@ -206,6 +215,17 @@ foreach ($entry in @(([string]$env:PAGENTOS_FAKE_CLAUDE_SECONDS).Split(",") | Fo
         break
     }
 }
+
+# team-engine hooks:
+#   PAGENTOS_FAKE_CLAUDE_RESUME_FAILS=1: a run started with --resume answers what the tool answers
+#     for a session it no longer has (an error result, exit 1) - before it does anything;
+#   PAGENTOS_FAKE_CLAUDE_RETURN_ONCE: task ids, comma separated: the FIRST inspection of each says
+#     RETURN, every later one APPROVE (the inspector's own earlier calls in the log are counted).
+if ($resume -and [string]$env:PAGENTOS_FAKE_CLAUDE_RESUME_FAILS -eq "1") {
+    Write-Answer -Text "No conversation found with session ID: $resume" -Cost 0 -IsError $true -EventLine (Get-LimitEvent -Status "allowed" -Type "five_hour" -ResetsAt ([DateTimeOffset]::UtcNow.AddHours(3).ToUnixTimeSeconds()))
+    exit 1
+}
+$returnOnce = @(([string]$env:PAGENTOS_FAKE_CLAUDE_RETURN_ONCE).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
 if ($scenario -eq "silent") {
     [Console]::Out.Write("I could not do that.")
@@ -298,7 +318,12 @@ switch ($role) {
     "inspector" {
         $lines = New-Object System.Collections.ArrayList
         1..60 | ForEach-Object { [void]$lines.Add("line $_ of the inspection") }
-        if ($scenario -eq "return") { [void]$lines.Add("RETURN (the test is missing)") }
+        $firstOfOnce = $false
+        if ($returnOnce -contains $taskId -and $log -and (Test-Path -LiteralPath $log)) {
+            # This call's own log entry is already written: one entry means the first inspection.
+            $firstOfOnce = (@(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_ -match '"role":"inspector"' -and $_ -match ('"task":"' + $taskId + '"') }).Count -le 1)
+        }
+        if ($scenario -eq "return" -or $firstOfOnce) { [void]$lines.Add("RETURN (the test is missing)") }
         else { [void]$lines.Add("APPROVE") }
         Send-Result -Text (($lines.ToArray()) -join "`n") -Cost $cost
     }

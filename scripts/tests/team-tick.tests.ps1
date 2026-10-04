@@ -357,6 +357,76 @@ Test-Case "(6) no job object: the tick still runs the cycle, waits only for its 
 }
 
 Write-Host ""
+Write-Host "the tick as the loop's watchdog (team-engine: the loop replaces the cycles; the tick only restarts a dead one)"
+
+function Write-LoopFile {
+    # team/logs/loop.json as a running loop writes it: its pid and its last heartbeat.
+    param([string]$Path, [int]$LoopPid, [datetime]$Heartbeat, [bool]$Running = $true)
+    $folder = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+    $stamp = $Heartbeat.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+    $text = '{"loop_id":"loop-test","pid":' + $LoopPid + ',"machine":"' + $env:COMPUTERNAME + '","running":' + $(if ($Running) { 'true' } else { 'false' }) + ',"heartbeat_at":"' + $stamp + '"}'
+    [System.IO.File]::WriteAllText($Path, $text)
+}
+
+Test-Case "(7) watchdog, a live loop (fresh heartbeat, its pid alive): the tick starts no cycle, starts the feeder without waiting for it, and exits in under 5 s" {
+    $work = New-Work
+    $ids = @()
+    try {
+        $calls = Join-Path $work "calls.log"
+        $hold = Join-Path $work "never.flag"
+        $feed = Join-Path $work "feed.ps1"; New-FakeScript -Path $feed -LogFile $calls -Name "feed" -HoldFile $hold
+        $cycle = Join-Path $work "cycle.ps1"; New-FakeScript -Path $cycle -LogFile $calls -Name "cycle"
+        $alive = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 120") -NoNewWindow -PassThru
+        $ids += $alive.Id
+        $loop = Join-Path $work "logs\loop.json"
+        Write-LoopFile -Path $loop -LoopPid $alive.Id -Heartbeat ([datetime]::UtcNow)
+        $run = Start-Tick -Work $work -Arguments @("-Watchdog", "-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + (Join-Path $work "tick.log") + '"'), "-LoopFile", ('"' + $loop + '"'))
+        $exited = $run.Process.WaitForExit(5000)
+        $took = ([datetime]::UtcNow - $run.Started).TotalSeconds
+        if (-not $exited) { Stop-ById -Ids @($run.Process.Id) }
+        Assert-True -Condition $exited -Because "the tick never waits for the loop or the feeder: still alive after 5 s"
+        Assert-True -Condition (Wait-Until -Seconds 20 -Condition { (Test-Path -LiteralPath $calls) -and ((Get-Content -LiteralPath $calls) -match "^feed") }) -Because "the feeder was started"
+        Start-Sleep -Milliseconds 1500
+        Assert-True -Condition (-not ((Get-Content -LiteralPath $calls) -match "^cycle")) -Because "no second loop beside the live one"
+        Write-Host "        (the tick took $([Math]::Round($took, 2)) s)"
+    }
+    finally {
+        Set-Content -LiteralPath (Join-Path $work "never.flag") -Value "go" -ErrorAction SilentlyContinue
+        Stop-ById -Ids $ids
+        Start-Sleep -Milliseconds 500
+        Remove-Work -Work $work
+    }
+}
+
+Test-Case "(8) watchdog, a dead loop (stale heartbeat, or its pid gone): the tick starts the loop detached with -Continuous and exits while it runs" {
+    $work = New-Work
+    try {
+        $calls = Join-Path $work "calls.log"
+        $hold = Join-Path $work "release.flag"
+        $feed = Join-Path $work "feed.ps1"; New-FakeScript -Path $feed -LogFile $calls -Name "feed"
+        $cycle = Join-Path $work "cycle.ps1"; New-FakeScript -Path $cycle -LogFile $calls -Name "cycle" -HoldFile $hold
+        $loop = Join-Path $work "logs\loop.json"
+        foreach ($case in @(@{ Pid = $PID; At = [datetime]::UtcNow.AddMinutes(-30) }, @{ Pid = 999999; At = [datetime]::UtcNow })) {
+            if (Test-Path -LiteralPath $calls) { Remove-Item -LiteralPath $calls -Force }
+            Write-LoopFile -Path $loop -LoopPid $case.Pid -Heartbeat $case.At
+            $run = Start-Tick -Work $work -Arguments @("-Watchdog", "-MaxParallel", "6", "-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + (Join-Path $work "tick.log") + '"'), "-LoopFile", ('"' + $loop + '"'))
+            $result = Wait-Tick -Tick $run
+            Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ($result.Out + $result.Err)
+            Assert-True -Condition (Wait-Until -Seconds 20 -Condition { (Test-Path -LiteralPath $calls) -and ((Get-Content -LiteralPath $calls) -match "^cycle") }) -Because "the loop was started (pid $($case.Pid)): $($result.Out)"
+            $seen = @(Get-Content -LiteralPath $calls)
+            Assert-Equal -Expected "feed,cycle" -Actual (($seen | ForEach-Object { ($_ -split " ")[0] }) -join ",") -Because "the feeder, then the loop"
+            Assert-True -Condition ($seen[1] -match "-Continuous" -and $seen[1] -match "-MaxParallel 6") -Because "a loop that does not end, with its arguments: $($seen[1])"
+            Assert-True -Condition (-not (Test-Path -LiteralPath $hold)) -Because "the tick exited while the loop was still running (it holds until the flag)"
+            Set-Content -LiteralPath $hold -Value "go"
+            Start-Sleep -Milliseconds 1500
+            Remove-Item -LiteralPath $hold -Force
+        }
+    }
+    finally { Set-Content -LiteralPath (Join-Path $work "release.flag") -Value "go" -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Remove-Work -Work $work }
+}
+
+Write-Host ""
 Write-Host "team-tick: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }
 exit 0
