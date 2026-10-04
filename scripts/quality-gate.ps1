@@ -20,6 +20,9 @@
 # (tests of the gate's step machinery: nothing real runs).
 # -GateSerial runs every step one after another, as before the suite group (gate-faster);
 # -GateMaxParallel sets the group's width (0 = the named default, GateSteps.ps1: 3).
+# -OnlyStep <pattern,...> runs only the steps whose names match a pattern (-like); every other
+# step keeps its row as SKIPPED. A slice of the gate for a run that must fit in a time limit;
+# a slice is never "the gate passed" - only a run without -OnlyStep is.
 param(
   [switch]$Fast,
   [switch]$E2E,
@@ -28,7 +31,8 @@ param(
   [int]$TestSlotPollSeconds = 20,
   [string]$StepList = "",
   [switch]$GateSerial,
-  [int]$GateMaxParallel = 0
+  [int]$GateMaxParallel = 0,
+  [string[]]$OnlyStep = @()
 )
 
 # "Continue", not "Stop": docker compose, alembic and next write progress to
@@ -102,6 +106,10 @@ function Invoke-Step {
   # -Kinds: the test-queue kinds this step needs (empty = a light step, no slot). A grouped
   # step's kinds are asked for once, for the whole group, by Complete-GateGroup.
   param([string]$Name, [scriptblock]$Action, [string[]]$Kinds = @())
+  if (@($OnlyStep).Count -gt 0 -and -not @($OnlyStep | Where-Object { $Name -like $_ }).Count) {
+    [void]$script:results.Add([pscustomobject]@{ Step = $Name; Result = "SKIPPED"; Seconds = 0; WaitSeconds = 0 })
+    return
+  }
   if ($null -ne $script:GateGroup) {
     # Between Start-GateGroup and Complete-GateGroup a step is RECORDED, not run: its
     # Invoke-GateSuite gives the script, its Assert-ExitCode the words of its FAILED line, and

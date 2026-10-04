@@ -437,6 +437,38 @@ Test-Case "11. the real gate (-StepList) asks the test queue once for its groupe
     Assert-True (@($out | Where-Object { $_ -match '^Test queue wait, total: [0-9.]+ s$' }).Count -eq 1) "the summary counts the wait: $(@($out | Where-Object { $_ -match "queue wait" }) -join " | ")"
 }
 
+# ------------------------------------------- 12: a slice of the gate
+
+Test-Case "12. -OnlyStep runs only the matching steps, grouped or not; every other step keeps its row as SKIPPED and is not run" {
+    # The full gate is longer than one foreground call may last (60 min): it is measured in
+    # slices, and a slice must say what it skipped instead of dropping the rows.
+    $dir = New-CaseDir
+    $ranRoot = Join-Path $dir "ran"
+    New-Item -ItemType Directory -Force -Path $ranRoot | Out-Null
+    $stepsFile = Join-Path $dir "steps.ps1"
+    $lines = New-Object System.Collections.ArrayList
+    foreach ($n in @("Kept A", "Dropped B")) {
+        $suite = Join-Path $dir ("suite-" + ($n -replace ' ', '') + ".ps1")
+        [System.IO.File]::WriteAllText($suite, "[System.IO.File]::WriteAllText('$(Join-Path $ranRoot ($n -replace ' ', ''))', 'x')`r`nexit 0`r`n", (New-Object System.Text.ASCIIEncoding))
+        [void]$lines.Add("Invoke-Step `"Seq $n`" { `$script = '$suite'; Invoke-GateSuite `$script; Assert-ExitCode `"seq $n`" }")
+    }
+    [void]$lines.Add("Start-GateGroup")
+    foreach ($n in @("Kept C", "Dropped D")) {
+        $suite = Join-Path $dir ("suite-" + ($n -replace ' ', '') + ".ps1")
+        [System.IO.File]::WriteAllText($suite, "[System.IO.File]::WriteAllText('$(Join-Path $ranRoot ($n -replace ' ', ''))', 'x')`r`nexit 0`r`n", (New-Object System.Text.ASCIIEncoding))
+        [void]$lines.Add("Invoke-Step `"Grp $n`" { `$script = '$suite'; Invoke-GateSuite `$script; Assert-ExitCode `"grp $n`" }")
+    }
+    [void]$lines.Add("Complete-GateGroup")
+    [System.IO.File]::WriteAllText($stepsFile, (($lines -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
+    $out = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File $gatePath -StepList $stepsFile -NoTestSlots -OnlyStep "*Kept*" 2>&1 | ForEach-Object { [string]$_ })
+    Assert-Equal 0 $LASTEXITCODE "the slice passed ($($out -join ' / '))"
+    $ran = @(Get-ChildItem -LiteralPath $ranRoot -File | ForEach-Object { $_.Name } | Sort-Object)
+    Assert-Equal "KeptA|KeptC" ($ran -join "|") "only the matching steps ran"
+    foreach ($row in @("Seq Kept A\s+PASS", "Seq Dropped B\s+SKIPPED", "Grp Kept C\s+PASS", "Grp Dropped D\s+SKIPPED")) {
+        Assert-True (@($out | Where-Object { $_ -match "^\s*$row" }).Count -eq 1) "the table has the row '$row'"
+    }
+}
+
 foreach ($p in @($script:Leftovers)) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
 Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 
