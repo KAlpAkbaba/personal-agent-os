@@ -166,7 +166,18 @@ def _tokens(text: str) -> list[str]:
     folded = turkish_casefold(text)
     # Keep digits, letters, ':' and '.' inside times; everything else becomes a separator.
     cleaned = re.sub(r"[^0-9a-zçğıöşü:.]+", " ", folded)
-    return [t for t in cleaned.split() if t]
+    return [part for t in cleaned.split() if t for part in _split_fused_fraction(t)]
+
+
+def _split_fused_fraction(token: str) -> tuple[str, ...]:
+    """"yedibuçukta" / "sekizeçeyrek": the STT fused a spoken hour to its "buçuk"/"çeyrek"
+    (ADR-0224 addendum 4). Two words, as said - only when the head is a number word, bare or
+    with a clock case suffix, so no other word is ever cut."""
+    for fraction in (*_HALF_WORDS, *_QUARTER_WORDS):
+        head = token[: -len(fraction)]
+        if head and token.endswith(fraction) and _split_number_word(head)[0] is not None:
+            return head, fraction
+    return (token,)
 
 
 def _word_number(tokens: list[str], index: int) -> tuple[int | None, int]:
