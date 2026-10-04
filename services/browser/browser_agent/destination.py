@@ -469,16 +469,11 @@ class EgressProxy:
         """The address to dial for ``host``, or ``BrowserError`` when the policy forbids it.
         ``url`` is the full url (absolute-form) or ``https://host:port/`` for a CONNECT."""
         host = host.strip("[]").strip().lower().rstrip(".")
-        trusted = self._trusted_origin
-        if (
-            connect
-            and trusted is not None
-            and port == trusted.port
-            and _canonical_host(host) == trusted.host
-        ):
-            # A tunnel carries no path: the origin is admitted, and the page-level guard
-            # (RequestGuard) still holds the main frame to the report-view route.
-            return self._resolve_one(host)
+        # A tunnel carries no path, so it never gets the trusted-origin exception (which is
+        # for the report-view route only): Chromium tunnels ws:// as a CONNECT, and admitting
+        # the origin let a page reach any path of it (inspector, 2026-10-04). The trusted
+        # report view is http and comes absolute-form, where the path IS checked.
+        trusted = None if connect else self._trusted_origin
         resolved: list[str] = []
 
         def recording(name: str) -> list[str]:
@@ -486,9 +481,7 @@ class EgressProxy:
             resolved.extend(addresses)
             return addresses
 
-        require_public_destination(
-            url, op="request", resolver=recording, trusted_origin=None if connect else trusted
-        )
+        require_public_destination(url, op="request", resolver=recording, trusted_origin=trusted)
         if resolved:
             return resolved[0]  # every one of them was checked; dial what was checked
         return self._resolve_one(host)  # an IP literal, or the trusted origin's own name

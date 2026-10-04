@@ -727,8 +727,10 @@ from their first request, WebSockets, workers, beacons, each redirect hop - is a
 absolute-form request there and is held to the same policy; the proxy connects to the address
 it checked (no second DNS answer, so rebinding cannot move it). A refused connection is a
 `403` from the proxy (the page sees a failed sub-request; a refused page navigation is still
-`security_scope_error`). For an https trusted origin a tunnel carries no path: the proxy admits
-that one host:port, and page navigations on it stay limited to the report-view route.
+`security_scope_error`). A tunnel (CONNECT: https, wss, and a ws:// WebSocket too) carries no
+path, so it never gets the trusted-origin exception: the trusted origin is reached only by an
+absolute-form http request whose path is the report-view route. An https trusted origin is
+therefore not reachable from a launched browser (fail closed).
 On an **owner-profile** session (the owner's own Chrome) there is no proxy - the browser is not
 the worker's to launch. The page guard intercepts the owner's tab only while a worker op drives
 it and is released (`Fetch.disable`, detached) when the op ends, so the owner's own requests to

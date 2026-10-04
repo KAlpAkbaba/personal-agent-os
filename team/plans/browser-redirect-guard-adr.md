@@ -53,10 +53,15 @@ measured on 1.62).
    browser on the owner's own network, and the requested url is still checked.
 9. `tab_new` with a url opens blank, attaches, then navigates - now under test.
 
-**Residual risk / follow-up.** The trusted origin is admitted as a whole host:port for a CONNECT
-tunnel (https has no path at the proxy); the page guard still limits PAGE navigations to the
-report-view route, but an https trusted origin's other paths are reachable by a sub-request
-through the tunnel. Today's trusted origin is http (path checked at the proxy). Follow-up task
+10. (Return of 2026-10-04.) A CONNECT never gets the trusted-origin exception. The first cut
+   admitted the trusted host:port for any tunnel; Chromium tunnels ws:// WebSockets as CONNECT
+   too, so a hostile public page reached ANY path of the Cloud Core API
+   (`/v1/devices/ws-probe`, the inspector's probe). A tunnel has no path to check, so the
+   exception (report-view route only) cannot apply to it; the trusted view is http and comes
+   absolute-form, where the path is checked. Cost: an https trusted origin is not reachable
+   from a launched browser (fail closed; none is configured today).
+
+**Residual risk / follow-up.** Follow-up task
 (not opened here): a host-level DOCKER-USER rule dropping the cloud-browser container's traffic
 to 100.64.0.0/10 and the host's own addresses (belt and braces against a bug in the proxy;
 needs the host's firewall, release-engineer). Media sessions (the alarm, YouTube) now stream

@@ -676,6 +676,31 @@ class TestEgressProxyUnit:
                 proxy.vet(url=url, host=urlsplit(url).hostname, port=port, connect=connect)
             assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR, url
 
+    async def test_a_tunnel_to_the_trusted_origin_itself_is_refused(self, upstream) -> None:
+        # Return of 2026-10-04: a tunnel carries no path, and Chromium tunnels ws:// through
+        # the proxy as a CONNECT - admitting the trusted host:port let a hostile page reach
+        # ANY path of the Cloud Core API (/v1/devices/ws-probe). The exception is for the
+        # report-view route only, so a CONNECT never gets it.
+        trusted = TrustedOrigin(scheme="http", host="127.0.0.1", port=upstream.port)
+        proxy = EgressProxy(resolver=_fake_resolver, trusted_origin=trusted)
+        with pytest.raises(BrowserError) as info:
+            proxy.vet(
+                url=f"https://127.0.0.1:{upstream.port}/",
+                host="127.0.0.1",
+                port=upstream.port,
+                connect=True,
+            )
+        assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR
+        await proxy.start()
+        try:
+            answer = await _through(
+                proxy, f"CONNECT 127.0.0.1:{upstream.port} HTTP/1.1\r\n\r\n".encode()
+            )
+        finally:
+            await proxy.close()
+        assert answer.startswith(b"HTTP/1.1 403")
+        assert upstream.seen == []
+
     async def test_chromium_is_left_no_way_around_it(self) -> None:
         proxy = EgressProxy()
         await proxy.start()
@@ -863,6 +888,26 @@ async def test_a_websocket_cannot_reach_the_tailnet(guarded_worker: Worker, site
     assert "Soket sayfasi" in result["excerpt"]
     assert sites.hits.paths == []
     assert any("127.0.0.1" in r.target for r in guarded_worker._egress_proxy.refusals)
+
+
+@pytest.mark.browser
+async def test_a_websocket_cannot_reach_another_path_of_the_trusted_origin(
+    guarded_worker: Worker, sites
+) -> None:
+    # The inspector's probe of 2026-10-04: the trusted origin is the "Cloud Core API"
+    # (here the secret fixture) and a public page opens a WebSocket to another path of it.
+    secret = sites.secret_port
+    guarded_worker._trusted_origin = TrustedOrigin(scheme="http", host="127.0.0.1", port=secret)
+    sites.pages["/ws-trusted"] = (
+        "<p>Soket sayfasi</p>"
+        f'<script>try{{new WebSocket("ws://127.0.0.1:{secret}/v1/devices/ws-probe")}}'
+        "catch(e){}</script>"
+    )
+    await _open(guarded_worker)
+    result = await _read(guarded_worker, f"{sites.base}/ws-trusted")
+    assert "Soket sayfasi" in result["excerpt"]
+    assert sites.hits.paths == []
+    assert any(r.method == "CONNECT" for r in guarded_worker._egress_proxy.refusals)
 
 
 @pytest.mark.browser
