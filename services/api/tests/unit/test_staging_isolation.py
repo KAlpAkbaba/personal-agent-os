@@ -11,7 +11,13 @@ infra/docker/docker-compose.staging.yml plus scripts/staging/*.ps1 (team/plans A
 * no setting that points at a real account (a mail/calendar host or address, a provider
   key) - and every `${...}` the compose interpolates is a `PAGENTOS_STAGING_*` name, so a
   stray `.env` or a shell that carries the owner's real key cannot leak one in;
-* no volume shared with the dev stack the gate resets, no external volume, no bind mount;
+* an ALLOW-LIST of what the file may say at all: the top-level keys (name, services,
+  volumes, networks, the blackhole anchor) and each service's keys are closed sets, so
+  anything else - volumes_from, secrets, configs, network_mode, pid, ipc, extends, env_file,
+  devices, privileged, ... - is refused without having to be foreseen;
+* mounts only of named volumes declared in this file, called pagentos-staging-*, plain local
+  (no external, no driver/driver_opts, no bind or host path, no `container:`); networks only
+  staging's own, declared here, never external;
 * its own compose project, container names, ports, Temporal namespace + task queue and
   bucket - nothing that collides with the dev stack (the gate of 2026-10-03 22:29 was red
   because a gate and agents shared the dev stack's Temporal queue).
@@ -176,26 +182,106 @@ def account_violations(compose: dict[str, Any], texts: dict[str, str]) -> list[s
     return found
 
 
+#: ALLOW-LIST, not a deny-list (inspector's third return, 2026-10-04: `volumes_from` and a
+#: `secrets: file:` bind passed a list of forbidden things). Every key the file may use is
+#: named here; any other key - volumes_from, secrets, configs, network_mode, pid, ipc,
+#: extends, env_file, devices, privileged, cap_add, links, include, ... - is a violation.
+TOP_LEVEL_KEYS = frozenset({"name", "services", "volumes", "networks", "x-production-blackhole"})
+SERVICE_KEYS = frozenset(
+    {
+        "image",
+        "build",
+        "container_name",
+        "extra_hosts",
+        "command",
+        "environment",
+        "ports",
+        "volumes",
+        "networks",
+        "healthcheck",
+        "depends_on",
+        "init",
+        "mem_limit",
+        "memswap_limit",
+        "pids_limit",
+        "read_only",
+        "tmpfs",
+        "cap_drop",
+        "security_opt",
+        "restart",
+    }
+)
+BUILD_KEYS = frozenset({"context", "dockerfile", "args"})
+#: A declared volume is a plain local named volume: no external, no driver / driver_opts (a
+#: `local` driver with `o: bind, device: C:/...` is a host bind mount by another name).
+VOLUME_SPEC_KEYS = frozenset({"name"})
+NETWORK_SPEC_KEYS = frozenset({"name", "ipam"})
+SECURITY_OPTS = frozenset({"no-new-privileges:true"})
+
+
+def schema_violations(compose: dict[str, Any]) -> list[str]:
+    found = [
+        f"top-level key {key!r} is not in the allow-list"
+        for key in compose
+        if key not in TOP_LEVEL_KEYS
+    ]
+    for svc_name, svc in (compose.get("services") or {}).items():
+        found += [
+            f"{svc_name}: key {key!r} is not in the allow-list"
+            for key in svc
+            if key not in SERVICE_KEYS
+        ]
+        build = svc.get("build")
+        if build is not None and not isinstance(build, dict):
+            found.append(f"{svc_name}: build {build!r} is not a context/dockerfile/args block")
+        found += [
+            f"{svc_name}: build key {key!r} is not in the allow-list"
+            for key in (build if isinstance(build, dict) else {})
+            if key not in BUILD_KEYS
+        ]
+        found += [
+            f"{svc_name}: security_opt {opt!r} is not in the allow-list"
+            for opt in svc.get("security_opt") or []
+            if str(opt) not in SECURITY_OPTS
+        ]
+    return found
+
+
 def volume_violations(
     compose: dict[str, Any], dev: dict[str, Any], prod: dict[str, Any]
 ) -> list[str]:
+    """Only named volumes declared in this file, called pagentos-staging-*, plain local."""
     found = []
     declared = compose.get("volumes") or {}
     other_names = set((dev.get("volumes") or {}).keys()) | set((prod.get("volumes") or {}).keys())
     for vol_name, spec in declared.items():
         spec = spec or {}
+        if not isinstance(spec, dict):
+            found.append(f"volume {vol_name}: spec {spec!r} is not a mapping")
+            continue
+        found += [
+            f"volume {vol_name}: key {key!r} is not in the allow-list"
+            + (" (external - another stack's data)" if key == "external" else "")
+            for key in spec
+            if key not in VOLUME_SPEC_KEYS
+        ]
         real_name = str(spec.get("name", vol_name))
-        if spec.get("external"):
-            found.append(f"volume {vol_name}: external - may be another stack's data")
-        if not real_name.startswith("pagentos-staging-"):
-            found.append(f"volume {vol_name}: name {real_name!r} is not pagentos-staging-*")
-        if vol_name in other_names or real_name in other_names or real_name.startswith("pagentos_"):
+        for label in (str(vol_name), real_name):
+            if not label.startswith("pagentos-staging-"):
+                found.append(f"volume {vol_name}: name {label!r} is not pagentos-staging-*")
+        if vol_name in other_names or real_name in other_names:
             found.append(f"volume {vol_name}: shares a name with the dev/prod stack ({real_name})")
     for svc_name, svc in (compose.get("services") or {}).items():
+        if "volumes_from" in svc:
+            found.append(f"{svc_name}: volumes_from mounts another container's volumes")
         for mount in svc.get("volumes") or []:
-            source = str(
-                mount.get("source", "") if isinstance(mount, dict) else str(mount).split(":", 1)[0]
-            )
+            if isinstance(mount, dict):
+                kind = mount.get("type", "volume")
+                source = str(mount.get("source", ""))
+                if kind != "volume":
+                    found.append(f"{svc_name}: a {kind!r} mount of {source!r} - only volumes")
+            else:
+                source = str(mount).split(":", 1)[0]
             if source not in declared:
                 found.append(
                     f"{svc_name}: mounts {source!r}, which is not a staging-declared volume"
@@ -389,6 +475,17 @@ def network_violations(compose: dict[str, Any]) -> list[str]:
         )
     if set(networks) - {"default"}:
         found.append(f"extra networks {sorted(set(networks) - {'default'})}")
+    for net_name, spec in networks.items():
+        spec = spec or {}
+        found += [
+            f"network {net_name}: key {key!r} is not in the allow-list"
+            + (" (external - another stack's network)" if key == "external" else "")
+            for key in (spec if isinstance(spec, dict) else {"<not a mapping>": None})
+            if key not in NETWORK_SPEC_KEYS
+        ]
+        real_name = str(spec.get("name", "")) if isinstance(spec, dict) else ""
+        if not real_name.startswith("pagentos-staging-"):
+            found.append(f"network {net_name}: name {real_name!r} is not pagentos-staging-*")
     for svc_name, svc in (compose.get("services") or {}).items():
         if svc.get("network_mode"):
             found.append(
@@ -493,3 +590,116 @@ def test_checker_catches_a_planted_shared_volume() -> None:
     first = next(iter(compose["volumes"]))
     compose["volumes"][first] = {"name": "pagentos_pagentos-postgres-data", "external": True}
     assert volume_violations(compose, _load(DEV), _load(PROD))
+
+
+def _all_violations(compose: dict[str, Any]) -> list[str]:
+    return (
+        schema_violations(compose)
+        + volume_violations(compose, _load(DEV), _load(PROD))
+        + network_violations(compose)
+    )
+
+
+def test_checker_catches_volumes_from_another_container() -> None:
+    # Inspector 2026-10-04 (round 3, M1): `volumes_from` mounts the dev Postgres container's
+    # data and passed all 17 checks - the deny-list read only `volumes:`.
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["postgres"]["volumes_from"] = ["container:pagentos-postgres"]
+    assert _all_violations(compose)
+
+
+def test_checker_catches_a_secret_bound_from_the_host() -> None:
+    # Inspector 2026-10-04 (round 3, M2): a top-level `secrets:` with `file:` is a bind mount
+    # from the owner's home folder into the api, and passed green.
+    compose = copy.deepcopy(_load(STAGING))
+    compose["secrets"] = {
+        "owner": {"file": "C:/Users/alpak/AppData/Local/PagentOS/identity/owner_credential"}
+    }
+    compose["services"]["api"]["secrets"] = ["owner"]
+    assert schema_violations(compose)
+    # Each half alone is refused too: the top-level block, and the service's use of it.
+    only_top = copy.deepcopy(_load(STAGING))
+    only_top["secrets"] = {"owner": {"environment": "PAGENTOS_IDENTITY_OWNER_CREDENTIAL"}}
+    assert schema_violations(only_top)
+    only_service = copy.deepcopy(_load(STAGING))
+    only_service["services"]["api"]["configs"] = ["owner"]
+    assert schema_violations(only_service)
+
+
+@pytest.mark.parametrize(
+    ("where", "key", "value"),
+    [
+        ("service", "volumes_from", ["container:pagentos-postgres"]),
+        ("service", "secrets", ["owner"]),
+        ("service", "configs", ["owner"]),
+        ("service", "network_mode", "host"),
+        ("service", "pid", "host"),
+        ("service", "ipc", "host"),
+        ("service", "extends", {"file": "docker-compose.dev.yml", "service": "postgres"}),
+        ("service", "env_file", ["../../.env"]),
+        ("service", "devices", ["/dev/sda:/dev/sda"]),
+        ("service", "privileged", True),
+        ("service", "cap_add", ["SYS_ADMIN"]),
+        ("service", "external_links", ["pagentos-postgres:postgres"]),
+        ("service", "links", ["postgres"]),
+        ("service", "userns_mode", "host"),
+        ("top", "secrets", {"owner": {"file": "C:/Users/owner/credential"}}),
+        ("top", "configs", {"owner": {"file": "C:/Users/owner/credential"}}),
+        ("top", "include", ["docker-compose.dev.yml"]),
+    ],
+)
+def test_checker_refuses_every_key_outside_the_allow_list(where: str, key: str, value: Any) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    (compose if where == "top" else compose["services"]["api"])[key] = value
+    assert any(key in v for v in schema_violations(compose)), key
+
+
+@pytest.mark.parametrize(
+    "mount",
+    [
+        "C:/Users/alpak/AppData/Local/PagentOS:/srv/pagentos/var/identity",
+        "./data:/data",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "pagentos-postgres-data:/var/lib/postgresql/data",
+        {"type": "bind", "source": "C:/Users/alpak", "target": "/srv"},
+        {"type": "volume", "source": "pagentos_pagentos-postgres-data", "target": "/srv"},
+    ],
+)
+def test_checker_refuses_a_mount_that_is_not_a_staging_volume(mount: Any) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["api"]["volumes"] = [mount]
+    assert volume_violations(compose, _load(DEV), _load(PROD)), mount
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"name": "pagentos-staging-postgres", "external": True},
+        {
+            "name": "pagentos-staging-postgres",
+            "driver_opts": {"type": "none", "o": "bind", "device": "C:/Users/alpak"},
+        },
+        {"name": "pagentos-staging-postgres", "driver": "local"},
+    ],
+)
+def test_checker_refuses_a_volume_that_is_not_a_plain_staging_volume(spec: Any) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["volumes"]["pagentos-staging-postgres"] = spec
+    assert volume_violations(compose, _load(DEV), _load(PROD)), spec
+
+
+def test_checker_refuses_a_network_that_is_not_staging_own() -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["networks"]["default"]["external"] = True
+    assert network_violations(compose)
+    compose = copy.deepcopy(_load(STAGING))
+    compose["networks"]["default"]["name"] = "pagentos_default"
+    assert network_violations(compose)
+    compose = copy.deepcopy(_load(STAGING))
+    compose["networks"]["dev"] = {"name": "pagentos_default", "external": True}
+    compose["services"]["api"]["networks"] = ["default", "dev"]
+    assert network_violations(compose)
+
+
+def test_staging_uses_only_allowed_keys() -> None:
+    assert schema_violations(_load(STAGING)) == []

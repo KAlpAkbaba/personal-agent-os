@@ -38,9 +38,25 @@ tailnet DNS name, pagentos_prod / pagentos-prod, /mnt/pagentos-data, /opt/pagent
 mail/calendar domain or a non-empty mail/calendar/IMAP/SMTP setting, on a key that is not a
 `staging-only` constant or a `PAGENTOS_STAGING_*` interpolation, on ANY `${...}` that is not
 `PAGENTOS_STAGING_*` (so a shell or `.env` carrying the owner's real key cannot leak in), on an
-env_file, on a volume that is external / not `pagentos-staging-*` / named like the dev or prod
-stack, on a bind mount, on a non-loopback or colliding port, and on the namespace / queue / bucket
-/ database not being staging's own. Mail and calendar: none connected (send and calendar writes
+env_file, on a non-loopback or colliding port, and on the namespace / queue / bucket / database
+not being staging's own. What the compose file may SAY is an ALLOW-LIST (inspector's third
+return, 2026-10-04: `volumes_from: [container:pagentos-postgres]` - the dev stack's data - and a
+top-level `secrets: owner: file: C:/Users/...` - a bind from the owner's home - both passed a
+deny-list green): the top-level keys are the closed set `name`, `services`, `volumes`,
+`networks`, `x-production-blackhole`; each service's keys are the closed set it actually uses
+(image, build{context,dockerfile,args}, container_name, extra_hosts, command, environment, ports,
+volumes, networks, healthcheck, depends_on, init, mem_limit, memswap_limit, pids_limit,
+read_only, tmpfs, cap_drop, security_opt=no-new-privileges, restart); ANY other key -
+volumes_from, secrets, configs, network_mode, pid, ipc, extends, env_file, devices, privileged,
+cap_add, links, include, ... - is refused without having to be foreseen. A mount is only a named
+volume declared in this file, both key and name `pagentos-staging-*`, with no key but `name`
+(no external, no driver / driver_opts - a local driver with `o: bind` is a host bind by another
+name); a bind / host path / `container:` source is refused. Networks: only staging's own,
+declared here, named `pagentos-staging-*`, keys `name`/`ipam` only, never external. Proved on
+the real compose file (planted, run, restored byte for byte, sha256 `a7079543d312aebd` before
+and after each): volumes_from RED (2 failed), secrets `file:` RED (1 failed), a `driver_opts`
+bind RED (1 failed); and loosening the allow-list itself turns 5 planted cases RED.
+Mail and calendar: none connected (send and calendar writes
 off); voice: the simulator answers (free); a real vendor only with a separate
 `PAGENTOS_STAGING_VOICE_OPENAI_API_KEY` test key.
 
