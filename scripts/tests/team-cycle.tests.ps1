@@ -3650,12 +3650,14 @@ try {
         [System.IO.File]::WriteAllText((Join-Path $tree "src\f\task-two.txt"), "l1`nboth`n")
         [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
         [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", "lead: resolved"))
+        # The fake's log is the sandbox's: the second run's calls are only its own.
+        Remove-Item -LiteralPath (Join-Path $root "fake.log") -Force -ErrorAction SilentlyContinue
         $second = Invoke-Cycle -Root $root -Scenario "approve"
         Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $second.Queue -Id "task-two").state -Because ($second.StdOut + $second.Report)
-        Assert-Equal -Expected 0 -Actual @($second.Calls).Count -Because "the approved task was merged, not inspected again"
+        Assert-Equal -Expected 0 -Actual @($second.Calls).Count -Because ("the approved task was merged, not inspected again: " + (@($second.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") + " " + $second.Report)
     }
 
-    Test-Case "integrate: a conflict that remains after the base is in is the task's - it goes back as today" {
+    Test-Case "integrate: a conflict that remains after the base is in is the task's - it goes back (and, still conflicting, is stopped) as today" {
         # The base moved on elsewhere (it merges in cleanly); integrate/c1 itself has a line the task's own line meets.
         $root = New-Sandbox -Tasks @((New-Task -Id "task-two" -State "assigned" -Area @("src/f")))
         [void](Add-SandboxCommit -Root $root -Path "src/f/task-two.txt" -Text "l1`nl2`n" -Message "the file")
@@ -3664,8 +3666,12 @@ try {
         [void](Add-SandboxCommit -Root $root -Path "docs/release.txt" -Text "released" -Message "the release record")
         $run = Invoke-Cycle -Root $root -Scenario "approve"
         $task = Get-TaskById -Queue $run.Queue -Id "task-two"
-        Assert-Equal -Expected "returned" -Actual $task.state -Because ($run.StdOut + $run.Report)
+        # The fake worker cannot resolve it: sent back, rebuilt, conflicting again - stopped at the
+        # returns' limit, as before team-engine.
+        Assert-True -Condition (@("returned", "stopped") -contains [string]$task.state) -Because ($run.StdOut + $run.Report)
         Assert-Equal -Expected "entegrasyon dalında çakışma" -Actual $task.reason -Because "the real conflict"
+        Assert-True -Condition ($run.Report -match "akisma: [1-9]|çakışma: [1-9]") -Because "counted as a conflict: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "dalını alamadı") -Because "not a base conflict"
         Assert-True -Condition ((Get-IntegrationLog -Root $root) -contains ("merge: main " + (Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "main")) + " into integrate/c1")) -Because "the base went in first and stays"
     }
 
@@ -3687,8 +3693,9 @@ try {
 
     function Start-CycleProcess {
         <# The cycle as a process of its own (Invoke-Cycle waits for it; a handover needs it not to). #>
-        param([string]$Root, [string]$Extra = "", [int]$MaxParallel = 3)
-        $command = "& '" + (Join-Path $Root "scripts\team\cycle.ps1") + "' -CycleId 'c1' -MaxParallel $MaxParallel -Machine 'MAIL' -NoResearch -RefillSeconds 1 $Extra" +
+        param([string]$Root, [string]$Extra = "", [int]$MaxParallel = 3, [switch]$WithResearch)
+        $research = if ($WithResearch) { "" } else { "-NoResearch" }
+        $command = "& '" + (Join-Path $Root "scripts\team\cycle.ps1") + "' -CycleId 'c1' -MaxParallel $MaxParallel -Machine 'MAIL' $research -RefillSeconds 1 $Extra" +
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" + (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'; exit `$LASTEXITCODE"
         $process = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ('"' + ($command -replace '"', '\"') + '"')) `
             -WorkingDirectory $Root -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $Root "loop-1.out") -RedirectStandardError (Join-Path $Root "loop-1.err")
@@ -3702,7 +3709,7 @@ try {
         $log = Join-Path $root "fake.log"
         $hooks = @{
             PAGENTOS_FAKE_CLAUDE_SCENARIO = "approve"; PAGENTOS_FAKE_CLAUDE_LOG = $log
-            PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-1=10,worker:task-2=10,worker:task-3=10"
+            PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-1=25,worker:task-2=25,worker:task-3=25"
             PAGENTOS_FAKE_CLAUDE_STOPFLAG = (Join-Path $root "team\handover.flag"); PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE = "worker"; PAGENTOS_FAKE_CLAUDE_STOPFLAG_TASK = "task-1"
             PAGENTOS_FAKE_CLAUDE_SETTINGS = (Join-Path $root "team\cycle-settings.json"); PAGENTOS_FAKE_CLAUDE_SETTINGS_RUN = "worker:task-1"; PAGENTOS_FAKE_CLAUDE_SETTINGS_JSON = '{"max_parallel":4}'
         }
@@ -3718,12 +3725,12 @@ try {
             if ($null -ne $successor) { Assert-True -Condition ($successor.WaitForExit(120000)) -Because "the new loop ends when the work is done" }
             $calls = @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_.Trim() } | ForEach-Object { ConvertFrom-Json -InputObject $_ })
             $first = @($calls | Where-Object { $_.role -eq "worker" -and $_.task -eq "task-1" })[0]
-            Assert-True -Condition ($oldEnded.Ticks -lt ($first.at + [TimeSpan]::FromSeconds(10).Ticks)) -Because "the old loop was gone before its runs ended: they were not killed with it"
+            Assert-True -Condition ($oldEnded.Ticks -lt ($first.at + [TimeSpan]::FromSeconds(25).Ticks)) -Because "the old loop was gone before its runs ended: they were not killed with it"
             $workers = @($calls | Where-Object { $_.role -eq "worker" })
             Assert-Equal -Expected "task-1,task-2,task-3,task-4" -Actual ((@($workers | ForEach-Object { $_.task }) | Sort-Object) -join ",") -Because "each worker ran once - no run was started twice"
             $fourth = @($workers | Where-Object { $_.task -eq "task-4" })[0]
             Assert-Equal -Expected "worker-4" -Actual $fourth.seat -Because "the adopted runs kept worker-1..3; the free seat was filled - no seat double-booked"
-            Assert-True -Condition ($fourth.at -lt ($first.at + [TimeSpan]::FromSeconds(10).Ticks)) -Because "the free seat was filled while the adopted runs were still live"
+            Assert-True -Condition ($fourth.at -lt ($first.at + [TimeSpan]::FromSeconds(25).Ticks)) -Because "the free seat was filled while the adopted runs were still live"
             $queue = Read-TeamJson -Path (Join-Path $root "team\queue.json")
             Assert-Equal -Expected "merged,merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $queue | ForEach-Object { $_.state }) -join ",") -Because "the adopted runs' reports were read and their tasks went on"
             foreach ($task in (Get-TeamTasks -Queue $queue)) {
@@ -3756,7 +3763,7 @@ try {
         $log = Join-Path $root "fake.log"
         $process = $null
         Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SCENARIO = "approve"; PAGENTOS_FAKE_CLAUDE_LOG = $log } -Body {
-            $script:timerLoop = Start-CycleProcess -Root $root -MaxParallel 1 -Extra "-Continuous -ResearchEveryHours 0.002 -Research"
+            $script:timerLoop = Start-CycleProcess -Root $root -MaxParallel 1 -WithResearch -Extra "-Continuous -ResearchEveryHours 0.002"
         }
         $process = $script:timerLoop
         try {
