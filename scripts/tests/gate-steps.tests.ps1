@@ -467,6 +467,14 @@ Test-Case "12. -OnlyStep runs only the matching steps, grouped or not; every oth
     foreach ($row in @("Seq Kept A\s+PASS", "Seq Dropped B\s+SKIPPED", "Grp Kept C\s+PASS", "Grp Dropped D\s+SKIPPED")) {
         Assert-True (@($out | Where-Object { $_ -match "^\s*$row" }).Count -eq 1) "the table has the row '$row'"
     }
+    # A list through -File arrives as ONE comma-joined string ("a,b"): the slice must still
+    # run what the list names (2026-10-04: a nine-pattern slice skipped every step).
+    Get-ChildItem -LiteralPath $ranRoot -File | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+    Assert-Equal 0 @(Get-ChildItem -LiteralPath $ranRoot -File).Count "the markers of the first slice are gone"
+    $out = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File $gatePath -StepList $stepsFile -NoTestSlots -OnlyStep "Nothing*,*Kept A,Grp Kept*" 2>&1 | ForEach-Object { [string]$_ })
+    Assert-Equal 0 $LASTEXITCODE "the comma-listed slice passed ($($out -join ' / '))"
+    $ran = @(Get-ChildItem -LiteralPath $ranRoot -File | ForEach-Object { $_.Name } | Sort-Object)
+    Assert-Equal "KeptA|KeptC" ($ran -join "|") "a comma list through -File runs each pattern's steps"
 }
 
 foreach ($p in @($script:Leftovers)) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }

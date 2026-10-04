@@ -106,7 +106,10 @@ function Invoke-Step {
   # -Kinds: the test-queue kinds this step needs (empty = a light step, no slot). A grouped
   # step's kinds are asked for once, for the whole group, by Complete-GateGroup.
   param([string]$Name, [scriptblock]$Action, [string[]]$Kinds = @())
-  if (@($OnlyStep).Count -gt 0 -and -not @($OnlyStep | Where-Object { $Name -like $_ }).Count) {
+  # -OnlyStep through -File arrives as ONE comma-joined string; a test that lifts this function
+  # under StrictMode has no such variable at all (both: 2026-10-04).
+  $only = @(Get-Variable -Name OnlyStep -ValueOnly -ErrorAction SilentlyContinue | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  if ($only.Count -gt 0 -and -not @($only | Where-Object { $Name -like $_ }).Count) {
     [void]$script:results.Add([pscustomobject]@{ Step = $Name; Result = "SKIPPED"; Seconds = 0; WaitSeconds = 0 })
     return
   }
