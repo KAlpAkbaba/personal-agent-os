@@ -55,17 +55,18 @@ function Invoke-Step {
     # Between Start-GateGroup and Complete-GateGroup a step is RECORDED, not run: its
     # Invoke-GateSuite gives the script, its Assert-ExitCode the words of its FAILED line, and
     # Complete-GateGroup runs it as a process of its own beside the others.
+    # A step that throws while it is recorded (a missing tool) is a failed step in the words a
+    # sequential run prints, reported by Complete-GateGroup in its place - never the end of the
+    # gate without its summary (the inspector's finding, 2026-10-04).
     $script:GateRecording = [pscustomobject]@{ Script = ""; Lane = ""; What = "" }
-    try { & $Action | Out-Null } finally { $recorded = $script:GateRecording; $script:GateRecording = $null }
-    if ($recorded.Script -and $recorded.What) {
+    $thrown = ""
+    try { & $Action | Out-Null } catch { $thrown = $_.Exception.Message } finally { $recorded = $script:GateRecording; $script:GateRecording = $null }
+    if (-not $thrown -and $recorded.Script -and $recorded.What) {
       [void]$script:GateGroup.Add((New-GateStep -Name $Name -Script $recorded.Script -What $recorded.What -Lane $recorded.Lane))
       return
     }
-    Write-Host ""
-    Write-Host "=== $Name ===" -ForegroundColor Cyan
-    Write-Host "FAILED: a grouped step must call Invoke-GateSuite and Assert-ExitCode" -ForegroundColor Red
-    [void]$script:results.Add([pscustomobject]@{ Step = $Name; Result = "FAIL"; Seconds = 0 })
-    $script:failed = $true
+    $why = if ($thrown) { $thrown } else { "a grouped step must call Invoke-GateSuite and Assert-ExitCode" }
+    [void]$script:GateGroup.Add([pscustomobject]@{ Name = $Name; Failure = $why })
     return
   }
   Write-Host ""
@@ -127,9 +128,22 @@ function Complete-GateGroup {
   # would have: its own "=== name ===" section with its whole log (the failed steps first),
   # its FAILED line in the same words, and its row of the table in the LISTED order.
   if ($null -eq $script:GateGroup) { return }
-  $steps = @($script:GateGroup.ToArray())
+  $entries = @($script:GateGroup.ToArray())
   $script:GateGroup = $null
-  if (@($steps).Count -eq 0) { return }
+  if (@($entries).Count -eq 0) { return }
+  # A step that failed while it was recorded is not run; it keeps its place in the table.
+  $refused = @($entries | Where-Object { $_.PSObject.Properties["Failure"] })
+  $steps = @($entries | Where-Object { -not $_.PSObject.Properties["Failure"] })
+  foreach ($f in $refused) {
+    Write-Host ""
+    Write-Host "=== $($f.Name) ===" -ForegroundColor Cyan
+    Write-Host "FAILED: $($f.Failure)" -ForegroundColor Red
+    $script:failed = $true
+  }
+  if (@($steps).Count -eq 0) {
+    foreach ($f in $refused) { [void]$script:results.Add([pscustomobject]@{ Step = $f.Name; Result = "FAIL"; Seconds = 0 }) }
+    return
+  }
   $width = if ($GateMaxParallel -gt 0) { $GateMaxParallel } else { $script:GateStepMaxParallel }
   $lanes = @($steps | Where-Object { $_.Lane } | ForEach-Object { $_.Lane } | Select-Object -Unique)
   $logRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("pagentos-gate-steps-" + $PID + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
@@ -146,8 +160,8 @@ function Complete-GateGroup {
       Write-Host ""
       Write-Host "=== $($s.Name) ===" -ForegroundColor Cyan
       Write-Host "FAILED: $($s.What): the suite group did not run: $groupError" -ForegroundColor Red
-      [void]$script:results.Add([pscustomobject]@{ Step = $s.Name; Result = "FAIL"; Seconds = 0 })
     }
+    foreach ($e in $entries) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0 }) }
     $script:failed = $true
     Remove-Item -LiteralPath $logRoot -Recurse -Force -ErrorAction SilentlyContinue
     return
@@ -167,7 +181,11 @@ function Complete-GateGroup {
       Write-Host "FAILED: $text" -ForegroundColor Red
     }
   }
-  foreach ($r in $ran) {
+  # The table in the LISTED order: the run results come back in the order of $steps.
+  $next = 0
+  foreach ($e in $entries) {
+    if ($e.PSObject.Properties["Failure"]) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0 }); continue }
+    $r = $ran[$next]; $next++
     [void]$script:results.Add([pscustomobject]@{ Step = $r.Name; Result = $(if ($r.Outcome -eq "PASS") { "PASS" } else { "FAIL" }); Seconds = $r.Seconds })
     if ($r.Outcome -ne "PASS") { $script:failed = $true }
   }
@@ -411,6 +429,16 @@ if (-not $Fast) {
         Remove-GateDatabase -Name $script:GateDatabase
       }
     }
+  }
+
+  Invoke-Step "Gate database tool (PS5.1 + the dev server)" {
+    # scripts/lib/GateDatabase.ps1 against the dev stack's real PostgreSQL: a database the
+    # migrations run on, the name rule, two at once, the sweep, no password. Not grouped: it
+    # makes and drops databases on the server the integration run above just used.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\gate-database.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "gate-database tests"
   }
 
   # gate-parallel-suites (team/plans/gate-faster-adr.md): the PowerShell / bash suites from here
@@ -672,6 +700,15 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\team-cycle.tests.ps1"
     Invoke-GateSuite $script
     Assert-ExitCode "team-cycle tests"
+  }
+
+  Invoke-Step "Gate suite group (PS5.1, fake steps)" {
+    # scripts/lib/GateSteps.ps1, the group this gate runs its suites in. Not grouped: its cases
+    # time fake steps against each other (three at once, a lane, a deadline).
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\gate-steps.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "gate-steps tests"
   }
 
   Invoke-Step "Agent team area widening rules (PS5.1, no model)" {

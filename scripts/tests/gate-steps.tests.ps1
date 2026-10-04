@@ -282,7 +282,7 @@ function Get-GateFunctionText {
 
 function Invoke-GateTwoWays {
     <# One failing fake suite through the gate's own functions, sequential and grouped. #>
-    param([string]$Suite)
+    param([string]$Suite, [string]$Mode = "fail", [string]$Passing = "")
     foreach ($fn in @("Invoke-Step", "Assert-ExitCode", "Get-StepFailureText", "Invoke-GateSuite", "Start-GateGroup", "Complete-GateGroup", "Write-GateSummary")) {
         . ([scriptblock]::Create((Get-GateFunctionText $fn)))
     }
@@ -304,9 +304,19 @@ function Invoke-GateTwoWays {
         $lines = @(& {
                 Start-GateGroup
                 Invoke-Step "A fake suite that fails (PS5.1)" {
+                    # "throw": the step dies before it names its suite, as a step does when
+                    # its tool is missing (`throw "Windows PowerShell 5.1 not found"`).
+                    if ($Mode -eq "throw") { throw "the fake step could not start" }
                     $script = $Suite
                     Invoke-GateSuite $script
                     Assert-ExitCode "fake suite tests"
+                }
+                if ($Passing) {
+                    Invoke-Step "A fake suite that passes (PS5.1)" {
+                        $script = $Passing
+                        Invoke-GateSuite $script
+                        Assert-ExitCode "passing suite tests"
+                    }
                 }
                 Complete-GateGroup
                 . ([scriptblock]::Create($tail))
@@ -343,6 +353,53 @@ Test-Case "8. the suites that read quality-gate.ps1's text still read it green (
         $code = $LASTEXITCODE
         $passed = @($lines | Where-Object { $_ -match '^\s*PASS\s' }).Count
         Assert-True ($code -eq 0 -and $passed -eq 1) "$($reader.Suite) -Filter '$($reader.Filter)': exit $code, $passed passed ($(@($lines | Where-Object { $_ -match 'FAIL|expected|actual' }) -join ' | '))"
+    }
+}
+
+# ------------------------------------------------------------------ 9: the lanes
+
+Test-Case "9. two steps of one lane never run at once, in the listed order, while a step of no lane runs beside them" {
+    # The inspector's M2 (2026-10-04): the lane rule removed, every case stayed green.
+    $dir = New-CaseDir
+    $steps = @(
+        (New-FakeGateStep -Dir $dir -Id "lane1" -Mode "sleep" -Milliseconds 3000 -Lane "shared"),
+        (New-FakeGateStep -Dir $dir -Id "lane2" -Mode "sleep" -Milliseconds 3000 -Lane "shared"),
+        (New-FakeGateStep -Dir $dir -Id "free" -Mode "sleep" -Milliseconds 3000)
+    )
+    $r = @(Invoke-GateStepGroup -Steps $steps -MaxParallel 3 -LogRoot (Join-Path $dir "logs"))
+    Assert-True (Test-GateStepGroupPassed -Results $r) "all three passed"
+    $end1 = Get-MarkerTicks $dir "ended" "lane1"
+    $start2 = Get-MarkerTicks $dir "started" "lane2"
+    Assert-True ($start2 -ge $end1) "lane2 started only after lane1 ended (start $start2, end $end1)"
+    $startFree = Get-MarkerTicks $dir "started" "free"
+    Assert-True ($startFree -lt $end1) "the lane-less step ran beside lane1 (the room was not wasted)"
+}
+
+Test-Case "9b. the gate puts the two suites that start the fake team API into one lane" {
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($gatePath, [ref]$tokens, [ref]$errors)
+    foreach ($suite in @("team-integrate.tests.ps1", "team-feed.tests.ps1")) {
+        $step = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq "Invoke-Step" -and $n.Extent.Text -like "*$suite*" }, $true)
+        Assert-True ($null -ne $step) "the gate has a step for $suite"
+        Assert-True ($step.Extent.Text -match 'Invoke-GateSuite \$script -Lane "fake-team-api"') "$suite runs in the lane fake-team-api"
+    }
+}
+
+# ------------------------------------------- 10: a step that throws while recorded
+
+Test-Case "10. a grouped step that throws before it names its suite fails in the sequential words, and the gate still prints its summary and the rest of the group runs" {
+    $suite = Join-Path $sandbox "never-run-suite.ps1"
+    [System.IO.File]::WriteAllText($suite, "exit 0`r`n", (New-Object System.Text.ASCIIEncoding))
+    $passing = Join-Path $sandbox "passing-suite.ps1"
+    [System.IO.File]::WriteAllText($passing, "Write-Host '  PASS  the passing case'`r`nexit 0`r`n", (New-Object System.Text.ASCIIEncoding))
+    $ways = Invoke-GateTwoWays -Suite $suite -Mode "throw" -Passing $passing
+    foreach ($way in @("serial", "group")) {
+        $failed = @($ways[$way] | Where-Object { $_ -match '^FAILED: ' })
+        Assert-Equal "FAILED: the fake step could not start" ($failed -join "|") "${way}: the step's FAILED line"
+        Assert-Equal "QUALITY GATE: FAIL" (@($ways[$way] | Where-Object { $_ -match '^QUALITY GATE: ' }) -join "|") "${way}: the final word"
+        Assert-True (@($ways[$way] | Where-Object { $_ -eq "=== Quality gate summary ===" }).Count -eq 1) "${way}: the summary is printed"
+        Assert-True (@($ways[$way] | Where-Object { $_ -eq "exit=1" }).Count -eq 1) "${way}: the gate exits 1"
+        Assert-True (@($ways[$way] | Where-Object { $_ -match 'PASS  the passing case' }).Count -eq 1) "${way}: the other step still ran"
     }
 }
 
