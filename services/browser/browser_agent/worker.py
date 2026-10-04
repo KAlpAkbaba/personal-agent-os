@@ -55,12 +55,17 @@ from . import (
     search_engines,
     task_denylist,
 )
-from .backends import ExistingSessionBackend, ManagedBackend
+from .backends import DEFAULT_TAB_NAV_TIMEOUT_MS, ExistingSessionBackend, ManagedBackend
 from .destination import (
     TRUSTED_VIEW_PATH,
+    EgressProxy,
+    RequestGuard,
+    Resolver,
     TrustedOrigin,
+    address_is_forbidden,
     parse_trusted_origin,
     require_public_destination,
+    trusted_origin_admits,
 )
 from .detect import BrowserInfo, detect_browser
 from .enrollment import (
@@ -70,6 +75,7 @@ from .enrollment import (
     require_research_authorization,
 )
 from .errors import BrowserError, ErrorClass, Phase, map_playwright_error, redact_url
+from .evidence import validate_selector, whitespace_digest
 from .extraction import (
     build_links,
     build_metadata,
@@ -453,6 +459,15 @@ async def _stdin_lines(loop: asyncio.AbstractEventLoop) -> AsyncIterator[str]:
 # ----------------------------------------------------------------------- #
 
 
+@dataclass(frozen=True, slots=True)
+class _NavigationMark:
+    """Where the guard's and the egress proxy's records stood when an op started."""
+
+    violations: int
+    navigations: int
+    refusals: int
+
+
 @dataclass(slots=True)
 class SessionState:
     session_id: str
@@ -512,6 +527,39 @@ class SessionState:
     # The interstitial last shown to the owner (kind, url) - the single source of the
     # ``verification`` evidence block on the search result.
     last_interstitial: tuple[str, str] | None = None
+    # browser-redirect-guard: every request of this session's pages (redirect hops and
+    # sub-requests included) is held to the destination policy; None under
+    # --allow-private-destinations. ``guarded_pages`` holds id(page) of pages attached.
+    request_guard: RequestGuard | None = None
+    guarded_pages: set[int] = field(default_factory=set)
+    # The CDP sessions the guard holds, by id(page): an owner-profile session releases
+    # them when each op ends, so the owner's own tab is never left intercepted.
+    guard_cdp: dict[int, Any] = field(default_factory=dict)
+
+
+#: fetch_evidence's ``selector``: the text of every matching element, document order. A
+#: selector the browser cannot parse throws a SyntaxError, reported as validation_error.
+_SELECTOR_TEXTS_JS = """
+(selector) => {
+  try {
+    const nodes = document.querySelectorAll(selector);
+    return Array.from(nodes, (el) => el.innerText || el.textContent || "");
+  } catch (e) {
+    return null;
+  }
+}
+"""
+
+
+async def _read_selector_texts(page: Page, selector: str) -> list[str]:
+    texts = await page.evaluate(_SELECTOR_TEXTS_JS, selector)
+    if texts is None:
+        raise BrowserError(
+            ErrorClass.VALIDATION_ERROR,
+            "fetch_evidence: selector is not a valid CSS selector",
+            retryable=False,
+        )
+    return [str(t) for t in texts]
 
 
 # ----------------------------------------------------------------------- #
@@ -691,6 +739,16 @@ class Worker:
         # configuration (the installer writes it); already validated by argparse, and never
         # something a Cloud Core command can set or widen.
         self._trusted_origin: TrustedOrigin | None = getattr(args, "trusted_origin", None)
+        # browser-redirect-guard: the resolver every destination check uses (None = the
+        # system resolver; tests give a fake one) and the rule for the address Chromium
+        # actually connected to (DNS rebinding: Chromium resolves on its own).
+        self._destination_resolver: Resolver | None = None
+        self._served_address_forbidden: Callable[[str], bool] = address_is_forbidden
+        # browser-redirect-guard (return 1-3): the network layer. Every managed browser is
+        # launched behind this in-process egress proxy (started with the first session);
+        # ``_egress_dial`` maps a vetted address to the one dialled (tests only).
+        self._egress_proxy: EgressProxy | None = None
+        self._egress_dial: Callable[[str], str] | None = None
         # Base URL for Google's home page (contract §3a). Defaults to the real
         # Google; the browser e2e suite points this at the fixture site so
         # the Google-through-the-UI flow is deterministic and offline.
@@ -890,6 +948,9 @@ class Worker:
             if state is None:
                 continue
             await self._close_session_state(session_id, state, op="shutdown_close")
+        proxy, self._egress_proxy = self._egress_proxy, None
+        if proxy is not None:
+            await proxy.close()
 
     async def _close_session_state(self, session_id: str, state: SessionState, *, op: str) -> bool:
         """Close one session's browser and wait (bounded) for its OS
@@ -1160,7 +1221,25 @@ class Worker:
                 risk_class = policy.CAPABILITY_RISK_CLASS[capability]
                 policy.enforce(state.policy_allowed, risk_class, capability=capability)
             handler = _HANDLERS[capability]
-            result = await handler(self, state, payload)
+            # browser-redirect-guard: whatever the op does to the page (navigate, click a
+            # link, search), a page navigation the guard refused - the requested url or any
+            # redirect hop - ends it as security_scope_error, never as a site error.
+            # The media family checks its session kind first and media_play attaches the
+            # guard itself before it navigates.
+            guard = state.request_guard
+            try:
+                if not capability.startswith("browser.media_"):
+                    await self._guard_current_page(state)
+                mark = self._navigation_mark(guard)
+                try:
+                    result = await handler(self, state, payload)
+                except BrowserError as exc:
+                    self._raise_on_refused_navigation(guard, mark, op=capability, cause=exc)
+                    raise
+                self._raise_on_refused_navigation(guard, mark, op=capability)
+            finally:
+                if self._is_attached(state):
+                    await self._release_guard(state)
             # M13 lifecycle backstop (owner-machine incident 2026-09-03):
             # tab_new/fetch_evidence already refuse BEFORE opening a tab that
             # would cross max_tabs; this is defense in depth for anything
@@ -1361,6 +1440,11 @@ class Worker:
         # window (browser_agent.media documents why it is a preference and not
         # an anti-bot measure). A research launch is byte-for-byte what it was.
         browser_args = media.media_launch_args(session_kind)
+        if profile != media.OWNER_PROFILE and not self._allow_private_destinations:
+            # browser-redirect-guard (return 1-3): the browser's only way out is the egress
+            # proxy, so a cross-site iframe, a popup's first request and a WebSocket are held
+            # to the same policy as the page itself.
+            browser_args = [*(browser_args or []), *(await self._egress_args())]
         backend: ManagedBackend | ExistingSessionBackend
         if profile == media.OWNER_PROFILE:
             # ATTACH, never launch. The owner's Chrome is not ours to start, not
@@ -1415,6 +1499,10 @@ class Worker:
             max_tabs=max_tabs,
             last_used=time.monotonic(),
         )
+        if not self._allow_private_destinations:
+            # browser-redirect-guard: every request of this session's pages is held to the
+            # destination policy; the guard attaches to a page before the first op drives it.
+            state.request_guard = RequestGuard(self._request_check)
         self._sessions[session_id] = state
         if profile_dir is not None:
             self._persistent_profile_owner[profile] = session_id
@@ -1572,7 +1660,163 @@ class Worker:
     def _check_destination(self, url: str, *, op: str) -> None:
         if self._allow_private_destinations:
             return
-        require_public_destination(url, op=op, trusted_origin=self._trusted_origin)
+        require_public_destination(
+            url,
+            op=op,
+            resolver=self._destination_resolver,
+            trusted_origin=self._trusted_origin,
+        )
+
+    # ------------------------------------------------------------------ #
+    # browser-redirect-guard: every request, every hop, the address served
+    # ------------------------------------------------------------------ #
+
+    def _request_check(self, url: str) -> None:
+        require_public_destination(
+            url,
+            op="request",
+            resolver=self._destination_resolver,
+            trusted_origin=self._trusted_origin,
+        )
+
+    async def _egress_args(self) -> list[str]:
+        if self._egress_proxy is None:
+            proxy = EgressProxy(
+                resolver=self._destination_resolver,
+                trusted_origin=self._trusted_origin,
+                dial=self._egress_dial,
+            )
+            await proxy.start()
+            self._egress_proxy = proxy
+        return self._egress_proxy.chromium_args()
+
+    async def _release_guard(self, state: SessionState) -> None:
+        """Owner-profile sessions (return 5): the owner's Chrome is not ours to configure and
+        cannot sit behind the egress proxy, so the page guard holds it only WHILE an op of the
+        worker drives it. When the op ends, interception is switched off and the CDP session
+        detached - the owner's own requests (the web shell, the NAS, the router) are never
+        failed or slowed by it afterwards."""
+        sessions, state.guard_cdp = state.guard_cdp, {}
+        state.guarded_pages.clear()
+        for cdp in sessions.values():
+            with suppress(Exception):
+                await cdp.send("Fetch.disable")
+            with suppress(Exception):
+                await cdp.detach()
+
+    async def _guard_current_page(self, state: SessionState) -> RequestGuard | None:
+        """Attach the session's request guard (created by session_open) to the page the op
+        acts on, once per page. Fails closed: a page the guard cannot attach to is not
+        driven."""
+        if state.request_guard is None:
+            return None
+        try:
+            page = state.browser_session.backend.current_page
+        except BrowserError:
+            return state.request_guard  # no live page: the op reports that itself
+        if id(page) in state.guarded_pages:
+            return state.request_guard
+        try:
+            cdp = await page.context.new_cdp_session(page)
+            await state.request_guard.attach(cdp)
+        except Exception as exc:
+            raise BrowserError(
+                ErrorClass.DEPENDENCY_UNAVAILABLE,
+                "request guard: could not intercept the page's requests; not driving it",
+                retryable=True,
+                evidence={"error": str(exc)[:200]},
+            ) from exc
+        state.guarded_pages.add(id(page))
+        state.guard_cdp[id(page)] = cdp
+        return state.request_guard
+
+    def _navigation_mark(self, guard: RequestGuard | None) -> _NavigationMark:
+        proxy = self._egress_proxy
+        return _NavigationMark(
+            violations=guard.mark() if guard is not None else 0,
+            navigations=len(guard.admitted_navigations) if guard is not None else 0,
+            refusals=len(proxy.refusals) if proxy is not None else 0,
+        )
+
+    def _raise_on_refused_navigation(
+        self,
+        guard: RequestGuard | None,
+        mark: _NavigationMark,
+        *,
+        op: str,
+        cause: BaseException | None = None,
+    ) -> None:
+        """``security_scope_error`` (not retryable) when a page navigation of the op - the
+        requested url or a redirect hop - was refused by the page guard, by the egress proxy
+        (return 3: it resolves on its own, so a name public for the guard may be private for
+        the proxy) or by Chromium itself for a redirect to a non-http scheme (file:///)."""
+        if isinstance(cause, BrowserError) and "ERR_UNSAFE_REDIRECT" in (
+            f"{cause.message} {(cause.evidence or {}).get('playwright_message', '')}"
+        ):
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                f"{op}: destination refused (a redirect hop leads to a forbidden scheme)",
+                retryable=False,
+            ) from cause
+        if guard is None:
+            return
+        refused = guard.main_frame_violation_since(mark.violations)
+        if refused is not None:
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                f"{op}: destination refused "
+                f"({'a redirect hop' if refused.redirect_hop else 'the page navigation'} "
+                "leads to a forbidden destination)",
+                retryable=False,
+                evidence={"url": refused.url, "redirect_hop": refused.redirect_hop},
+            ) from cause
+        proxy = self._egress_proxy
+        if proxy is None:
+            return
+        navigations = set(guard.admitted_navigations[mark.navigations :])
+        blocked = next(
+            (r for r in proxy.refusals[mark.refusals :] if (r.host, r.port) in navigations), None
+        )
+        if blocked is not None:
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                f"{op}: destination refused (the egress proxy refused the page navigation)",
+                retryable=False,
+                evidence={"url": blocked.target},
+            ) from cause
+
+    async def _verify_navigation(self, response: Any, final_url: str, *, op: str) -> None:
+        """After a navigation: every url of the redirect chain and the final url pass the
+        destination policy, and the address Chromium was served from is not a forbidden one
+        (a name the policy resolved as public but Chromium resolved into the tailnet).
+        The guard already blocked a forbidden hop before it was sent; this is the second,
+        independent check of what the navigation says it went through."""
+        if self._allow_private_destinations:
+            return
+        chain: list[str] = []
+        request = getattr(response, "request", None) if response is not None else None
+        while request is not None:
+            chain.append(str(request.url))
+            request = request.redirected_from
+        for url in [*reversed(chain), final_url]:
+            self._check_destination(url, op=op)
+        if response is None or trusted_origin_admits(final_url, self._trusted_origin):
+            return
+        try:
+            served = await response.server_addr()
+        except Exception:
+            served = None
+        address = (served or {}).get("ipAddress")
+        proxy = self._egress_proxy
+        if proxy is not None and proxy.is_proxy_address(address, (served or {}).get("port")):
+            return  # served through the egress proxy, which dialled the address it vetted
+        if address and self._served_address_forbidden(str(address)):
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                f"{op}: destination refused (the page was served from a non-public address)",
+                retryable=False,
+                evidence={"url": redact_url(final_url)},
+            )
 
     async def _op_navigate(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         url = payload.get("url")
@@ -1584,6 +1828,9 @@ class Worker:
         timeout_ms = payload.get("timeout_ms", DEFAULT_NAV_TIMEOUT_MS)
         start = time.perf_counter()
         response = await state.browser_session.navigate(url, timeout_ms=timeout_ms)
+        await self._verify_navigation(
+            response, state.browser_session.backend.current_page.url, op="navigate"
+        )
         return await self._navigation_result(
             state.browser_session, response, elapsed_ms=_elapsed_ms(start)
         )
@@ -1634,8 +1881,18 @@ class Worker:
         lifecycle.check_tab_budget(
             self._budgeted_tabs(state, current), state.max_tabs, op="tab_new"
         )
-        index = await state.browser_session.new_tab(url)
+        # Open blank, guard, THEN navigate: a tab opened straight onto its url would send
+        # the first request (and follow its redirects) before the guard could attach.
+        index = await state.browser_session.new_tab(None)
         state.own_tabs += 1
+        if url:
+            await self._guard_current_page(state)
+            response = await state.browser_session.navigate(
+                url, timeout_ms=DEFAULT_TAB_NAV_TIMEOUT_MS
+            )
+            await self._verify_navigation(
+                response, state.browser_session.backend.current_page.url, op="tab_new"
+            )
         return {"index": index}
 
     async def _op_tab_close(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2586,6 +2843,7 @@ class Worker:
                 ErrorClass.VALIDATION_ERROR, "fetch_evidence: 'url' is required", retryable=False
             )
         self._check_destination(url, op="fetch_evidence")
+        selector = validate_selector(payload.get("selector"))
         query = payload.get("query") or ""
         source_class = payload.get("source_class") or "unknown"
         excerpt_chars = payload.get("excerpt_chars", 1_200)
@@ -2619,9 +2877,11 @@ class Worker:
                 previous_tab_index = next((t.index for t in tabs_before if t.is_current), 0)
                 new_tab_index = await browser_session.new_tab(None)
                 state.own_tabs += 1
+                await self._guard_current_page(state)
 
             response = await browser_session.navigate(url, timeout_ms=timeout_ms)
             page = browser_session.backend.current_page
+            await self._verify_navigation(response, page.url, op="fetch_evidence")
             # DOM/navigation-driven settle (bounded, exceptions swallowed) —
             # replaces the old fixed sleep (contract §3a).
             with suppress(Exception):
@@ -2640,6 +2900,16 @@ class Worker:
                 has_password_field=raw.has_password_field,
                 http_status=http_status,
             )
+            # text_sha256 covers the WHOLE text the excerpt is cut from (or only what the
+            # selector matched), so a change past excerpt_chars still changes the hash.
+            selector_matched: bool | None = None
+            hashed_text: str | None = primary_text
+            if selector is not None:
+                matched = await _read_selector_texts(page, selector)
+                selector_matched = bool(matched)
+                hashed_text = "\n".join(matched) if matched else None
+                primary_text = " ".join(" ".join(matched).split())
+            text_sha256 = whitespace_digest(hashed_text) if hashed_text is not None else None
             excerpt, _truncated = truncate_text(primary_text.strip(), max_chars=excerpt_chars)
             links = build_links(raw.links, base_url=page.url)
 
@@ -2659,6 +2929,8 @@ class Worker:
                 "injection_markers": count_injection_markers(body_text),
                 "links_count": len(links),
                 "tab_used": tab,
+                "text_sha256": text_sha256,
+                "selector_matched": selector_matched,
             }
         finally:
             if new_tab_index is not None:
@@ -2765,6 +3037,7 @@ class Worker:
         timeout_ms = payload.get("timeout_ms", DEFAULT_NAV_TIMEOUT_MS)
 
         browser_session = state.browser_session
+        await self._guard_current_page(state)
         try:
             response = await browser_session.navigate(url, timeout_ms=timeout_ms)
         except BrowserError as err:

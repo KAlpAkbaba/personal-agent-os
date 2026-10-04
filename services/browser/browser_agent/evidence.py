@@ -24,12 +24,13 @@ command (see docs/DECISIONS.md ADR-0035) is dispatched to it.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
 
-from .errors import BrowserError
+from .errors import BrowserError, ErrorClass
 
 #: Provider-neutral source-class taxonomy (mirrors the categories the M3
 #: deterministic corpus already uses informally, made explicit for planning).
@@ -118,6 +119,32 @@ def _normalize_url(url: str) -> str:
 def _clean_excerpt(text: str, *, max_chars: int) -> str:
     collapsed = " ".join(text.split())
     return collapsed[:max_chars].strip()
+
+
+#: ``browser.fetch_evidence``'s optional ``selector`` (contract: a CSS selector string of at
+#: most this many characters).
+MAX_SELECTOR_CHARS = 200
+
+
+def whitespace_digest(text: str) -> str:
+    """``text_sha256``: sha256 of the text with every whitespace run collapsed to one space
+    and the ends trimmed - a re-flowed page is not a changed page."""
+    return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+
+
+def validate_selector(value: object) -> str | None:
+    """The ``selector`` field: absent/None -> None; a non-blank string of at most
+    ``MAX_SELECTOR_CHARS`` -> itself; anything else -> ``validation_error``."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_SELECTOR_CHARS:
+        raise BrowserError(
+            ErrorClass.VALIDATION_ERROR,
+            f"fetch_evidence: selector must be a CSS selector string of 1..{MAX_SELECTOR_CHARS} "
+            "characters",
+            retryable=False,
+        )
+    return value
 
 
 async def extract_page_evidence(
@@ -254,6 +281,7 @@ __all__ = [
     "EXTRACTION_ACCESSIBILITY_SNAPSHOT",
     "EXTRACTION_DOM_TEXT",
     "EXTRACTION_METHODS",
+    "MAX_SELECTOR_CHARS",
     "SOURCE_CLASSES",
     "BrowserError",
     "FetchFailure",
@@ -262,4 +290,6 @@ __all__ = [
     "RankedEvidence",
     "dedup_and_rank_evidence",
     "extract_page_evidence",
+    "validate_selector",
+    "whitespace_digest",
 ]

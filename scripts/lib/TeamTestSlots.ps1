@@ -31,6 +31,11 @@
       * a ticket unused for 5 minutes is void; a place not asked about for 10 minutes is
         dropped; a running slot whose holder (pid AND process start time) is gone is free.
 
+    The office SEES the line (owner, 2026-10-03, team/plans/team-board-talk-adr.md): a take, a
+    first BEKLE and a freed slot are one 'bilgi' note each on the team's board, with a snapshot
+    of the line the Ofis draws. The note is built from what the queue already decided and sent
+    after the decision; a board that is down or slow changes nothing here (one clock: this one).
+
     Windows PowerShell 5.1, StrictMode.
 #>
 
@@ -301,7 +306,9 @@ function Invoke-TestSlotAsk {
         [Parameter(Mandatory = $true)][string]$Task,
         [Parameter(Mandatory = $true)][string]$Role,
         [Parameter(Mandatory = $true)][string]$What,
-        [Nullable[datetime]]$NowUtc = $null
+        [Nullable[datetime]]$NowUtc = $null,
+        # The asker's seat on the team's board (worker-2, inspector, ...): the notes' names.
+        [string]$Seat = ""
     )
     $kinds = @(Resolve-TestSlotKinds -Kind $Kind)
     $now = if ($null -ne $NowUtc) { ([datetime]$NowUtc).ToUniversalTime() } else { [DateTime]::UtcNow }
@@ -312,8 +319,9 @@ function Invoke-TestSlotAsk {
         $entries = @(Invoke-TestSlotPurge -Store $Store -NowUtc $now)
         $mine = @($entries | Where-Object { ($_.state -eq "waiting" -or $_.state -eq "granted") -and $_.role -eq $role -and $_.task -eq $Task -and (@($_.kinds) -join ",") -eq $key }) | Select-Object -First 1
         if ($null -ne $mine -and $mine.state -eq "granted") {
-            return [pscustomobject]@{ Decision = "ONAY"; Ticket = $mine.ticket; Position = 0; Line = "ONAY $($mine.ticket)" }
+            return [pscustomobject]@{ Decision = "ONAY"; Ticket = $mine.ticket; Position = 0; Line = "ONAY $($mine.ticket)"; Fresh = $false; Entry = $mine }
         }
+        $fresh = ($null -eq $mine)
         if ($null -eq $mine) {
             $seq = 1
             foreach ($e in $entries) { if ([long]$e.seq -ge $seq) { $seq = [long]$e.seq + 1 } }
@@ -321,7 +329,7 @@ function Invoke-TestSlotAsk {
                 ticket = "ts-" + [guid]::NewGuid().ToString("N").Substring(0, 12)
                 kinds = @($kinds); role = $role; task = $Task; what = $What; state = "waiting"; seq = $seq
                 first_asked = (ConvertTo-TestSlotTime $now); last_asked = (ConvertTo-TestSlotTime $now)
-                granted_at = ""; started_at = ""; holder_pid = 0; holder_start = ""
+                granted_at = ""; started_at = ""; holder_pid = 0; holder_start = ""; seat = $Seat
             }
             $entries = @($entries) + @($mine)
         }
@@ -334,7 +342,7 @@ function Invoke-TestSlotAsk {
             $mine.state = "granted"
             $mine.granted_at = ConvertTo-TestSlotTime $now
             Write-TestSlotEntry -Store $Store -Entry $mine
-            return [pscustomobject]@{ Decision = "ONAY"; Ticket = $mine.ticket; Position = 0; Line = "ONAY $($mine.ticket)" }
+            return [pscustomobject]@{ Decision = "ONAY"; Ticket = $mine.ticket; Position = 0; Line = "ONAY $($mine.ticket)"; Fresh = $true; Entry = $mine }
         }
         Write-TestSlotEntry -Store $Store -Entry $mine
         $holders = @($decision.Holders | ForEach-Object { "{0} [{1}] {2}" -f (Format-TestSlotWho $_), (@($_.kinds) -join ","), (Format-TestSlotSince -Time $(if ($_.started_at) { $_.started_at } else { $_.granted_at }) -NowUtc $now) })
@@ -344,6 +352,7 @@ function Invoke-TestSlotAsk {
         return [pscustomobject]@{
             Decision = "BEKLE"; Ticket = $mine.ticket; Position = $decision.Position
             Line = ("BEKLE {0} | {1} | {2}" -f $decision.Position, $holderText, $aheadText)
+            Fresh = $fresh; Entry = $mine
         }
     }
     finally { $lock.Dispose() }
@@ -386,7 +395,9 @@ function Complete-TestSlotRun {
         [Parameter(Mandatory = $true)][string]$Store,
         [Parameter(Mandatory = $true)][string]$Ticket,
         [string]$ExitCode = "0",
-        [Nullable[datetime]]$NowUtc = $null
+        [Nullable[datetime]]$NowUtc = $null,
+        # Returns the freed entry (for the board's note); nothing without it.
+        [switch]$PassThru
     )
     $now = if ($null -ne $NowUtc) { ([datetime]$NowUtc).ToUniversalTime() } else { [DateTime]::UtcNow }
     $lock = Enter-TestSlotLock -Store $Store
@@ -395,6 +406,7 @@ function Complete-TestSlotRun {
         if ($null -eq $e) { return }
         Remove-TestSlotEntryFile -Store $Store -Ticket $Ticket
         if ($e.state -eq "running") { Write-TestSlotLogLine -Store $Store -Entry $e -NowUtc $now -Exit $ExitCode }
+        if ($PassThru) { return $e }
     }
     finally { $lock.Dispose() }
 }
@@ -471,4 +483,184 @@ function Wait-TestSlotGrant {
         }
         Start-Sleep -Seconds ([math]::Max(1, $PollSeconds))
     }
+}
+
+# ---------------------------------------------------------------------- the board (the office sees the line)
+
+$script:TestSlotKindTr = @{ database = "veritabanı"; desktop = "masaüstü"; heavy = "ağır" }
+$script:TestSlotNoteTextMax = 280
+$script:TestSlotNoteWhatMax = 100
+$script:TestSlotNamesMax = 20
+$script:TestSlotEstimateRuns = 5
+# The board's own patterns (services/api/app/team/board.py SEAT_PATTERN, TASK_PATTERN).
+$script:TestSlotSeatPattern = '^(?:lead|researcher|integrator|inspector(?:-[1-9])?|worker-[1-9])$'
+$script:TestSlotTaskPattern = '^[a-z0-9][a-z0-9-]{2,63}$'
+
+function Get-TestSlotSeatName {
+    <# A seat or a role in plain Turkish: worker-2 -> "Çalışan 2", gate -> "Kapı". #>
+    param([string]$Name)
+    if ($Name -match '^worker-(\d)$') { return "Çalışan " + $Matches[1] }
+    if ($Name -match '^inspector-(\d)$') { return "Denetleyici " + $Matches[1] }
+    switch ($Name) {
+        "inspector" { return "Denetleyici" }
+        "lead" { return "Proje Yöneticisi" }
+        "gate" { return "Kapı" }
+        "researcher" { return "Araştırmacı" }
+        "integrator" { return "Entegratör" }
+        "worker" { return "Çalışan" }
+    }
+    return $Name
+}
+
+function Get-TestSlotEntryName {
+    <# Who holds or waits, as the board names it: the entry's seat, else its role. #>
+    param($Entry)
+    $seat = if ($Entry.PSObject.Properties["seat"]) { [string]$Entry.seat } else { "" }
+    $name = if ($seat) { $seat } else { ([string]$Entry.role).ToLowerInvariant() }
+    if ($name -notmatch '^[a-z][a-z0-9-]{0,31}$') { $name = "test" }
+    return $name
+}
+
+function Get-TestSlotKindText {
+    param($Entry)
+    return ((@($Entry.kinds) | ForEach-Object { $script:TestSlotKindTr[[string]$_] }) -join ", ")
+}
+
+function Get-TestSlotWhatText {
+    param($Entry)
+    $what = ([string]$Entry.what -replace '\s+', ' ').Trim()
+    if ($what.Length -gt $script:TestSlotNoteWhatMax) { $what = $what.Substring(0, $script:TestSlotNoteWhatMax - 1) + "…" }
+    return $what
+}
+
+function Get-TestSlotEstimateMinutes {
+    <# The mean of the last runs of the same command (else of the same kinds) in runs.log, in
+       whole minutes; 0 when the log knows none. Read-only, decides nothing. #>
+    param([string]$Store, $Entry)
+    $path = Get-TestSlotLogPath -Store $Store
+    if (-not (Test-Path -LiteralPath $path)) { return 0 }
+    $runs = @()
+    try { $lines = [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8) } catch { return 0 }
+    foreach ($line in $lines) {
+        $f = @{}
+        foreach ($part in ($line -split "`t")) { $kv = $part -split "=", 2; if ($kv.Count -eq 2) { $f[$kv[0]] = $kv[1] } }
+        if (-not $f.ContainsKey("ran_s") -or $f["exit"] -eq "holder-gone" -or $f["exit"] -eq "released") { continue }
+        $runs += [pscustomobject]@{ What = [string]$f["what"]; Kinds = [string]$f["kinds"]; Ran = [int]$f["ran_s"] }
+    }
+    $same = @($runs | Where-Object { $_.What -eq [string]$Entry.what })
+    if ($same.Count -eq 0) { $same = @($runs | Where-Object { $_.Kinds -eq (@($Entry.kinds) -join ",") }) }
+    if ($same.Count -eq 0) { return 0 }
+    $last = @($same | Select-Object -Last $script:TestSlotEstimateRuns)
+    $mean = ($last | Measure-Object -Property Ran -Average).Average
+    return [int][math]::Max(1, [math]::Ceiling($mean / 60))
+}
+
+function Get-TestSlotNoteSeat {
+    <# The seat a note is written under: the entry's seat; the gate writes as the lead; a role
+       that is a seat (inspector, lead, ...) as itself; else none (no note). #>
+    param($Entry)
+    $seat = if ($Entry.PSObject.Properties["seat"]) { [string]$Entry.seat } else { "" }
+    if ($seat -match $script:TestSlotSeatPattern) { return $seat }
+    $role = ([string]$Entry.role).ToLowerInvariant()
+    if ($role -eq "gate") { return "lead" }
+    if ($role -match $script:TestSlotSeatPattern) { return $role }
+    return ""
+}
+
+function New-TestSlotBoardNote {
+    <# One 'bilgi' note for a decision the queue already made: take (ONAY), wait (a first BEKLE)
+       or free (a run ended). Pure over the entries it is given; $null when the entry has no
+       seat or task the board knows. #>
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("take", "wait", "free")][string]$Event,
+        [Parameter(Mandatory = $true)]$Entry,
+        [AllowEmptyCollection()][object[]]$Entries = @(),
+        [string]$Store = "",
+        [string]$ExitCode = "0",
+        [Nullable[datetime]]$NowUtc = $null
+    )
+    $seat = Get-TestSlotNoteSeat -Entry $Entry
+    if (-not $seat -or [string]$Entry.task -notmatch $script:TestSlotTaskPattern) { return $null }
+    $now = if ($null -ne $NowUtc) { ([datetime]$NowUtc).ToUniversalTime() } else { [DateTime]::UtcNow }
+    $name = Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $Entry)
+    $what = Get-TestSlotWhatText -Entry $Entry
+    $kinds = Get-TestSlotKindText -Entry $Entry
+    $holding = @(@($Entries) | Where-Object { ($_.state -eq "granted" -or $_.state -eq "running") -and $_.ticket -ne $(if ($Event -eq "free") { $Entry.ticket } else { "" }) } | Sort-Object -Property @{ Expression = { [long]$_.seq } })
+    $line = @(Get-TestSlotQueue -Entries @($Entries))
+    $slot = [ordered]@{
+        state   = $Event
+        kinds   = @($Entry.kinds | ForEach-Object { [string]$_ })
+        holders = @($holding | ForEach-Object { Get-TestSlotEntryName -Entry $_ } | Select-Object -First $script:TestSlotNamesMax)
+        waiting = @($line | ForEach-Object { Get-TestSlotEntryName -Entry $_ } | Select-Object -First $script:TestSlotNamesMax)
+    }
+    if ($Event -eq "take") {
+        $estimate = if ($Store) { Get-TestSlotEstimateMinutes -Store $Store -Entry $Entry } else { 0 }
+        $tail = if ($estimate -gt 0) { "tahmini $estimate dk" } else { "süre tahmini yok" }
+        $text = "{0}: {1} başlatıyorum ({2}), {3}" -f $name, $what, $kinds, $tail
+        if ($estimate -gt 0) { $slot.estimate_min = [int]$estimate }
+    }
+    elseif ($Event -eq "wait") {
+        $mine = @($Entry.kinds)
+        $before = @($holding | Where-Object { $hk = @($_.kinds); @($mine | Where-Object { $hk -contains $_ }).Count -gt 0 })
+        foreach ($w in $line) {
+            if ($w.ticket -eq $Entry.ticket) { break }
+            $wk = @($w.kinds)
+            if (@($mine | Where-Object { $wk -contains $_ }).Count -gt 0) { $before += $w }
+        }
+        $names = @($before | ForEach-Object { Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $_) } | Select-Object -Unique)
+        $position = 1
+        foreach ($w in $line) { if ($w.ticket -eq $Entry.ticket) { break }; $position++ }
+        $ahead = if ($names.Count -gt 0) { "önümde " + ($names -join ", ") } else { "önümde kimse yok" }
+        $text = "{0}: test sırası bekliyorum ({1}: {2}), sıram {3}, {4}" -f $name, $kinds, $what, $position, $ahead
+    }
+    else {
+        $started = ConvertFrom-TestSlotTime ([string]$Entry.started_at)
+        $ran = if ($null -ne $started) { [int][math]::Max(0, [math]::Round(($now - $started).TotalMinutes)) } else { 0 }
+        $next = @($line | Select-Object -First 1)
+        $after = if ($next.Count -gt 0) { "sıradaki: " + (Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $next[0])) } else { "sırada kimse yok" }
+        $text = "{0}: {1} bitti ({2} dk, çıkış {3}); {4}" -f $name, $what, $ran, $ExitCode, $after
+    }
+    if ($text.Length -gt $script:TestSlotNoteTextMax) { $text = $text.Substring(0, $script:TestSlotNoteTextMax - 1) + "…" }
+    return [pscustomobject]@{ seat = $seat; task = [string]$Entry.task; text = $text; slot = $slot }
+}
+
+function Publish-TestSlotBoardNote {
+    <# Sends one note with -Sender; never throws, never retries: $true when it was sent. The
+       board is a report of the queue, never a part of its decision. #>
+    param($Note, [scriptblock]$Sender)
+    if ($null -eq $Note -or $null -eq $Sender) { return $false }
+    try { [void](& $Sender $Note); return $true } catch { return $false }
+}
+
+function Get-TestSlotBoardEntries {
+    <# The entries as they are now, read without the lock (a report never waits on a decision). #>
+    param([string]$Store)
+    try { return @(Get-TestSlotEntries -Store $Store) } catch { return @() }
+}
+
+function Get-TestSlotWhoText {
+    <# `who`: who tests what right now and the waiting line, by seat name, in Turkish. #>
+    param([Parameter(Mandatory = $true)][string]$Store, [Nullable[datetime]]$NowUtc = $null)
+    $now = if ($null -ne $NowUtc) { ([datetime]$NowUtc).ToUniversalTime() } else { [DateTime]::UtcNow }
+    $lock = Enter-TestSlotLock -Store $Store
+    try { $entries = @(Invoke-TestSlotPurge -Store $Store -NowUtc $now) }
+    finally { $lock.Dispose() }
+    $held = @($entries | Where-Object { $_.state -eq "granted" -or $_.state -eq "running" } | Sort-Object -Property @{ Expression = { [long]$_.seq } })
+    $line = @(Get-TestSlotQueue -Entries $entries)
+    $lines = New-Object System.Collections.ArrayList
+    if ($held.Count -eq 0 -and $line.Count -eq 0) { [void]$lines.Add("Şu an test yapan yok, sırada kimse yok."); return @($lines) }
+    [void]$lines.Add(("Şu an test yapan: {0}, sırada: {1}" -f $held.Count, $line.Count))
+    foreach ($e in $held) {
+        $since = if ($e.started_at) { $e.started_at } else { $e.granted_at }
+        $at = ConvertFrom-TestSlotTime ([string]$since)
+        $min = if ($null -ne $at) { [int][math]::Max(0, [math]::Floor(($now - $at).TotalMinutes)) } else { 0 }
+        $state = if ($e.state -eq "running") { "" } else { ", onay aldı, henüz başlamadı" }
+        [void]$lines.Add(("  TEST    {0} - {1} ({2}), {3} dk{4}" -f (Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $e)), (Get-TestSlotWhatText -Entry $e), (Get-TestSlotKindText -Entry $e), $min, $state))
+    }
+    $i = 0
+    foreach ($w in $line) {
+        $i++
+        [void]$lines.Add(("  SIRA {0}  {1} - {2} ({3})" -f $i, (Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $w)), (Get-TestSlotWhatText -Entry $w), (Get-TestSlotKindText -Entry $w)))
+    }
+    return @($lines)
 }

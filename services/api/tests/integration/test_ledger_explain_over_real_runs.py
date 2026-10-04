@@ -10,17 +10,107 @@ say it found no record. Either way a second backfill records nothing new.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 import pytest
 
 from app.artifacts.runtime import build_artifact_context
 from app.config import Settings
 from app.explain.classify import classify
-from app.explain.engine import LABEL_FACT, LABEL_UNCERTAINTY, NO_EVIDENCE_TR
+from app.explain.engine import (
+    LABEL_FACT,
+    LABEL_UNCERTAINTY,
+    MEANINGFUL_CLASSES,
+    NO_EVIDENCE_TR,
+    EventView,
+    owner_relevance,
+)
 from app.explain.service import explain_to_briefing
 from app.narration.models import NarrationSession
 from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
+
+
+#: "Son ne yaptın" reads the last seven days (app/explain/classify.py: QUERY_LAST_ACTIVITY)
+#: and the newest hundred events of them (engine.explain), newest first by occurred_at
+#: then recorded_at (app/ledger/service.py: query) - the same rows GET /v1/ledger/events
+#: returns for the same window and limit.
+LAST_ACTIVITY_WINDOW = timedelta(days=7)
+LAST_ACTIVITY_LIMIT = 100
+#: Events that annotate another event (a qualification verdict, a backfill run, a
+#: briefing's queueing): never an activity of their own.
+ANNOTATION_EVENT_TYPES = frozenset(
+    {"research.qualified", "ledger.backfill", "briefing.queued", "briefing.delivered"}
+)
+
+
+def _at(event: dict[str, Any], key: str) -> datetime:
+    return datetime.fromisoformat(str(event[key]).replace("Z", "+00:00"))
+
+
+def _order_key(event: dict[str, Any]) -> tuple[datetime, datetime]:
+    return (_at(event, "occurred_at"), _at(event, "recorded_at"))
+
+
+def expected_latest_activity(
+    events: list[dict[str, Any]], *, now: datetime
+) -> list[dict[str, Any]]:
+    """The events the engine may answer "son ne yaptın" with, by its documented rule.
+
+    The rule (ADR-0214 gate red of 2026-10-04): within the seven-day window, without
+    annotations, OWNER RELEVANCE first - voice/ledger/briefing bookkeeping and browser
+    telemetry never lead while a task, change, failure, security or evolution event is
+    there - then the newest FINISHED one, else the newest of that pool. Reading the
+    newest finished row of the whole ledger instead was the gate's order-dependent red:
+    an earlier integration test that left a telemetry or meta row newest made the test
+    expect "Efendim, en son ..." while the engine rightly answered with the research.
+
+    Returns every event tied for the lead (same occurred_at AND recorded_at): the ledger
+    orders no further, so either may be the one the engine read. Empty means "no record".
+    """
+    since = now - LAST_ACTIVITY_WINDOW
+    window = sorted(
+        (e for e in events if _at(e, "occurred_at") >= since), key=_order_key, reverse=True
+    )[:LAST_ACTIVITY_LIMIT]
+    activities = [e for e in window if e["event_type"] not in ANNOTATION_EVENT_TYPES]
+    meaningful = [e for e in activities if owner_relevance(_view(e)) in MEANINGFUL_CLASSES]
+    pool = meaningful or activities
+    finished = [e for e in pool if e["status"] in ("completed", "failed")]
+    candidates = finished or pool
+    if not candidates:
+        return []
+    lead = _order_key(candidates[0])
+    return [e for e in candidates if _order_key(e) == lead]
+
+
+def _view(event: dict[str, Any]) -> EventView:
+    return EventView(
+        event_id=str(event["event_id"]),
+        occurred_at=_at(event, "occurred_at"),
+        event_type=event["event_type"],
+        subsystem=event["subsystem"],
+        status=event["status"],
+        severity=event["severity"],
+        factual_summary=event.get("factual_summary") or "",
+    )
+
+
+def answered_event(briefing: Any, events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The activity the briefing answered with: the first activity-event reference of the
+    executive sentences, in speaking order, that is an activity of its own.
+
+    Not executive[0] alone: a qualified research opens with the qualification sentence,
+    whose evidence is the research.qualified VERDICT (an annotation); the research it
+    answered stands on the next sentence (engine._research_executive).
+    """
+    by_id = {str(e["event_id"]): e for e in events if e["event_type"] not in ANNOTATION_EVENT_TYPES}
+    refs = (r for s in briefing.executive for r in s.evidence_refs)
+    return next(
+        (by_id[r["ref"]] for r in refs if r.get("kind") == "activity_event" and r["ref"] in by_id),
+        None,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -42,24 +132,18 @@ def test_backfill_is_idempotent_and_the_briefing_matches_the_ledger(settings: Se
             or not (report["examined"])
         )
 
-        # the engine answers "son ne yaptın" with the newest FINISHED activity, skipping
-        # annotation events (a qualification verdict, a backfill run) - derive the
-        # expectation with the same rule from the same rows
-        events = client.get("/v1/ledger/events", params={"limit": 200}).json()["events"]
-        annotations = {
-            "research.qualified",
-            "ledger.backfill",
-            "briefing.queued",
-            "briefing.delivered",
-        }
-        latest = next(
-            (
-                e
-                for e in events
-                if e["status"] in ("completed", "failed") and e["event_type"] not in annotations
-            ),
-            None,
-        )
+        # the engine answers "son ne yaptın" with the newest FINISHED owner-relevant
+        # activity of the week - derive the expectation with that rule from the same
+        # window of rows (see expected_latest_activity)
+        now = datetime.now(UTC)
+        events = client.get(
+            "/v1/ledger/events",
+            params={
+                "since": (now - LAST_ACTIVITY_WINDOW).isoformat(),
+                "limit": LAST_ACTIVITY_LIMIT,
+            },
+        ).json()["events"]
+        leaders = expected_latest_activity(events, now=now)
         policy = client.get("/v1/ledger/policy").json()
         assert policy["ledger_version"] >= 1
         assert "research.completed" in policy["event_types"]
@@ -75,6 +159,16 @@ def test_backfill_is_idempotent_and_the_briefing_matches_the_ledger(settings: Se
         assert classify("Son yaptıklarını anlat").kind == briefing.query.kind
         narration = db.get(NarrationSession, record.narration_session_id)
         assert narration is not None and narration.artifact_id == record.artifact_id
+
+    # on a timestamp tie the engine read one of the leaders; judge it by the one it read
+    answered = answered_event(briefing, events)
+    latest = answered if answered in leaders else None
+    if leaders:
+        assert latest is not None, (
+            answered and answered["event_id"],
+            [e["event_id"] for e in leaders],
+            record.speech,
+        )
 
     if latest is not None and latest["event_type"] == "research.failed":
         # A failed research is the newest activity (a workflow integration test that ran

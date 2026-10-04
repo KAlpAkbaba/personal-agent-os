@@ -67,6 +67,10 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     # misheard-ledger-store: the notebook's 24-hour purge. Advisory like the loops above -
     # a 30-day promise nothing sweeps is a promise kept on paper, so the loop is visible.
     "misheard_purge",
+    # watch-engine: the watch runner ("skipped" while ``watch_runner_enabled`` is off) and the
+    # readings' 30-day purge. Advisory like the loops above.
+    "watch_runner",
+    "watch_purge",
     # B07 req 679: the retention POLICY itself, readable. A policy nobody can see is a
     # policy nobody can check.
     "audit_retention",
@@ -134,6 +138,8 @@ def test_health_ok_shape(monkeypatch) -> None:
             "research_tool_call_announcer",
             "selfmodel_refresher",
             "misheard_purge",
+            "watch_runner",
+            "watch_purge",
             "audit_retention",
             "backup",
         ):

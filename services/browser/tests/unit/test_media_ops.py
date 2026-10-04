@@ -459,7 +459,11 @@ class TestSessionOpen:
         assert result["profile"] == "alarm"
         assert result["session_kind"] == "media"
         backend = recording_backend.instances[-1]
-        assert backend.kwargs["browser_args"] == [media.AUTOPLAY_POLICY_ARG]
+        # The autoplay flag, then the egress proxy every managed browser goes out through.
+        assert backend.kwargs["browser_args"] == [
+            media.AUTOPLAY_POLICY_ARG,
+            *worker._egress_proxy.chromium_args(),
+        ]
         assert backend.kwargs["profile_dir"] == worker._alarm_profile_dir
         assert backend.kwargs["profile_dir"] != worker._profile_dir
         # A visible window even though this worker was started --headless.
@@ -474,7 +478,8 @@ class TestSessionOpen:
         await worker._print_hello()
         await worker._execute("browser.session_open", {"session_id": "task-1"})
         backend = recording_backend.instances[-1]
-        assert backend.kwargs["browser_args"] is None
+        # No media flag - only the egress proxy every managed browser goes out through.
+        assert backend.kwargs["browser_args"] == worker._egress_proxy.chromium_args()
         assert backend.kwargs["profile_dir"] == worker._profile_dir
         assert backend.kwargs["headless"] is True
 
