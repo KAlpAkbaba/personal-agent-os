@@ -106,6 +106,12 @@ web 200) -> seed: owner session valid -> deploy `eac453fc` (origin/main) exit 0 
 ok -> deploy back `6a21294c` exit 0 in 293 s, health ok -> seed again: valid. A probe row written
 before the first deploy and the owner sessions (2) were still there after both moves. docker
 stats after: api 305 MiB, minio 239, postgres 128, temporal 99, web 39, redis 4 (~0.8 GiB).
+Dev reset, 11:10 UTC, ticket `ts-441ebe445f80` [database], right after the lead's gate had run
+"Dev stack up" + alembic + the API integration suite on the dev stack: `docker compose` (project
+`pagentos`) down -> staging api 200 while dev was gone -> `scripts/dev-up.ps1` -> dev postgres and
+temporal restarted (11:10:52Z/11:10:57Z); staging's postgres/temporal kept their 07:09Z start,
+the probe row and the 3 owner sessions stayed, health ok on `6a21294c`. Volumes are disjoint:
+`pagentos-staging-{postgres,minio,identity}` vs `pagentos_pagentos-*-data`.
 
 ## Release (optional, not wired here)
 
