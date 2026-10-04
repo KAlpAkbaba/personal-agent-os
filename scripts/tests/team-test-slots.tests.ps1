@@ -645,13 +645,27 @@ Test-Case "15 board down: a closed port, a missing token file or a refusing boar
     Assert-True (($script:sent -eq 1) -and ($ok -eq $false)) "a sender that throws is swallowed: sent $script:sent, ok $ok"
 }
 
+function Invoke-SlotUtf8 {
+    <# test-slot.ps1 with its stdout read as UTF-8 (the verbs that write UTF-8: who). #>
+    param([string[]]$Arguments)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo $ps5
+    $psi.Arguments = ConvertTo-NativeArgumentLine -Arguments (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $slotScript) + $Arguments)
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $child = [pscustomobject]@{ Process = $p; Out = $p.StandardOutput.ReadToEndAsync(); Err = $p.StandardError.ReadToEndAsync() }
+    [void]$script:Children.Add($child)
+    return (Wait-Child -Child $child)
+}
+
 Test-Case "16 who: the holder and the line in Turkish, by seat name, an agent can ask before it plans" {
     $s = New-Store
     $h = Get-Ticket (Ask-As -Store $s -Seat "worker-2" -Task "who-holder" -What "birim testleri") "holder"
     [void](Start-TestSlotRun -Store $s -Ticket $h -HolderPid $PID)
     Assert-Bekle (Ask-As -Store $s -Seat "worker-3" -Task "who-waiter" -What "entegrasyon testleri" -Kind "database,heavy") 1 "waiter"
     Assert-Bekle (Invoke-Slot -Arguments @("ask", "-Kind", "database", "-Task", "who-gate", "-Role", "gate", "-What", "kapı", "-Store", $s)) 1 "the gate goes first"
-    $r = Invoke-Slot -Arguments @("who", "-Store", $s)
+    $r = Invoke-SlotUtf8 -Arguments @("who", "-Store", $s)
     Assert-Equal 0 $r.Code "who exits 0: $($r.Err)"
     $lines = @($r.Out.Trim() -split "`r?`n")
     Assert-True ($lines[0] -match '^Şu an test yapan: 1, sırada: 2') "the head line: $($r.Out)"
@@ -659,7 +673,7 @@ Test-Case "16 who: the holder and the line in Turkish, by seat name, an agent ca
     Assert-True ($r.Out -match '(?m)^  SIRA 1  Kapı - kapı \(veritabanı\)') "the gate first: $($r.Out)"
     Assert-True ($r.Out -match '(?m)^  SIRA 2  Çalışan 3 - entegrasyon testleri \(veritabanı, ağır\)') "then worker-3: $($r.Out)"
     Complete-TestSlotRun -Store $s -Ticket $h -ExitCode 0
-    $empty = Invoke-Slot -Arguments @("who", "-Store", (New-Store))
+    $empty = Invoke-SlotUtf8 -Arguments @("who", "-Store", (New-Store))
     Assert-True ($empty.Out -match 'Şu an test yapan yok, sırada kimse yok\.') "an empty line: $($empty.Out)"
 }
 

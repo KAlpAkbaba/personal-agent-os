@@ -17,10 +17,19 @@
               command ends - and also when this wrapper is killed (the slot belongs to this
               process: pid and start time). Nothing is killed, and no run is refused for being long.
       status  The queue in Turkish: who runs what since when, who waits.
+      who     Short, by seat name: who is testing what right now and the waiting line -
+              ask it before you plan a heavy run.
       release -Ticket <ticket>   gives a ticket (or a place in line) back.
 
     Common: -Store <folder> (default %LOCALAPPDATA%\PagentOS\test-slots), -DryRun (validates
-    the request and prints DRYRUN, touches nothing), -NowUtc <ISO time> (tests only).
+    the request and prints DRYRUN, touches nothing), -NowUtc <ISO time> (tests only), -Seat
+    <your seat on the team's board> (default $env:PAGENTOS_TEAM_SEAT).
+
+    The team's board (scripts/team/board.ps1) hears the line: a take, a first BEKLE and a freed
+    slot are one 'bilgi' note each ("Çalışan 2: birim testleri başlatıyorum (ağır), tahmini 6
+    dk"), sent AFTER the queue decided, to $env:PAGENTOS_TEAM_URL with the token file of
+    $env:PAGENTOS_TEAM_TOKEN_FILE. No address, no token, a board that is down: no note, and the
+    answer and the exit code are the same.
 
     Exit codes: 0 ONAY / done; 3 BEKLE; 2 a bad request; 4 the ticket is unknown or void
     (ask again); 5 the queue itself failed. `run` returns the COMMAND's exit code once the
@@ -40,6 +49,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")
+. (Join-Path $repoRoot "scripts\lib\TeamBoard.ps1")
 
 function Write-Problem {
     param([string]$Text)
@@ -54,7 +64,7 @@ function Exit-BadRequest {
 }
 
 # ---------------------------------------------------------------------- arguments
-$valueOptions = @("kind", "task", "role", "what", "ticket", "store", "nowutc")
+$valueOptions = @("kind", "task", "role", "what", "ticket", "store", "nowutc", "seat")
 $opts = @{}
 $verb = $null
 $dryRun = $false
@@ -83,7 +93,7 @@ for ($i = 0; $i -lt @($all).Count; $i++) {
     foreach ($x in @($a)) { [void]$command.Add([string]$x) }
 }
 
-if (-not $verb) { Exit-BadRequest "no verb (ask, run, status, release)" }
+if (-not $verb) { Exit-BadRequest "no verb (ask, run, status, who, release)" }
 $verb = $verb.ToLowerInvariant()
 $store = if ($opts.ContainsKey("store") -and $opts["store"]) { [string]$opts["store"] } else { Get-TestSlotDefaultStore }
 $now = $null
@@ -101,6 +111,34 @@ function Get-Opt {
     return $null
 }
 
+function Get-BoardSender {
+    <# The board's sender, or $null (no address or no token file: no notes). Short timeout: a
+       slow board costs a run seconds, never its slot. #>
+    if (-not $env:PAGENTOS_TEAM_URL -or -not $env:PAGENTOS_TEAM_TOKEN_FILE) { return $null }
+    try { $script:BoardClient = New-TeamBoardClient -Url $env:PAGENTOS_TEAM_URL -TokenFile $env:PAGENTOS_TEAM_TOKEN_FILE -TimeoutSec 5 }
+    catch { return $null }
+    return {
+        param($Note)
+        $body = New-TeamBoardNoteBody -Seat $Note.seat -Task $Note.task -Kind "bilgi" -Text $Note.text -Slot $Note.slot
+        [void](Send-TeamBoardNote -Client $script:BoardClient -Body $body)
+    }
+}
+
+function Send-BoardEvent {
+    <# After the decision: one note for it, built from the entries as they are now. Never throws. #>
+    param([string]$Event, $Entry, [string]$ExitCode = "0")
+    try {
+        $sender = Get-BoardSender
+        if ($null -eq $sender) { return }
+        $note = New-TestSlotBoardNote -Event $Event -Entry $Entry -Entries @(Get-TestSlotBoardEntries -Store $store) -Store $store -ExitCode $ExitCode
+        [void](Publish-TestSlotBoardNote -Note $note -Sender $sender)
+    }
+    catch { }
+}
+
+$seat = [string](Get-Opt "seat")
+if (-not $seat -and $env:PAGENTOS_TEAM_SEAT) { $seat = [string]$env:PAGENTOS_TEAM_SEAT }
+
 try {
     switch ($verb) {
         "ask" {
@@ -115,8 +153,9 @@ try {
                 Write-Output ("DRYRUN ask kinds={0} task={1} role={2} what={3}" -f ($kinds -join ","), $task, $role, $what)
                 exit 0
             }
-            $r = Invoke-TestSlotAsk -Store $store -Kind $kinds -Task $task -Role $role -What $what -NowUtc $now
+            $r = Invoke-TestSlotAsk -Store $store -Kind $kinds -Task $task -Role $role -What $what -NowUtc $now -Seat $seat
             Write-Output $r.Line
+            if ($r.Fresh) { Send-BoardEvent -Event $(if ($r.Decision -eq "ONAY") { "take" } else { "wait" }) -Entry $r.Entry }
             if ($r.Decision -eq "ONAY") { exit 0 }
             exit 3
         }
@@ -157,12 +196,19 @@ try {
                 }
             }
             finally {
-                Complete-TestSlotRun -Store $store -Ticket $ticket -ExitCode ([string]$code)
+                $freed = Complete-TestSlotRun -Store $store -Ticket $ticket -ExitCode ([string]$code) -PassThru
+                if ($null -ne $freed) { Send-BoardEvent -Event "free" -Entry $freed -ExitCode ([string]$code) }
             }
             exit $code
         }
         "status" {
             foreach ($line in @(Get-TestSlotStatusText -Store $store -NowUtc $now)) { Write-Output $line }
+            exit 0
+        }
+        "who" {
+            # Stdout as UTF-8: an agent's Bash reads the Turkish names whole (board.ps1 does the same).
+            try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+            foreach ($line in @(Get-TestSlotWhoText -Store $store -NowUtc $now)) { Write-Output $line }
             exit 0
         }
         "release" {
