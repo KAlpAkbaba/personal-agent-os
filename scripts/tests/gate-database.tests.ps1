@@ -349,6 +349,9 @@ function Invoke-GateBlock {
     . ([scriptblock]::Create((Get-GateFunctionText "Enter-GateTestSlot")))
     . ([scriptblock]::Create((Get-GateFunctionText "Exit-GateTestSlot")))
     $NoTestSlots = $true
+    # The gate's -OnlyStep parameter: empty, every step of the block runs (StrictMode would
+    # otherwise stop Invoke-Step on the unset variable before the block makes its database).
+    $OnlyStep = @()
     $block = [scriptblock]::Create((Get-GateDatabaseBlockText))
     $printed = Invoke-Captured { . $block }
     $seen = @()
