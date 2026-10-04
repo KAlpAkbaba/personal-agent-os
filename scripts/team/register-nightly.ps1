@@ -101,7 +101,9 @@ $plan = Get-NightlyPlan -RepoRoot $repoRoot -MaxUsd $MaxUsd -MaxParallel $MaxPar
     -CycleMinutes $CycleMinutes -LocalZone ([System.TimeZoneInfo]::Local) -QueueUrl $QueueUrl -QueueToken $QueueToken
 if ($EveryMinutes -gt 0) {
     $hours = $ResearchEveryHours.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
-    $plan.Arguments += " -DailyId -ResearchEveryHours $hours"
+    # team-engine (continuous-team-loop): every N minutes the tick is the loop's WATCHDOG only -
+    # it starts the one continuous loop when none is alive and never waits for it.
+    $plan.Arguments += " -DailyId -ResearchEveryHours $hours -Watchdog"
 }
 if ($Base) {
     if ($Base -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$') { throw "-Base is a branch name" }

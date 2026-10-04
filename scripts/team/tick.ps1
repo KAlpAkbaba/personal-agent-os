@@ -34,7 +34,16 @@ param(
     # Where the tick writes what it stopped (default team/logs/tick.log, git-ignored), and the
     # folder of the cycle reports that get an orphan line (default team/reports).
     [string]$LogPath = "",
-    [string]$ReportsRoot = ""
+    [string]$ReportsRoot = "",
+    # The loop's watchdog (team-engine, the owner's rule of 2026-10-03: no cycles, one flow):
+    # the cycle runs as ONE continuous loop; the tick never waits for it. A live loop (its
+    # team/logs/loop.json says it runs, its pid is alive, its heartbeat is fresh) -> the feeder is
+    # started detached and the tick exits at once; no live loop -> the feeder runs, then the loop
+    # is started detached with -Continuous, and the tick exits while it runs.
+    [switch]$Watchdog,
+    # The loop's heartbeat file (default team/logs/loop.json) and how old a heartbeat may be.
+    [string]$LoopFile = "",
+    [double]$StaleMinutes = 10
 )
 
 Set-StrictMode -Version Latest
@@ -256,6 +265,23 @@ if ($QueueUrl) {
     $store = @("-QueueUrl", $QueueUrl, "-QueueToken", "`"$QueueToken`"")
 }
 
+if ($Watchdog) {
+    . (Join-Path $repoRoot "scripts\lib\TeamQueue.ps1")
+    if (-not $LoopFile) { $LoopFile = Join-Path $repoRoot "team\logs\loop.json" }
+    $alive = Test-TeamLoopAlive -Path $LoopFile -StaleMinutes $StaleMinutes
+    if ($alive.Alive) {
+        # 0x800710E0 never again: the tick does not wait for the loop, nor for the feeder.
+        if (-not $NoFeed) {
+            $feedAll = (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$feedScript`"") + $store) -join " "
+            $feeder = Start-Process -FilePath $powershell -ArgumentList $feedAll -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru
+            Write-Host "tick: the feeder was started (pid $($feeder.Id)); not waited for"
+        }
+        Write-Host "tick: a loop runs ($($alive.Why)); the watchdog has nothing to do"
+        exit 0
+    }
+    Write-TickLog "watchdog: no live loop ($($alive.Why)); one is started"
+}
+
 if (-not $NoFeed) {
     $feedExit = -1
     try { $feedExit = Invoke-Script -Path $feedScript -Arguments $store -Label "feeder" }
@@ -277,6 +303,16 @@ if ($Base) {
     $cycleArguments += @("-Base", $Base)
 }
 $cycleArguments += $store
+
+if ($Watchdog) {
+    # Never Invoke-Script for the loop: it is not waited for, and it is not in the tick's job (the
+    # job's leftovers are stopped when the tick's script ends - the loop must outlive the tick).
+    $cycleArguments += "-Continuous"
+    $all = (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$cycleScript`"") + $cycleArguments) -join " "
+    $loop = Start-Process -FilePath $powershell -ArgumentList $all -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru
+    Write-TickLog "watchdog: the loop was started (pid $($loop.Id))"
+    exit 0
+}
 
 # cycle.ps1 -DailyId names the cycle by the day it starts on; without it the tick cannot know the report.
 $cycleId = if ($DailyId) { "d" + (Get-Date).ToString("yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture) } else { "" }

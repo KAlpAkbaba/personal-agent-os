@@ -1049,6 +1049,8 @@ Test-Case "the scheduled task runs the tick: the feeder first, then the cycle - 
         "-TaskName", $probeName, "-Machine", "MAIL", "-HomeMachine", "MAIL")
     Assert-True -Condition ($result.StdOut -match "scripts\\team\\tick\.ps1") -Because "the registered action is the tick: $($result.StdOut)"
     Assert-True -Condition ($result.StdOut -notmatch "scripts\\team\\cycle\.ps1") -Because "not the cycle alone"
+    # team-engine (continuous-team-loop): the half-hourly tick is the loop's watchdog only.
+    Assert-True -Condition ($result.StdOut -match "tick\.ps1`" [^\r\n]*-Watchdog(\s|$)") -Because "every N minutes the tick watches the one loop: $($result.StdOut)"
 
     $tick = Join-Path $repoRoot "scripts\team\tick.ps1"
     $work = Join-Path $env:TEMP ("pagentos-tick-" + [guid]::NewGuid().ToString("N"))
