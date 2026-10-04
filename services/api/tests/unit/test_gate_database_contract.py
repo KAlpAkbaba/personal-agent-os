@@ -79,6 +79,39 @@ def test_the_gate_sets_the_variable_only_through_the_step_scoped_helper() -> Non
     assert "Invoke-WithGateDatabase -Variable $script:GateDatabaseVariable" in text
 
 
+def _integration_conftest():
+    from tests.integration import conftest
+
+    return conftest
+
+
+def test_two_runs_fit_on_the_server_only_when_their_connections_do() -> None:
+    """2026-10-04: two integration runs on two gate databases of the dev server (max_connections
+    300) both died on `too many clients already`; one run alone peaked at 231 connections.
+    The suite takes one of a server-wide number of run slots, and that number is what the
+    server's connections hold - one on today's dev server, more on a larger one."""
+    conftest = _integration_conftest()
+    assert conftest._RUN_CONNECTION_BUDGET >= 231, "below the peak measured on 2026-10-04"
+    assert conftest.server_run_slots(max_connections=300, reserved=3) == 1
+    assert conftest.server_run_slots(max_connections=100, reserved=3) == 1
+    budget = conftest._RUN_CONNECTION_BUDGET
+    room = 3 + conftest._SERVER_HEADROOM_CONNECTIONS
+    assert conftest.server_run_slots(max_connections=room + 2 * budget, reserved=3) == 2
+    assert conftest.server_run_slots(max_connections=room + 2 * budget - 1, reserved=3) == 1
+
+
+def test_the_run_slot_is_held_in_the_server_wide_database_not_the_runs_own() -> None:
+    """An advisory lock is per database: taken in the run's own `pagentos_gate_*` it would
+    never meet the other run's. The slot is taken in the `postgres` maintenance database."""
+    conftest = _integration_conftest()
+    url = "postgresql+psycopg://u@127.0.0.1:5432/pagentos_gate_20261004000000_x?sslmode=disable"
+    assert (
+        conftest.server_lock_url(url)
+        == "postgresql+psycopg://u@127.0.0.1:5432/postgres?sslmode=disable"
+    )
+    assert conftest.server_lock_url("postgresql://u@h/pagentos") == "postgresql://u@h/postgres"
+
+
 def test_no_file_of_the_card_names_production() -> None:
     for relative in CARD_FILES:
         path = REPO_ROOT / relative
