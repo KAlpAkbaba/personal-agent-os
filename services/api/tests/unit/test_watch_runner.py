@@ -245,6 +245,37 @@ def test_an_invented_number_is_dropped_as_unreadable(factory) -> None:
     assert watch.baseline_sha256 is None
 
 
+@pytest.mark.parametrize(
+    "speech",
+    ["19.499 TL efendim.", "Fiyat şu an 19.499 TL, efendim.", "“19.499 TL”"],
+)
+def test_a_padded_answer_still_yields_the_number_on_the_page(speech: str) -> None:
+    # The provider speaks with the voice assistant's prompt ("efendim"): the number token
+    # is what must occur on the page, not the whole answer.
+    value = extract.extract_number(
+        FakeProvider(speech),
+        "Ürün sayfası. Fiyat 19.499 TL, kargo 49,90 TL.",
+        label="fiyat",
+        condition="number_below:20000",
+    )
+    assert value == pytest.approx(19499)
+
+
+@pytest.mark.parametrize(
+    "speech",
+    ["9.499 TL", "9.499 TL efendim.", "15.000 TL efendim.", "on dokuz bin dört yüz doksan dokuz lira"],
+)
+def test_a_padded_answer_with_a_number_not_on_the_page_is_dropped(speech: str) -> None:
+    # '9.499' is a substring of '19.499' but not a number on the page.
+    value = extract.extract_number(
+        FakeProvider(speech),
+        "Ürün sayfası. Fiyat 19.499 TL, kargo 49,90 TL.",
+        label="fiyat",
+        condition="number_below:20000",
+    )
+    assert value is None
+
+
 # ------------------------------------------------------------------ (5) failures
 
 
