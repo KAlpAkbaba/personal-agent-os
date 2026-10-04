@@ -75,3 +75,26 @@ target stop. `add_column` passes only on the `sa.Column(...)`'s OWN top-level ke
 `nullable=True`, or a `server_default` that is not `None`/`sa.null()`; a `*`/`**` spread, a
 non-literal `nullable`, a primary key or a column that is not a direct `sa.Column(...)` stops.
 `create_index(..., unique=<not False>)` stops (it may reject rows the old colour writes).
+
+Return 5 (Danışman, 2026-10-04 04:50): a WHITE list, so no new escape is left.
+- Code outside strings and comments must be ASCII: Python reads non-ASCII names (fullwidth
+  `ｏｓ` is `os`, `from os import system as é`), so any such character stops. Turkish in a
+  comment, a docstring or a string is not code and still passes.
+- Every string literal of the judged code (module constants and `upgrade()`) is on a white
+  list (`Get-TeamStringObjection`): the first argument of `sa.text` / `sa.literal_column` /
+  `sa.CheckConstraint` / `sa.Computed` / `sa.DDL` must be ONE literal whose SQL is digits, a
+  single-quoted string of at most 64 characters without `;`, `\` or a newline, `now()` or
+  `CURRENT_TIMESTAMP`; a `comment=` / `server_default=` literal (SQLAlchemy quotes it) holds no
+  `;` or `\`; `ondelete=`/`onupdate=` is one of SQLAlchemy's phrases; every other literal is a
+  plain name (`[A-Za-z0-9_]` with dots). So an index expression (`'lower(name)'`, `sa.text(...)`,
+  `postgresql_where`), a CHECK, a computed column or SQL in a constant stops.
+- Calls inside the arguments were narrowed with it: `sa.<Capitalised>()`, `sa.text`,
+  `sa.literal_column`, `sa.true/false/null`, `sa.func.now/current_timestamp` only (so
+  `sa.select`, `sa.func.pg_sleep`, `sa.func.lower` stop), `postgresql.<Capitalised>()`.
+- `op.add_column(sa.Column(..., unique=True))` stays expand-only: the new column starts NULL in
+  every row (NULLs do not collide), and the old colour does not know the column, so it never
+  writes it; only the new colour's writes meet the constraint. With a `server_default` on a
+  non-empty table the unique index fails AT MIGRATION time, before the switch - the release
+  script's preflight/migrate fails and nothing is promoted.
+- Of the repository's 65 real migrations the same 21 are expand-only before and after this
+  change (0065 among them): the white list costs no real migration that passed before.

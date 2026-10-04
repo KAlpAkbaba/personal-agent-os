@@ -50,11 +50,13 @@ function Get-TeamPythonMask {
     The Python text with every string literal's content and every comment blanked to the same
     length ('x' inside a literal, ' ' for a comment), so its structure is read without what the
     strings say. FStrings: where each f-string starts (its braces are code the mask hides);
-    Closed: false when a string never ends.
+    Strings: every literal (Start = its prefix, Quote = its opening quote, Width 1 or 3, End =
+    its closing quote); Closed: false when a string never ends.
     #>
     param([AllowEmptyString()][string]$Text = "")
     $chars = $Text.ToCharArray()
     $fstrings = New-Object System.Collections.ArrayList
+    $strings = New-Object System.Collections.ArrayList
     $closed = $true
     $i = 0
     while ($i -lt $Text.Length) {
@@ -81,10 +83,11 @@ function Get-TeamPythonMask {
             $j++
         }
         if ($end -lt 0) { $closed = $false; $end = $Text.Length }
+        [void]$strings.Add([pscustomobject]@{ Start = $i - $prefix.Length; Quote = $i; Width = $width; End = $end })
         for ($k = $i + $width; $k -lt $end; $k++) { $chars[$k] = 'x' }
         $i = $end + $width
     }
-    return [pscustomobject]@{ Masked = (New-Object string -ArgumentList (, $chars)); FStrings = @($fstrings.ToArray()); Closed = $closed }
+    return [pscustomobject]@{ Masked = (New-Object string -ArgumentList (, $chars)); FStrings = @($fstrings.ToArray()); Strings = @($strings.ToArray()); Closed = $closed }
 }
 
 function Get-TeamPythonStatements {
@@ -143,19 +146,56 @@ function Get-TeamPythonArguments {
 function Get-TeamCallObjection {
     <#
     Why masked expression code may do more than build a schema object, or "" when it only
-    calls what the allow-list names: sa.<Name>(), sa.func.<name>(), postgresql.<Name>(),
-    op.f(), and .with_variant() on such a result. Any other call - a helper, os.system,
-    op.get_bind, Session, .delete() - and lambda/await/yield/import are not on it.
+    calls what the allow-list names: sa.<Name>() (a capitalised schema builder), sa.text(),
+    sa.literal_column(), sa.true/false/null(), sa.func.now/current_timestamp(),
+    postgresql.<Name>(), op.f(), and .with_variant() on such a result. Any other call - a
+    helper, os.system, op.get_bind, Session, sa.select, sa.func.pg_sleep, .delete() - and
+    lambda/await/yield/import are not on it.
     #>
     param([AllowEmptyString()][string]$Code = "")
     $word = [regex]::Match($Code, '\b(lambda|await|yield|import|exec|eval)\b')
     if ($word.Success) { return "izin listesinde olmayan ifade: $($word.Value)" }
     if ($Code -match '[)\]}]\s*\(') { return "bir ifadenin sonucu çağrılıyor" }
-    $allowed = '^(?:(?:sa|sqlalchemy)\.(?:func\.)?[A-Za-z_]\w*|(?:(?:sa|sqlalchemy)\.dialects\.)?postgresql\.[A-Za-z_]\w*|op\.f)$'
+    $allowed = '^(?:(?:sa|sqlalchemy)\.(?:[A-Z]\w*|text|literal_column|true|false|null|func\.(?:now|current_timestamp))|(?:(?:sa|sqlalchemy)\.dialects\.)?postgresql\.[A-Z]\w*|op\.f)$'
     foreach ($m in [regex]::Matches($Code, '(?<![\w.])(\.\s*)?([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*\(')) {
         $name = $m.Groups[2].Value -replace '\s', ''
         if ($m.Groups[1].Success) { if ($name -cne "with_variant") { return "izin listesinde olmayan çağrı: .$name()" } }
         elseif ($name -cnotmatch $allowed) { return "izin listesinde olmayan çağrı: $name()" }
+    }
+    return ""
+}
+
+function Get-TeamStringObjection {
+    <#
+    Why a string literal of masked statement code [From, To) may carry SQL, or "" when every one
+    is on the white list (Danışman 2026-10-04, return 5). The FIRST argument of sa.text(),
+    sa.literal_column(), sa.CheckConstraint(), sa.Computed() and sa.DDL() must be one literal
+    whose SQL is a number, a short single-quoted string without ';', now() or CURRENT_TIMESTAMP.
+    A comment= or server_default= literal (SQLAlchemy quotes it) holds no ';' or '\';
+    ondelete=/onupdate= is one of SQLAlchemy's own phrases. Every other literal is a plain name
+    (letters, digits, '_', '.'), so an index expression ('lower(name)') or SQL in a constant stops.
+    #>
+    param([string]$Text, [string]$Masked, [object[]]$Strings, [int]$From, [int]$To)
+    $sqlCall = '(?:sa|sqlalchemy)\s*\.\s*(?:text|literal_column|CheckConstraint|Computed|DDL)\s*\(\s*'
+    $code = $Masked.Substring($From, $To - $From)
+    $bare = [regex]::Match($code, $sqlCall + '(?=\S)(?![rRuUbB]{0,2}["''])')
+    if ($bare.Success) { return "SQL bir dize değil: $($bare.Value.Trim())" }
+    foreach ($s in @($Strings | Where-Object { $_.Start -ge $From -and $_.Start -lt $To })) {
+        $content = $Text.Substring($s.Quote + $s.Width, $s.End - $s.Quote - $s.Width)
+        $before = $Masked.Substring($From, $s.Start - $From)
+        $rest = [Math]::Min($To, $s.End + $s.Width)
+        $alone = ($Masked.Substring($rest, $To - $rest) -match '^\s*[,)]')
+        if ($before -cmatch ($sqlCall + '$')) {
+            if (-not $alone) { return "SQL tek bir dize değil: $content" }
+            if ($content -cnotmatch '^(?:[0-9]+(?:\.[0-9]+)?|''[^'';\\\r\n]{0,64}''|now\(\)|NOW\(\)|CURRENT_TIMESTAMP|current_timestamp)$') { return "SQL beyaz listede değil: $content" }
+            continue
+        }
+        if ($alone -and $before -cmatch '(?<![\w.])(?:comment|server_default)\s*=\s*$') {
+            if ($content -cmatch '[;\\]') { return "dizgede ';' ya da '\': $content" }
+            continue
+        }
+        if ($alone -and $before -cmatch '(?<![\w.])(?:ondelete|onupdate)\s*=\s*$' -and $content -cmatch '^(?:CASCADE|RESTRICT|SET NULL|SET DEFAULT|NO ACTION)$') { continue }
+        if ($content -cnotmatch '^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$') { return "dizge bir ad değil (beyaz listede değil): $content" }
     }
     return ""
 }
@@ -281,7 +321,9 @@ function Get-TeamMigrationVerdict {
             that is not None/sa.null() (no primary key, no spread: Get-TeamAddColumnObjection);
           * op.create_foreign_key(...) whose source table this upgrade creates;
           * pass and a docstring.
-        Their arguments may call only schema builders (Get-TeamCallObjection). The module
+        Their arguments may call only schema builders (Get-TeamCallObjection) and every string
+        literal is a plain name or white-listed SQL (Get-TeamStringObjection); code outside
+        strings and comments is ASCII only. The module
         around it may hold only imports, constant assignments, docstrings and the two defs;
         downgrade() is not read (it drops what the upgrade added). EVERYTHING else is not
         expand-only: op.execute (even 'SELECT 1'), any raw SQL, any other op, an ORM write, a
@@ -297,6 +339,9 @@ function Get-TeamMigrationVerdict {
     $mask = Get-TeamPythonMask -Text $Text
     if (-not $mask.Closed) { return (& $verdict $false "göç okunamadı (kapanmayan dize)") }
     $masked = $mask.Masked
+    # Python reads non-ASCII names (fullwidth 'ｏｓ' is 'os'): code outside strings and comments is ASCII only.
+    $foreign = [regex]::Match($masked, '[^\x00-\x7F]')
+    if ($foreign.Success) { return (& $verdict $false ("göç kodunda ASCII olmayan karakter (U+{0:X4})" -f [int][char]$foreign.Value)) }
     # A walrus binds a name anywhere, op and sa among them: not read.
     if ($masked.Contains(":=")) { return (& $verdict $false "':=' ile bir ad bağlanıyor") }
     $docstring = '^(?:[rRuU]{0,2}("""|''''''|"|'')x*\1\s*)+$'
@@ -337,6 +382,7 @@ function Get-TeamMigrationVerdict {
                 # One target only: in 'X = op = 1' the later targets are bound too.
                 if ((Get-TeamTopLevelAssignCount -Code $code) -ne 1) { return (& $verdict $false "birden çok hedefe atama: $first") }
                 $why = Get-TeamCallObjection -Code $code
+                if (-not $why) { $why = Get-TeamStringObjection -Text $Text -Masked $masked -Strings $mask.Strings -From $s.Start -To $s.End }
                 if ($why) { return (& $verdict $false "$why ($first)") }
                 continue
             }
@@ -358,6 +404,7 @@ function Get-TeamMigrationVerdict {
         if (-not $call.Success -or $close -ne $code.Length - 1) { return (& $verdict $false "upgrade() içinde izin listesinde olmayan: $first") }
         $arguments = $code.Substring($open + 1, $close - $open - 1)
         $why = Get-TeamCallObjection -Code $arguments
+        if (-not $why) { $why = Get-TeamStringObjection -Text $Text -Masked $masked -Strings $mask.Strings -From $s.Start -To $s.End }
         if ($why) { return (& $verdict $false "$why ($first)") }
         [void]$calls.Add([pscustomobject]@{ Name = $call.Groups[1].Value; Masked = $arguments; Raw = $raw.Substring($open + 1, $close - $open - 1); First = $first })
     }
