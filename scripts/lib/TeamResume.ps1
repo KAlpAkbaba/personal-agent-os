@@ -21,7 +21,8 @@
 
     Pure functions: no process is started here (no claude, no git). The ONE side effect is
     Remove-TeamRunSessionFiles's deletion, and only of a '.jsonl' under a given account
-    directory and its '<uuid>\' tool-results folder (KVKK: both carry the repository's content).
+    directory and its '<uuid>\' tool-results folder (KVKK: both carry the repository's content);
+    what it reports is what the disk shows afterwards (Failed for what stayed).
 
     Dot-source; StrictMode-safe; Windows PowerShell 5.1.
 #>
@@ -149,8 +150,14 @@ function Remove-TeamRunSessionFiles {
         THE side effect of this file. A path is deleted only when it ends in '.jsonl' and,
         resolved in full ('..' included), lies under one of -AccountDirs. With a '<uuid>.jsonl'
         goes the '<uuid>\' folder beside it (tool-results), whether the .jsonl exists or not.
-        Any other path is left alone with a warning. Returns Removed, RemovedDirs, Refused and
-        Missing (the full paths).
+        Any other path is left alone with a warning. Returns Removed, RemovedDirs, Refused,
+        Missing (the full paths) and Failed (Path, Error).
+
+        The result follows the disk, not the call: a path is Removed / RemovedDirs only when,
+        after the delete, Test-Path finds it gone. A delete that throws (a read-only file: its
+        attribute is never cleared here) or leaves the path on disk goes to Failed with the
+        error, and the remaining paths go on. Never throws, under $ErrorActionPreference
+        'Stop' too (cycle.ps1 runs with it).
     #>
     [CmdletBinding()]
     param(
@@ -160,7 +167,8 @@ function Remove-TeamRunSessionFiles {
     $roots = New-Object System.Collections.ArrayList
     foreach ($dir in @($AccountDirs)) {
         if (-not $dir) { continue }
-        $full = [System.IO.Path]::GetFullPath($dir).TrimEnd('\', '/')
+        try { $full = [System.IO.Path]::GetFullPath($dir).TrimEnd('\', '/') }
+        catch { Write-Warning "hesap dizini sayılmadı (geçersiz yol): $dir"; continue }
         # A drive root is no account directory: everything would lie under it.
         if ($full.Length -le 3) { Write-Warning "hesap dizini sayılmadı (sürücü kökü): $dir"; continue }
         [void]$roots.Add($full + '\')
@@ -169,9 +177,25 @@ function Remove-TeamRunSessionFiles {
     $refused = New-Object System.Collections.ArrayList
     $missing = New-Object System.Collections.ArrayList
     $removedDirs = New-Object System.Collections.ArrayList
+    $failed = New-Object System.Collections.ArrayList
+    # Try one delete, then let the disk say what happened.
+    $attempt = {
+        param([string]$Target, [scriptblock]$Delete, [scriptblock]$Gone, $Into)
+        $why = ""
+        try { & $Delete } catch { $why = $_.Exception.Message }
+        if (& $Gone) { [void]$Into.Add($Target); return }
+        if (-not $why) { $why = "silindikten sonra diskte duruyor" }
+        Write-Warning "oturum dosyası silinemedi: $Target ($why)"
+        [void]$failed.Add([pscustomobject]@{ Path = $Target; Error = $why })
+    }
     foreach ($path in @($Paths)) {
         if (-not $path) { continue }
-        $full = [System.IO.Path]::GetFullPath($path)
+        try { $full = [System.IO.Path]::GetFullPath($path) }
+        catch {
+            Write-Warning "oturum dosyası silinmedi (geçersiz yol): $path"
+            [void]$refused.Add([string]$path)
+            continue
+        }
         $under = $false
         foreach ($root in $roots) {
             if ($full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { $under = $true; break }
@@ -193,14 +217,19 @@ function Remove-TeamRunSessionFiles {
                 }
                 else {
                     # Directory.Delete removes a link inside, never what it points to.
-                    [System.IO.Directory]::Delete($folder, $true)
-                    [void]$removedDirs.Add($folder)
+                    & $attempt -Target $folder -Into $removedDirs `
+                        -Delete { [System.IO.Directory]::Delete($folder, $true) } `
+                        -Gone { -not (Test-Path -LiteralPath $folder) }
                 }
             }
         }
         if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { [void]$missing.Add($full); continue }
-        [System.IO.File]::Delete($full)
-        [void]$removed.Add($full)
+        & $attempt -Target $full -Into $removed `
+            -Delete { [System.IO.File]::Delete($full) } `
+            -Gone { -not (Test-Path -LiteralPath $full) }
     }
-    return [pscustomobject]@{ Removed = @($removed.ToArray()); RemovedDirs = @($removedDirs.ToArray()); Refused = @($refused.ToArray()); Missing = @($missing.ToArray()) }
+    return [pscustomobject]@{
+        Removed = @($removed.ToArray()); RemovedDirs = @($removedDirs.ToArray()); Refused = @($refused.ToArray())
+        Missing = @($missing.ToArray()); Failed = @($failed.ToArray())
+    }
 }

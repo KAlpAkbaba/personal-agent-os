@@ -13,7 +13,8 @@
                   New-TeamRunSessionId;
       path        Get-TeamProjectDirName and Get-TeamSessionFilePath;
       remove      Remove-TeamRunSessionFiles in a TEMP sandbox: only a .jsonl under a given
-                  account directory is deleted.
+                  account directory is deleted; the result follows the disk (Failed for what
+                  stayed), never throws, refuses a junction and a drive root.
 
     The library starts no process; the wiring into TeamRun.ps1 / cycle.ps1 is another card
     (team/plans/limit-resume-session-adr.md names its lines).
@@ -221,6 +222,76 @@ try {
         Assert-True -Condition (Test-Path -LiteralPath $plain) -Because "a folder not named by a uuid stays"
         Assert-True -Condition (Test-Path -LiteralPath $outsideDir) -Because "outside every account directory"
         Assert-Equal -Expected 2 -Actual @($result.RemovedDirs).Count -Because "two session folders deleted"
+    }
+
+    # A session folder holding a read-only file: Directory.Delete throws. The result follows
+    # the disk, not the call: the folder is Failed (with the error), never RemovedDirs, and the
+    # next path of the same call is still deleted - under the default EAP and under 'Stop'
+    # (cycle.ps1:155 runs with 'Stop').
+    foreach ($eap in @("Continue", "Stop")) {
+        Test-Case "remove (k): a folder that cannot be deleted (read-only file) is Failed, not RemovedDirs; the next path still goes (EAP=$eap)" {
+            $account = Join-Path $sandbox ".claude-hesap-ro-$eap"
+            $project = Join-Path $account "projects\E--repo"
+            $stuck = Join-Path $project $session
+            $results = Join-Path $stuck "tool-results"
+            [void](New-Item -ItemType Directory -Path $results -Force)
+            $locked = Join-Path $results "out.txt"
+            [System.IO.File]::WriteAllText($locked, "repo content`n", $utf8)
+            [System.IO.File]::SetAttributes($locked, [System.IO.FileAttributes]::ReadOnly)
+            $next = "7f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
+            $nextFile = Join-Path $project "$next.jsonl"
+            [System.IO.File]::WriteAllText($nextFile, "{}`n", $utf8)
+            $paths = @((Join-Path $project "$session.jsonl"), $nextFile)
+            $result = $null
+            $threw = ""
+            $ErrorActionPreference = $eap
+            try { $result = Remove-TeamRunSessionFiles -Paths $paths -AccountDirs @($account) -WarningAction SilentlyContinue }
+            catch { $threw = $_.Exception.Message }
+            finally { $ErrorActionPreference = "Stop" }
+            if (Test-Path -LiteralPath $locked) { [System.IO.File]::SetAttributes($locked, [System.IO.FileAttributes]::Normal) }
+            Assert-True -Condition (Test-Path -LiteralPath $stuck) -Because "the folder is still on disk (the sandbox's premise)"
+            Assert-True -Condition (Test-Path -LiteralPath $locked) -Because "the read-only file was not silently unlocked and deleted"
+            if ($result) { Assert-True -Condition (@($result.RemovedDirs) -notcontains $stuck) -Because "a folder on disk is never reported removed: $(@($result.RemovedDirs) -join ', ')" }
+            Assert-Equal -Expected "" -Actual $threw -Because "the function never throws nor writes an error"
+            $failed = @($result.Failed | Where-Object { $_.Path -eq $stuck })
+            Assert-Equal -Expected 1 -Actual $failed.Count -Because "the folder is in Failed"
+            Assert-True -Condition ([bool][string]$failed[0].Error) -Because "Failed carries the error"
+            Assert-True -Condition (-not (Test-Path -LiteralPath $nextFile)) -Because "the next path of the same call is still deleted"
+            Assert-True -Condition (@($result.Removed) -contains $nextFile) -Because "and reported removed"
+        }
+    }
+
+    Test-Case "remove (l): a session folder that is itself a junction is refused; its target and the target's content stay" {
+        $account = Join-Path $sandbox ".claude-hesap-jn"
+        $project = Join-Path $account "projects\E--repo"
+        [void](New-Item -ItemType Directory -Path $project -Force)
+        $target = Join-Path $sandbox "junction-target"
+        [void](New-Item -ItemType Directory -Path $target -Force)
+        $keep = Join-Path $target "keep.txt"
+        [System.IO.File]::WriteAllText($keep, "not the session's`n", $utf8)
+        $link = Join-Path $project $session
+        [void](New-Item -ItemType Junction -Path $link -Value $target)
+        try {
+            $result = Remove-TeamRunSessionFiles -Paths @((Join-Path $project "$session.jsonl")) -AccountDirs @($account) -WarningAction SilentlyContinue
+            Assert-True -Condition (@($result.Refused) -contains $link) -Because "the junction is refused: $(@($result.Refused) -join ', ')"
+            Assert-True -Condition (@($result.RemovedDirs) -notcontains $link) -Because "never reported removed"
+            Assert-True -Condition (Test-Path -LiteralPath $link) -Because "the junction itself is left alone"
+            Assert-True -Condition (Test-Path -LiteralPath $keep) -Because "the target's content stays"
+        }
+        finally {
+            # Drop the link only (rmdir on a junction never touches its target).
+            if (Test-Path -LiteralPath $link) { [System.IO.Directory]::Delete($link, $false) }
+        }
+    }
+
+    Test-Case "remove (m): a drive root is no account directory: a .jsonl under it is refused" {
+        $file = Join-Path $sandbox "$session.jsonl"
+        [System.IO.File]::WriteAllText($file, "{}`n", $utf8)
+        $root = [System.IO.Path]::GetPathRoot($sandbox)
+        $result = Remove-TeamRunSessionFiles -Paths @($file) -AccountDirs @($root) -WarningAction SilentlyContinue
+        Assert-True -Condition (Test-Path -LiteralPath $file) -Because "the drive root covers nothing"
+        Assert-Equal -Expected 1 -Actual @($result.Refused).Count -Because "refused"
+        Assert-Equal -Expected 0 -Actual @($result.Removed).Count -Because "nothing deleted"
     }
 }
 finally {

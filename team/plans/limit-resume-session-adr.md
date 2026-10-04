@@ -21,7 +21,7 @@ Karar ve komut satırı yeni, saf bir kütüphanede: `scripts/lib/TeamResume.ps1
 | `Get-TeamResumeArgs -Plan -Model` | `Arguments = --resume <hedef> --model <model>`, `Prompt` = kısa devam istemi; fresh plan -> throw |
 | `Get-TeamProjectDirName -Path` | Claude Code'un proje klasör adı |
 | `Get-TeamSessionFilePath -AccountDir -ProjectDir -SessionId` | `<hesap>\projects\<proje>\<uuid>.jsonl` |
-| `Remove-TeamRunSessionFiles -Paths -AccountDirs` | `Removed`, `RemovedDirs` (`<uuid>\` klasörleri), `Refused`, `Missing` |
+| `Remove-TeamRunSessionFiles -Paths -AccountDirs` | `Removed`, `RemovedDirs` (`<uuid>\` klasörleri), `Refused`, `Missing`, `Failed` (`Path`, `Error`); diskin son durumu, hiç atmaz |
 
 Kural (`Select-TeamResumePlan`), sırayla; ilk tutan 'fresh' döner:
 1. `StopReason` tam olarak `usage_limit` değil -> 'baştan: durma nedeni kullanım limiti değil (<neden>)'. Hata, zaman aşımı, boş: hep baştan.
@@ -83,6 +83,22 @@ kabul edilmiş `.jsonl` yolundan türetildiği için aynı hesap dizini sınır�
 klasör silinmez; klasörün kendisi bir bağlantı noktasıysa (junction/symlink) silinmez, `Refused`'a yazılır; içindeki bağlantılar
 `[System.IO.Directory]::Delete` ile hedefleri izlenmeden kaldırılır. Silinen klasörler `RemovedDirs`'te döner.
 
+Sonuç diskin son durumudur, çağrının dönüşü değil (denetim 2026-10-04, 2. tur: içinde salt-okunur dosya olan klasörde
+`Directory.Delete` hata atıyor, varsayılan EAP'de klasör yine `RemovedDirs`'e yazılıyor ve içerik diskte kalıyordu; EAP=Stop'ta
+çağrının tamamı kopuyordu). Kural: her yolun silmesi ayrı `try/catch` içindedir; bir yol `Removed`/`RemovedDirs`'e ancak silme
+denendikten sonra `Test-Path` onun gittiğini doğrularsa girer. Silme hata atarsa ya da yol diskte kalırsa yol `Failed`'a
+`{ Path; Error }` olarak yazılır (`Error`: istisnanın iletisi, ya da 'silindikten sonra diskte duruyor'), `Write-Warning` verilir ve
+kalan yollar işlenir. Fonksiyon `$ErrorActionPreference='Stop'` altında da exception atmaz (`cycle.ps1:155`). Salt-okunur özniteliği
+SESSİZCE KALDIRILMAZ: kim koymuşsa bilerek koymuştur; içerik diskte durur ve `Failed`'da görünür. Kısmi silme olabilir (klasörün
+bir bölümü gitmiş, kalanı durur); klasör diskte olduğu sürece `Failed`'dadır. Geçersiz karakterli yol `Refused`'a gider.
+Testler: (k) salt-okunur klasör hem varsayılan EAP hem Stop altında `Failed`'da, `RemovedDirs`'te değil, aynı çağrıdaki ikinci yol
+siliniyor; (l) junction klasör `Refused`'da, hedef ve içeriği sağlam; (m) sürücü kökü hesap dizini sayılmıyor.
+
+Bağlama kartı `Failed`'ı şöyle raporlar: `Failed` boş değilse kartın kapanış satırına 'oturum dosyası silinemedi: <n>' ve her yol
+için `Add-CycleNote -List "risks"` ile '<yol>: <Error>' (KVKK: depo içeriği diskte kaldı; sahibin dikkatine). Kart kapanır ama
+`run_sessions`'tan yalnız `Removed`/`RemovedDirs`/`Missing`'tekiler düşülür; `Failed`'takiler kartta kalır ve bir sonraki döngünün
+kapanış taramasında yeniden denenir. `Refused` da risk notuna yazılır (yanlış yol = bağlama hatası).
+
 ## Bağlama kartı: tam satır listesi (TeamRun.ps1 / cycle.ps1 / quality-gate.ps1 serbest kalınca)
 
 1. `scripts/lib/TeamRun.ps1:283` - `Get-TeamRunArguments`'a `[string]$SessionId = ""` ve `[string[]]$ResumeArguments = @()`
@@ -104,7 +120,7 @@ klasör silinmez; klasörün kendisi bir bağlantı noktasıysa (junction/symlin
    Çağıranlar (1261, 1370) `-Done` geçirmeli (bugün yalnız `$Started`, `$Again`).
 4. `scripts/team/cycle.ps1` kart kapanışı (merged/stopped yazılan yerler) - `Remove-TeamRunSessionFiles -Paths <run_sessions'tan Get-TeamSessionFilePath> -AccountDirs <hesap havuzu dizinleri>`;
    bu çağrı `<uuid>.jsonl` ile birlikte yanındaki `<uuid>\` klasörünü (`tool-results\`) de siler, `.jsonl` hiç yazılmamış olsa bile; ayrı çağrı gerekmez.
-   `Removed` + `RemovedDirs` sayısı kartın kapanış satırına, `Refused` risk notuna. Geçiş dönemi: bugüne kadar `--no-session-persistence`
+   `Removed` + `RemovedDirs` sayısı kartın kapanış satırına, `Refused` ve `Failed` risk notuna (KVKK bölümündeki biçimle). Geçiş dönemi: bugüne kadar `--no-session-persistence`
    ile birikmiş `tool-results` klasörlerinin (`.jsonl`'siz, kimlikleri kayıtsız) temizliği bu satırın işi DEĞİL; bağlama kartı
    bunu ayrı bir tek seferlik adım olarak (hesap dizinlerinde `projects\<ekip worktree klasörü>\<uuid>\`) önerir.
 5. `scripts/tests/team-cycle.tests.ps1:674` - `Assert-True ($line -match "--no-session-persistence") -Because "a fresh run"` ->
