@@ -393,6 +393,62 @@ Test-Case "inspector-4 (ek): create_index(..., unique=True) is not expand-only (
         'op.create_index("ix", "notes", ["c"], **KW)')
 }
 
+# Danışman, 2026-10-04 04:50 (return 5): a WHITE list, so no new escape is left - non-ASCII code
+# stops anywhere, and every string literal of the judged code is either a plain name or sits
+# where its SQL is read from a short white list.
+Test-Case "inspector-5 (1): ANY non-ASCII character in the masked code (a name, an import alias) is not expand-only" {
+    $fullwidthOs = [string][char]0xFF4F + [char]0xFF53
+    $eAcute = [string][char]0x00E9
+    Assert-NotExpandOnly -Because "a non-ASCII name" -Bodies @(
+        "op.create_table('t', sa.Column('id', sa.Integer, info=$fullwidthOs.system('echo pwn')))",
+        "op.add_column('t', sa.Column('c', sa.Integer, nullable=True, info=$eAcute))")
+    $verdict = Get-ModuleVerdict -Head "from os import system as $eAcute"
+    Assert-True -Condition (-not $verdict.ExpandOnly) -Because "a non-ASCII import alias: $($verdict.Why)"
+    Assert-True -Condition ([bool]$verdict.Why) -Because "it says why"
+    # Turkish in a comment or a docstring is not code: still expand-only.
+    $verdict = Get-ModuleVerdict -Head ("# s" + [char]0x0131 + "n" + [char]0x0131 + "r`n`"`"`"Sahibin g" + [char]0x00F6 + "revi.`"`"`"")
+    Assert-True -Condition $verdict.ExpandOnly -Because "non-ASCII only in a comment and a docstring: $($verdict.Why)"
+}
+
+Test-Case "inspector-5 (2): SQL in sa.text / CheckConstraint / Computed / an index expression passes only digits, a short ';'-free quoted string, now() or CURRENT_TIMESTAMP" {
+    Assert-NotExpandOnly -Because "SQL outside the white list" -Bodies @(
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.text('0; DROP TABLE users')))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.text(`"'a;b'`")))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.text('now(); DROP TABLE users')))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.text('pg_sleep(100)')))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.text('0' '; DROP TABLE users')))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.text('0' + DROP)))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.text(SQL)))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.literal_column('1; DROP TABLE users')))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default=sa.func.pg_sleep(100)))",
+        "op.add_column('users', sa.Column('x', sa.Integer, server_default='0; DROP TABLE users'))",
+        "op.create_table('t', sa.Column('id', sa.Integer, primary_key=True), sa.CheckConstraint('id > 0'))",
+        "op.create_table('t', sa.Column('id', sa.Integer, primary_key=True), sa.Column('d', sa.Integer, sa.Computed('id * 2')))",
+        "op.create_index('ix', 'notes', [sa.text('lower(name)')])",
+        "op.create_index('ix', 'notes', ['lower(name)'])",
+        "op.create_index('ix', 'notes', [sa.func.lower(sa.column('name'))])",
+        "op.create_index('ix', 'notes', ['c'], postgresql_where=sa.text('deleted_at IS NULL'))",
+        "op.create_table('t', sa.Column('id', sa.Integer, primary_key=True), sa.Index('ix_t', sa.text('id + 1')))",
+        "op.create_table('t', sa.Column('id', sa.Integer, primary_key=True, info=sa.select(sa.text('1'))))")
+    $verdict = Get-ModuleVerdict -Head "DEFAULT = '0; DROP TABLE users'"
+    Assert-True -Condition (-not $verdict.ExpandOnly) -Because "a module constant holding SQL: $($verdict.Why)"
+    foreach ($body in @("op.add_column('t', sa.Column('c', sa.Integer(), nullable=False, server_default=sa.text('0')))",
+            "op.add_column('t', sa.Column('c', sa.String(8), nullable=False, server_default=sa.text(`"'pending'`")))",
+            "op.add_column('t', sa.Column('c', sa.DateTime(), nullable=False, server_default=sa.text('now()')))",
+            "op.add_column('t', sa.Column('c', sa.DateTime(), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')))",
+            "op.add_column('t', sa.Column('c', sa.DateTime(), nullable=False, server_default=sa.func.now()))",
+            "op.add_column('t', sa.Column('c', sa.String(8), nullable=True, comment='the colour, for the list view'))",
+            "op.create_table('l', sa.Column('id', sa.Uuid(), primary_key=True), sa.Column('n', sa.Uuid(), sa.ForeignKey('notes.id', ondelete='SET NULL'), nullable=True))")) {
+        $verdict = Get-UpgradeVerdict -Body $body
+        Assert-True -Condition $verdict.ExpandOnly -Because "on the white list: $body - $($verdict.Why)"
+    }
+}
+
+Test-Case "inspector-5 (3): add_column(sa.Column(..., unique=True)) stays expand-only (the new column starts NULL; the old colour never writes it)" {
+    $verdict = Get-UpgradeVerdict -Body "op.add_column('notes', sa.Column('slug', sa.String(64), nullable=True, unique=True))"
+    Assert-True -Condition $verdict.ExpandOnly -Because "a nullable unique new column: $($verdict.Why)"
+}
+
 Test-Case "only alembic versions are migrations" {
     Assert-True -Condition (Test-TeamMigrationPath -Path "services/api/alembic/versions/20261003_0066_x.py") -Because "a version file"
     Assert-True -Condition (-not (Test-TeamMigrationPath -Path "services/api/alembic/env.py")) -Because "env.py is not a version"
