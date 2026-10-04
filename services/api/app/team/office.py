@@ -241,6 +241,7 @@ def office_view(
         "cycle": {
             "cycle_id": document.get("cycle_id"),
             "machine": document.get("machine"),
+            "account": document.get("account"),
             "started_at": document.get("started_at"),
             "running": live,
             "running_agents": running_agents,

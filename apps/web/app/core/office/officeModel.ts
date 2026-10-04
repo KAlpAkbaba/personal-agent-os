@@ -167,6 +167,8 @@ export type TopBar = {
   lowered: string | null;
   /** The status' time when the cycle is not running: its limits are not the present. */
   asOf: string | null;
+  /** `Hesap 3`, `Ana hesap`, or null when the cycle does not say. */
+  account: string | null;
 };
 
 export type PanelModel = {
@@ -285,6 +287,15 @@ function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now
   };
 }
 
+/** The account folder as the owner says it: ".claude-hesap3" -> "Hesap 3", "varsayilan" -> "Ana hesap". */
+export function accountLabel(account: string | null | undefined): string | null {
+  if (!account) return null;
+  if (account === "varsayilan") return "Ana hesap";
+  const numbered = /hesap[-_]?(\d+)$/i.exec(account);
+  if (numbered) return `Hesap ${numbered[1]}`;
+  return account.replace(/^\.?claude-?/i, "") || account;
+}
+
 export function buildOffice(view: OfficeView, now: Date = new Date()) {
   const cycle = view.cycle;
   const topBar: TopBar = {
@@ -298,6 +309,7 @@ export function buildOffice(view: OfficeView, now: Date = new Date()) {
     fallback: view.models ? view.models.fallback : null,
     lowered: loweredLine(view, cycle.limits),
     asOf: cycle.running ? null : `${startedAt(cycle.updated_at)} itibarıyla`,
+    account: accountLabel(cycle.account),
   };
   return {
     topBar,

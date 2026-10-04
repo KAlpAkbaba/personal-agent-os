@@ -24,6 +24,8 @@ from app.team import store as team_store
 from app.team.models import TeamStateRow
 from tests.identity_support import authenticate, install_identity
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 SEATS = [
     "lead",
@@ -501,3 +503,30 @@ def test_an_updated_at_a_little_ahead_of_the_clock_is_still_live():
         [("alpha-task", "worker")], updated_at=team_store.stamp(NOW + timedelta(seconds=30))
     )
     assert _view([_task("alpha-task")], status)["cycle"]["running"] is True
+
+
+def test_the_status_names_the_claude_account_and_the_office_shows_it(owner):
+    """The owner switches the team between Claude accounts (2026-10-04) and wants to SEE which
+    one is working on the Ofis. The cycle sends the account's folder name, never an e-mail."""
+    owner.team_store.acquire_lock(machine="MAIL", cycle_id="c1", pid=7)
+    doc = {**_live_status([("alpha-task", "worker")]), "account": ".claude-hesap3"}
+    assert owner.put(STATUS, json=doc).status_code == 200
+    assert owner.get(OFFICE).json()["cycle"]["account"] == ".claude-hesap3"
+    older = _live_status([("alpha-task", "worker")])
+    assert owner.put(STATUS, json=older).status_code == 200, (
+        "a cycle without the field still writes"
+    )
+    assert owner.get(OFFICE).json()["cycle"]["account"] is None
+    for bad in ("someone@example.com", "x" * 65, "a b", ""):
+        assert owner.put(STATUS, json={**older, "account": bad}).status_code == 422, bad
+
+
+def test_the_cycle_script_writes_the_account_it_runs_under():
+    """The other half of the contract above: the cycle's status document carries the account
+    the team wrapper chose (CLAUDE_CONFIG_DIR's folder name), or 'varsayilan'."""
+    script = (REPO_ROOT / "scripts" / "team" / "cycle.ps1").read_text(encoding="utf-8")
+    body = script[
+        script.index("function New-CycleStatus") : script.index("function Write-CycleStatus")
+    ]
+    assert '$document["account"]' in body
+    assert "CLAUDE_CONFIG_DIR" in body

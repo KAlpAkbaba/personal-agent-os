@@ -89,6 +89,8 @@ export type OfficeTask = {
 export type OfficeCycle = {
   cycle_id: string | null;
   machine: string | null;
+  /** The Claude account the team runs under (".claude-hesap3", "varsayilan"); absent from an older API or cycle. */
+  account?: string | null;
   started_at: string | null;
   running: boolean;
   running_agents: number;

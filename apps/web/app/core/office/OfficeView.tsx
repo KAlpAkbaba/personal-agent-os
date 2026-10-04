@@ -45,6 +45,11 @@ export default function OfficeView({
           Döngü: <strong>{bar.cycleId}</strong>
         </span>
         <span>Başlangıç: {bar.startedAt}</span>
+        {bar.account && (
+          <span className="office-account" data-office="account">
+            Hesap: <strong>{bar.account}</strong>
+          </span>
+        )}
         <span>{bar.runningAgents}</span>
         <span>{bar.estimated}</span>
         <span>Max limit: {bar.limit}</span>

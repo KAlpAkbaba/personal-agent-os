@@ -22983,6 +22983,23 @@ refuses before any store (file or database) is reached, so all three stores answ
   to the legacy shape for that cycle. A clamp to 0..100 on the client closes it.
 - No migration, no setting, no compose change: released automatically under addendum 9.
 
+### ADR-0214 addendum 23 (2026-10-04): the Ofis names the Claude account the team runs under
+
+- Context: the owner switches the team between his Claude accounts when one runs out
+  (2026-10-03 hesap2, 2026-10-04 hesap3, through `%USERPROFILE%\.pagentos-team\team-account.txt`
+  and the team wrapper's `CLAUDE_CONFIG_DIR`) and asked to see the switch on the Ofis: "ana ekranda
+  da değiştiğini göreyim".
+- Decision: the cycle's live status carries `account`, the leaf of `CLAUDE_CONFIG_DIR`
+  (`.claude-hesap3`) or `varsayilan`; the status route accepts it as an optional folder name
+  (`^[A-Za-z0-9._-]+$`, 1-64 characters - an e-mail or a space is a 422, so an address can never
+  reach the store); the office answer passes it through; the top bar says `Hesap: Hesap 3` /
+  `Hesap: Ana hesap`, and nothing when an older cycle does not send it.
+- The field is sent only in the non-legacy shape. The API must be released before the cycle sends it
+  (the cycle runs from the lead branch, which takes this commit only with the release).
+- Tests: `test_the_status_names_the_claude_account_and_the_office_shows_it` (round trip, an older
+  cycle without it, four refused values), the contract half that reads `New-CycleStatus`, and the
+  office model's label test (mutation RED: the label returns null).
+
 ### ADR-0224 addendum 5 (2026-10-03): the STT corpus measured with layer 2 as production configures it
 
 Draft: `team/plans/stt-corpus-layer2-remeasure-adr.md` (numbered at the eleventh integration of d20261003).

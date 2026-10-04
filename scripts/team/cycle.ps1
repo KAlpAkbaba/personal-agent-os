@@ -477,7 +477,12 @@ function New-CycleStatus {
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
         usage_limit   = [ordered]@{ state = $script:usageLimit.state; resets_at = $script:usageLimit.resets_at }
     }
-    if (-not $Legacy) { $document["limits"] = (Get-LimitsDocument) }
+    if (-not $Legacy) {
+        $document["limits"] = (Get-LimitsDocument)
+        # Which Claude account the team runs under (the owner switches them, 2026-10-04, and wants
+        # to see it on the Ofis): the folder CLAUDE_CONFIG_DIR names, set by the team wrapper.
+        $document["account"] = if ($env:CLAUDE_CONFIG_DIR) { Split-Path -Leaf $env:CLAUDE_CONFIG_DIR } else { "varsayilan" }
+    }
     $document["updated_at"] = (Get-TeamTimestamp)
     return $document
 }
