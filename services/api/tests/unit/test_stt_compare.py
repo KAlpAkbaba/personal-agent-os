@@ -571,3 +571,18 @@ def test_the_run_writes_only_the_output_file_and_prints_no_transcript(
     assert "hesap makinesini" not in printed.out + printed.err
     # the transcript is in the one file the caller named, and nowhere else
     assert "Ofisü" in out.read_text(encoding="utf-8")
+
+
+# ------------------------------------------- local-tr-stt-measure: the schema bump
+
+
+def test_the_report_schema_is_one_point_two_for_the_real_time_factor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """1.2 adds the per-row real-time factor and peak memory and the command-sentence count
+    (local-tr-stt-measure); a report reader must see the version move."""
+    _no_keys(monkeypatch)
+    sc.write_manifest_template(tmp_path)
+    (tmp_path / sc.TEMPLATE_NAME).rename(tmp_path / sc.MANIFEST_NAME)
+    assert sc.REPORT_SCHEMA_VERSION == "1.2"
+    assert sc.run_comparison(tmp_path, [])["schema_version"] == "1.2"
