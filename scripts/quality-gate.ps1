@@ -516,7 +516,7 @@ if (-not $Fast) {
     }
   }
 
-  Invoke-Step "Gate database tool (PS5.1 + the dev server)" {
+  Invoke-Step "Gate database tool (PS5.1 + the dev server)" -Kinds database {
     # scripts/lib/GateDatabase.ps1 against the dev stack's real PostgreSQL: a database the
     # migrations run on, the name rule, two at once, the sweep, no password. Not grouped: it
     # makes and drops databases on the server the integration run above just used.
