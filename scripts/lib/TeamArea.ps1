@@ -19,7 +19,10 @@
         area is widened;
       * THE WRITING of that judgement onto the task (Add-TeamAreaWidening), which changes
         nothing when it is run a second time;
-      * whether the return still counts as one of the worker's two (Test-TeamAreaReturnCounts).
+      * whether the return still counts as one of the worker's two (Test-TeamAreaReturnCounts);
+      * whether a counted second return still stops the task: not when the inspector's
+        `onceki_bulgular: kapandi` line says the previous items are closed - one extra round,
+        never a third (Get-TeamPriorFindings, Resolve-TeamReturnStop).
 
     As in `TeamQueue.ps1`, every rule is a function that takes its inputs and returns its
     answer: this file starts no process, reads no file and writes no store. Nothing here is
@@ -414,4 +417,97 @@ function Test-TeamAreaReturnCounts {
     param([AllowNull()]$Resolution)
     $decision = [string](Get-TeamProperty -InputObject $Resolution -Name "Decision" -Default "")
     return [bool](@("widen", "wait") -cnotcontains $decision)
+}
+
+# ---------------------------------------------------------------------------------------
+# "İkinci dönüş yeni bulguysa iş durmasın" (team/proposals/2026-10-03-ikinci-donus-yeni-bulgu.md):
+# the other half of "does this return stop the task". A second RETURN whose previous items
+# are all closed is a NEW finding and buys one more round; anything else stops as today.
+
+# The inspector's key, case-sensitive, as `alan_disi`.
+$script:TeamPriorFindingsKey = "onceki_bulgular"
+
+# The return that stops a task whatever its report says: one extra round at most.
+$script:TeamReturnsHardCap = 3
+
+function Get-TeamPriorFindings {
+    <#
+    .SYNOPSIS
+        The inspector's `onceki_bulgular:` line: are the previous RETURN's items closed.
+
+    .DESCRIPTION
+        ONE line, alone on its line, above the verdict: the key, a colon, then `kapandi` or
+        `acik [n, n]` (the previous items still open; `acik` with an empty or no list is
+        still acik). Backticks, asterisks and spaces around the line, the key and the value
+        are ignored; a bullet, quote mark or number before the key makes the line prose, and
+        nothing may follow the value or the closing bracket. The LAST such line wins.
+        Anything else after the key, or no line at all, is acik - the safe default.
+
+        Returns Present (a line with the key was found), Closed (true only for a valid
+        `kapandi`), Open (the item numbers of a valid `acik [...]`) and Raw (the last line
+        as written, "" when there is none).
+    #>
+    param([AllowEmptyString()][string]$Report)
+    $key = [regex]::Escape($script:TeamPriorFindingsKey)
+    $present = $false
+    $closed = $false
+    $open = New-Object System.Collections.Generic.List[int]
+    $raw = ""
+    foreach ($line in @(([string]$Report) -split "`r?`n")) {
+        $text = $line.Trim().Trim('`', '*', ' ')
+        if ($text -cnotmatch ('^' + $key + '[\s`*]*:[\s`*]*(.*)$')) { continue }
+        $rest = $Matches[1].Trim().Trim('`', '*', ' ')
+        $present = $true
+        $raw = $line
+        $closed = [string]::Equals($rest, "kapandi", [System.StringComparison]::Ordinal)
+        $open.Clear()
+        if ($rest -cmatch '^acik\s*\[([^\]]*)\]$') {
+            foreach ($entry in @($Matches[1] -split ',')) {
+                $number = 0
+                if ([int]::TryParse($entry.Trim().Trim('`', '*', ' '), [ref]$number)) { $open.Add($number) }
+            }
+        }
+    }
+    return [pscustomobject]@{ Present = [bool]$present; Closed = [bool]$closed; Open = [int[]]$open.ToArray(); Raw = $raw }
+}
+
+function Resolve-TeamReturnStop {
+    <#
+    .SYNOPSIS
+        Where a returned task goes: back to its worker, or stopped for the lead.
+
+    .DESCRIPTION
+        The shape of Get-TeamStateAfterInspection's RETURN branch - State ('returned' |
+        'stopped'), Returns (the task's `returns` + 1), Reason - and Extra, true when the
+        round was granted by this rule. Called in place of that branch, after
+        Test-TeamAreaReturnCounts has said the return counts. In this order:
+
+          Returns >= $script:TeamReturnsHardCap               -> stopped, whatever the line says
+          Returns <  $script:TeamMaxReturns                   -> returned (no line needed)
+          Returns =  $script:TeamMaxReturns and `kapandi`     -> returned, Extra
+          otherwise (acik, malformed, no line)                -> stopped with today's reason,
+                                                                 plus the open items when known
+
+        Every 'stopped' reason starts with Get-TeamStateAfterInspection's own text.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]$Task,
+        [AllowEmptyString()][string]$Report
+    )
+    $returns = [int](Get-TeamProperty -InputObject $Task -Name "returns" -Default 0) + 1
+    $stopped = "ayni is iki kez geri verildi"
+    if ($returns -ge $script:TeamReturnsHardCap) {
+        return [pscustomobject]@{ State = "stopped"; Returns = $returns; Reason = "$stopped; $returns. dönüş - ek tur yalnız bir kez verilir"; Extra = $false }
+    }
+    if ($returns -lt $script:TeamMaxReturns) {
+        $why = if ((Get-TeamVerdict -Report $Report).Verdict -eq "NONE") { "rapor bir hukumle bitmedi" } else { "" }
+        return [pscustomobject]@{ State = "returned"; Returns = $returns; Reason = $why; Extra = $false }
+    }
+    $prior = Get-TeamPriorFindings -Report $Report
+    if ($prior.Closed) {
+        return [pscustomobject]@{ State = "returned"; Returns = $returns; Reason = "önceki dönüşün maddeleri kapandı, yeni bir bulgu geldi; bir ek tur verildi"; Extra = $true }
+    }
+    $reason = $stopped
+    if (@($prior.Open).Count -gt 0) { $reason = "$stopped; açık kalan maddeler: $(@($prior.Open) -join ', ')" }
+    return [pscustomobject]@{ State = "stopped"; Returns = $returns; Reason = $reason; Extra = $false }
 }

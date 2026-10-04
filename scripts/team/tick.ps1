@@ -20,6 +20,10 @@ param(
     [int]$MaxParallel = 2,
     [double]$MaxUsd = 0,
     [int]$CycleMinutes = 0,
+    # The cycle's -MaxHours, when given (0 = no end): a cycle that stops dispatching at four hours
+    # left five seats empty for half an hour twice on 2026-10-03 while it drained. Not given: the
+    # cycle's own default, as before.
+    [double]$MaxHours = -1,
     [switch]$Research,
     [switch]$DailyId,
     [double]$ResearchEveryHours = 0,
@@ -267,6 +271,9 @@ $cycleArguments = @(
     "-MaxUsd", $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture),
     "-MaxParallel", "$MaxParallel", "-CycleMinutes", "$CycleMinutes"
 )
+if ($MaxHours -ge 0) {
+    $cycleArguments += @("-MaxHours", $MaxHours.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture))
+}
 if ($Research) { $cycleArguments += "-Research" }
 if ($DailyId) { $cycleArguments += "-DailyId" }
 if ($ResearchEveryHours -gt 0) {

@@ -50,12 +50,12 @@ describe("how a character feels", () => {
 
   it("a task back from the inspector makes it sad; a stopped or failed one makes it angry", () => {
     const view = twoWorkers();
-    const inspector = view.agents.find((a) => a.seat === "inspector")!;
-    const old = view.tasks["t-old"];
-    expect(moodOf(inspector, old, NOW)).toBe("sad");
-    expect(moodOf(inspector, { ...old, state: "stopped" }, NOW)).toBe("angry");
+    const worker = view.agents.find((a) => a.seat === "worker-4")!;
+    const back = view.tasks["t-back"];
+    expect(moodOf(worker, back, NOW)).toBe("sad");
+    expect(moodOf(worker, { ...back, state: "stopped" }, NOW)).toBe("angry");
     expect(
-      moodOf(inspector, { ...old, report: { role: "worker", at: "", outcome: "başarısız: exit 1", summary: [] } }, NOW),
+      moodOf(worker, { ...back, report: { role: "worker", at: "", outcome: "başarısız: exit 1", summary: [] } }, NOW),
     ).toBe("angry");
   });
 
@@ -71,7 +71,8 @@ describe("how a character feels", () => {
     const late = buildOffice(twoWorkers(), at(90)).seats;
     expect(early.find((s) => s.seat === "worker-1")!.mood).toBe("focused");
     expect(late.find((s) => s.seat === "worker-1")!.mood).toBe("tired");
-    expect(late.find((s) => s.seat === "inspector")!.mood).toBe("sad");
+    expect(late.find((s) => s.seat === "worker-4")!.mood).toBe("sad");
+    expect(late.find((s) => s.seat === "inspector")!.mood).toBe("relaxed");
     expect(late.find((s) => s.seat === "lead")!.mood).toBe("relaxed");
   });
 });
@@ -79,9 +80,9 @@ describe("how a character feels", () => {
 describe("what the feeling looks like", () => {
   it("each mood draws its own face, and the marks that go with it", () => {
     const view = twoWorkers();
-    view.tasks["t-old"] = { ...view.tasks["t-old"], state: "stopped" };
+    view.tasks["t-back"] = { ...view.tasks["t-back"], state: "stopped" };
     const html = render(view);
-    const angry = seatHtml(html, "inspector");
+    const angry = seatHtml(html, "worker-4");
     expect(angry).toContain("office-mood-angry");
     expect(angry).toContain("var(--office-face-angry)");
     expect(angry).toContain('class="office-steam"');
@@ -90,7 +91,7 @@ describe("what the feeling looks like", () => {
     expect(relaxed).toContain('class="office-mug"');
     // the two faces differ from each other
     const faces = new Set(
-      ["inspector", "lead"].map((s) => seatHtml(html, s).match(/<g transform="translate\(5 4\)"[\s\S]*?<\/g>/)?.[0]),
+      ["worker-4", "lead"].map((s) => seatHtml(html, s).match(/<g transform="translate\(5 4\)"[\s\S]*?<\/g>/)?.[0]),
     );
     expect(faces.size).toBe(2);
   });

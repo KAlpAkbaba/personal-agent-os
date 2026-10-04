@@ -49,9 +49,11 @@
   --office-city-light: #ffd25a;
   --office-neon: #38d9ff;
   /* the room */
-  --office-floor-a: #e6ebf3;
-  --office-floor-b: #dbe2ec;
-  --office-grid: rgba(56, 217, 255, 0.16);
+  /* a dark floor (the owner, 2026-10-03: "arka plan beyaz olduğu için hiçbir şey gözükmüyor") */
+  --office-floor-a: #1b2143;
+  --office-floor-b: #20274d;
+  --office-grid: rgba(56, 217, 255, 0.13);
+  --office-label: #cfe9ff;
   --office-wall-top: #1e2347;
   --office-wall-bottom: #2b3366;
   --office-wall-edge: #a9b0c0;
@@ -80,6 +82,12 @@
 
 .office-topbar strong {
   color: var(--office-gold);
+}
+
+/* a long line (the newest downgrade) wraps inside the bar at phone width */
+.office-topbar > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .office-offline {
@@ -146,16 +154,16 @@
 }
 
 .office-seat:hover {
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(56, 217, 255, 0.1);
 }
 
 .office-seat[aria-pressed="true"] {
-  background: rgba(255, 255, 255, 0.65);
-  border-color: var(--office-navy);
+  background: rgba(56, 217, 255, 0.16);
+  border-color: var(--office-neon);
 }
 
 .office-seat:focus-visible {
-  outline: 3px solid var(--office-navy);
+  outline: 3px solid var(--office-neon);
   outline-offset: 2px;
 }
 
@@ -167,7 +175,7 @@
   white-space: nowrap;
   font-size: 0.72rem;
   font-weight: 600;
-  color: var(--office-navy-shade);
+  color: var(--office-label);
 }
 
 .office-figure {
@@ -175,6 +183,8 @@
   max-width: 8rem;
   height: auto;
   overflow: visible;
+  /* a soft light behind each character so navy and amber read on the dark floor */
+  filter: drop-shadow(0 0 6px rgba(124, 202, 240, 0.28));
 }
 
 /* the name badge under the desk, like a name card */
@@ -690,4 +700,32 @@
   .office-decor-vacuum {
     animation: none;
   }
+}
+
+/* A seat whose live run is on another model than configured (the model policy). */
+.office-lowered {
+  font-size: 0.7rem;
+  color: var(--core-amber, #f0a53a);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* yedek model: açık / kapalı - a real toggle in the top bar. */
+.office-toggle {
+  font: inherit;
+  padding: 0 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.office-toggle[aria-pressed="true"] {
+  border-color: var(--core-amber, #f0a53a);
+}
+
+.office-panel select {
+  max-width: 100%;
+  font: inherit;
 }

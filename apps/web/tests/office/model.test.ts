@@ -57,9 +57,19 @@ describe("the office model", () => {
   });
 
   it("stands a returned seat beside the desk with the warning mark", () => {
-    const seat = buildOffice(twoWorkers()).seats.find((s) => s.seat === "inspector")!;
+    const seat = buildOffice(twoWorkers()).seats.find((s) => s.seat === "worker-4")!;
     expect(seat.pose).toBe("standing");
     expect(seat.warning).toBe(true);
+  });
+
+  it("seats the inspector calm when its last task came back: it sent it back, the worker fixes it", () => {
+    const seat = buildOffice(twoWorkers()).seats.find((s) => s.seat === "inspector")!;
+    expect(seat.state).toBe("waiting");
+    expect(seat.pose).toBe("seated");
+    expect(seat.warning).toBe(false);
+    expect(seat.mood).toBe("relaxed");
+    // its panel still names the task it sent back
+    expect(buildPanel(twoWorkers(), "inspector")!.task?.title).toBe("Eski iş");
   });
 
   it("seats a waiting seat still, without a mark or a label", () => {
@@ -72,7 +82,8 @@ describe("the office model", () => {
   it("names role and state in the aria-label", () => {
     const office = buildOffice(twoWorkers());
     expect(office.seats.find((s) => s.seat === "worker-1")!.ariaLabel).toBe("Çalışan 1, çalışıyor");
-    expect(office.seats.find((s) => s.seat === "inspector")!.ariaLabel).toBe("Denetleyici, döndü");
+    expect(office.seats.find((s) => s.seat === "worker-4")!.ariaLabel).toBe("Çalışan 4, döndü");
+    expect(office.seats.find((s) => s.seat === "inspector")!.ariaLabel).toBe("Denetleyici, bekliyor");
     expect(office.seats.find((s) => s.seat === "lead")!.ariaLabel).toBe("Proje Yöneticisi, bekliyor");
   });
 
@@ -135,7 +146,7 @@ describe("the seats the API sends", () => {
       "CTO",
     ]);
     expect(buildOffice(twoWorkers()).seats.find((s) => s.seat === "worker-4")!.ariaLabel).toBe(
-      "Çalışan 4, bekliyor",
+      "Çalışan 4, döndü",
     );
   });
 

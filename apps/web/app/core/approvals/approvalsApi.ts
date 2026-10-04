@@ -11,6 +11,7 @@ import { apiFetch } from "../../lib/session";
 
 export const APPROVALS_PATH = "/v1/team/approvals";
 export const DECISION_PATH = `${APPROVALS_PATH}/decision`;
+export const TRIAL_DECISION_PATH = "/v1/team/trials/decision";
 
 export type Gate = "fikir" | "yayin";
 
@@ -28,8 +29,24 @@ export type PendingApproval = {
   updated_at: string | null;
 };
 
+/** One trial on a real device (ADR-0258): what the owner says, where, and what must happen. */
+export type OwnerTrial = {
+  id: string;
+  sentence: string;
+  machine: string;
+  expect: string;
+  verdict: null | "oldu" | "olmadi";
+  said: string | null;
+  at: string | null;
+};
+
+/** An undecided trial of a released task, as `GET /v1/team/approvals` lists it. */
+export type OpenTrial = { task_id: string; title: string; sha: string | null; trial: OwnerTrial };
+
 export type ApprovalsView = {
   approvals: PendingApproval[];
+  /** The third gate (ADR-0258); absent from a Cloud Core older than it. */
+  trials?: OpenTrial[];
   cycle_report: { file: string; text: string } | null;
   cycle_running: boolean;
   /**
@@ -42,6 +59,11 @@ export type ApprovalsView = {
 /** `decisions_open` when the Cloud Core sends it; otherwise the old rule: not while a cycle runs. */
 export function decisionsOpen(view: Pick<ApprovalsView, "cycle_running" | "decisions_open">): boolean {
   return view.decisions_open ?? !view.cycle_running;
+}
+
+/** What the Onay Merkezi reports as waiting for the owner: both gates' tasks and the open trials. */
+export function waitingCount(view: Pick<ApprovalsView, "approvals" | "trials">): number {
+  return view.approvals.length + (view.trials?.length ?? 0);
 }
 
 export const GATE_TR: Record<Gate, string> = { fikir: "Fikir onayı", yayin: "Yayın onayı" };
@@ -91,4 +113,24 @@ export async function decide(
   if (!response.ok) return { ok: false, ...(await refusal(response)) };
   const body = (await response.json()) as { state: string };
   return { ok: true, state: body.state };
+}
+
+export type TrialDecisionResult =
+  | { ok: true; fix_task_id: string | null; message: string }
+  | { ok: false; code: string; message: string };
+
+/** Oldu / Olmadı on one trial; `said` is the owner's words (the server requires them for "olmadi"). */
+export async function decideTrial(
+  open: Pick<OpenTrial, "task_id" | "trial">,
+  verdict: "oldu" | "olmadi",
+  said: string | null,
+): Promise<TrialDecisionResult> {
+  const response = await apiFetch(TRIAL_DECISION_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_id: open.task_id, trial_id: open.trial.id, verdict, said }),
+  });
+  if (!response.ok) return { ok: false, ...(await refusal(response)) };
+  const body = (await response.json()) as { fix_task_id?: string | null; message?: string };
+  return { ok: true, fix_task_id: body.fix_task_id ?? null, message: body.message ?? "" };
 }
