@@ -21,6 +21,7 @@ Two layers of tests:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import threading
 from collections.abc import Iterator
@@ -30,11 +31,16 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from browser_agent import media
-from browser_agent.destination import RequestGuard, TrustedOrigin, require_public_destination
+from browser_agent import media, policy
+from browser_agent.destination import (
+    EgressProxy,
+    RequestGuard,
+    TrustedOrigin,
+    require_public_destination,
+)
 from browser_agent.errors import BrowserError, ErrorClass
 from browser_agent.evidence import validate_selector, whitespace_digest
-from browser_agent.worker import Worker, build_arg_parser
+from browser_agent.worker import SessionState, Worker, build_arg_parser
 
 _PUBLIC = {"public.test": ["93.184.216.34"], "evil.test": ["100.90.158.26"]}
 
@@ -294,6 +300,8 @@ def _serve(handler_factory) -> tuple[ThreadingHTTPServer, threading.Thread]:
 @pytest.fixture()
 def sites() -> Iterator[SimpleNamespace]:
     hits = _Hits()
+    pages: dict[str, str] = {}  # extra pages a test adds (path -> body html)
+    reached: list[str] = []  # every path the PUBLIC fixture served
 
     class Secret(BaseHTTPRequestHandler):
         def log_message(self, *_a) -> None:
@@ -326,6 +334,10 @@ def sites() -> Iterator[SimpleNamespace]:
         def do_GET(self) -> None:  # noqa: N802
             parts = urlsplit(self.path)
             query = parse_qs(parts.query)
+            reached.append(parts.path)
+            if parts.path in pages:
+                self._html(f"<html><body><main>{pages[parts.path]}</main></body></html>")
+                return
             if parts.path == "/redir":
                 self.send_response(302)
                 self.send_header("Location", query["to"][0])
@@ -364,6 +376,8 @@ def sites() -> Iterator[SimpleNamespace]:
             base=f"http://public.test:{public.server_address[1]}",
             secret_port=secret_port,
             hits=hits,
+            pages=pages,
+            reached=reached,
         )
     finally:
         for server, thread in ((public, public_thread), (secret, secret_thread)):
@@ -371,19 +385,19 @@ def sites() -> Iterator[SimpleNamespace]:
             thread.join(timeout=5)
 
 
+def _dial_fixture(address: str) -> str:
+    """The browser tests' "public" addresses (93.184.216.x) are the loopback fixture."""
+    return "127.0.0.1" if address.startswith("93.184.216.") else address
+
+
 @pytest.fixture()
-async def guarded_worker(tmp_path, monkeypatch) -> Iterator[Worker]:
-    """A real worker WITHOUT --allow-private-destinations; ``public.test`` is public to the
-    policy (fake resolver) and lands on the loopback fixture in Chromium."""
-    monkeypatch.setattr(
-        media,
-        "media_launch_args",
-        lambda _kind: ["--host-resolver-rules=MAP public.test 127.0.0.1"],
-    )
+async def guarded_worker(tmp_path) -> Iterator[Worker]:
+    """A real worker WITHOUT --allow-private-destinations, behind its egress proxy:
+    ``public.test`` / ``other.test`` are public to the policy (fake resolver) and the proxy
+    dials the loopback fixture for them. Chromium resolves nothing itself - without the proxy
+    ``public.test`` would not load at all, so every passing read proves the proxy path."""
     worker = _worker(tmp_path)
-    # The fixture is really served from 127.0.0.1; only the served-address (rebinding)
-    # check is told so - the URL policy is the production one.
-    worker._served_address_forbidden = lambda _ip: False
+    worker._egress_dial = _dial_fixture
     await worker._print_hello()
     try:
         yield worker
@@ -532,3 +546,334 @@ async def test_a_selector_over_200_characters_is_validation_error(
             {"session_id": "s1", "url": f"{sites.base}/prices", "selector": "d" * 201},
         )
     assert info.value.error_class is ErrorClass.VALIDATION_ERROR
+
+
+# --------------------------------------------------------------------------- #
+# no browser: the egress proxy (return 1-3) against raw sockets
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture()
+def upstream() -> Iterator[SimpleNamespace]:
+    seen: list[tuple[str, str]] = []
+
+    class Echo(BaseHTTPRequestHandler):
+        def log_message(self, *_a) -> None:
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            seen.append((self.path, self.headers.get("Host", "")))
+            body = b"upstream says hi"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            self.wfile.write(body)
+
+    server, thread = _serve(Echo)
+    try:
+        yield SimpleNamespace(port=server.server_address[1], seen=seen)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+async def _through(proxy: EgressProxy, request: bytes) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+    writer.write(request)
+    await writer.drain()
+    try:
+        return await asyncio.wait_for(reader.read(65536), timeout=5)
+    finally:
+        writer.close()
+
+
+class TestEgressProxyUnit:
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "100.64.0.1:443",
+            "100.90.158.26:8001",
+            "127.0.0.1:{port}",
+            "169.254.169.254:80",
+            "evil.test:443",
+            "[::1]:{port}",
+        ],
+    )
+    async def test_a_tunnel_to_a_forbidden_destination_is_refused_and_never_dialled(
+        self, upstream, target: str
+    ) -> None:
+        proxy = EgressProxy(resolver=_fake_resolver, dial=_dial_fixture)
+        await proxy.start()
+        try:
+            host_port = target.format(port=upstream.port)
+            answer = await _through(proxy, f"CONNECT {host_port} HTTP/1.1\r\n\r\n".encode())
+        finally:
+            await proxy.close()
+        assert answer.startswith(b"HTTP/1.1 403")
+        assert len(proxy.refusals) == 1
+        assert upstream.seen == []
+
+    async def test_a_plain_request_to_a_forbidden_destination_is_refused(self, upstream) -> None:
+        proxy = EgressProxy(resolver=_fake_resolver, dial=_dial_fixture)
+        await proxy.start()
+        try:
+            answer = await _through(
+                proxy,
+                f"GET http://127.0.0.1:{upstream.port}/x?t=secret HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{upstream.port}\r\n\r\n".encode(),
+            )
+        finally:
+            await proxy.close()
+        assert answer.startswith(b"HTTP/1.1 403")
+        assert "secret" not in proxy.refusals[0].target
+        assert upstream.seen == []
+
+    async def test_a_public_request_is_forwarded_once_and_the_connection_closed(
+        self, upstream
+    ) -> None:
+        proxy = EgressProxy(resolver=_fake_resolver, dial=_dial_fixture)
+        await proxy.start()
+        try:
+            answer = await _through(
+                proxy,
+                (
+                    f"GET http://public.test:{upstream.port}/a?b=1 HTTP/1.1\r\n"
+                    f"Host: public.test:{upstream.port}\r\n"
+                    "Proxy-Connection: keep-alive\r\n\r\n"
+                ).encode(),
+            )
+        finally:
+            await proxy.close()
+        assert answer.split(b" ", 2)[1] == b"200"
+        assert b"Connection: close" in answer and b"keep-alive" not in answer
+        assert upstream.seen == [("/a?b=1", f"public.test:{upstream.port}")]
+
+    def test_the_proxy_dials_the_address_it_vetted(self) -> None:
+        # DNS rebinding: the name is resolved ONCE and the checked answer is what is dialled;
+        # a second (tailnet) answer is never asked for.
+        answers = iter([["93.184.216.34"], ["100.90.158.26"]])
+        proxy = EgressProxy(resolver=lambda _h: next(answers))
+        address = proxy.vet(
+            url="https://rebind.test:443/", host="rebind.test", port=443, connect=True
+        )
+        assert address == "93.184.216.34"
+
+    def test_the_trusted_origin_view_is_admitted_and_nothing_else(self) -> None:
+        trusted = TrustedOrigin(scheme="http", host="100.90.158.26", port=8001)
+        proxy = EgressProxy(resolver=_fake_resolver, trusted_origin=trusted)
+        view = "http://100.90.158.26:8001/v1/artifacts/renders/view?t=abc"
+        assert proxy.vet(url=view, host="100.90.158.26", port=8001, connect=False) == (
+            "100.90.158.26"
+        )
+        for url, port, connect in (
+            ("http://100.90.158.26:8001/v1/devices", 8001, False),
+            ("http://100.90.158.26:8002/v1/artifacts/renders/view", 8002, False),
+            ("https://100.90.158.26:8002/", 8002, True),
+            ("https://100.90.158.27:8001/", 8001, True),
+        ):
+            with pytest.raises(BrowserError) as info:
+                proxy.vet(url=url, host=urlsplit(url).hostname, port=port, connect=connect)
+            assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR, url
+
+    async def test_chromium_is_left_no_way_around_it(self) -> None:
+        proxy = EgressProxy()
+        await proxy.start()
+        try:
+            args = proxy.chromium_args()
+            assert f"--proxy-server=http://127.0.0.1:{proxy.port}" in args
+        finally:
+            await proxy.close()
+        # Chromium sends loopback around a proxy unless told not to.
+        assert "--proxy-bypass-list=<-loopback>" in args
+        assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args
+
+    async def test_the_worker_starts_one_proxy_and_stops_it_at_shutdown(self, tmp_path) -> None:
+        worker = _worker(tmp_path)
+        try:
+            args = await worker._egress_args()
+            assert args == await worker._egress_args()
+            assert worker._egress_proxy is not None
+        finally:
+            await worker._close_all_sessions()
+        assert worker._egress_proxy is None
+
+
+# --------------------------------------------------------------------------- #
+# no browser: the owner's own Chrome is not left intercepted (return 5)
+# --------------------------------------------------------------------------- #
+
+
+class _ReleasableCdp(_FakeCdp):
+    def __init__(self) -> None:
+        super().__init__()
+        self.detached = False
+
+    async def detach(self) -> None:
+        self.detached = True
+
+
+class _OwnerPage:
+    url = "https://ornek.com/"
+
+    def __init__(self) -> None:
+        self.cdp = _ReleasableCdp()
+        cdp = self.cdp
+
+        class _Context:
+            async def new_cdp_session(self, _page) -> _ReleasableCdp:
+                return cdp
+
+        self.context = _Context()
+
+
+class _OwnerTab:
+    index = 0
+    is_current = True
+    url = "https://ornek.com/"
+    title = "Sahibin sekmesi"
+
+
+class _OwnerBrowserSession:
+    def __init__(self) -> None:
+        self.backend = SimpleNamespace(
+            current_page=_OwnerPage(),
+            main_pid=None,
+            last_launch_kind=None,
+            launch_lock_name=None,
+            job_object_assigned=False,
+        )
+
+    async def list_tabs(self) -> list[_OwnerTab]:
+        return [_OwnerTab()]
+
+
+def _session_state(profile: str) -> SessionState:
+    browser_session = _OwnerBrowserSession()
+    return SessionState(
+        session_id="o",
+        browser_session=browser_session,  # type: ignore[arg-type]
+        backend=browser_session.backend,  # type: ignore[arg-type]
+        policy_allowed=frozenset(policy.RiskClass),
+        visible=True,
+        channel="chrome",
+        browser_version=None,
+        profile=profile,
+        last_used=0.0,
+        request_guard=RequestGuard(_policy_check),
+    )
+
+
+class TestOwnerSessionGuardUnit:
+    async def test_the_owners_tab_is_released_when_the_op_ends(self, tmp_path) -> None:
+        worker = _worker(tmp_path)
+        state = _session_state(media.OWNER_PROFILE)
+        worker._sessions["o"] = state
+        await worker._execute("browser.tab_list", {"session_id": "o"})
+        cdp = state.browser_session.backend.current_page.cdp
+        methods = [m for m, _ in cdp.sent]
+        assert "Fetch.enable" in methods  # guarded WHILE the worker drove the tab
+        assert methods[-1] == "Fetch.disable" and cdp.detached  # and let go after
+        assert state.guard_cdp == {} and state.guarded_pages == set()
+
+    async def test_the_owners_tab_is_released_when_the_op_fails(self, tmp_path) -> None:
+        worker = _worker(tmp_path)
+        state = _session_state(media.OWNER_PROFILE)
+        worker._sessions["o"] = state
+        with pytest.raises(BrowserError):
+            await worker._execute("browser.tab_select", {"session_id": "o", "index": "x"})
+        cdp = state.browser_session.backend.current_page.cdp
+        assert cdp.detached and state.guard_cdp == {}
+
+    async def test_a_worker_profile_keeps_its_guard_between_ops(self, tmp_path) -> None:
+        worker = _worker(tmp_path)
+        state = _session_state("isolated")
+        worker._sessions["o"] = state
+        await worker._execute("browser.tab_list", {"session_id": "o"})
+        cdp = state.browser_session.backend.current_page.cdp
+        assert "Fetch.disable" not in [m for m, _ in cdp.sent] and not cdp.detached
+        assert state.guard_cdp  # still intercepting: it is the worker's own browser
+
+
+# --------------------------------------------------------------------------- #
+# -m browser: what the page-level guard could not see (return 1-4)
+# --------------------------------------------------------------------------- #
+
+
+def _hostile(sites) -> None:
+    """Pages that try the ways around a page-level guard: a cross-site iframe whose own
+    img/fetch/WebSocket go to the "tailnet", popups and WebSockets."""
+    secret = sites.secret_port
+    sites.pages.update(
+        {
+            "/oopif": (
+                f'<p>Dis sayfa</p><iframe src="http://other.test:{sites.port}/inner"></iframe>'
+            ),
+            "/inner": (
+                f'<p>Ic cerceve</p><img src="http://127.0.0.1:{secret}/inner-img">'
+                f'<script>fetch("http://127.0.0.1:{secret}/inner-fetch").catch(()=>0);'
+                f'try{{new WebSocket("ws://127.0.0.1:{secret}/inner-ws")}}catch(e){{}}</script>'
+            ),
+            "/popup": (
+                "<p>Acilir pencere sayfasi</p>"
+                f'<script>window.open("http://127.0.0.1:{secret}/popup");'
+                f'window.open("{sites.base}/redir?to=http://127.0.0.1:{secret}/popup-hop");'
+                "</script>"
+            ),
+            "/ws": (
+                "<p>Soket sayfasi</p>"
+                f'<script>try{{new WebSocket("ws://127.0.0.1:{secret}/ws")}}catch(e){{}}'
+                'try{new WebSocket("ws://evil.test/ws")}catch(e){}</script>'
+            ),
+        }
+    )
+
+
+async def _read(worker: Worker, url: str) -> dict:
+    result = await worker._execute("browser.fetch_evidence", {"session_id": "s1", "url": url})
+    await asyncio.sleep(2.0)  # what the page starts on its own has time to try
+    return result
+
+
+@pytest.mark.browser
+async def test_a_cross_site_iframe_cannot_reach_the_tailnet(guarded_worker: Worker, sites) -> None:
+    _hostile(sites)
+    await _open(guarded_worker)
+    result = await _read(guarded_worker, f"{sites.base}/oopif")
+    assert "Dis sayfa" in result["excerpt"]
+    assert "/inner" in sites.reached  # the cross-site frame itself DID load
+    assert sites.hits.paths == []  # ...and nothing it asked for reached the "tailnet"
+    assert any("127.0.0.1" in r.target for r in guarded_worker._egress_proxy.refusals)
+
+
+@pytest.mark.browser
+async def test_a_popup_cannot_reach_the_tailnet(guarded_worker: Worker, sites) -> None:
+    _hostile(sites)
+    await _open(guarded_worker)
+    result = await _read(guarded_worker, f"{sites.base}/popup")
+    assert "Acilir pencere" in result["excerpt"]
+    assert sites.hits.paths == []  # neither the popup's first request nor its redirect hop
+
+
+@pytest.mark.browser
+async def test_a_websocket_cannot_reach_the_tailnet(guarded_worker: Worker, sites) -> None:
+    _hostile(sites)
+    await _open(guarded_worker)
+    result = await _read(guarded_worker, f"{sites.base}/ws")
+    assert "Soket sayfasi" in result["excerpt"]
+    assert sites.hits.paths == []
+    assert any("127.0.0.1" in r.target for r in guarded_worker._egress_proxy.refusals)
+
+
+@pytest.mark.browser
+async def test_tab_new_with_a_redirecting_url_is_refused(guarded_worker: Worker, sites) -> None:
+    await _open(guarded_worker)
+    for target in _targets(sites.secret_port):
+        with pytest.raises(BrowserError) as info:
+            await guarded_worker._execute(
+                "browser.tab_new",
+                {"session_id": "s1", "url": f"{sites.base}/redir?to={target}"},
+            )
+        assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR, target
+        assert info.value.retryable is False
+    assert sites.hits.paths == []

@@ -363,9 +363,290 @@ class RequestGuard:
         return next((v for v in self.violations[mark:] if v.is_page_navigation), None)
 
 
+# --------------------------------------------------------------------------- #
+# the network layer: Chromium's only way out (browser-redirect-guard, return 1)
+# --------------------------------------------------------------------------- #
+#
+# CDP ``Fetch`` on the page's own session does not see a cross-site iframe's requests (an
+# out-of-process frame is another target), a popup's first request (sent before anything can
+# attach to the new target) or a WebSocket (CDP Fetch does not intercept it); the inspector
+# reached the "tailnet" all three ways on 2026-10-04. So every managed browser the worker
+# launches gets ``--proxy-server`` pointing at this in-process egress proxy and
+# ``--proxy-bypass-list=<-loopback>`` (Chromium otherwise sends loopback around a proxy).
+# Every connection Chromium makes - any target, any frame, redirect hops, WebSockets,
+# workers, beacons - is a CONNECT or an absolute-form request here, held to the same
+# policy, and the proxy dials the ADDRESS IT VETTED (no second resolution: the DNS
+# rebinding gap between our resolver and Chromium's is closed, not just detected). The idea
+# is Stripe's smokescreen; it is in-process Python so the office PC's Windows worker and the
+# cloud container get the same guard without another binary.
+
+_PROXY_HEAD_LIMIT = 64 * 1024
+_PROXY_IO_TIMEOUT_S = 30.0
+_PROXY_DIAL_TIMEOUT_S = 15.0
+_HOP_BY_HOP = frozenset(
+    {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te", "trailer"}
+)
+_REFUSED = (
+    b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n"
+    b"Connection: close\r\nProxy-Connection: close\r\n\r\n"
+)
+_BAD_REQUEST = (
+    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n"
+    b"Proxy-Connection: close\r\n\r\n"
+)
+_BAD_GATEWAY = (
+    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n"
+    b"Proxy-Connection: close\r\n\r\n"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyRefusal:
+    """One connection the egress proxy refused (host, port and - for http - the path)."""
+
+    method: str
+    target: str  # scheme://host:port/path or host:port - never the query
+    reason: str
+
+
+class EgressProxy:
+    """A forward proxy on 127.0.0.1 that admits only what ``require_public_destination``
+    admits (the trusted-origin exception included) and dials the address it checked.
+
+    ``dial`` maps a vetted address to the address actually connected to; production leaves
+    it the identity, the browser tests map their "public" addresses to the loopback fixture.
+    """
+
+    def __init__(
+        self,
+        *,
+        resolver: Resolver | None = None,
+        trusted_origin: TrustedOrigin | None = None,
+        dial: Callable[[str], str] | None = None,
+    ) -> None:
+        self._resolver = resolver
+        self._trusted_origin = trusted_origin
+        self._dial = dial or (lambda address: address)
+        self._server: asyncio.AbstractServer | None = None
+        self._connections: set[asyncio.Task[None]] = set()
+        self.refusals: list[ProxyRefusal] = []
+        self.port: int | None = None
+
+    async def start(self) -> None:
+        if self._server is not None:
+            return
+        self._server = await asyncio.start_server(self._on_client, "127.0.0.1", 0)
+        self.port = int(self._server.sockets[0].getsockname()[1])
+
+    def chromium_args(self) -> list[str]:
+        """Launch arguments that leave the browser no other way out. WebRTC's UDP would go
+        around an HTTP proxy, so non-proxied UDP is switched off."""
+        if self.port is None:
+            raise RuntimeError("egress proxy is not started")
+        return [
+            f"--proxy-server=http://127.0.0.1:{self.port}",
+            "--proxy-bypass-list=<-loopback>",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ]
+
+    def is_proxy_address(self, address: str | None, port: Any) -> bool:
+        return self.port is not None and address in ("127.0.0.1", "::1") and port == self.port
+
+    async def close(self) -> None:
+        server, self._server = self._server, None
+        if server is not None:
+            server.close()
+        for task in list(self._connections):
+            task.cancel()
+        if server is not None:
+            with contextlib.suppress(Exception):
+                await server.wait_closed()
+        self.port = None
+
+    # -- policy --------------------------------------------------------------- #
+
+    def vet(self, *, url: str, host: str, port: int, connect: bool) -> str:
+        """The address to dial for ``host``, or ``BrowserError`` when the policy forbids it.
+        ``url`` is the full url (absolute-form) or ``https://host:port/`` for a CONNECT."""
+        host = host.strip("[]").strip().lower().rstrip(".")
+        trusted = self._trusted_origin
+        if (
+            connect
+            and trusted is not None
+            and port == trusted.port
+            and _canonical_host(host) == trusted.host
+        ):
+            # A tunnel carries no path: the origin is admitted, and the page-level guard
+            # (RequestGuard) still holds the main frame to the report-view route.
+            return self._resolve_one(host)
+        resolved: list[str] = []
+
+        def recording(name: str) -> list[str]:
+            addresses = list((self._resolver or _default_resolver)(name))
+            resolved.extend(addresses)
+            return addresses
+
+        require_public_destination(
+            url, op="request", resolver=recording, trusted_origin=None if connect else trusted
+        )
+        if resolved:
+            return resolved[0]  # every one of them was checked; dial what was checked
+        return self._resolve_one(host)  # an IP literal, or the trusted origin's own name
+
+    def _resolve_one(self, host: str) -> str:
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            addresses = list((self._resolver or _default_resolver)(host))
+        if not addresses:
+            raise BrowserError(
+                ErrorClass.DEPENDENCY_UNAVAILABLE, "egress proxy: no address", retryable=True
+            )
+        return addresses[0]
+
+    # -- connections ---------------------------------------------------------- #
+
+    def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.ensure_future(self._serve(reader, writer))
+        self._connections.add(task)
+        task.add_done_callback(self._connections.discard)
+
+    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        upstream: asyncio.StreamWriter | None = None
+        try:
+            head = await asyncio.wait_for(
+                reader.readuntil(b"\r\n\r\n"), timeout=_PROXY_IO_TIMEOUT_S
+            )
+            if len(head) > _PROXY_HEAD_LIMIT:
+                writer.write(_BAD_REQUEST)
+                return
+            request_line, _, header_block = head.decode("latin-1").partition("\r\n")
+            method, target, version = (request_line.split(" ") + ["", "", ""])[:3]
+            if not version.startswith("HTTP/"):
+                writer.write(_BAD_REQUEST)
+                return
+            connect = method.upper() == "CONNECT"
+            parsed = _proxy_target(target, connect=connect)
+            if parsed is None:
+                writer.write(_BAD_REQUEST)
+                return
+            url, host, port, origin_form = parsed
+            try:
+                address = await asyncio.to_thread(
+                    self.vet, url=url, host=host, port=port, connect=connect
+                )
+            except BrowserError as exc:
+                self.refusals.append(
+                    ProxyRefusal(
+                        method=method.upper(), target=_url_without_query(url), reason=str(exc)[:200]
+                    )
+                )
+                writer.write(_REFUSED)
+                return
+            try:
+                up_reader, upstream = await asyncio.wait_for(
+                    asyncio.open_connection(self._dial(address), port),
+                    timeout=_PROXY_DIAL_TIMEOUT_S,
+                )
+            except (OSError, TimeoutError):
+                writer.write(_BAD_GATEWAY)
+                return
+            if connect:
+                writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                await writer.drain()
+            else:
+                # One request per proxy connection: the next request on a kept-alive
+                # connection could be for another host, and it would land on this upstream.
+                upstream.write(_origin_request(method, origin_form, version, header_block))
+                await upstream.drain()
+                response_head = await asyncio.wait_for(
+                    up_reader.readuntil(b"\r\n\r\n"), timeout=_PROXY_IO_TIMEOUT_S
+                )
+                writer.write(_closing_response(response_head))
+                await writer.drain()
+            await _pipe_both(reader, writer, up_reader, upstream)
+        except (
+            asyncio.IncompleteReadError,
+            asyncio.LimitOverrunError,
+            ConnectionError,
+            TimeoutError,
+            ValueError,
+        ):
+            pass
+        finally:
+            for w in (upstream, writer):
+                if w is not None:
+                    with contextlib.suppress(Exception):
+                        w.close()
+
+
+def _proxy_target(target: str, *, connect: bool) -> tuple[str, str, int, str] | None:
+    """(url for the policy, host, port, origin-form path) of a proxy request target."""
+    if connect:
+        host, sep, port_text = target.rpartition(":")
+        if not sep or not port_text.isdigit() or not host:
+            return None
+        port = int(port_text)
+        if not 0 < port < 65536:
+            return None
+        bare = host.strip("[]")
+        shown = f"[{bare}]" if ":" in bare else bare
+        return f"https://{shown}:{port}/", bare, port, ""
+    try:
+        parts = urlsplit(target)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "ws") or not parts.hostname:
+        return None  # https and wss come as CONNECT; anything else is not ours to carry
+    policy_url = target if scheme == "http" else "http" + target[len(scheme) :]
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
+    return policy_url, parts.hostname, port or 80, path
+
+
+def _origin_request(method: str, path: str, version: str, header_block: str) -> bytes:
+    headers = [line for line in header_block.split("\r\n") if line]
+    upgrade = any(line.lower().startswith("upgrade:") for line in headers)
+    kept = [line for line in headers if line.split(":", 1)[0].strip().lower() not in _HOP_BY_HOP]
+    kept.append("Connection: Upgrade" if upgrade else "Connection: close")
+    return (f"{method} {path} {version}\r\n" + "\r\n".join(kept) + "\r\n\r\n").encode("latin-1")
+
+
+def _closing_response(head: bytes) -> bytes:
+    status_line, _, header_block = head.decode("latin-1").partition("\r\n")
+    headers = [line for line in header_block.split("\r\n") if line]
+    if " 101 " in f"{status_line} ":
+        return head  # a WebSocket upgrade stays the connection it is
+    kept = [line for line in headers if line.split(":", 1)[0].strip().lower() not in _HOP_BY_HOP]
+    kept += ["Connection: close", "Proxy-Connection: close"]
+    return (status_line + "\r\n" + "\r\n".join(kept) + "\r\n\r\n").encode("latin-1")
+
+
+async def _pipe_both(
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    up_reader: asyncio.StreamReader,
+    up_writer: asyncio.StreamWriter,
+) -> None:
+    async def pump(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+        with contextlib.suppress(Exception):
+            while chunk := await src.read(65536):
+                dst.write(chunk)
+                await dst.drain()
+        with contextlib.suppress(Exception):
+            dst.close()
+
+    await asyncio.gather(pump(client_reader, up_writer), pump(up_reader, client_writer))
+
+
 __all__ = [
     "TRUSTED_VIEW_PATH",
     "BlockedRequest",
+    "EgressProxy",
+    "ProxyRefusal",
     "RequestGuard",
     "TrustedOrigin",
     "address_is_forbidden",

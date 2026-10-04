@@ -58,6 +58,7 @@ from . import (
 from .backends import DEFAULT_TAB_NAV_TIMEOUT_MS, ExistingSessionBackend, ManagedBackend
 from .destination import (
     TRUSTED_VIEW_PATH,
+    EgressProxy,
     RequestGuard,
     Resolver,
     TrustedOrigin,
@@ -522,6 +523,9 @@ class SessionState:
     # --allow-private-destinations. ``guarded_pages`` holds id(page) of pages attached.
     request_guard: RequestGuard | None = None
     guarded_pages: set[int] = field(default_factory=set)
+    # The CDP sessions the guard holds, by id(page): an owner-profile session releases
+    # them when each op ends, so the owner's own tab is never left intercepted.
+    guard_cdp: dict[int, Any] = field(default_factory=dict)
 
 
 #: fetch_evidence's ``selector``: the text of every matching element, document order. A
@@ -731,6 +735,11 @@ class Worker:
         # actually connected to (DNS rebinding: Chromium resolves on its own).
         self._destination_resolver: Resolver | None = None
         self._served_address_forbidden: Callable[[str], bool] = address_is_forbidden
+        # browser-redirect-guard (return 1-3): the network layer. Every managed browser is
+        # launched behind this in-process egress proxy (started with the first session);
+        # ``_egress_dial`` maps a vetted address to the one dialled (tests only).
+        self._egress_proxy: EgressProxy | None = None
+        self._egress_dial: Callable[[str], str] | None = None
         # Base URL for Google's home page (contract §3a). Defaults to the real
         # Google; the browser e2e suite points this at the fixture site so
         # the Google-through-the-UI flow is deterministic and offline.
@@ -930,6 +939,9 @@ class Worker:
             if state is None:
                 continue
             await self._close_session_state(session_id, state, op="shutdown_close")
+        proxy, self._egress_proxy = self._egress_proxy, None
+        if proxy is not None:
+            await proxy.close()
 
     async def _close_session_state(self, session_id: str, state: SessionState, *, op: str) -> bool:
         """Close one session's browser and wait (bounded) for its OS
@@ -1206,15 +1218,19 @@ class Worker:
             # The media family checks its session kind first and media_play attaches the
             # guard itself before it navigates.
             guard = state.request_guard
-            if not capability.startswith("browser.media_"):
-                await self._guard_current_page(state)
-            mark = guard.mark() if guard is not None else 0
             try:
-                result = await handler(self, state, payload)
-            except BrowserError as exc:
-                self._raise_on_refused_navigation(guard, mark, op=capability, cause=exc)
-                raise
-            self._raise_on_refused_navigation(guard, mark, op=capability)
+                if not capability.startswith("browser.media_"):
+                    await self._guard_current_page(state)
+                mark = guard.mark() if guard is not None else 0
+                try:
+                    result = await handler(self, state, payload)
+                except BrowserError as exc:
+                    self._raise_on_refused_navigation(guard, mark, op=capability, cause=exc)
+                    raise
+                self._raise_on_refused_navigation(guard, mark, op=capability)
+            finally:
+                if self._is_attached(state):
+                    await self._release_guard(state)
             # M13 lifecycle backstop (owner-machine incident 2026-09-03):
             # tab_new/fetch_evidence already refuse BEFORE opening a tab that
             # would cross max_tabs; this is defense in depth for anything
@@ -1415,6 +1431,11 @@ class Worker:
         # window (browser_agent.media documents why it is a preference and not
         # an anti-bot measure). A research launch is byte-for-byte what it was.
         browser_args = media.media_launch_args(session_kind)
+        if profile != media.OWNER_PROFILE and not self._allow_private_destinations:
+            # browser-redirect-guard (return 1-3): the browser's only way out is the egress
+            # proxy, so a cross-site iframe, a popup's first request and a WebSocket are held
+            # to the same policy as the page itself.
+            browser_args = [*(browser_args or []), *(await self._egress_args())]
         backend: ManagedBackend | ExistingSessionBackend
         if profile == media.OWNER_PROFILE:
             # ATTACH, never launch. The owner's Chrome is not ours to start, not
@@ -1649,6 +1670,31 @@ class Worker:
             trusted_origin=self._trusted_origin,
         )
 
+    async def _egress_args(self) -> list[str]:
+        if self._egress_proxy is None:
+            proxy = EgressProxy(
+                resolver=self._destination_resolver,
+                trusted_origin=self._trusted_origin,
+                dial=self._egress_dial,
+            )
+            await proxy.start()
+            self._egress_proxy = proxy
+        return self._egress_proxy.chromium_args()
+
+    async def _release_guard(self, state: SessionState) -> None:
+        """Owner-profile sessions (return 5): the owner's Chrome is not ours to configure and
+        cannot sit behind the egress proxy, so the page guard holds it only WHILE an op of the
+        worker drives it. When the op ends, interception is switched off and the CDP session
+        detached - the owner's own requests (the web shell, the NAS, the router) are never
+        failed or slowed by it afterwards."""
+        sessions, state.guard_cdp = state.guard_cdp, {}
+        state.guarded_pages.clear()
+        for cdp in sessions.values():
+            with suppress(Exception):
+                await cdp.send("Fetch.disable")
+            with suppress(Exception):
+                await cdp.detach()
+
     async def _guard_current_page(self, state: SessionState) -> RequestGuard | None:
         """Attach the session's request guard (created by session_open) to the page the op
         acts on, once per page. Fails closed: a page the guard cannot attach to is not
@@ -1672,6 +1718,7 @@ class Worker:
                 evidence={"error": str(exc)[:200]},
             ) from exc
         state.guarded_pages.add(id(page))
+        state.guard_cdp[id(page)] = cdp
         return state.request_guard
 
     @staticmethod
@@ -1714,6 +1761,9 @@ class Worker:
         except Exception:
             served = None
         address = (served or {}).get("ipAddress")
+        proxy = self._egress_proxy
+        if proxy is not None and proxy.is_proxy_address(address, (served or {}).get("port")):
+            return  # served through the egress proxy, which dialled the address it vetted
         if address and self._served_address_forbidden(str(address)):
             raise BrowserError(
                 ErrorClass.SECURITY_SCOPE_ERROR,

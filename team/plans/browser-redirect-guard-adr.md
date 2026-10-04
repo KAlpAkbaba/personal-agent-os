@@ -26,10 +26,38 @@ measured on 1.62).
    `text_sha256` (whitespace-collapsed sha256 of the matched text joined by newline, or of the
    WHOLE primary text before the excerpt cut), `selector_matched` (bool / null).
 
-**Not chosen here: a network-level egress rule.** The cloud container runs `cap_drop: ALL`, so
-iptables inside it is impossible, and the worker process itself must reach `api` on a private
-docker address. The working form is a Chromium-only egress proxy (Stripe Smokescreen, MIT, as a
-`--proxy-server` inside the container - verify it denies 100.64/10) or a host DOCKER-USER rule.
-That is a separate task (third-party record, image change). Residual gaps until then:
-WebSockets, service-worker and out-of-process (cross-site) iframe sub-requests, the first
-request of a popup before the worker closes it, and a DNS-rebinding SUB-request.
+**Return of 2026-10-04 (inspector: a cross-site iframe, a popup and a WebSocket reached the
+"tailnet"; tab_new had no test; the owner's tab stayed intercepted) - decisions added:**
+6. **Network layer: an in-process egress proxy** (`destination.EgressProxy`, the smokescreen idea
+   in ~250 lines of asyncio, no new dependency). Every MANAGED browser the worker launches gets
+   `--proxy-server=http://127.0.0.1:<port>`, `--proxy-bypass-list=<-loopback>` (Chromium
+   otherwise sends loopback around a proxy) and
+   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (WebRTC UDP would go around it).
+   Every connection - any target (OOPIF, popup, worker), each hop, WebSockets (CONNECT) - is
+   checked by `require_public_destination` with the same resolver and trusted origin, and the
+   proxy dials the address it VETTED (resolved once: the DNS-rebinding gap between our resolver
+   and Chromium's is closed, not only detected). One request per plain-http connection
+   (`Connection: close` both ways) so a kept-alive connection cannot carry a second host.
+   Chosen over CDP `Target.setAutoAttach`+`waitForDebuggerOnStart`: Playwright's CDPSession
+   cannot address the flattened child sessions, and auto-attach still misses WebSockets.
+   Chosen over a container iptables rule: `cap_drop: ALL` forbids it, and the office/home
+   Windows workers need the same guard. Smokescreen (Go binary) is not needed for that.
+7. The page guard (decision 1) stays: it identifies a refused PAGE navigation (so the op ends in
+   `security_scope_error`, not a proxy 403 page) and covers owner-profile sessions. When the
+   page was served through the proxy, the served-address check (decision 3) is the proxy's.
+8. **Owner-profile sessions** (the owner's own Chrome, attached over CDP): not ours to launch, so
+   no proxy. The page guard holds the owner's tab ONLY while an op of the worker drives it; when
+   the op ends (or fails) `Fetch.disable` + detach - the owner's own requests to the web shell,
+   NAS or router are never failed or slowed afterwards. Residual: an owner session has no
+   network layer (OOPIF/popup/WebSocket gaps of decision 1) - accepted: it is the owner's own
+   browser on the owner's own network, and the requested url is still checked.
+9. `tab_new` with a url opens blank, attaches, then navigates - now under test.
+
+**Residual risk / follow-up.** The trusted origin is admitted as a whole host:port for a CONNECT
+tunnel (https has no path at the proxy); the page guard still limits PAGE navigations to the
+report-view route, but an https trusted origin's other paths are reachable by a sub-request
+through the tunnel. Today's trusted origin is http (path checked at the proxy). Follow-up task
+(not opened here): a host-level DOCKER-USER rule dropping the cloud-browser container's traffic
+to 100.64.0.0/10 and the host's own addresses (belt and braces against a bug in the proxy;
+needs the host's firewall, release-engineer). Media sessions (the alarm, YouTube) now stream
+through the proxy too: watch the first alarm after release.

@@ -717,9 +717,23 @@ again (a name the policy resolved as public but Chromium reached on a forbidden 
 rebinding - is refused). A forbidden sub-request is blocked and the page itself still reads. A
 check that cannot decide (DNS down) fails the request too (fail closed). The trusted-origin
 exception is unchanged: on the configured origin only the report-view route is admitted, for
-hops and sub-requests as well. Known gaps, closed only by a network-level egress rule (not in
-this version): WebSockets, service-worker and cross-site (out-of-process) iframe sub-requests,
-the first request of a popup before it is closed, and a rebinding sub-request.
+hops and sub-requests as well.
+
+**The network layer (same day, the inspector's return).** Every browser the worker LAUNCHES
+(research, isolated, media) is started behind the worker's in-process egress proxy
+(`--proxy-server=http://127.0.0.1:<port>`, `--proxy-bypass-list=<-loopback>`, non-proxied WebRTC
+UDP off). Every connection the browser makes - cross-site (out-of-process) iframes, popups
+from their first request, WebSockets, workers, beacons, each redirect hop - is a CONNECT or an
+absolute-form request there and is held to the same policy; the proxy connects to the address
+it checked (no second DNS answer, so rebinding cannot move it). A refused connection is a
+`403` from the proxy (the page sees a failed sub-request; a refused page navigation is still
+`security_scope_error`). For an https trusted origin a tunnel carries no path: the proxy admits
+that one host:port, and page navigations on it stay limited to the report-view route.
+On an **owner-profile** session (the owner's own Chrome) there is no proxy - the browser is not
+the worker's to launch. The page guard intercepts the owner's tab only while a worker op drives
+it and is released (`Fetch.disable`, detached) when the op ends, so the owner's own requests to
+private addresses are never failed afterwards. `--allow-private-destinations` turns both
+layers off (fixture suites only).
 
 ## 6. Untrusted content boundary
 
