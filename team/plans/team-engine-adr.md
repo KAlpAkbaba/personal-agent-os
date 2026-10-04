@@ -19,9 +19,12 @@ geri gönderecek"; "Döngüyü kaldırabiliriz. Direkt bir sirkülasyon şeklind
 3. **Resume.** Worker runs keep their session (no `--no-session-persistence`); the session id is
    read from the result document and stored. The fixing run gets `--resume <id>` (id checked
    against `^[A-Za-z0-9-]{1,80}$`) plus the usual card (reason + the inspector's report), and keeps
-   every guard of a fresh run (model, budget, no background tasks, area). A failed resume
-   (error result) is not a failure of the task and spends no try: the same seat starts a fresh
-   run once, told so in its card, and the report says "<seat> önceki oturumunu sürdüremedi".
+   every guard of a fresh run (model, budget, no background tasks, area). Only a LOST session
+   (`Test-TeamResumeLost`: the tool says the session is not found / expired / cannot be resumed)
+   is not a failure of the task and spends no try: the same seat starts a fresh run once, told
+   so in its card, and the report says "<seat> önceki oturumunu sürdüremedi". A resumed run that
+   times out, hits its budget, is limited or crashes is an ordinary failure: counted, its
+   report kept, no fresh run in its place (the inspector, 2026-10-04).
 4. **The loop.** `-MaxHours` defaults to 0; `-Continuous` keeps the process alive when idle. The
    four jobs of the cycle boundary are kept without it: (a) handover - `team/handover.flag` or a
    change of the scripts' SHA-256 -> the loop writes `team/logs/loop-handover.json`, exits without
@@ -38,7 +41,8 @@ geri gönderecek"; "Döngüyü kaldırabiliriz. Direkt bir sirkülasyon şeklind
    first (silently, nothing the Ofis shows today is lost), then the model fields (as before).
 6. **The integration branch follows its base.** `Merge-TeamBranch -Follow`: if the base has
    commits `integrate/<id>` lacks, they are merged first (`merge: <base> <sha> into
-   integrate/<id>`, --no-ff). A conflict there aborts, the task stays `inspecting` with the
+   integrate/<id>`, --no-ff). A conflict there aborts (the integrate worktree is left clean, no
+   merge in progress), the task stays `inspecting` with the
    inspector's APPROVE as its last report (`Test-TeamAwaitingMerge`; the protocol has no state of
    its own for "approved, waiting to merge"), the lead gets one line "entegrasyon dalı <base>
    dalını alamadı: <files>", and every refill tries the merge again - never a second inspection.
@@ -52,6 +56,8 @@ geri gönderecek"; "Döngüyü kaldırabiliriz. Direkt bir sirkülasyon şeklind
 - The Ofis: `services/api/app/team/routes.py` (`_Run.seat`, status `loop_id`/`loop_started_at`/
   `returns`), `services/api/app/team/office.py` (the '!' on `owner_seat`; "geri dönen iş sırada:
   <title>" when that seat is busy) and the web top bar "Akış: kesintisiz, <n> saattir".
+- `owner_seat` / `session_id` as fields of the store's task record (the api's task model): until
+  that card lands they live in `team/logs/seats.json` on the loop's machine (decision 1).
 - A daily standup does not exist in the code yet; when it comes it is a timer like the researcher's.
 
 ## Consequences

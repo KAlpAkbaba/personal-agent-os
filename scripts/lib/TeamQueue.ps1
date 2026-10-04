@@ -1237,6 +1237,17 @@ function Read-TeamRunResult {
     }
 }
 
+function Test-TeamResumeLost {
+    <# team-engine: did a run started with `--resume <id>` fail because the tool could not resume
+       that session (expired, missing, refused) - and ONLY that? A run that timed out, hit its
+       budget, was limited or crashed for any other reason is an ordinary failure of the run:
+       its report counts, and no fresh run is started in its place (the inspector, 2026-10-04). #>
+    param([string]$Why = "", [string]$StdErr = "", [bool]$TimedOut = $false, [bool]$UsageLimited = $false)
+    if ($TimedOut -or $UsageLimited) { return $false }
+    $said = "$Why`n$StdErr"
+    return ($said -match '(?i)no conversation found|session[^\r\n]{0,60}\b(not found|expired|no longer exists|does not exist|is invalid)|\b(could not|cannot|unable to|failed to) resume')
+}
+
 # ------------------------------------------------------------------ the model policy
 #
 # ADR-0214 addendum 7 (owner, 2026-10-01). Three models, strongest first: the order IS the

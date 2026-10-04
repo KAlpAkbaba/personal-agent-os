@@ -898,6 +898,17 @@ Test-Case "engine run: the session a run printed is kept; a worker run keeps its
     Assert-True -Condition $threw -Because "a session id that is not one never reaches a command line"
 }
 
+Test-Case "engine run: only a session the tool could not resume is a lost session - a timeout, the budget, a limit and a crash are ordinary failures" {
+    Assert-True -Condition (Test-TeamResumeLost -Why "No conversation found with session ID: abc-123") -Because "the tool's own words for a session it no longer has"
+    Assert-True -Condition (Test-TeamResumeLost -Why "the run printed no result document (exit 1)" -StdErr "Error: No conversation found with session ID: abc") -Because "said on stderr only"
+    Assert-True -Condition (Test-TeamResumeLost -Why "Session abc-123 has expired") -Because "an expired session"
+    Assert-True -Condition (-not (Test-TeamResumeLost -Why "No conversation found with session ID: abc" -TimedOut $true)) -Because "a run that ran out of time resumed: its time is spent"
+    Assert-True -Condition (-not (Test-TeamResumeLost -Why "No conversation found" -UsageLimited $true)) -Because "a limit is a limit"
+    Assert-True -Condition (-not (Test-TeamResumeLost -Why "error_max_budget_usd")) -Because "the budget cap"
+    Assert-True -Condition (-not (Test-TeamResumeLost -Why "the run printed no result document (exit 3)" -StdErr "Unhandled exception: out of memory")) -Because "a crash"
+    Assert-True -Condition (-not (Test-TeamResumeLost -Why "the run returned an empty report")) -Because "an empty report"
+}
+
 Write-Host ""
 Write-Host "a run"
 
@@ -4028,6 +4039,24 @@ try {
         Assert-True -Condition ($run.Report -match "task-b: worker-1 önceki oturumunu sürdüremedi") -Because "the report says so: $($run.Report)"
     }
 
+    Test-Case "engine: a resumed run that hits its budget or crashes is an ordinary failure - counted, its report kept, no fresh run in its place" {
+        foreach ($kind in @("budget", "crash")) {
+            $root = New-Sandbox -Tasks @((New-ReturnedTask -Id "task-b" -Area @("src/b")))
+            Set-SeatRecords -Root $root -Records @{ "task-b" = @{ owner_seat = "worker-1"; session_id = "sess-b" } }
+            Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_RESUMED_FAILS = $kind } -Body { $script:failRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+            $run = $script:failRun
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+            $calls = @(Get-WorkerCalls -Run $run -Id "task-b" | Sort-Object -Property at)
+            Assert-Equal -Expected "sess-b" -Actual $calls[0].resume -Because "${kind}: the session was resumed"
+            Assert-True -Condition (@($calls | Where-Object { [bool]$_.fallback_said }).Count -eq 0) -Because "${kind}: no run is told its session was lost - it was not"
+            Assert-True -Condition ($run.Report -notmatch "önceki oturumunu sürdüremedi") -Because "${kind}: not a lost session: $($run.Report)"
+            $task = Get-TaskById -Queue $run.Queue -Id "task-b"
+            Assert-True -Condition ([int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0) -ge 1) -Because "${kind}: the failure counts: $($task | ConvertTo-Json -Compress -Depth 6)"
+            $workerReports = @(@($task.reports) | Where-Object { $_.role -eq "worker" })
+            Assert-True -Condition (@($workerReports).Count -ge 1) -Because "${kind}: the failed run's report is in the task's record"
+        }
+    }
+
     Test-Case "engine: an approval holds nothing - the worker takes the next task while its work is inspected, on the same seat" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-a" -State "assigned" -Area @("src/a")), (New-Task -Id "task-c" -State "assigned" -Area @("src/c")))
         Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "inspector:task-a=6" } -Body { $script:freeRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
@@ -4161,8 +4190,13 @@ try {
         Assert-True -Condition ($run.Report -match "entegrasyon dalı main dalını alamadı: src/f/task-two\.txt") -Because "one line for the lead: $($run.Report)"
         Assert-True -Condition ($run.Report -notmatch "entegrasyon dalında çakışma") -Because "not the task's conflict"
         Assert-Equal -Expected 1 -Actual @($run.Calls | Where-Object { $_.role -eq "inspector" }).Count -Because "inspected once"
-        # The lead takes the base in by hand (in another worktree, then the integration branch moves).
+        # The failed base merge is undone: the integration worktree is left clean, with no merge in
+        # progress (the 2026-10-03 case: a half-done merge there blocks the next one, and the lead's).
         $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        $gitDir = Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "--absolute-git-dir")
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $gitDir "MERGE_HEAD"))) -Because "no merge left in progress in $gitDir"
+        Assert-Equal -Expected "" -Actual ([string](Invoke-SandboxGit -Root $tree -Arguments @("status", "--porcelain"))).Trim() -Because "the integration worktree is clean"
+        # The lead takes the base in by hand (in another worktree, then the integration branch moves).
         $null = Invoke-TeamGit -WorkingDirectory $tree -Arguments @("merge", "--no-ff", "-m", "lead: main into integrate", "main")
         [System.IO.File]::WriteAllText((Join-Path $tree "src\f\task-two.txt"), "l1`nboth`n")
         [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
@@ -4272,6 +4306,15 @@ try {
         Assert-True -Condition ($text -match "(?m)^- task-one / worker: " -and $text -match "(?m)^- task-one / inspector: ") -Because "the run that crossed midnight is in the new day's report, and nothing was lost: $text"
         Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the task went on"
         Assert-Equal -Expected "integrate/d20261004" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").integration_branch -Because "the new day's integration branch"
+        # The task's record names each run's report file: every one is there, where it says.
+        $reports = @((Get-TaskById -Queue $run.Queue -Id "task-one").reports | Where-Object { [string]$_.file })
+        Assert-True -Condition (@($reports).Count -ge 2) -Because "the worker's and the inspector's reports are recorded"
+        foreach ($entry in $reports) {
+            $file = Join-Path $root ([string]$entry.file -replace '/', '\')
+            Assert-True -Condition (Test-Path -LiteralPath $file) -Because "$($entry.role)'s report is where its record points: $($entry.file) (on disk: $(@(Get-ChildItem -LiteralPath (Join-Path $root 'team\reports') -Recurse -File -Name) -join ', '))"
+        }
+        $crossed = @($reports | Where-Object { $_.role -eq "worker" })[0]
+        Assert-True -Condition ([string]$crossed.file -match "^team/reports/d20261004/") -Because "the run that crossed midnight is filed under the new day: $($crossed.file)"
     }
 
     Test-Case "loop: a continuous loop does not end when idle, the researcher's timer fires again inside it, and the stop flag ends it" {

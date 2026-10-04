@@ -229,6 +229,19 @@ if ($resume -and [string]$env:PAGENTOS_FAKE_CLAUDE_RESUME_FAILS -eq "1") {
     Write-Answer -Text "No conversation found with session ID: $resume" -Cost 0 -IsError $true -EventLine (Get-LimitEvent -Status "allowed" -Type "five_hour" -ResetsAt ([DateTimeOffset]::UtcNow.AddHours(3).ToUnixTimeSeconds()))
     exit 1
 }
+#   PAGENTOS_FAKE_CLAUDE_RESUMED_FAILS=budget|crash: a run started with --resume DID resume and then
+#     failed as any run can - the budget cap (an error result, error_max_budget_usd) or a crash
+#     (exit 3, nothing printed). An ordinary failure, not a lost session.
+$resumedFails = [string]$env:PAGENTOS_FAKE_CLAUDE_RESUMED_FAILS
+if ($resume -and $resumedFails -eq "budget") {
+    $document = [ordered]@{ type = "result"; subtype = "error_max_budget_usd"; is_error = $true; result = ""; total_cost_usd = 2.5; session_id = $runSession }
+    [Console]::Out.Write((ConvertTo-Json -InputObject $document -Compress))
+    exit 1
+}
+if ($resume -and $resumedFails -eq "crash") {
+    [Console]::Error.Write("Unhandled exception: the process ran out of memory")
+    exit 3
+}
 $returnOnce = @(([string]$env:PAGENTOS_FAKE_CLAUDE_RETURN_ONCE).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
 if ($scenario -eq "silent") {

@@ -1119,6 +1119,8 @@ try {
             LimitScope = [string]$result.LimitScope; LimitedModel = [string]$result.LimitedModel; LimitType = [string]$result.LimitType
             Model = [string]$Started.Model; RanModel = $ranModel; Substituted = [bool]$result.Substituted
             SessionId = [string]$result.SessionId; Why = [string]$result.Why
+            ResumeLost = ([bool]$Started.ResumeSession -and -not $result.Ok -and
+                (Test-TeamResumeLost -Why ([string]$result.Why) -StdErr ([string]$finished.StdErr) -TimedOut ([bool]$finished.TimedOut) -UsageLimited ([bool]$result.UsageLimited)))
         }
     }
 
@@ -1972,10 +1974,12 @@ try {
             # The session of the run that built (or fixed) it: what its next return resumes.
             Set-SeatRecord -Id $id -Session ([string]$done.SessionId)
         }
-        if ($role -eq "worker" -and [string]$Started.ResumeSession -and -not $done.Ok -and -not $done.UsageLimited) {
-            # The session could not be resumed (expired, missing, an error): the same seat starts a
+        if ($role -eq "worker" -and [bool]$done.ResumeLost) {
+            # The session could not be resumed (expired, missing, refused): the same seat starts a
             # fresh run with the card - the reason and the inspector's report - and is told so. Not a
             # failure of the task and not a try spent; once only (the fresh run resumes nothing).
+            # A resumed run that timed out, hit its budget or crashed is an ordinary failure
+            # (Test-TeamResumeLost): its report counts below and no new run takes its place.
             $why = ([string]$done.Why -replace '\s+', ' ').Trim()
             Add-CycleNote -List "risks" -Text "${id}: $($Started.Seat) önceki oturumunu sürdüremedi ($why); taze koşu raporla başlatıldı"
             try {
