@@ -17,8 +17,13 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import shutil
 import tempfile
+import time
 import uuid
+import weakref
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -440,6 +445,61 @@ class _FixtureInstalledPaintProvider(PaintProvider):
         return DetectionFacts(installed=True, checked=("fixture",), detail="mspaint.exe")
 
 
+#: The four folders every harness makes (creative3d render, genesis skills/work, native
+#: build root). The names stay: the owner's one-time cleanup of the folders older runs
+#: leaked is keyed on them.
+TEMP_DIR_PREFIXES = ("creative3d-render-", "genesis-skills-", "genesis-work-", "native-corpus-")
+
+#: Folders a cleanup pass could not remove (a file still open on Windows), by prefix.
+#: Never reset by this module: the hygiene test reads the delta.
+TEMP_DIRS_LEFT_BEHIND: Counter[str] = Counter()
+
+_log = logging.getLogger(__name__)
+
+_REMOVE_ATTEMPTS = 5
+_REMOVE_PAUSE_S = 0.05
+
+
+class HarnessTempDirs:
+    """The temp folders ONE harness made, and nothing else: cleanup removes exactly the
+    paths this object created (never a glob on the prefix, so two harnesses alive at once
+    never touch each other's). A folder that will not go after a few bounded retries is
+    kept for the next pass and counted in ``TEMP_DIRS_LEFT_BEHIND`` - never swallowed."""
+
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = root
+        self.pending: list[tuple[str, Path]] = []
+
+    def make(self, prefix: str) -> Path:
+        path = Path(tempfile.mkdtemp(prefix=prefix, dir=self.root))
+        self.pending.append((prefix, path))
+        return path
+
+    def cleanup(self) -> list[Path]:
+        """Remove every folder still pending; return the ones that stay (counted)."""
+        kept: list[tuple[str, Path]] = []
+        for prefix, path in self.pending:
+            error: OSError | None = None
+            for attempt in range(_REMOVE_ATTEMPTS):
+                try:
+                    shutil.rmtree(path)
+                    error = None
+                    break
+                except FileNotFoundError:
+                    error = None
+                    break
+                except OSError as exc:
+                    error = exc
+                    if attempt + 1 < _REMOVE_ATTEMPTS:
+                        time.sleep(_REMOVE_PAUSE_S)
+            if error is not None and path.exists():
+                TEMP_DIRS_LEFT_BEHIND[prefix] += 1
+                _log.warning("harness temp folder left behind: %s (%s)", path, error)
+                kept.append((prefix, path))
+        self.pending = kept
+        return [path for _prefix, path in kept]
+
+
 @dataclass
 class Harness:
     client: TestClient
@@ -488,6 +548,27 @@ class Harness:
     #: itself, closed by ``run_case``'s own ``finally`` block.
     genesis_fixture: Any = None
     _genesis_fixture_cm: Any = None
+    #: The temp folders ``build_harness`` made for THIS harness; ``close()`` removes them.
+    temp_dirs: HarnessTempDirs | None = None
+
+    def __post_init__(self) -> None:
+        # The callers that never close a harness (most test files build one per test and
+        # drop it) still clean up: when the harness is collected, or at interpreter exit.
+        if self.temp_dirs is not None:
+            weakref.finalize(self, self.temp_dirs.cleanup)
+
+    def close(self) -> list[Path]:
+        """Remove the temp folders this harness made. Safe to call again: a second pass
+        retries what a first one had to leave (a file still open). Returns what stays."""
+        if self.temp_dirs is None:
+            return []
+        return self.temp_dirs.cleanup()
+
+    def __enter__(self) -> Harness:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     # ------------------------------------------------------------- relay
 
@@ -1352,8 +1433,21 @@ class Harness:
             return is_paused(db)
 
 
-def build_harness() -> Harness:
-    """A fresh application per case: real relay, real router, real services, fake device."""
+def build_harness(*, temp_root: Path | None = None) -> Harness:
+    """A fresh application per case: real relay, real router, real services, fake device.
+
+    The four temp folders go under ``temp_root`` (default: the temp folder) and belong to
+    the returned harness: ``close()`` (or ``with``) removes them, and a harness nobody
+    closes removes them when it is collected."""
+    temp_dirs = HarnessTempDirs(temp_root)
+    try:
+        return _build_harness(temp_dirs)
+    except BaseException:
+        temp_dirs.cleanup()
+        raise
+
+
+def _build_harness(temp_dirs: HarnessTempDirs) -> Harness:
     settings = Settings(
         _env_file=None,
         voice_openai_api_key=VENDOR_KEY,
@@ -1416,7 +1510,7 @@ def build_harness() -> Harness:
     # own docstring), so it must be spread AFTER ``appfactory_capability_results()``
     # to be the one actually reached for both.
     creative3d_device = FakeCreative3DDevice(
-        unity_available=False, render_dir=Path(tempfile.mkdtemp(prefix="creative3d-render-"))
+        unity_available=False, render_dir=temp_dirs.make("creative3d-render-")
     )
     device = FakeDeviceAction(
         results={
@@ -1466,8 +1560,8 @@ def build_harness() -> Harness:
     # (app.genesis.service._publish) — two independent harnesses (two
     # separate in-memory databases, no shared history) publishing the SAME
     # capability_id/version to that ONE real directory would collide.
-    evolution.skills_root = Path(tempfile.mkdtemp(prefix="genesis-skills-"))
-    evolution.work_root = Path(tempfile.mkdtemp(prefix="genesis-work-"))
+    evolution.skills_root = temp_dirs.make("genesis-skills-")
+    evolution.work_root = temp_dirs.make("genesis-work-")
     genesis = GenesisRuntime(evolution)
     app.state.genesis = genesis
     register_genesis_service(genesis.service)
@@ -1564,7 +1658,7 @@ def build_harness() -> Harness:
     # the same way every other family's dependency is - so the tools read exactly
     # what production reads, through the one path (ADR-0078).
     native_runner = CorpusBuildRunner()
-    native_root = Path(tempfile.mkdtemp(prefix="native-corpus-"))
+    native_root = temp_dirs.make("native-corpus-")
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -1649,6 +1743,7 @@ def build_harness() -> Harness:
         native_runner=native_runner,
         native_root=native_root,
         memory=memory,
+        temp_dirs=temp_dirs,
     )
 
 
@@ -2361,11 +2456,17 @@ def _run_case(case: UtteranceCase, harness: Harness | None) -> CaseResult:
         result.problems.append(f"{type(exc).__name__}: {exc}"[:300])
         return result
     finally:
-        h.client.close()
-        set_holdoffs(HoldoffRegistry())
-        set_publisher(UiStatePublisher())
-        if h._genesis_fixture_cm is not None:  # noqa: SLF001 - this module owns the field
-            h._genesis_fixture_cm.__exit__(None, None, None)
+        try:
+            h.client.close()
+            set_holdoffs(HoldoffRegistry())
+            set_publisher(UiStatePublisher())
+            if h._genesis_fixture_cm is not None:  # noqa: SLF001 - this module owns the field
+                h._genesis_fixture_cm.__exit__(None, None, None)
+        finally:
+            # A harness this call built is this call's to clean up (2754 corpus cases
+            # leaked four folders each until 2026-10-03); a caller's harness is the caller's.
+            if harness is None:
+                h.close()
 
 
 def build_report(results: list[CaseResult], *, corpus_version: int) -> dict[str, Any]:

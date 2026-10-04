@@ -321,6 +321,31 @@ Test-Case "(5) the tick's exit code is the cycle's (0, 3, 7), and a failing feed
             $seen = @(Get-Content -LiteralPath $calls)
             Assert-Equal -Expected "feed,cycle" -Actual (($seen | ForEach-Object { ($_ -split " ")[0] }) -join ",") -Because "feeder exit $($step.Feed) (throw: $($step.Throw)): the cycle ran"
             Assert-True -Condition ($seen[1] -match "-MaxParallel 6") -Because "the cycle's arguments travel: $($seen[1])"
+            Assert-True -Condition ($seen[1] -notmatch "-MaxHours") -Because "no -MaxHours given: the cycle keeps its own default: $($seen[1])"
+        }
+    }
+    finally { Remove-Work -Work $work }
+}
+
+Test-Case "(5b) -MaxHours reaches the cycle (12, and 0 = no end); without it the cycle keeps its own default" {
+    # 2026-10-03: the cycle stopped dispatching at its default four hours and drained for half an
+    # hour, twice, with returned work waiting beside empty seats; the scheduled tick could not
+    # pass a longer limit.
+    $work = New-Work
+    try {
+        $calls = Join-Path $work "calls.log"
+        $cycle = Join-Path $work "cycle.ps1"
+        $feed = Join-Path $work "feed.ps1"
+        $log = Join-Path $work "tick.log"
+        foreach ($hours in @("12", "0")) {
+            if (Test-Path -LiteralPath $calls) { Remove-Item -LiteralPath $calls -Force }
+            New-FakeScript -Path $feed -ExitCode 0 -LogFile $calls -Name "feed"
+            New-FakeScript -Path $cycle -ExitCode 0 -LogFile $calls -Name "cycle"
+            $run = Start-Tick -Work $work -Arguments @("-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + $log + '"'), "-MaxHours", $hours)
+            $result = Wait-Tick -Tick $run
+            Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ($result.Out + $result.Err)
+            $seen = @(Get-Content -LiteralPath $calls)
+            Assert-True -Condition ($seen[1] -match "-MaxHours $hours(\s|$)") -Because "-MaxHours $hours travels to the cycle: $($seen[1])"
         }
     }
     finally { Remove-Work -Work $work }

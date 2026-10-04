@@ -235,8 +235,10 @@ jobs:
           powershell -NoProfile -File scripts\tests\team-tick.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-area.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-integrate.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-board.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\maintenance-reboot.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\host-snapshot.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-test-slots.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\web-tailnet-https.tests.ps1
       # The staged update, end to end, against the REAL DeviceService this job just built:
       # candidate identity, the complete capability manifest (40 with -DisplayPower and a

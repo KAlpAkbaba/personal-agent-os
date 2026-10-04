@@ -16,7 +16,9 @@
       slow       the run sleeps for longer than the cycle lets it
       split      the lead's split run writes two sound tasks to the file its card names;
                  split-overlap / split-shared / split-missing write one task that breaks the
-                 rule named, any other scenario writes no file (cycle-lead-run)
+                 rule named, any other scenario writes no file (cycle-lead-run); a lead card
+                 that names a duty_file is the duty run whatever the scenario (pm-duty-stopped:
+                 PAGENTOS_FAKE_CLAUDE_DUTY_JSON is the file it writes, _DUTY_CARD where its card goes)
       limited    the FIRST worker run of a task answers with the subscription's usage-limit
                  error (reset time 200 s in the past); every later run is as approve
 
@@ -35,6 +37,8 @@
       PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS  the reset, seconds from now (default 3600)
       PAGENTOS_FAKE_CLAUDE_RAN_MODEL       "<role>=<id>": that role's modelUsage names <id>
           whatever --model said, as a tool that substituted the model itself would print
+      PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES  roles whose run FAILS with a long report that
+          quotes the limit words in its middle (model-policy-floor: not the limit)
 
     The pool's hooks (cycle-seat-pool), independent of the scenario as well - described where
     they are read: PAGENTOS_FAKE_CLAUDE_SECONDS (how long each run takes),
@@ -110,7 +114,7 @@ if ($env:TEMP -and (Test-Path -LiteralPath $env:TEMP)) { try { [System.IO.File]:
 # resumed, as the tool does), the seat the cycle gave it, and when it started.
 $runSession = if ($resume) { $resume } else { "sess-$taskId-$role-" + [guid]::NewGuid().ToString("N").Substring(0, 8) }
 if ($log) {
-    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; seat = [string]$env:PAGENTOS_TEAM_SEAT; resume = $resume; keeps_session = $keepsSession; session = $runSession; at = [DateTime]::UtcNow.Ticks; pid = $PID; fallback_said = ($card -match 'oturumu sürdürülemedi'); came_back_report = ($card -match 'The last report on this task \(inspector\)'); budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; temp_env = [string]$env:TEMP; tmp_env = [string]$env:TMP; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
+    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; seat = [string]$env:PAGENTOS_TEAM_SEAT; resume = $resume; keeps_session = $keepsSession; session = $runSession; at = [DateTime]::UtcNow.Ticks; pid = $PID; fallback_said = ($card -match 'oturumu sürdürülemedi'); came_back_report = ($card -match 'The last report on this task \(inspector\)'); budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; temp_env = [string]$env:TEMP; tmp_env = [string]$env:TMP; team_seat = [string]$env:PAGENTOS_TEAM_SEAT; team_task = [string]$env:PAGENTOS_TEAM_TASK; team_url = [string]$env:PAGENTOS_TEAM_URL; team_token_file = [string]$env:PAGENTOS_TEAM_TOKEN_FILE; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
     Add-SharedLine -Path $log -Line ($entry | ConvertTo-Json -Compress)
 }
 
@@ -235,6 +239,15 @@ if ($scenario -eq "slow") {
     Start-Sleep -Seconds 600
     exit 0
 }
+# model-policy-floor: PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES (comma separated) - that role's run
+# FAILS for another reason, and its long result text QUOTES the limit words in its middle.
+$quotingRoles = @(([string]$env:PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($quotingRoles -contains $role) {
+    $quote = "Report: the suite failed - 'usage limit reached' was not read as the limit`n`nThe suite failed. Its output:`n  expected 'Claude AI usage limit reached' to be read as the limit`n  You've hit your Opus limit " + [char]0x00B7 + " resets 8:40pm`n`nverdict: failed"
+    $session = [DateTimeOffset]::UtcNow.AddHours(3).ToUnixTimeSeconds()
+    Write-Answer -Text $quote -Cost 0.25 -IsError $true -EventLine (Get-LimitEvent -Status "allowed" -Type "five_hour" -ResetsAt $session)
+    exit 1
+}
 # The model policy: a run on a model the test named as limited answers what the real tool answers.
 $limitedModels = @(([string]$env:PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $limitedRoles = @(([string]$env:PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -275,6 +288,22 @@ switch ($role) {
         Send-Result -Text "1 öneri yazıldı: team/proposals/2026-09-30-anlati.md" -Cost $cost
     }
     "lead" {
+        # The Proje Yöneticisi's duty run for stopped tasks (pm-duty-stopped), whatever the scenario:
+        # its card names a duty_file. PAGENTOS_FAKE_CLAUDE_DUTY_CARD: the card is appended to that
+        # file; PAGENTOS_FAKE_CLAUDE_DUTY_JSON: the decision file's text, written as it is - unset,
+        # no file is written, as a run that failed to decide.
+        if ($card -match '(?m)^- duty_file: (\S+)') {
+            $dutyTarget = Join-Path $here ($Matches[1] -replace "/", "\")
+            if ([string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_CARD) { Add-SharedLine -Path ([string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_CARD) -Line $card }
+            $dutyText = [string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_JSON
+            if ($dutyText) {
+                $folder = Split-Path -Parent $dutyTarget
+                if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+                [System.IO.File]::WriteAllText($dutyTarget, $dutyText, (New-Object System.Text.UTF8Encoding($false)))
+                Send-Result -Text "duty written: $dutyTarget" -Cost $cost
+            }
+            Send-Result -Text "I wrote no decision." -Cost $cost
+        }
         # The split run (cycle-lead-run): writes the file the card names, in the shape the
         # scenario asks for. Any other scenario writes nothing, as a lead that failed would.
         $target = ""

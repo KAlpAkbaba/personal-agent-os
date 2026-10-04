@@ -827,6 +827,180 @@ function ConvertTo-TeamSplitTasks {
     return @($made.ToArray())
 }
 
+# ------------------------------------------------------------------ the Proje Yöneticisi's duty
+# (pm-duty-stopped, the owner of 2026-10-03: "Böyle bulgular bulunduğunda konuyu proje
+# yöneticisine iletsinler, proje yöneticisi de sana iletsin.") A task the cycle stopped wakes ONE
+# lead run that writes a decision file; as with a split, THIS side judges the file and takes it
+# whole or refuses it whole. The lead-protected paths are TeamArea.ps1's list - one list; without
+# it loaded nothing is accepted.
+
+# What a decision writes in front of the reason. A stopped task whose reason starts with the
+# first is the Danışman's: it is never handed to a duty run again until somebody else moves it.
+$script:TeamDutyEscalated = "Danışman'a iletildi: "
+$script:TeamDutyReturned = "Proje Yöneticisi: "
+# What the Onay Merkezi's "Reddet" puts in front of the owner's reason
+# (services/api/app/team/approvals.py OWNER_REJECTED_PREFIX). A task the owner stopped is his:
+# never handed to a duty run, so no decision can send it back or overwrite his words.
+$script:TeamOwnerRejected = "Sahip reddetti: "
+# How many duty runs one task is handed in all, across cycles (team/duty-ledger.json): after
+# that the Danışman decides. The ledger outlives a cycle, so a tick does not hand the same stop
+# again and again (review 2026-10-04: one paid lead run per tick, for ever).
+$script:TeamDutyMaxHandovers = 3
+$script:TeamDutyActions = @("return", "grant_and_return", "escalate")
+$script:TeamDutyMaxGrants = 5
+$script:TeamDutyMaxReason = 1200
+$script:TeamDutyMaxTasks = 8
+
+function Get-TeamDutyPrefix {
+    <# The text a decision puts in front of a reason: 'escalated' or 'returned'. #>
+    param([Parameter(Mandatory = $true)][ValidateSet("escalated", "returned")][string]$Kind)
+    if ($Kind -eq "escalated") { return $script:TeamDutyEscalated }
+    return $script:TeamDutyReturned
+}
+
+function Get-TeamDutyCandidates {
+    <#
+    .SYNOPSIS
+        The stopped tasks a duty run of the Proje Yöneticisi is handed now, in queue order.
+
+    .DESCRIPTION
+        A task in `stopped` - but not one the Danışman already has (its reason starts with
+        "Danışman'a iletildi: "), not one in -Skip (ids the caller set aside), and not one
+        handed at THIS stop: -Handed maps an id to the updated_at it had when it was handed, so
+        a task stopped again later (a new updated_at) is handed again. At most -Max a run; the
+        rest are handed when it ends.
+    #>
+    param($Queue, [hashtable]$Handed = @{}, [hashtable]$Skip = @{}, [int]$Max = $script:TeamDutyMaxTasks)
+    $found = New-Object System.Collections.ArrayList
+    foreach ($task in @(Get-TeamTasks -Queue $Queue)) {
+        if (@($found).Count -ge $Max) { break }
+        if ([string](Get-TeamProperty -InputObject $task -Name "state" -Default "") -ne "stopped") { continue }
+        $id = [string](Get-TeamProperty -InputObject $task -Name "id" -Default "")
+        if (-not $id -or $Skip.ContainsKey($id)) { continue }
+        $reason = [string](Get-TeamProperty -InputObject $task -Name "reason" -Default "")
+        if ($reason.StartsWith($script:TeamDutyEscalated, [System.StringComparison]::Ordinal)) { continue }
+        if ($reason.StartsWith($script:TeamOwnerRejected, [System.StringComparison]::Ordinal)) { continue }
+        $stamp = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
+        if ($Handed.ContainsKey($id) -and [string]$Handed[$id] -ceq $stamp) { continue }
+        [void]$found.Add($task)
+    }
+    return @($found.ToArray())
+}
+
+function Read-TeamDutyFile {
+    <#
+    .SYNOPSIS
+        The file a duty run wrote: { "decisions": [ ... ] }. The answer says whether it could
+        be read, and why not.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $refuse = { param([string]$Why) return [pscustomobject]@{ Ok = $false; Decisions = @(); Why = $Why } }
+    if (-not (Test-Path -LiteralPath $Path)) { return (& $refuse "the Proje Yöneticisi wrote no decision file: $Path") }
+    try {
+        $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+        if (-not $text.Trim()) { return (& $refuse "the decision file is empty: $Path") }
+        $document = ConvertFrom-Json -InputObject $text
+    }
+    catch { return (& $refuse "the decision file is not JSON: $($_.Exception.Message)") }
+    if ($document -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $document.PSObject.Properties["decisions"]) {
+        return (& $refuse "the decision file is not an object holding 'decisions'")
+    }
+    return [pscustomobject]@{ Ok = $true; Decisions = @($document.decisions | Where-Object { $null -ne $_ }); Why = "" }
+}
+
+function Test-TeamDuty {
+    <#
+    .SYNOPSIS
+        Every reason a duty run's decisions are refused, as sentences; empty when they are
+        sound. Taken whole or refused whole: one bad decision and NOTHING is applied.
+
+    .DESCRIPTION
+        Each decision is an object { task, action, grant, reason }:
+          * task    one of -Listed (the stopped tasks this run was handed), once;
+          * action  return | grant_and_return | escalate (as written, lower case);
+          * grant   only with grant_and_return: a list of 1 to 5 plainly written
+                    repository-relative paths (ConvertTo-TeamAreaPath: no '..', no drive, no
+                    leading slash, no empty or dotted segment), none lead-protected
+                    (Get-TeamAreaProtection), and the area stays within 25 entries;
+          * reason  Turkish text for the worker, not blank, at most 1200 characters.
+    #>
+    param($Decisions, [string[]]$Listed = @(), [Parameter(Mandatory = $true)]$Queue)
+    $problems = New-Object System.Collections.ArrayList
+    # The protected list is TeamArea.ps1's; without it a grant cannot be judged, and a judge
+    # that cannot judge refuses.
+    foreach ($needed in @("ConvertTo-TeamAreaPath", "Get-TeamAreaProtection")) {
+        if ($null -eq (Get-Command -Name $needed -CommandType Function -ErrorAction SilentlyContinue)) {
+            [void]$problems.Add("the protected-path list (scripts/lib/TeamArea.ps1) is not loaded: no decision is accepted")
+            return @($problems.ToArray())
+        }
+    }
+    $items = @($Decisions | Where-Object { $null -ne $_ })
+    if (@($items).Count -eq 0) { [void]$problems.Add("the decision file holds no decision"); return @($problems.ToArray()) }
+    $seen = @{}
+    foreach ($item in $items) {
+        if ($item -isnot [System.Management.Automation.PSCustomObject]) {
+            [void]$problems.Add("an entry of the decision file is not a decision object")
+            continue
+        }
+        $id = [string](Get-TeamProperty -InputObject $item -Name "task" -Default "")
+        $label = if ($id) { $id } else { "(a decision without a task)" }
+        if (@($Listed) -cnotcontains $id) { [void]$problems.Add("${label}: not one of the stopped tasks this run was given") }
+        if ($id -and $seen.ContainsKey($id)) { [void]$problems.Add("${label}: more than one decision for one task") }
+        $seen[$id] = $true
+        $actionValue = Get-TeamProperty -InputObject $item -Name "action" -Default ""
+        $action = if ($actionValue -is [string]) { $actionValue } else { "" }
+        if ($script:TeamDutyActions -cnotcontains $action) { [void]$problems.Add("${label}: '$actionValue' is not an action (return, grant_and_return, escalate)") }
+        $reasonValue = Get-TeamProperty -InputObject $item -Name "reason" -Default ""
+        if ($reasonValue -isnot [string] -or -not $reasonValue.Trim()) { [void]$problems.Add("${label}: the reason is empty") }
+        elseif ($reasonValue.Trim().Length -gt $script:TeamDutyMaxReason) { [void]$problems.Add("${label}: the reason is $($reasonValue.Trim().Length) characters; at most $script:TeamDutyMaxReason") }
+
+        # The value as written: Get-TeamProperty would unroll a one-entry list into its entry.
+        $grantProperty = $item.PSObject.Properties["grant"]
+        # NOT `$grantValue = if (...) { $grantProperty.Value }`: an if-expression's output is
+        # enumerated, so a one-entry list came out as its entry and was refused as "not a list".
+        $grantValue = $null
+        if ($null -ne $grantProperty) { $grantValue = $grantProperty.Value }
+        if ($action -ne "grant_and_return") {
+            if ($null -ne $grantValue -and -not ($grantValue -is [array] -and @($grantValue).Count -eq 0)) {
+                [void]$problems.Add("${label}: a grant goes only with grant_and_return")
+            }
+            continue
+        }
+        if ($null -ne $grantValue -and $grantValue -isnot [array]) {
+            [void]$problems.Add("${label}: the grant must be a list of paths")
+            continue
+        }
+        $grants = @($grantValue | Where-Object { $null -ne $_ })
+        if (@($grants).Count -lt 1 -or @($grants).Count -gt $script:TeamDutyMaxGrants) {
+            [void]$problems.Add("${label}: grant_and_return names 1 to $script:TeamDutyMaxGrants paths, not $(@($grants).Count)")
+            continue
+        }
+        $task = @(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -ceq $id })
+        $area = if (@($task).Count -gt 0) { @(Get-TeamProperty -InputObject $task[0] -Name "area" -Default @() | ForEach-Object { [string]$_ }) } else { @() }
+        $added = New-Object System.Collections.ArrayList
+        foreach ($grant in $grants) {
+            $path = if ($grant -is [string]) { ConvertTo-TeamAreaPath -Text $grant } else { $null }
+            if ($null -eq $path -or -not $path.Inside) {
+                [void]$problems.Add("${label}: the grant '$grant' is not a plain repository-relative path")
+                continue
+            }
+            $entry = Get-TeamAreaProtection -Path $path.Path
+            if ($null -ne $entry) {
+                [void]$problems.Add("${label}: the grant '$($path.Path)' is a lead-protected path ($($entry.Name)); the Danışman decides it")
+                continue
+            }
+            if (-not (Test-TeamPathInsideArea -Path $path.Path -Area $area) -and @($added) -notcontains (Get-TeamAreaKey -Area $path.Path)) {
+                [void]$added.Add((Get-TeamAreaKey -Area $path.Path))
+            }
+        }
+        $total = @($area).Count + @($added).Count
+        if ($total -gt $script:TeamMaxAreaEntries) {
+            [void]$problems.Add("${label}: the grant takes the area to $total entries; a task is at most $script:TeamMaxAreaEntries")
+        }
+    }
+    return @($problems.ToArray())
+}
+
 function Get-TeamVerdict {
     <#
     .SYNOPSIS
@@ -985,12 +1159,13 @@ function Read-TeamRunResult {
     $said = ""
     if ($null -ne $document) {
         $text = [string](Get-TeamProperty -InputObject $document -Name "result" -Default "")
-        $said = $text
         # team-engine: the session a return resumes (`--resume <id>`). Kept only when it is one.
         $sessionId = [string](Get-TeamProperty -InputObject $document -Name "session_id" -Default "")
         if ($sessionId -cnotmatch '^[A-Za-z0-9-]{1,80}$') { $sessionId = "" }
         $cost = [double](Get-TeamProperty -InputObject $document -Name "total_cost_usd" -Default 0)
         $isError = [bool](Get-TeamProperty -InputObject $document -Name "is_error" -Default $false)
+        # Only an ERROR result is the tool speaking; a report is the run's own words.
+        if ($isError) { $said = $text }
         $subtype = [string](Get-TeamProperty -InputObject $document -Name "subtype" -Default "")
         # The model that really ran: side models (a small one for titles) appear beside it,
         # so it is the entry that cost the most.
@@ -1019,10 +1194,9 @@ function Read-TeamRunResult {
         }
     }
     else {
+        # Prose instead of a document is not the tool's limit shape: the run's transcript may
+        # hold any sentence at all (the limit is then read from stderr alone).
         $why = "the run printed no result document (exit $ExitCode)"
-        # Prose instead of a document: only its beginning is the tool's own word. The rest of a
-        # stream is the run's transcript, which may hold any sentence at all.
-        $said = if ($raw.Length -gt 2000) { $raw.Substring(0, 2000) } else { $raw }
     }
     # A model the tool ran in place of the one asked for (it can switch a session off Fable
     # by itself; CLAUDE_CODE_NO_MODEL_FALLBACK is best effort). Only a model of the chain is
@@ -1030,19 +1204,26 @@ function Read-TeamRunResult {
     if ($Model -and (Test-TeamModelId -Model $ranModel) -and $ranModel -cne $Model) { $substituted = $true }
     if (-not $ok) {
         # Owner decision 2026-09-30: the ONE stop the team has is the subscription's usage
-        # limit. It is read from the result's words and from stderr - never from the rest of
-        # the stream.
-        $said = $said + "`n" + ([string]$StdErr)
+        # limit. It is read only from the tool's own error shape (ADR-0214 addendum 10): a
+        # rejected event, an error result whose text STARTS with the tool's limit sentence, or
+        # stderr's first line being it. A failed run that merely QUOTES those words (a test's
+        # output, a report about limits) is a plain failure - its model is not barred.
+        $sentencePattern = "(?i)^\s*(You.ve hit your (\w+ ){0,3}limit|You.re out of (extra usage|usage credits)|(Claude AI )?usage limit reached)"
+        $sentence = ""
+        $firstSaid = [string](@(([string]$said).TrimStart() -split "`r?`n")[0])
+        $firstErr = [string](@(([string]$StdErr).TrimStart() -split "`r?`n")[0])
+        if ($firstSaid -match $sentencePattern) { $sentence = $firstSaid }
+        elseif ($firstErr -match $sentencePattern) { $sentence = $firstErr }
         $rejected = ($null -ne $lastEvent -and [string](Get-TeamProperty -InputObject $lastEvent -Name "status" -Default "") -eq "rejected")
-        if ($rejected -or $said -match "(?i)hit your (\w+ )?limit|usage limit|limit reached|out of (extra usage|usage credits)") {
+        if ($rejected -or $sentence) {
             $usageLimited = $true
             $why = "Max kullanım limiti"
             if ($rejected) {
                 $limitType = [string](Get-TeamProperty -InputObject $lastEvent -Name "rateLimitType" -Default "")
                 $resetsAt = ConvertFrom-TeamEpoch -Seconds (Get-TeamProperty -InputObject $lastEvent -Name "resetsAt")
             }
-            if (-not $resetsAt -and $said -match "limit reached\|(\d{10})") { $resetsAt = ConvertFrom-TeamEpoch -Seconds ([long]$Matches[1]) }
-            $closes = Get-TeamLimitScope -Type $limitType -Text $said
+            if (-not $resetsAt -and $sentence -match "limit reached\|(\d{10})") { $resetsAt = ConvertFrom-TeamEpoch -Seconds ([long]$Matches[1]) }
+            $closes = Get-TeamLimitScope -Type $limitType -Text $sentence
             $limitScope = $closes.Scope
             $limitedModel = $closes.Model
         }
@@ -1286,29 +1467,51 @@ function Get-TeamOkOutcome {
     return "tamam"
 }
 
+function Get-TeamStrongerModel {
+    <# The stronger of two models (a text that is not a model loses; both not models: ""). #>
+    param([string]$First, [string]$Second)
+    $one = Get-TeamModelRank -Model $First
+    $two = Get-TeamModelRank -Model $Second
+    if ($one -lt 0) { return $(if ($two -ge 0) { $Second } else { "" }) }
+    if ($two -lt 0 -or $one -le $two) { return $First }
+    return $Second
+}
+
 function Get-TeamWorkerModel {
-    <# The model the task's last FINISHED worker run really used ("" when no entry says: a
-       run from before the policy - Get-TeamInspectionFloor then takes the configured worker
-       model). The reader of Get-TeamOkOutcome. #>
+    <# The STRONGEST model among the task's FINISHED worker runs that name one ("" when no
+       entry says: a run from before the policy - Get-TeamInspectionFloor then takes the
+       configured worker model). Not the last run's: a branch written on Fable, returned and
+       reworked on Sonnet is still mostly Fable's work (ADR-0214 addendum 10). The reader of
+       Get-TeamOkOutcome. #>
     param($Task)
     $model = ""
     foreach ($report in @(Get-TeamProperty -InputObject $Task -Name "reports" -Default @())) {
         if ([string](Get-TeamProperty -InputObject $report -Name "role" -Default "") -ne "worker") { continue }
         $outcome = [string](Get-TeamProperty -InputObject $report -Name "outcome" -Default "")
-        if ($outcome -cmatch '^tamam \(model ([A-Za-z0-9._-]+)\)$' -and (Test-TeamModelId -Model $Matches[1])) { $model = $Matches[1] }
+        if ($outcome -cmatch '^tamam \(model ([A-Za-z0-9._-]+)\)$' -and (Test-TeamModelId -Model $Matches[1])) { $model = Get-TeamStrongerModel -First $model -Second $Matches[1] }
     }
     return $model
 }
 
 function Get-TeamInspectionFloor {
     <# The model an inspection of this task is never started below, and never takes a verdict
-       below: the one the worker's run really used; when no entry says (a worker that finished
-       before the policy, a task queued by hand), the model the setting gives the worker -
-       an unknown is not "any model will do". Recorded says which of the two it is. #>
+       below: the STRONGEST model among the task's finished worker runs (a task keeps one
+       branch for its life, so these are the runs of its current branch). An entry that names
+       no model (a worker that finished before the policy) counts as the model the setting
+       gives the worker; no entry at all (a task queued by hand) is that model too - an
+       unknown is not "any model will do". Recorded is true when the floor is a model an
+       entry named. #>
     param($Task, [Parameter(Mandatory = $true)]$Setting)
     $recorded = Get-TeamWorkerModel -Task $Task
-    if ($recorded) { return [pscustomobject]@{ Model = $recorded; Recorded = $true } }
-    return [pscustomobject]@{ Model = [string]$Setting.roles.worker; Recorded = $false }
+    $configured = [string]$Setting.roles.worker
+    $unnamed = @(@(Get-TeamProperty -InputObject $Task -Name "reports" -Default @()) | Where-Object {
+            [string](Get-TeamProperty -InputObject $_ -Name "role" -Default "") -eq "worker" -and
+            [string](Get-TeamProperty -InputObject $_ -Name "outcome" -Default "") -ceq "tamam"
+        })
+    if ($recorded -and (@($unnamed).Count -eq 0 -or (Get-TeamStrongerModel -First $recorded -Second $configured) -ceq $recorded)) {
+        return [pscustomobject]@{ Model = $recorded; Recorded = $true }
+    }
+    return [pscustomobject]@{ Model = $configured; Recorded = $false }
 }
 
 function Get-TeamRoleTools {

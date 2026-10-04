@@ -15,10 +15,16 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `a5e68d92d9271ececec51da01b713e43a394e28c` (2026-10-03 16:12 UTC = 19:12 yerel, api-green), LKG `e6682a61`,
-pin = RELEASE (Danışman pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`7a6531ef`). QUALIFICATION Stage 50.
-Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK. SIRADAKİ entegrasyon: integrate/d20261003
-(döngünün onaylı işleri + branch-guards-runner + model-policy-office-ui).**
+**ÜRETİM: main `002c6292cc0de9fd1c87423a30757b4b5ea64961` (2026-10-04 12:07 UTC = 15:07 yerel, api-green), LKG `eac453fc`,
+pin = RELEASE (Danışman pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`5711e33f`). QUALIFICATION Stage 52
+(Proje Yöneticisi nöbet koşusu ADR-0283 + Ofis'te hesap adı). Ana kopya `team/nightly/lead` üzerinde (= main). Kapıda bekleyen YOK.
+SIRADAKİ entegrasyon: integrate/d20261003'in onaylıları (office-progress dahil, Danışman elle birleştirdi 28592423) +
+`lead/roles-research-integrate` (fbfe98f1). Ekip hesap3'te (`%USERPROFILE%\.pagentos-team\team-account.txt`); hesap2'nin limit
+dosyası `team/limits.hesap2-20261004.json` olarak kenarda (limits.json hesap başına değil - account-pool kartı).**
+**ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
+`team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
+yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**
+**ÇALIŞAN SINIRI: `team/cycle-settings.json` max_parallel 4 (bellek ölçüldü: kapının birim adımı 21,7 GB; o adımda 3'e indir).**
 **DEV KABUĞU: ev PC'sindeki `next dev` (:3000) ana kopyanın dal değişimlerinde bozulabiliyor (telefonda 'Oturum kontrol ediliyor'
 takılı, web.err.log'da 'Blocked cross-origin'). Yeniden başlatma: süreç ağacını durdur, `scripts/voice/start-web-voice.ps1 -PnpmPath
 C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd` Start-Process ile, çıktılar %LOCALAPPDATA%/PagentOS/web-shell. Kalıcı adres sunucudaki.**

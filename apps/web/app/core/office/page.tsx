@@ -12,8 +12,17 @@ import { useEffect, useRef, useState } from "react";
 
 import FamilyPage from "../../components/FamilyPage";
 import OfficeView from "./OfficeView";
-import { createOfficePoller, fetchOffice, type OfficeView as Office } from "./officeApi";
-import { selectSeat } from "./officeModel";
+import {
+  applySetting,
+  createOfficePoller,
+  fetchOffice,
+  putModels,
+  type ModelId,
+  type ModelRole,
+  type ModelSetting,
+  type OfficeView as Office,
+} from "./officeApi";
+import { chooseModel, selectSeat } from "./officeModel";
 import { arrivals } from "./officeMood";
 import "./office.css";
 
@@ -34,22 +43,32 @@ export default function OfficePage() {
   const [offline, setOffline] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // The setting the owner just chose, drawn before the poll brings it back (optimistic).
+  const [chosen, setChosen] = useState<ModelSetting | null>(null);
+  const [modelNotice, setModelNotice] = useState<string | null>(null);
+  const saving = useRef(false);
   const reducedMotion = useReducedMotion();
   // the seats that just took a new task walk in to their desks for a moment
   const [arriving, setArriving] = useState<string[]>([]);
-  const previous = useRef<Office | null>(null);
+  const lastAnswer = useRef<Office | null>(null);
 
   useEffect(() => {
     const poller = createOfficePoller({
       fetch: fetchOffice,
       onData: (next) => {
-        const walked = arrivals(previous.current, next);
-        previous.current = next;
+        const walked = arrivals(lastAnswer.current, next);
+        lastAnswer.current = next;
         if (walked.length > 0) {
           setArriving(walked);
           window.setTimeout(() => setArriving([]), 2600);
         }
         setView(next);
+        // The poll's setting takes over once it is the stored one (or a newer one).
+        setChosen((mine) =>
+          mine && !saving.current && next.models && next.models.updated_at >= mine.updated_at
+            ? null
+            : mine,
+        );
         setOffline(false);
         setFailure(null);
       },
@@ -70,6 +89,28 @@ export default function OfficePage() {
     };
   }, []);
 
+  const shown = view && chosen ? { ...view, models: chosen } : view;
+
+  const save = (next: ModelSetting) => {
+    const previous = shown?.models;
+    if (!previous || saving.current) return;
+    saving.current = true;
+    void applySetting(previous, next, {
+      put: putModels,
+      show: setChosen,
+      say: setModelNotice,
+    }).finally(() => {
+      saving.current = false;
+    });
+  };
+
+  const onChooseModel = (role: ModelRole, model: ModelId) => {
+    if (!shown?.models) return;
+    const choice = chooseModel(shown.models, role, model);
+    if ("refusal" in choice) setModelNotice(choice.refusal);
+    else save(choice.setting);
+  };
+
   return (
     <FamilyPage
       id="office"
@@ -82,14 +123,17 @@ export default function OfficePage() {
           bağlantı yok{failure ? `: ${failure}` : ""}
         </p>
       )}
-      {view && (
+      {shown && (
         <OfficeView
-          view={view}
+          view={shown}
           selected={selected}
           offline={offline}
           reducedMotion={reducedMotion}
           arriving={arriving}
           onSelect={(seat) => setSelected((current) => selectSeat(current, seat))}
+          modelNotice={modelNotice}
+          onChooseModel={onChooseModel}
+          onToggleFallback={save}
         />
       )}
     </FamilyPage>
