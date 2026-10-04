@@ -9,6 +9,9 @@
       * deploy.ps1 accepts a commit on main (-CheckOnly: decides, builds nothing);
       * up.ps1 refuses to start under 6 GB free memory (exit 3, says so) and passes the
         memory check above it;
+      * up.ps1 waits for `status: ok` in the health BODY: a fake health answering HTTP 200 +
+        `degraded` makes it recreate the api once and then exit 1; `ok` -> exit 0, nothing
+        recreated; a health url off this PC is refused;
       * seed.ps1 refuses any api that is not staging's own loopback port (the Cloud Core's
         tailnet address included) before it calls anything;
       * down.ps1 names only the staging compose file and project;
@@ -90,6 +93,59 @@ $r = Invoke-Script "up.ps1" @("-MeasuredFreeMB", "4000", "-CheckOnly")
 Assert-True ($r.Rc -eq 3) "up still refuses when deploy's pre-build measurement is under the floor (exit $($r.Rc))"
 $deployText = [IO.File]::ReadAllText((Join-Path $stagingDir "deploy.ps1"))
 Assert-True ($deployText -match '-MeasuredFreeMB \$freeBeforeBuild') "deploy passes its pre-build measurement to up"
+
+Write-Host "staging: up waits for status ok, not HTTP 200"
+# Inspector 2026-10-04: after a Docker restart the live staging api answered HTTP 200 with
+# {"status":"degraded","failing_checks":"temporal_worker"} for ~2 h and up.ps1 counted it UP.
+# A fake health (a loopback TcpListener in a job) answers every request with one fixed body;
+# a fake docker (.cmd) records what up.ps1 asked compose to do.
+function Start-FakeHealth {
+    param([string]$Body)
+    $probe = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
+    $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
+    $job = Start-Job -ArgumentList $port, $Body -ScriptBlock {
+        param($port, $body)
+        $l = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $port)
+        $l.Start()
+        while ($true) {
+            $c = $l.AcceptTcpClient()
+            $s = $c.GetStream()
+            $reader = New-Object IO.StreamReader($s)
+            while ($true) { $line = $reader.ReadLine(); if ($null -eq $line -or $line -eq "") { break } }
+            $b = [Text.Encoding]::UTF8.GetBytes($body)
+            $h = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($b.Length)`r`nConnection: close`r`n`r`n")
+            $s.Write($h, 0, $h.Length); $s.Write($b, 0, $b.Length); $s.Flush(); $c.Close()
+        }
+    }
+    return [pscustomobject]@{ Job = $job; Url = "http://127.0.0.1:$port/" }
+}
+$fakeDir = Join-Path ([IO.Path]::GetTempPath()) ("staging-tests-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force $fakeDir | Out-Null
+$fakeDocker = Join-Path $fakeDir "docker.cmd"
+$dockerLog = Join-Path $fakeDir "docker-calls.log"
+[IO.File]::WriteAllText($fakeDocker, "@echo %*>> `"%~dp0docker-calls.log`"`r`n@exit /b 0`r`n")
+try {
+    $degraded = Start-FakeHealth '{"status":"degraded","failing_checks":"temporal_worker"}'
+    $r = Invoke-Script "up.ps1" @("-HealthOnly", "-TimeoutSec", "20", "-DegradedGraceSec", "3",
+        "-ApiHealthUrl", "$($degraded.Url)v1/system/health", "-WebUrl", $degraded.Url, "-DockerExe", $fakeDocker)
+    $calls = if (Test-Path $dockerLog) { [IO.File]::ReadAllText($dockerLog) } else { "" }
+    Assert-True ($r.Rc -eq 1) "up exits 1 on a degraded api that answers HTTP 200 (exit $($r.Rc))"
+    Assert-True ($r.Out -notmatch "STAGING UP") "up does not say STAGING UP on a degraded api"
+    Assert-True ($r.Out -match "STAGING FAILED: api still degraded .*temporal_worker") "up says the api is still degraded and why"
+    Assert-True ($calls -match "up -d --no-build --force-recreate api") "up recreated the degraded api once before giving up"
+    Stop-Job $degraded.Job; Remove-Job -Force $degraded.Job
+
+    Remove-Item -Force $dockerLog -ErrorAction SilentlyContinue
+    $ok = Start-FakeHealth '{"status":"ok"}'
+    $r = Invoke-Script "up.ps1" @("-HealthOnly", "-TimeoutSec", "20", "-DegradedGraceSec", "3",
+        "-ApiHealthUrl", "$($ok.Url)v1/system/health", "-WebUrl", $ok.Url, "-DockerExe", $fakeDocker)
+    Assert-True ($r.Rc -eq 0 -and $r.Out -match "STAGING UP") "up says STAGING UP when the body says ok (exit $($r.Rc))"
+    Assert-True (-not (Test-Path $dockerLog)) "up recreates nothing when the api is ok"
+    Stop-Job $ok.Job; Remove-Job -Force $ok.Job
+} finally { Remove-Item -Recurse -Force $fakeDir -ErrorAction SilentlyContinue }
+$r = Invoke-Script "up.ps1" @("-HealthOnly", "-ApiHealthUrl", "http://100.90.158.26:8001/v1/system/health")
+Assert-True ($r.Rc -eq 1 -and $r.Out -match "not a loopback url") "up refuses a health url off this PC"
+Assert-True ($deployText -match '& powershell -NoProfile -File \$upScript -TimeoutSec') "deploy waits for health through up.ps1 (status ok, degraded recreate)"
 
 Write-Host "staging: seed only talks to staging"
 foreach ($base in @("http://100.90.158.26:8001", "http://127.0.0.1:8001", "http://127.0.0.1:28000")) {

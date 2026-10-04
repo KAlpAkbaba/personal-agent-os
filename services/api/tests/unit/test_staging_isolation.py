@@ -21,6 +21,10 @@ infra/docker/docker-compose.staging.yml plus scripts/staging/*.ps1 (team/plans A
 * mounts only of named volumes declared in this file, called pagentos-staging-*, plain local
   (no external, no driver/driver_opts, no bind or host path, no `container:`); networks only
   staging's own, declared here, never external;
+* an ALLOW-LIST of values: each service's environment equals an expected dictionary exactly,
+  every address is parsed and its host is staging's own service on the expected port (no
+  query), and extra_hosts is exactly the blackhole set (production's names, and Docker
+  Desktop's names for the PC where the dev stack listens) - never `host-gateway`;
 * its own compose project, container names, ports, Temporal namespace + task queue and
   bucket - nothing that collides with the dev stack (the gate of 2026-10-03 22:29 was red
   because a gate and agents shared the dev stack's Temporal queue).
@@ -259,6 +263,20 @@ def _local_context(context: str) -> bool:
     return (DOCKER / context).resolve().is_relative_to(REPO)
 
 
+def _local_dockerfile(context: str, dockerfile: str) -> bool:
+    """The same rule for `build.dockerfile` (relative to the context): no URL, drive, `@`,
+    backslash or absolute path, and it resolves inside the repository (inspector, round 5:
+    `C:/Users/...` passed)."""
+    if (
+        not dockerfile
+        or dockerfile.startswith("/")
+        or any(ch in dockerfile for ch in ":@\\")
+        or not _local_context(context)
+    ):
+        return False
+    return (DOCKER / context / dockerfile).resolve().is_relative_to(REPO)
+
+
 def schema_violations(compose: dict[str, Any]) -> list[str]:
     found = [
         f"top-level key {key!r} is not in the allow-list"
@@ -282,6 +300,11 @@ def schema_violations(compose: dict[str, Any]) -> list[str]:
         context = build.get("context") if isinstance(build, dict) else None
         if context is not None and not _local_context(str(context)):
             found.append(f"{svc_name}: build context {context!r} is not a path in this repository")
+        dockerfile = build.get("dockerfile") if isinstance(build, dict) else None
+        if dockerfile is not None and not _local_dockerfile(str(context or "."), str(dockerfile)):
+            found.append(
+                f"{svc_name}: build dockerfile {dockerfile!r} is not a path in this repository"
+            )
         found += [
             f"{svc_name}: security_opt {opt!r} is not in the allow-list"
             for opt in svc.get("security_opt") or []
@@ -793,6 +816,282 @@ def test_checker_keeps_the_escape_and_staging_variables(line: str) -> None:
     raw = texts["docker-compose.staging.yml"]
     texts["docker-compose.staging.yml"] = raw.replace(_PLANTED_AFTER, _PLANTED_AFTER + line + "\n")
     assert account_violations(_load(STAGING), texts) == [], line
+
+
+# ----------------------------------------------------------------------------- allow-list
+# Inspector's fifth return, 2026-10-04: from inside pagentos-staging-api, host.docker.internal
+# (Docker Desktop's name for the PC) reached the dev Postgres :15432, the dev Temporal :17233
+# and jarvis_api :8000, and `PAGENTOS_TEMPORAL_ADDRESS: host.docker.internal:17233` (or a Redis /
+# S3 url there, or a database url carrying "@postgres:5432/pagentos_staging" only in its query)
+# passed every check green. So each service's environment is compared with an EXACT expected
+# dictionary - a key too many, a key missing or a value changed is red - and every address is
+# parsed: the host is exactly staging's own service and the port the expected one.
+
+#: Every service's environment, key for key and value for value.
+EXPECTED_ENV: dict[str, dict[str, str]] = {
+    "postgres": {
+        "POSTGRES_USER": "staging",
+        "POSTGRES_PASSWORD": "staging-only",
+        "POSTGRES_DB": "pagentos_staging",
+    },
+    "redis": {},
+    "minio": {
+        "MINIO_ROOT_USER": "staging-only-artifacts",
+        "MINIO_ROOT_PASSWORD": "staging-only-minio",
+    },
+    "temporal": {
+        "DB": "postgres12",
+        "DB_PORT": "5432",
+        "POSTGRES_USER": "staging",
+        "POSTGRES_PWD": "staging-only",
+        "POSTGRES_SEEDS": "postgres",
+        "DEFAULT_NAMESPACE": "pagentos-staging",
+        "TEMPORAL_ADDRESS": "temporal:7233",
+        "TEMPORAL_CLI_ADDRESS": "temporal:7233",
+    },
+    "api": {
+        "PAGENTOS_ENVIRONMENT": "staging",
+        "PAGENTOS_DATABASE_URL": "postgresql+psycopg://staging:staging-only@postgres:5432/pagentos_staging",
+        "PAGENTOS_REDIS_URL": "redis://redis:6379/0",
+        "PAGENTOS_S3_ENDPOINT_URL": "http://minio:9000",
+        "PAGENTOS_S3_ACCESS_KEY": "staging-only-artifacts",
+        "PAGENTOS_S3_SECRET_KEY": "staging-only-minio",
+        "PAGENTOS_S3_BUCKET": "pagentos-staging-artifacts",
+        "PAGENTOS_TEMPORAL_ADDRESS": "temporal:7233",
+        "PAGENTOS_TEMPORAL_NAMESPACE": "pagentos-staging",
+        "PAGENTOS_TEMPORAL_TASK_QUEUE": "pagentos-staging",
+        "PAGENTOS_WORKER_MODE": "embedded",
+        "PAGENTOS_VOICE_PROFILE_SECRET": "staging-only-voice-profile",
+        "PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED": "true",
+        "PAGENTOS_VOICE_OPENAI_API_KEY": "${PAGENTOS_STAGING_VOICE_OPENAI_API_KEY:-}",
+        "PAGENTOS_MAIL_SEND_ENABLED": "false",
+        "PAGENTOS_CALENDAR_WRITE_ENABLED": "false",
+        "PAGENTOS_MEMORY_EMBEDDING_PROVIDER": "deterministic",
+        "PAGENTOS_MEMORY_RERANK_PROVIDER": "none",
+        "PAGENTOS_WEB_ORIGINS": '["http://127.0.0.1:28000","http://localhost:28000"]',
+        "PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY": "true",
+        "PAGENTOS_TEAM_STORE": "file",
+        "PAGENTOS_RELEASE": "${PAGENTOS_STAGING_RELEASE:-}",
+        "PAGENTOS_GODS_EYE_URL": "",
+    },
+    "web": {},
+}
+
+#: Every address a service is given: (service, where, value kind) -> (scheme, host, port, path).
+#: The host is the compose service name - staging's own container, nothing else.
+EXPECTED_ADDRESSES: dict[tuple[str, str], tuple[str, str, int, str]] = {
+    ("api", "PAGENTOS_DATABASE_URL"): ("postgresql+psycopg", "postgres", 5432, "/pagentos_staging"),
+    ("api", "PAGENTOS_REDIS_URL"): ("redis", "redis", 6379, "/0"),
+    ("api", "PAGENTOS_S3_ENDPOINT_URL"): ("http", "minio", 9000, ""),
+    ("api", "PAGENTOS_TEMPORAL_ADDRESS"): ("", "temporal", 7233, ""),
+    ("temporal", "TEMPORAL_ADDRESS"): ("", "temporal", 7233, ""),
+    ("temporal", "TEMPORAL_CLI_ADDRESS"): ("", "temporal", 7233, ""),
+    ("web", "build.args.PAGENTOS_API_UPSTREAM"): ("http", "api", 8001, ""),
+}
+
+#: extra_hosts, exactly: production's names to TEST-NET-1, and Docker Desktop's names for the
+#: PC (where the dev stack publishes its ports) to 0.0.0.0. `host-gateway` - the PC's address
+#: - or any other entry is red.
+EXPECTED_EXTRA_HOSTS = {
+    "pagentos-core": BLACKHOLE,
+    "pagentos-core.tail0e6789.ts.net": BLACKHOLE,
+    "host.docker.internal": "0.0.0.0",
+    "gateway.docker.internal": "0.0.0.0",
+}
+
+
+def env_violations(compose: dict[str, Any]) -> list[str]:
+    found = []
+    services = compose.get("services") or {}
+    if set(services) != set(EXPECTED_ENV):
+        found.append(f"services {sorted(services)} are not {sorted(EXPECTED_ENV)}")
+    for svc_name, svc in services.items():
+        env = _env(svc)
+        wanted = EXPECTED_ENV.get(svc_name, {})
+        found += [
+            f"{svc_name}: {k} is not in the expected environment"
+            for k in env.keys() - wanted.keys()
+        ]
+        found += [f"{svc_name}: {k} is missing" for k in wanted.keys() - env.keys()]
+        found += [
+            f"{svc_name}: {k}={env[k]!r}, expected {wanted[k]!r}"
+            for k in env.keys() & wanted.keys()
+            if env[k] != wanted[k]
+        ]
+    return found
+
+
+def _address(value: str) -> tuple[str, str, int | None, str, str]:
+    """(scheme, host, port, path, query+fragment+userinfo-oddities) of a url or `host:port`."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(value if "://" in value else f"//{value}")
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return parts.scheme, parts.hostname or "", port, parts.path, parts.query + parts.fragment
+
+
+def address_violations(compose: dict[str, Any]) -> list[str]:
+    found = []
+    services = compose.get("services") or {}
+    for (svc_name, where), (scheme, host, port, path) in EXPECTED_ADDRESSES.items():
+        svc = services.get(svc_name) or {}
+        if where.startswith("build.args."):
+            build = svc.get("build") if isinstance(svc.get("build"), dict) else {}
+            value = str(
+                ((build or {}).get("args") or {}).get(where.removeprefix("build.args."), "")
+            )
+        else:
+            value = _env(svc).get(where, "")
+        got = _address(value)
+        # A query is refused outright: libpq reads `?host=` / `?port=` and goes there instead.
+        if got != (scheme, host, port, path, ""):
+            found.append(
+                f"{svc_name}: {where}={value!r} is not {scheme or 'host'}://{host}:{port}{path} "
+                f"(parsed scheme={got[0]!r} host={got[1]!r} port={got[2]!r} path={got[3]!r} "
+                f"query={got[4]!r})"
+            )
+    return found
+
+
+def extra_hosts_violations(compose: dict[str, Any]) -> list[str]:
+    found = []
+    for svc_name, svc in (compose.get("services") or {}).items():
+        entries = [str(e) for e in svc.get("extra_hosts") or []]
+        hosts: dict[str, str] = {}
+        for entry in entries:
+            name, sep, addr = entry.partition(":")
+            if not sep or name in hosts:
+                found.append(f"{svc_name}: extra_hosts entry {entry!r} is malformed or repeated")
+            hosts[name] = addr
+        if hosts != EXPECTED_EXTRA_HOSTS:
+            found.append(f"{svc_name}: extra_hosts {entries} is not exactly {EXPECTED_EXTRA_HOSTS}")
+        found += [
+            f"{svc_name}: extra_hosts {entry!r} sends a name to the PC (host-gateway)"
+            for entry in entries
+            if "host-gateway" in entry
+        ]
+    return found
+
+
+def test_staging_environment_is_exactly_the_expected_one() -> None:
+    assert env_violations(_load(STAGING)) == []
+
+
+def test_staging_addresses_are_staging_own_services() -> None:
+    assert address_violations(_load(STAGING)) == []
+
+
+def test_staging_sends_the_pc_names_nowhere() -> None:
+    assert extra_hosts_violations(_load(STAGING)) == []
+
+
+@pytest.mark.parametrize(
+    ("service", "key", "value"),
+    [
+        ("api", "PAGENTOS_TEMPORAL_ADDRESS", "host.docker.internal:17233"),
+        ("api", "PAGENTOS_REDIS_URL", "redis://host.docker.internal:16379/0"),
+        ("api", "PAGENTOS_S3_ENDPOINT_URL", "http://host.docker.internal:19000"),
+        ("api", "PAGENTOS_TEMPORAL_ADDRESS", "temporal:17233"),
+        ("api", "PAGENTOS_REDIS_URL", "redis://redis.evil:6379/0"),
+        (
+            "api",
+            "PAGENTOS_DATABASE_URL",
+            "postgresql+psycopg://staging:staging-only@host.docker.internal:15432/pagentos"
+            "?x=@postgres:5432/pagentos_staging",
+        ),
+        (
+            "api",
+            "PAGENTOS_DATABASE_URL",
+            "postgresql+psycopg://staging:staging-only@postgres:5432/pagentos_staging"
+            "?host=host.docker.internal&port=15432",
+        ),
+        (
+            "api",
+            "PAGENTOS_DATABASE_URL",
+            "postgresql+psycopg://staging:staging-only@postgres:5432/pagentos",
+        ),
+        ("temporal", "TEMPORAL_ADDRESS", "192.168.65.254:17233"),
+    ],
+)
+def test_checker_refuses_an_address_outside_staging(service: str, key: str, value: str) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"][service]["environment"][key] = value
+    assert address_violations(compose), value
+    assert env_violations(compose), value
+
+
+def test_checker_refuses_a_web_upstream_outside_staging() -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["web"]["build"]["args"]["PAGENTOS_API_UPSTREAM"] = (
+        "http://host.docker.internal:8001"
+    )
+    assert address_violations(compose)
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["extra", "missing", "changed"],
+)
+def test_checker_refuses_any_environment_drift(change: str) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    env = compose["services"]["api"]["environment"]
+    if change == "extra":
+        env["PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN"] = "http://127.0.0.1:28001"
+    elif change == "missing":
+        env.pop("PAGENTOS_GODS_EYE_URL")
+    else:
+        env["PAGENTOS_WORKER_MODE"] = "external"
+    assert env_violations(compose), change
+
+
+@pytest.mark.parametrize(
+    "hosts",
+    [
+        ["pagentos-core:192.0.2.1", "pagentos-core.tail0e6789.ts.net:192.0.2.1"],
+        [
+            "pagentos-core:192.0.2.1",
+            "pagentos-core.tail0e6789.ts.net:192.0.2.1",
+            "host.docker.internal:host-gateway",
+            "gateway.docker.internal:0.0.0.0",
+        ],
+        [
+            "pagentos-core:192.0.2.1",
+            "pagentos-core.tail0e6789.ts.net:192.0.2.1",
+            "host.docker.internal:0.0.0.0",
+            "gateway.docker.internal:0.0.0.0",
+            "devpg:host-gateway",
+        ],
+        [
+            "pagentos-core:192.0.2.1",
+            "pagentos-core.tail0e6789.ts.net:192.0.2.1",
+            "host.docker.internal:192.168.65.254",
+            "gateway.docker.internal:0.0.0.0",
+        ],
+    ],
+)
+def test_checker_refuses_extra_hosts_that_reach_the_pc(hosts: list[str]) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["api"]["extra_hosts"] = hosts
+    assert extra_hosts_violations(compose), hosts
+
+
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        "C:/Users/alpak/src/pagentos/infra/docker/web/Dockerfile",
+        "/home/owner/Dockerfile",
+        "../../../../outside/Dockerfile",
+        "https://example.net/Dockerfile",
+        "infra\\docker\\web\\Dockerfile",
+    ],
+)
+def test_checker_refuses_a_dockerfile_outside_the_repository(dockerfile: str) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["web"]["build"]["dockerfile"] = dockerfile
+    assert schema_violations(compose), dockerfile
 
 
 @pytest.mark.parametrize(

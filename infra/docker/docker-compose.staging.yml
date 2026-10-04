@@ -36,9 +36,14 @@ name: pagentos-staging
 # resolve to TEST-NET-1 (RFC 5737, routed nowhere). By ADDRESS the `networks:` block at the
 # end makes the whole tailnet unroutable. These two lines are the only place a production
 # name may be written in staging (the isolation test allows exactly them).
+# The dev stack by NAME goes nowhere either: Docker Desktop's names for the PC, where the dev
+# stack publishes 15432/17233/... (inspector 2026-10-04: reachable from the staging api), are
+# sent to 0.0.0.0 - the container's own address, where none of those ports listens.
 x-production-blackhole: &production-blackhole
   - "pagentos-core:192.0.2.1"
   - "pagentos-core.tail0e6789.ts.net:192.0.2.1"
+  - "host.docker.internal:0.0.0.0"
+  - "gateway.docker.internal:0.0.0.0"
 
 services:
   postgres:

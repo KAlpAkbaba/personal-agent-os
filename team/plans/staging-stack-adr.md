@@ -101,6 +101,49 @@ A full egress block (an internal network plus a vendor-allowlist proxy) is a sep
 `main` cannot wave a sha through), and after a deploy removes `pagentos-staging/*` images except
 this sha's and the previous one's (each sha is ~1.8 GB; C: ran out on 2026-10-03).
 
+Reaching the DEV stack - allow-list of values (inspector's fifth return, 2026-10-04). From
+inside `pagentos-staging-api`, `host.docker.internal` (Docker Desktop's name for the PC,
+192.168.65.254) reached the dev Postgres :15432, the dev Temporal :17233 and jarvis_api :8000,
+and `PAGENTOS_TEMPORAL_ADDRESS: host.docker.internal:17233` (or a Redis / S3 url there, or a
+database url carrying `@postgres:5432/pagentos_staging` only in its query) passed every check.
+Now: (a) every service's `environment` is compared with an EXACT expected dictionary
+(`EXPECTED_ENV` in the test) - a key too many, a key missing or a value changed is red; (b)
+every address (api's database / Redis / S3 / Temporal, temporal's own, web's
+`PAGENTOS_API_UPSTREAM`) is parsed as a url: scheme, host, port and path must be exactly
+staging's service (`postgres:5432/pagentos_staging`, `redis:6379/0`, `minio:9000`,
+`temporal:7233`, `api:8001`), and ANY query is refused (libpq reads `?host=`/`?port=` and goes
+there); (c) `extra_hosts` is exactly the blackhole set - the two production names to 192.0.2.1
+and `host.docker.internal` / `gateway.docker.internal` to 0.0.0.0 (the container's own
+address, where none of the dev ports listens); `host-gateway` or any other entry is red; (d)
+`build.dockerfile` follows the context's rule (no drive, URL, `@`, backslash or absolute path,
+resolves inside the repo). Proved on the real compose file (planted, run, restored byte for
+byte, sha256 `38e88f92c76ce237` before and after each): Temporal -> host.docker.internal:17233,
+Redis -> :16379, S3 -> :19000 and the query-smuggled database url each RED (2 failed: exact env
++ address); `host.docker.internal:host-gateway` RED (1); an absolute dockerfile RED (2); one
+extra env key RED (1). Loosening the address check back to a substring turns the 3 database
+planted cases RED. Live 2026-10-04 17:33Z, test-slot `ts-3257b0249c4c` [heavy]: from the
+recreated api, `host.docker.internal` and `gateway.docker.internal` -> 0.0.0.0, :15432 / :17233
+/ :8000 `[Errno 111] Connection refused` (was OPEN at 17:2xZ) - PROVEN_PROXY. **Open risk:**
+the raw address `192.168.65.254` (:15432/:17233/:8000) is still OPEN from the container; no
+config path can name it (the env allow-list), only code that hard-codes it could. Closing it
+needs the full egress block (internal network + vendor-allowlist proxy), the separate card above.
+
+Health is the body, and recovery after a restart (inspector, same return). The live staging was
+`{"status":"degraded","failing_checks":"temporal_worker"}` with HTTP 200 from 13:11Z: after a
+Docker restart `restart: unless-stopped` ignored the depends_on order, the api came up before
+Temporal, its embedded worker tried once and never retried (that retry is in
+`services/api/app`, outside this card - a separate card), and up.ps1 / deploy.ps1 would have
+said UP. Now up.ps1 (and deploy.ps1, which waits through it) requires `status == "ok"` in the
+body; an api `degraded` for `-DegradedGraceSec` (60 s) is recreated once (`up -d --no-build
+--force-recreate api`) and waited for again; still degraded -> exit 1. A plain up.ps1 takes the
+images deploy.ps1 last recorded (deployed.json), not `:local`. **After the PC or Docker
+restarts, run `scripts/staging/up.ps1`** - that is the recovery path. Proved: staging.tests.ps1
+drives a fake health (loopback TcpListener) that answers 200 + degraded -> exit 1, recreate
+called, no "STAGING UP"; 200 + ok -> exit 0, nothing recreated (old up.ps1: 4 failed; up.ps1
+mutated to accept bare 200: 4 failed). Live 17:32-17:33Z on the degraded staging:
+`up.ps1 -HealthOnly -DegradedGraceSec 10` recreated the api (compose recreated the data services
+too, the compose had changed), health `status: ok`, the 3 owner sessions and the probe row kept.
+
 Differences from production, deliberate: one api colour, no edge; the embedder is
 `deterministic` (no 100 MB model download; health says `semantic: false`); no backup mounts
 (health: `backup: skipped`).
@@ -116,6 +159,9 @@ Differences from production, deliberate: one api colour, no edge; the embedder i
 | web | 39-41 MiB | 512 MiB |
 | redis | 5 MiB | 256 MiB |
 | **total** | **~0.85 GiB** | 5.25 GiB cap |
+
+Again 2026-10-04 17:34Z after the recreate: api 291, minio 229, web 110, postgres 116, temporal
+77, redis 4 MiB (~0.81 GiB).
 
 Images: cloud-core 1.38 GB + web 391 MB per deployed sha (deploy keeps this sha's and the previous
 sha's tags and removes the rest). First deploy 7m43s (cold web build),
