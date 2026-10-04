@@ -138,6 +138,11 @@ SUBSYSTEM_NATIVEFACTORY = "nativefactory"
 #: decision. Its own subsystem so the Cockpit can tell "what the system is fixing in
 #: itself" from "what evolved".
 SUBSYSTEM_SELFDEV = "selfdev"
+#: watch-engine (ADR-0213 order 2b): a public page read in the cloud and compared with the
+#: last reading. Its own subsystem so "neyi izliyorsun, ne değişti?" is answerable without
+#: separating it from routine rows; only a notified change or failure is written here -
+#: every reading lives in ``watch_readings``.
+SUBSYSTEM_WATCH = "watch"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -172,6 +177,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_CREATIVE,
     SUBSYSTEM_NATIVEFACTORY,
     SUBSYSTEM_SELFDEV,
+    SUBSYSTEM_WATCH,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -574,6 +580,10 @@ EVENT_TYPE_SELFDEV_DEFECT_QUEUED = "selfdev.defect_queued"
 EVENT_TYPE_SELFDEV_RUN_ENDED = "selfdev.run_ended"
 EVENT_TYPE_SELFDEV_CANDIDATE_READY = "selfdev.candidate_ready"
 EVENT_TYPE_SELFDEV_DECIDED = "selfdev.decided"
+#: watch-engine: the three facts a watch tells the owner (never a plain reading).
+EVENT_TYPE_WATCH_CHANGED = "watch.changed"
+EVENT_TYPE_WATCH_CONDITION_MET = "watch.condition_met"
+EVENT_TYPE_WATCH_READ_FAILED = "watch.read_failed"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -757,6 +767,9 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_SELFDEV_RUN_ENDED,
     EVENT_TYPE_SELFDEV_CANDIDATE_READY,
     EVENT_TYPE_SELFDEV_DECIDED,
+    EVENT_TYPE_WATCH_CHANGED,
+    EVENT_TYPE_WATCH_CONDITION_MET,
+    EVENT_TYPE_WATCH_READ_FAILED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the
