@@ -1387,5 +1387,5 @@ standing rule.
 |---|---|---|---|
 | 51.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: eac453fc… is running as api-blue behind the edge`, device handoff 2/2, health through the edge settled at once, `aux: web up`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-blue is canonical (release eac453fc…)` |
 | 51.2 | The dark Ofis is served | `PROVEN_REAL` (transport) | `pagentos-prod-web` rebuilt 01:33 UTC; its CSS chunk carries the floor colour `#1b2143`; `/core/office` 200 over the tailnet. The look after sign-in is the owner's |
-| 51.3 | The tick passes -MaxHours | `PROVEN_AUTOMATED` | team-tick 7/7 with case 5b; the scheduled task does not pass it yet (set after this release) |
+| 51.3 | The tick passes -MaxHours | `PROVEN_AUTOMATED` | `scripts/tests/team-tick.tests.ps1` 7/7 with case 5b; the scheduled task passes `-MaxHours 12` since 2026-10-04 04:55 |
 | 51.4 | The scheduled tick runs again | `PROVEN_REAL` | the wrapper under %LOCALAPPDATA% was invisible to Task Scheduler (the desktop app's MSIX redirect; exit 0xFFFD0000); moved to `%USERPROFILE%\.pagentos-team`, a probe task saw it, the 01:00 tick ran and exited 3 (the lock of the running cycle - correct) |
