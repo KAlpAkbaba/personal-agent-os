@@ -48,10 +48,20 @@ def _consult(**fields: object) -> dict[str, object]:
         "task": "consult-asker",
         "kind": "danisma",
         "to": "auto",
-        "situation": "board.py'ye danışma notunu ekliyorum; seçenekleri nerede doğrulayacağıma karar veriyorum.",
-        "options": ["A: board.py içinde, saf fonksiyonla", "B: routes_board.py'de pydantic modeliyle"],
+        "situation": (
+            "board.py'ye danışma notunu ekliyorum; "
+            "seçenekleri nerede doğrulayacağıma karar veriyorum."
+        ),
+        "options": [
+            "A: board.py içinde, saf fonksiyonla",
+            "B: routes_board.py'de pydantic modeliyle",
+        ],
         "my_lean": "A: iki depo aynı kuralı kullanır",
-        "files": ["services/api/app/team/board.py", "scripts/lib/TeamBoard.ps1", "scripts/team/board.ps1"],
+        "files": [
+            "services/api/app/team/board.py",
+            "scripts/lib/TeamBoard.ps1",
+            "scripts/team/board.ps1",
+        ],
         **fields,
     }
 
@@ -109,7 +119,10 @@ def _refused(call) -> board.Refused:
 def test_a_danisma_is_kept_with_its_situation_options_lean_and_files(store) -> None:
     note = store.post(_consult(to="worker-2"), now=NOW)
     assert note["kind"] == "danisma" and note["to"] == "worker-2"
-    assert note["options"] == ["A: board.py içinde, saf fonksiyonla", "B: routes_board.py'de pydantic modeliyle"]
+    assert note["options"] == [
+        "A: board.py içinde, saf fonksiyonla",
+        "B: routes_board.py'de pydantic modeliyle",
+    ]
     assert note["my_lean"].startswith("A:")
     assert note["files"][0] == "services/api/app/team/board.py"
     assert note["text"] == note["situation"]  # the line every reader already prints
@@ -117,7 +130,9 @@ def test_a_danisma_is_kept_with_its_situation_options_lean_and_files(store) -> N
 
 
 def test_options_are_named_A_B_C_by_their_place(store) -> None:
-    note = store.post(_consult(to="worker-2", options=["tek tablo", "B: iki tablo", "üç tablo"]), now=NOW)
+    note = store.post(
+        _consult(to="worker-2", options=["tek tablo", "B: iki tablo", "üç tablo"]), now=NOW
+    )
     assert note["options"] == ["A: tek tablo", "B: iki tablo", "C: üç tablo"]
 
 
@@ -166,7 +181,12 @@ def test_two_and_three_options_pass_one_and_four_do_not(store) -> None:
 
 def test_auto_and_the_consult_fields_are_a_danismas_only(store) -> None:
     plain = {"seat": "worker-1", "task": "consult-asker", "kind": "soru", "text": "?"}
-    for fields in ({"to": "auto"}, {"options": ["A: x", "B: y"]}, {"situation": "s"}, {"files": ["a.py"]}):
+    for fields in (
+        {"to": "auto"},
+        {"options": ["A: x", "B: y"]},
+        {"situation": "s"},
+        {"files": ["a.py"]},
+    ):
         refused = _refused(lambda f=fields: store.post({**plain, **f}, now=NOW))
         assert refused.status == 422, (fields, refused.problems)
 
@@ -176,7 +196,9 @@ def test_auto_and_the_consult_fields_are_a_danismas_only(store) -> None:
 
 def test_auto_goes_to_the_running_seat_whose_area_shares_a_file(store) -> None:
     _seat_the_runs(store)
-    routing = _running(("worker", "consult-asker"), ("worker", "consult-other"), ("worker", "consult-sharer"))
+    routing = _running(
+        ("worker", "consult-asker"), ("worker", "consult-other"), ("worker", "consult-sharer")
+    )
     note = store.post(_consult(), now=NOW, routing=routing)
     assert note["to"] == "worker-3", note
     assert "scripts/lib/teamboard.ps1" in note["route"].lower()
@@ -192,7 +214,9 @@ def test_auto_never_picks_the_asker_even_when_its_own_area_matches_best(store) -
 
 def test_auto_never_picks_a_seat_that_is_not_running(store) -> None:
     _seat_the_runs(store)  # worker-3 said hello on consult-sharer ...
-    routing = _running(("worker", "consult-asker"), ("worker", "consult-other"))  # ... and has ended
+    routing = _running(
+        ("worker", "consult-asker"), ("worker", "consult-other")
+    )  # ... and has ended
     note = store.post(_consult(), now=NOW, routing=routing)
     assert note["to"] == "lead"
     # no live cycle at all: nobody runs, not even the lead - the note goes to everyone
@@ -202,8 +226,12 @@ def test_auto_never_picks_a_seat_that_is_not_running(store) -> None:
 
 def test_a_test_question_goes_to_the_running_inspector_when_no_area_is_shared(store) -> None:
     _seat_the_runs(store)
-    routing = _running(("worker", "consult-asker"), ("worker", "consult-other"), ("inspector", "consult-other"))
-    note = store.post(_consult(topic="test", files=["services/api/app/team/board.py"]), now=NOW, routing=routing)
+    routing = _running(
+        ("worker", "consult-asker"), ("worker", "consult-other"), ("inspector", "consult-other")
+    )
+    note = store.post(
+        _consult(topic="test", files=["services/api/app/team/board.py"]), now=NOW, routing=routing
+    )
     assert note["to"] == "inspector"
     no_inspector = _running(("worker", "consult-asker"), ("worker", "consult-other"))
     later = store.post(_consult(topic="test"), now=NOW + timedelta(seconds=1), routing=no_inspector)
@@ -231,7 +259,9 @@ def test_the_pure_router_on_its_own() -> None:
     seat, _ = board.route_auto("worker-1", ASKER_AREA, ["scripts/lib/TeamBoard.ps1"], "kod", seats)
     assert seat == "worker-3"
     # a directory in an area holds the files under it
-    seat, _ = board.route_auto("worker-1", ["apps/web/app/core/office/officeBoard.ts"], [], "kod", seats)
+    seat, _ = board.route_auto(
+        "worker-1", ["apps/web/app/core/office/officeBoard.ts"], [], "kod", seats
+    )
     assert seat == "worker-2"
     seat, _ = board.route_auto("worker-3", SHARING_AREA, [], "kod", seats)
     assert seat == "worker-1"
@@ -288,8 +318,17 @@ def test_a_cevap_to_a_danisma_with_no_or_a_wrong_choice_is_a_422(store, choice) 
 
 
 def test_a_choice_only_answers_a_danisma(store) -> None:
-    asked = store.post({"seat": "worker-1", "task": "consult-asker", "kind": "soru", "text": "?"}, now=NOW)
-    body = {"seat": "worker-2", "task": "consult-other", "kind": "cevap", "reply_to": asked["id"], "choice": "A", "text": "x"}
+    asked = store.post(
+        {"seat": "worker-1", "task": "consult-asker", "kind": "soru", "text": "?"}, now=NOW
+    )
+    body = {
+        "seat": "worker-2",
+        "task": "consult-other",
+        "kind": "cevap",
+        "reply_to": asked["id"],
+        "choice": "A",
+        "text": "x",
+    }
     assert _refused(lambda: store.post(body, now=NOW + timedelta(seconds=1))).status == 422
 
 
@@ -297,7 +336,14 @@ def test_read_can_ask_for_the_answers_to_one_note(store) -> None:
     asked = store.post(_consult(to="worker-2"), now=NOW)
     store.post(_bilgi("worker-3", "consult-sharer"), now=NOW + timedelta(seconds=1))
     answer = store.post(
-        {"seat": "worker-2", "task": "consult-other", "kind": "cevap", "reply_to": asked["id"], "choice": "A", "text": "A."},
+        {
+            "seat": "worker-2",
+            "task": "consult-other",
+            "kind": "cevap",
+            "reply_to": asked["id"],
+            "choice": "A",
+            "text": "A.",
+        },
         now=NOW + timedelta(seconds=2),
     )
     assert store.read(reply_to=asked["id"]) == [answer]
@@ -308,12 +354,31 @@ def test_read_can_ask_for_the_answers_to_one_note(store) -> None:
 
 
 def _slot(**fields: object) -> dict[str, object]:
-    return {"state": "take", "kinds": ["heavy"], "holders": ["worker-2"], "waiting": ["worker-3", "gate"], **fields}
+    return {
+        "state": "take",
+        "kinds": ["heavy"],
+        "holders": ["worker-2"],
+        "waiting": ["worker-3", "gate"],
+        **fields,
+    }
 
 
 def test_a_test_queue_note_carries_the_lines_snapshot(store) -> None:
-    note = store.post({**_bilgi("worker-2", "consult-other", "Çalışan 2: birim testlerini başlatıyorum (ağır), tahmini 6 dk"), "slot": _slot(estimate_min=6)}, now=NOW)
-    assert note["slot"]["holders"] == ["worker-2"] and note["slot"]["waiting"] == ["worker-3", "gate"]
+    note = store.post(
+        {
+            **_bilgi(
+                "worker-2",
+                "consult-other",
+                "Çalışan 2: birim testlerini başlatıyorum (ağır), tahmini 6 dk",
+            ),
+            "slot": _slot(estimate_min=6),
+        },
+        now=NOW,
+    )
+    assert note["slot"]["holders"] == ["worker-2"] and note["slot"]["waiting"] == [
+        "worker-3",
+        "gate",
+    ]
     assert note["slot"]["estimate_min"] == 6
 
 
@@ -335,7 +400,13 @@ def test_a_slot_that_breaks_a_rule_is_a_422(store, slot) -> None:
 
 
 def test_a_slot_is_a_bilgis_only(store) -> None:
-    body = {"seat": "worker-2", "task": "consult-other", "kind": "soru", "text": "?", "slot": _slot()}
+    body = {
+        "seat": "worker-2",
+        "task": "consult-other",
+        "kind": "soru",
+        "text": "?",
+        "slot": _slot(),
+    }
     assert _refused(lambda: store.post(body, now=NOW)).status == 422
 
 
@@ -362,7 +433,9 @@ def team_root(tmp_path: Path) -> Path:
     (root / "queue.json").write_text(json.dumps({"version": 1, "tasks": tasks}), encoding="utf-8")
     stamp = board.stamp(board.utcnow())
     (root / "lock.json").write_text(
-        json.dumps({"held": True, "machine": "PC", "cycle_id": "c1", "pid": 1, "acquired_at": stamp}),
+        json.dumps(
+            {"held": True, "machine": "PC", "cycle_id": "c1", "pid": 1, "acquired_at": stamp}
+        ),
         encoding="utf-8",
     )
     (root / "status.json").write_text(
@@ -393,8 +466,14 @@ def client(team_root: Path) -> TestClient:
     return test_client
 
 
-def test_the_route_routes_auto_from_the_live_status_and_the_queues_areas(client: TestClient) -> None:
-    for seat, task in (("worker-1", "consult-asker"), ("worker-2", "consult-other"), ("worker-3", "consult-sharer")):
+def test_the_route_routes_auto_from_the_live_status_and_the_queues_areas(
+    client: TestClient,
+) -> None:
+    for seat, task in (
+        ("worker-1", "consult-asker"),
+        ("worker-2", "consult-other"),
+        ("worker-3", "consult-sharer"),
+    ):
         assert client.post(NOTES, json=_bilgi(seat, task)).status_code == 200
     posted = client.post(NOTES, json=_consult())
     assert posted.status_code == 200, posted.text
@@ -426,7 +505,14 @@ def test_context_gives_the_note_the_askers_card_branch_and_answers(client: TestC
     asked = client.post(NOTES, json=_consult(to="worker-2")).json()["note"]
     client.post(
         NOTES,
-        json={"seat": "worker-2", "task": "consult-other", "kind": "cevap", "reply_to": asked["id"], "choice": "B", "text": "B daha iyi."},
+        json={
+            "seat": "worker-2",
+            "task": "consult-other",
+            "kind": "cevap",
+            "reply_to": asked["id"],
+            "choice": "B",
+            "text": "B daha iyi.",
+        },
     )
     context = client.get(f"{NOTES}/{asked['id']}/context")
     assert context.status_code == 200, context.text
