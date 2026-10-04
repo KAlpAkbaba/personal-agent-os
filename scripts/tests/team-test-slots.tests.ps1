@@ -22,7 +22,11 @@
       10 a half-written entry and a missing store are tolerated;
       11 status speaks Turkish; the log has one line per finished run (run as `& script`);
       12 the role files name the rule, and their example commands pass -DryRun;
-      13 quality-gate.ps1 asks before a heavy step, waits, and -NoTestSlots asks nothing.
+      13 quality-gate.ps1 asks before a heavy step, waits, and -NoTestSlots asks nothing;
+      14 the board: a take, a BEKLE and a freed slot are one bilgi note each (a fake board);
+      15 the board down never blocks or changes ONAY/BEKLE;
+      16 `who` speaks Turkish by seat name;
+      17 the notes' names and bounds.
 
     Run: powershell -NoProfile -File scripts\tests\team-test-slots.tests.ps1 [-Filter <regex>]
 #>
@@ -47,6 +51,8 @@ if (Test-Path -LiteralPath $libPath) { . $libPath; $script:LibLoaded = $true }
 
 $script:Failures = 0
 $script:Passes = 0
+# This run's own board must never hear the cases: no child inherits an address, a token or a seat.
+foreach ($name in @("PAGENTOS_TEAM_URL", "PAGENTOS_TEAM_TOKEN_FILE", "PAGENTOS_TEAM_SEAT")) { Remove-Item -Path ("Env:" + $name) -ErrorAction SilentlyContinue }
 $script:TempRoot = Join-Path $env:TEMP ("pagentos-test-slots-tests-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 [void](New-Item -ItemType Directory -Path $script:TempRoot -Force)
 $script:Children = New-Object System.Collections.ArrayList
@@ -514,6 +520,162 @@ Test-Case "13 quality-gate.ps1 (-StepList) asks before a heavy step, waits while
 }
 
 # ------------------------------------------------------------------------------------ gate wiring
+# ------------------------------------------------------------------------------------ 14-17: the board
+# The office SEES the queue (owner, 2026-10-03): a take, a BEKLE and a freed slot are one
+# 'bilgi' note each on the team's board; the queue decides, the board only reports.
+
+function Start-FakeBoard {
+    <# A fake board in its own process: every POST body is one line of <dir>\sink.jsonl. #>
+    param([string]$Dir)
+    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
+    $server = Join-Path $Dir "fake-board.ps1"
+    $code = @'
+param([int]$Port, [string]$Ready, [string]$Sink)
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$l = New-Object System.Net.HttpListener
+$l.Prefixes.Add("http://127.0.0.1:$Port/")
+$l.Start()
+[System.IO.File]::WriteAllText($Ready, "ready")
+$n = 0
+while ($true) {
+    $c = $l.GetContext()
+    $raw = (New-Object System.IO.StreamReader($c.Request.InputStream, $utf8)).ReadToEnd()
+    if ($c.Request.Url.AbsolutePath -eq "/__stop") { $c.Response.Close(); break }
+    [System.IO.File]::AppendAllText($Sink, ($raw -replace "[\r\n]+", " ") + "`n", $utf8)
+    $n++
+    $b = $utf8.GetBytes(('{{"note":{{"id":"n-20261004T0900{0:00}000000Z-0000abcd","at":"2026-10-04T09:00:00Z"}}}}' -f ($n % 60)))
+    $c.Response.ContentType = "application/json; charset=utf-8"
+    $c.Response.OutputStream.Write($b, 0, $b.Length)
+    $c.Response.Close()
+}
+$l.Stop()
+'@
+    [System.IO.File]::WriteAllText($server, $code, (New-Object System.Text.UTF8Encoding($true)))
+    $ready = Join-Path $Dir "board-ready"
+    $sink = Join-Path $Dir "sink.jsonl"
+    $child = Start-PsChild -Arguments @("-File", $server, "-Port", [string]$port, "-Ready", $ready, "-Sink", $sink)
+    Wait-Until { Test-Path -LiteralPath $ready } "the fake board started" 40
+    $token = Join-Path $Dir "team.token"
+    [System.IO.File]::WriteAllText($token, "fake-board-token")
+    return [pscustomobject]@{ Url = "http://127.0.0.1:$port"; Token = $token; Sink = $sink; Child = $child }
+}
+
+function Get-BoardNotes {
+    param($Board)
+    if (-not (Test-Path -LiteralPath $Board.Sink)) { return @() }
+    return @([System.IO.File]::ReadAllLines($Board.Sink, [System.Text.Encoding]::UTF8) | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
+function Use-Board {
+    <# The children of a case inherit the board's address and token file; cleared afterwards. #>
+    param([string]$Url, [string]$Token, [scriptblock]$Body)
+    $env:PAGENTOS_TEAM_URL = $Url; $env:PAGENTOS_TEAM_TOKEN_FILE = $Token
+    try { & $Body }
+    finally { Remove-Item Env:PAGENTOS_TEAM_URL, Env:PAGENTOS_TEAM_TOKEN_FILE -ErrorAction SilentlyContinue }
+}
+
+function Ask-As {
+    param([string]$Store, [string]$Seat, [string]$Task, [string]$What, [string]$Kind = "database")
+    return (Invoke-Slot -Arguments @("ask", "-Kind", $Kind, "-Task", $Task, "-Role", "worker", "-Seat", $Seat, "-What", $What, "-Store", $Store))
+}
+
+Test-Case "14 board: a take posts one bilgi (seat, kind of test, estimate); a BEKLE names the holder; freeing names who is next" {
+    $s = New-Store; $d = New-CaseDir
+    [void](New-Item -ItemType Directory -Path $s -Force)
+    # two earlier runs of the same command: 300 s and 420 s - the estimate is their mean, 6 min
+    $old = "2026-10-03T08:00:00Z`trole=worker`ttask=x-task`tkinds=database`twaited_s=0`tran_s={0}`texit=0`twhat=birim testleri`r`n"
+    [System.IO.File]::WriteAllText((Get-TestSlotLogPath -Store $s), (($old -f 300) + ($old -f 420)))
+    $board = Start-FakeBoard -Dir $d
+    Use-Board -Url $board.Url -Token $board.Token -Body {
+        $t = Get-Ticket (Ask-As -Store $s -Seat "worker-2" -Task "slot-holder" -What "birim testleri") "worker-2 takes the slot"
+        $notes = @(Get-BoardNotes $board)
+        Assert-Equal 1 $notes.Count "one note on take: $(@($notes) | ConvertTo-Json -Compress)"
+        $n = $notes[0]
+        Assert-Equal "worker-2|slot-holder|bilgi" ("{0}|{1}|{2}" -f $n.seat, $n.task, $n.kind) "the holder's seat and task"
+        Assert-True ($n.text -match '^Çalışan 2: birim testleri başlatıyorum \(veritabanı\), tahmini 6 dk$') "plain Turkish: $($n.text)"
+        Assert-Equal "take|database|worker-2|6" ("{0}|{1}|{2}|{3}" -f $n.slot.state, (@($n.slot.kinds) -join ","), (@($n.slot.holders) -join ","), $n.slot.estimate_min) "the snapshot"
+        [void](Get-Ticket (Ask-As -Store $s -Seat "worker-2" -Task "slot-holder" -What "birim testleri") "asking again with the ticket unused")
+        Assert-Equal 1 @(Get-BoardNotes $board).Count "asking again posts nothing"
+
+        $started = Join-Path $d "started"; $release = Join-Path $d "release"
+        $wrapper = Start-Slot -Arguments (@("run", "-Ticket", $t, "-Store", $s, "--") + (Get-WaitCommand -Started $started -Release $release))
+        Wait-Until { Test-Path -LiteralPath $started } "the holder's command started"
+        Assert-Bekle (Ask-As -Store $s -Seat "worker-3" -Task "slot-waiter" -What "entegrasyon testleri") 1 "worker-3 waits"
+        $notes = @(Get-BoardNotes $board)
+        Assert-Equal 2 $notes.Count "one note for the BEKLE"
+        Assert-True ($notes[1].text -match '^Çalışan 3: test sırası bekliyorum \(veritabanı: entegrasyon testleri\), sıram 1, önümde Çalışan 2$') "the waiting note: $($notes[1].text)"
+        Assert-Equal "wait|worker-2|worker-3" ("{0}|{1}|{2}" -f $notes[1].slot.state, (@($notes[1].slot.holders) -join ","), (@($notes[1].slot.waiting) -join ",")) "the snapshot"
+        Assert-Bekle (Ask-As -Store $s -Seat "worker-3" -Task "slot-waiter" -What "entegrasyon testleri") 1 "worker-3 asks again"
+        Assert-Equal 2 @(Get-BoardNotes $board).Count "asking again in line posts nothing"
+
+        [void](New-Item -ItemType File -Path $release)
+        $w = Wait-Child $wrapper
+        Assert-Equal 0 $w.Code "the holder's run ended cleanly: $($w.Err)"
+        $notes = @(Get-BoardNotes $board)
+        Assert-Equal 3 $notes.Count "one note when the slot frees"
+        Assert-Equal "worker-2|slot-holder" ("{0}|{1}" -f $notes[2].seat, $notes[2].task) "the freeing seat writes it"
+        Assert-True ($notes[2].text -match '^Çalışan 2: birim testleri bitti \(\d+ dk, çıkış 0\); sıradaki: Çalışan 3$') "who is next: $($notes[2].text)"
+        Assert-Equal "free||worker-3" ("{0}|{1}|{2}" -f $notes[2].slot.state, (@($notes[2].slot.holders) -join ","), (@($notes[2].slot.waiting) -join ",")) "the snapshot"
+        [void](Get-Ticket (Ask-As -Store $s -Seat "worker-3" -Task "slot-waiter" -What "entegrasyon testleri") "the waiter's turn")
+        Assert-Equal 4 @(Get-BoardNotes $board).Count "and its take is on the board too"
+    }
+    try { [void](Invoke-WebRequest -UseBasicParsing -Uri ($board.Url + "/__stop") -TimeoutSec 5) } catch { }
+}
+
+Test-Case "15 board down: a closed port, a missing token file or a refusing board never blocks or changes ONAY/BEKLE" {
+    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $probe.Start(); $closed = $probe.LocalEndpoint.Port; $probe.Stop()
+    $d = New-CaseDir
+    $token = Join-Path $d "t.token"; [System.IO.File]::WriteAllText($token, "x")
+    foreach ($case in @(@("http://127.0.0.1:$closed", $token), @("http://127.0.0.1:$closed", (Join-Path $d "absent.token")), @("", ""))) {
+        $s = New-Store
+        Use-Board -Url $case[0] -Token $case[1] -Body {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $t = Get-Ticket (Ask-As -Store $s -Seat "worker-2" -Task "down-holder" -What "birim testleri") "ONAY with the board down ($($case[0]))"
+            Assert-Bekle (Ask-As -Store $s -Seat "worker-3" -Task "down-waiter" -What "entegrasyon") 1 "BEKLE with the board down"
+            $r = Invoke-Slot -Arguments @("run", "-Ticket", $t, "-Store", $s, "--", $ps5, "-NoProfile", "-Command", "exit 7")
+            Assert-Equal 7 $r.Code "run's exit code is the command's, board or no board"
+            Assert-True ($sw.Elapsed.TotalSeconds -lt 60) "nothing waited on the board: $($sw.Elapsed.TotalSeconds) s"
+            [void](Get-Ticket (Ask-As -Store $s -Seat "worker-3" -Task "down-waiter" -What "entegrasyon") "the waiter's turn, the board still down")
+        }
+    }
+    $script:sent = 0
+    $ok = Publish-TestSlotBoardNote -Note ([pscustomobject]@{ seat = "worker-2"; task = "x-task"; text = "t"; slot = @{} }) -Sender { param($n) $script:sent++; throw "the board is on fire" }
+    Assert-True (($script:sent -eq 1) -and ($ok -eq $false)) "a sender that throws is swallowed: sent $script:sent, ok $ok"
+}
+
+Test-Case "16 who: the holder and the line in Turkish, by seat name, an agent can ask before it plans" {
+    $s = New-Store
+    $h = Get-Ticket (Ask-As -Store $s -Seat "worker-2" -Task "who-holder" -What "birim testleri") "holder"
+    [void](Start-TestSlotRun -Store $s -Ticket $h -HolderPid $PID)
+    Assert-Bekle (Ask-As -Store $s -Seat "worker-3" -Task "who-waiter" -What "entegrasyon testleri" -Kind "database,heavy") 1 "waiter"
+    Assert-Bekle (Invoke-Slot -Arguments @("ask", "-Kind", "database", "-Task", "who-gate", "-Role", "gate", "-What", "kapı", "-Store", $s)) 1 "the gate goes first"
+    $r = Invoke-Slot -Arguments @("who", "-Store", $s)
+    Assert-Equal 0 $r.Code "who exits 0: $($r.Err)"
+    $lines = @($r.Out.Trim() -split "`r?`n")
+    Assert-True ($lines[0] -match '^Şu an test yapan: 1, sırada: 2') "the head line: $($r.Out)"
+    Assert-True ($r.Out -match '(?m)^  TEST    Çalışan 2 - birim testleri \(veritabanı\), \d+ dk') "the holder: $($r.Out)"
+    Assert-True ($r.Out -match '(?m)^  SIRA 1  Kapı - kapı \(veritabanı\)') "the gate first: $($r.Out)"
+    Assert-True ($r.Out -match '(?m)^  SIRA 2  Çalışan 3 - entegrasyon testleri \(veritabanı, ağır\)') "then worker-3: $($r.Out)"
+    Complete-TestSlotRun -Store $s -Ticket $h -ExitCode 0
+    $empty = Invoke-Slot -Arguments @("who", "-Store", (New-Store))
+    Assert-True ($empty.Out -match 'Şu an test yapan yok, sırada kimse yok\.') "an empty line: $($empty.Out)"
+}
+
+Test-Case "17 board notes: Turkish seat names, at most 280 characters, the gate writes as the lead, no seat no note" {
+    Assert-Equal "Çalışan 2|Denetleyici|Denetleyici 2|Proje Yöneticisi|Kapı|Araştırmacı|Entegratör|reviewer" ((@("worker-2", "inspector", "inspector-2", "lead", "gate", "researcher", "integrator", "reviewer") | ForEach-Object { Get-TestSlotSeatName -Name $_ }) -join "|") "names"
+    $mk = { param($seat, $role, $what) [pscustomobject]@{ ticket = "ts-1"; kinds = @("heavy"); role = $role; task = "long-task"; what = $what; seat = $seat; state = "granted"; seq = 1; first_asked = ""; last_asked = ""; granted_at = ""; started_at = ""; holder_pid = 0; holder_start = "" } }
+    $long = & $mk "worker-4" "worker" ("ş" * 400)
+    $n = New-TestSlotBoardNote -Event take -Entry $long -Entries @($long) -Store (New-Store)
+    Assert-True ($n.text.Length -le 280 -and $n.text.StartsWith("Çalışan 4: ")) "bounded: $($n.text.Length)"
+    $gate = & $mk "" "gate" "tam kapı"
+    Assert-Equal "lead" (New-TestSlotBoardNote -Event take -Entry $gate -Entries @($gate) -Store (New-Store)).seat "the gate writes as the lead"
+    Assert-True ($null -eq (New-TestSlotBoardNote -Event take -Entry (& $mk "" "worker" "x") -Entries @() -Store (New-Store))) "a worker with no seat posts nothing"
+    $badTask = & $mk "worker-1" "worker" "x"; $badTask.task = "Not A Task"
+    Assert-True ($null -eq (New-TestSlotBoardNote -Event take -Entry $badTask -Entries @() -Store (New-Store))) "a task the board does not know posts nothing"
+}
+
 Test-Case "gate: quality-gate.ps1 runs this suite as its own step under PS 5.1, and asks before its heavy steps" {
     $gate = [System.IO.File]::ReadAllText($gateScript, [System.Text.Encoding]::UTF8)
     $step = [regex]::Match($gate, '(?s)Invoke-Step "Agent team test queue[^"]*" \{(.*?)\n  \}')
