@@ -168,7 +168,7 @@ if ($useApi -and -not $QueueToken) { throw "-QueueUrl needs -QueueToken: the pat
 $apiStore = $null
 if ($useApi) { $apiStore = New-TeamApiStore -Url $QueueUrl -TokenFile $QueueToken }
 # In file mode the queue has ONE writer, the holder of the cycle's lock: the step takes it, as always.
-$besideCycle = $useApi -and $BesideCycle
+$runsBesideCycle = $useApi -and $BesideCycle
 if ($BesideCycle -and -not $useApi) { Write-Host "-BesideCycle has no effect in file mode: the cycle's lock is taken (the queue file has one writer)" }
 $localRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
 $stepLockFile = if ($StepLockPath) { $StepLockPath } else { Join-Path $localRoot "PagentOS\integrate-step.lock" }
@@ -360,7 +360,7 @@ function Write-Skipped {
 # and only the step's own lock (below) keeps two gates apart.
 
 $lock = $null
-if ($besideCycle) { }
+if ($runsBesideCycle) { }
 elseif ($useApi) { $lock = Get-TeamLockApi -Store $apiStore }
 elseif (Test-Path -LiteralPath $lockPath) { $lock = Read-TeamJson -Path $lockPath }
 $decision = Get-TeamLockDecision -Lock $lock -Machine $Machine -Now $started
@@ -911,7 +911,7 @@ try {
     }
 
     # ---- the cycle's lock, held for the whole gate - unless the step runs beside the cycle
-    if ($besideCycle) { Write-Host "beside the cycle (-BesideCycle): the cycle's lock is not taken; the step's own lock is held" }
+    if ($runsBesideCycle) { Write-Host "beside the cycle (-BesideCycle): the cycle's lock is not taken; the step's own lock is held" }
     elseif ($useApi) {
         $acquired = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $lockCycle -TakeoverDead ($decision.Kind -eq "dead")
         if (-not [bool]$acquired.acquired) {
