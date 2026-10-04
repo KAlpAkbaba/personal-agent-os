@@ -222,7 +222,28 @@ export type CreateSessionBody = {
   voice?: string;
   /** ADR-0208 (contract v3): the enrolled Cloud Core device this browser shares a computer with. */
   device_id?: string;
+  /**
+   * GPT-Live measurement: the provider this ONE session asks for (`?ses=live`). Absent
+   * otherwise - the default body has no such key. A server that does not offer it opens
+   * the current provider.
+   */
+  prefer_provider?: string;
 };
+
+/** The provider `?ses=live` asks for (the gpt-live-provider card's registry name). */
+export const LIVE_PROVIDER = "openai-live";
+
+/** `?ses=live` in a page's query string -> the live provider; anything else -> null. */
+export function preferProviderFrom(search: string | null | undefined): string | null {
+  if (!search) return null;
+  return new URLSearchParams(search).get("ses") === "live" ? LIVE_PROVIDER : null;
+}
+
+/** The current page's choice (the controller's default when its deps name none); null off-browser. */
+export function pagePreferProvider(): string | null {
+  const location = (globalThis as { location?: { search?: string } }).location;
+  return preferProviderFrom(location?.search);
+}
 
 export type AttachBody = {
   client_kind?: string;

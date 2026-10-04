@@ -35,7 +35,8 @@ const LIGHTS_SPEECH = "Salonun ışığı açıldı efendim.";
 const RESEARCH_SPEECH = "Araştırmayı başlattım efendim.";
 
 function router(text: string): Array<Record<string, unknown>> {
-  if (/ışı/i.test(text)) return [{ intent: "lights", tool: "lights_on" }];
+  // `/i` does not fold the Turkish dotless I: "Işığı" needs its own class.
+  if (/[ıI]şı/.test(text)) return [{ intent: "lights", tool: "lights_on" }];
   if (/araştır/i.test(text)) return [{ intent: "research", tool: "research_start" }];
   return [];
 }
@@ -52,7 +53,7 @@ function heldRelay(options: FakeCloudCoreOptions = {}) {
   });
   const holds = new Map<string, { promise: Promise<void>; release: () => void }>();
   const hold = (name: string): (() => void) => {
-    let release = () => {};
+    let release!: () => void;
     const promise = new Promise<void>((resolve) => {
       release = resolve;
     });

@@ -111,6 +111,12 @@ export type TransportEvent =
     }
   | { type: "error"; at: number; message: string; code?: string }
   /**
+   * GPT-Live (dialect `openai-live`) hands work back to the client. The vendor's id is
+   * the only key its result may ever be returned under; the task text is not in the
+   * event (the delegation bridge takes it from the input transcript it keeps).
+   */
+  | { type: "delegation"; at: number; delegationId: string; offsetMs?: number }
+  /**
    * B20 req 218: the link is in trouble but not gone.
    *
    * WebRTC says `disconnected` before it says `failed`, and the gap between them is the
@@ -177,6 +183,11 @@ export interface RealtimeTransport {
   notifyToolCompleted(callId: string, name: string, result: unknown): void;
   /** Ask the provider to speak a short phrase now (sideband `say`). */
   say(text: string): void;
+  /**
+   * Optional (dialect `openai-live`): say the result of one delegation, under its id.
+   * A transport without it cannot return delegation results; the controller logs that.
+   */
+  appendCommentary?(delegationId: string, text: string): void;
   close(reason?: string): void;
 }
 
@@ -189,4 +200,8 @@ export interface Dialect {
   submitToolResult(callId: string, result: unknown): unknown[];
   notifyToolCompleted(callId: string, name: string, result: unknown): unknown[];
   say(text: string): unknown[];
+  /** Optional (`openai-live`): the spoken result of one delegation; [] without an id. */
+  commentaryAppend?(delegationId: string, text: string): unknown[];
+  /** Optional (`openai-live`): unspoken context for one delegation, or the session (null). */
+  thinkingAppend?(delegationId: string | null, text: string): unknown[];
 }
