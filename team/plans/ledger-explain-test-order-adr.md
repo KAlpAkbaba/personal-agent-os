@@ -33,6 +33,14 @@ runs the real engine over a fake EventSource for meta-newest, telemetry-newest,
 equal-occurred_at, full tie, outside-window and telemetry-only. In each case the old
 rule disagrees with the engine and the new one agrees.
 
+The engine's answer is read from EVERY executive sentence in speaking order
+(`answered_event`), skipping annotation rows - not from executive[0] alone. A qualified
+research opens with the qualification sentence, whose evidence is the
+`research.qualified` verdict (an annotation, never a leader); the research it answered
+stands on the next sentence. Reading executive[0] alone was a second false red
+(inspector return of the first fix); a unit case runs the real engine over a research
+plus its verdict.
+
 ## Consequences
 
 If the engine's selection rule changes, the unit test goes red and points at this
