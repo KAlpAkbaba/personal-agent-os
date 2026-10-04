@@ -162,7 +162,9 @@ def test_a_stale_status_means_not_running_and_nobody_working():
         None,
         {"held": False},
         {**LOCK, "cycle_id": "other"},
-        {**LOCK, "acquired_at": "2026-10-01T05:00:00Z"},
+        # Stale: seven hours old and its holder (pid 8) is not the status' writer. With the
+        # writer's own pid this was the 2026-10-02 incident, and it is running now (the last case).
+        {**LOCK, "pid": 8, "acquired_at": "2026-10-01T05:00:00Z"},
     ],
 )
 def test_a_lock_that_is_released_or_not_the_cycles_means_not_running(lock):
@@ -530,3 +532,19 @@ def test_the_cycle_script_writes_the_account_it_runs_under():
     ]
     assert '$document["account"]' in body
     assert "CLAUDE_CONFIG_DIR" in body
+
+
+def test_a_cycle_seven_hours_old_with_a_two_minute_old_status_is_running_with_its_run():
+    """2026-10-02: from six hours after ``acquired_at`` the page showed 'koşan ajan 0/6' for a
+    cycle that wrote its status every two minutes. Its status is its heartbeat."""
+    lock = {**LOCK, "acquired_at": team_store.stamp(NOW - timedelta(hours=7))}
+    status = _status(
+        [("alpha-task", "worker")], updated_at=team_store.stamp(NOW - timedelta(minutes=2))
+    )
+    view = _view([_task("alpha-task")], status, lock=lock)
+    assert view["cycle"]["running"] is True
+    assert view["cycle"]["running_agents"] == 1
+    assert (_seat(view, "worker-1")["state"], _seat(view, "worker-1")["task_id"]) == (
+        "working",
+        "alpha-task",
+    )

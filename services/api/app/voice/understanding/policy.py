@@ -223,11 +223,14 @@ def decide(
     device_missing: bool = False,
     device_aliases: Iterable[str] = (),
     negated: bool = False,
+    rival: str | None = None,
 ) -> Decision:
     """The band of a ranked list (``combine``) and what follows from it.
 
     ``device``: the machine the sentence named, when something bound it. ``device_missing``:
     it named one and nothing could. ``negated``: the sentence carries a negative imperative.
+    ``rival``: another rule claimed the same words (the router's contested reading) - two
+    claimants, neither exact, are never acted on: ONE question naming both.
     """
     th = thresholds or _default_thresholds()
     ranked = tuple(candidates)
@@ -250,6 +253,17 @@ def decide(
         # A repaired rule route against a stronger reading: a question, never a guess.
         question = _two_readings_question(top, rule)
         return Decision(BAND_LOW, rule, question, rule.confidence, LAYER_SEMANTIC, ranked)
+    if rival and rival != rule.intent and rival not in NON_ACTING_INTENTS:
+        other = Candidate(rival, rule.confidence, source="rule")
+        question = _two_readings_question(rule, other)
+        return Decision(
+            BAND_LOW,
+            rule,
+            question,
+            min(rule.confidence, th.high - 0.01),
+            LAYER_RULE,
+            (*ranked, other),
+        )
     if device_missing:
         question = device_question(device_aliases)
         return Decision(BAND_LOW, rule, question, 0.0, LAYER_NONE, ranked, missing=SLOT_DEVICE)
@@ -397,18 +411,42 @@ class _RuleReading:
     intent: str
     entities: Mapping[str, str]
     match_kind: str
+    #: Another table's claim on the same words (the router's "contested:<intent>").
+    rival: str | None = None
+
+
+#: Route repairs that changed a WORD, not only a verb's ending: the router gives them the
+#: confidence of a confusion, and so does its adapter (one number for one decision).
+_REPAIRED_WORD_LABELS: Final[frozenset[str]] = frozenset({"fused", "invented"})
+_CONTESTED_PREFIX: Final = "contested:"
 
 
 def rule_reading(
     intent: str, *, application: str | None = None, route_repair: str | None = None
 ) -> RuleResult | None:
     """A rule-table result as candidate #1: exact, or - when the words reached it only
-    through a repair reading (polite request, folded letters) - a dropped suffix."""
+    through a repair reading (polite request, folded letters) - a dropped suffix; a repaired
+    word (a fused token split, an invented ending dropped) is a confusion. A contested
+    reading carries the other claimant as ``rival``."""
     if intent == "none":
         return None
     entities = {"app": application} if application else {}
-    kind = MATCH_SUFFIX_DROPPED if route_repair else MATCH_EXACT
-    return _RuleReading(intent, entities, kind)
+    labels = route_repair.split("+") if route_repair else []
+    rival = next(
+        (
+            label[len(_CONTESTED_PREFIX) :]
+            for label in labels
+            if label.startswith(_CONTESTED_PREFIX)
+        ),
+        None,
+    )
+    if not labels:
+        kind = MATCH_EXACT
+    elif rival or _REPAIRED_WORD_LABELS.intersection(labels):
+        kind = MATCH_CONFUSION
+    else:
+        kind = MATCH_SUFFIX_DROPPED
+    return _RuleReading(intent, entities, kind, rival)
 
 
 def configured_engine() -> SemanticEngine | None:
@@ -468,6 +506,7 @@ def read_turn(
         device_missing=missing,
         device_aliases=aliases,
         negated=is_negated(norm),
+        rival=getattr(rule, "rival", None),
     )
 
 

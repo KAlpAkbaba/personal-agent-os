@@ -1368,6 +1368,114 @@ try {
     finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+    function Read-Marker {
+        <# A marker of the fake, read again while another process holds it open (the inspector,
+           2026-10-03: ReadAllText refused a freshly renamed .started 3 times in 21 runs under
+           load - most likely a scanner or indexer opening the new file). The bound is a hang
+           guard, not an assertion. #>
+        param([string]$Path, [int]$Seconds = 60)
+        $deadline = [datetime]::UtcNow.AddSeconds($Seconds)
+        while ($true) {
+            try { return (Read-TeamJson -Path $Path) }
+            catch {
+                # A .NET call's failure arrives wrapped (MethodInvocationException): look down the chain.
+                $sharing = $false
+                for ($cause = $_.Exception; $cause; $cause = $cause.InnerException) {
+                    if ($cause -is [System.IO.IOException] -or $cause -is [System.UnauthorizedAccessException]) { $sharing = $true }
+                }
+                if (-not $sharing -or [datetime]::UtcNow -gt $deadline) { throw }
+                Start-Sleep -Milliseconds 50
+            }
+        }
+    }
+
+    Test-Case "a marker another process holds open is read once it is free: the reader waits inside its hang guard, it does not fail" {
+        $work = Join-Path $env:TEMP ("pagentos-markerlock-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+        [void]$sandboxes.Add($work)
+        [void](New-Item -ItemType Directory -Force -Path $work)
+        $marker = Join-Path $work "inspector-task-one.started"
+        [System.IO.File]::WriteAllText($marker, '{"in_flight":"task-one:inspector"}')
+        $held = Join-Path $work "held"
+        $release = Join-Path $work "release"
+        # The holder lets go 1.5 s after it is told to: the read below starts while it still holds.
+        $script = "`$f = [System.IO.File]::Open('$marker', 'Open', 'Read', 'None'); [System.IO.File]::WriteAllText('$held', 'held'); " +
+            "`$until = [datetime]::UtcNow.AddSeconds(60); while (-not (Test-Path -LiteralPath '$release') -and [datetime]::UtcNow -lt `$until) { Start-Sleep -Milliseconds 50 }; " +
+            "Start-Sleep -Milliseconds 1500; `$f.Dispose()"
+        $holder = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($script))) -PassThru -WindowStyle Hidden
+        try {
+            $deadline = [datetime]::UtcNow.AddSeconds(60)
+            while (-not (Test-Path -LiteralPath $held)) {
+                if ([datetime]::UtcNow -gt $deadline -or $holder.HasExited) { throw "the holder did not open the marker (hang guard 60 s)" }
+                Start-Sleep -Milliseconds 50
+            }
+            $refused = $false
+            try { [void](Read-TeamJson -Path $marker) } catch { $refused = $true }
+            Assert-True -Condition $refused -Because "the lock is real: a plain read is refused while it is held (the failure the inspector saw)"
+            [System.IO.File]::WriteAllText($release, "go")
+            Assert-Equal -Expected "task-one:inspector" -Actual ([string](Read-Marker -Path $marker).in_flight) -Because "the marker reader waits for the holder and reads the marker whole"
+            Assert-True -Condition ($holder.WaitForExit(60000)) -Because "the holder ended (hang guard 60 s)"
+        }
+        finally { if (-not $holder.HasExited) { $holder.Kill() } }
+    }
+
+    function Start-FakeAlone {
+        <# The fake as the cycle starts it - role file, card on standard input - with no cycle around it. #>
+        param([string]$Work, [string]$Role, [string]$TaskId)
+        $info = New-Object System.Diagnostics.ProcessStartInfo
+        $info.FileName = $powershell
+        $info.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $fakeSource + '" -p --append-system-prompt-file "' + (Join-Path $Work "$Role.md") + '"'
+        $info.WorkingDirectory = $Work
+        $info.UseShellExecute = $false
+        $info.CreateNoWindow = $true
+        $info.RedirectStandardInput = $true
+        $info.RedirectStandardOutput = $true
+        $child = [System.Diagnostics.Process]::Start($info)
+        $child.StandardInput.Write("# Task`n- id: $TaskId`n")
+        $child.StandardInput.Close()
+        return [pscustomobject]@{ Process = $child; Output = $child.StandardOutput.ReadToEndAsync() }
+    }
+
+    Test-Case "the fake's barrier: a run told to wait writes its 'started' marker, does not end before the file appears, ends after it; with no barrier its answer is as before and no marker is written" {
+        $work = Join-Path $env:TEMP ("pagentos-fakebarrier-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+        [void]$sandboxes.Add($work)
+        $markers = Join-Path $work "markers"
+        [void](New-Item -ItemType Directory -Force -Path $markers)
+        $open = Join-Path $work "open"
+        $names = @("PAGENTOS_FAKE_CLAUDE_SCENARIO", "PAGENTOS_FAKE_CLAUDE_MARKERS", "PAGENTOS_FAKE_CLAUDE_BARRIER")
+        # The answer of today's fake to this card (inspector, approve, no --output-format): no clock in it.
+        $expected = '{"type":"result","subtype":"success","is_error":false,"result":"' + ((1..60 | ForEach-Object { "line $_ of the inspection" }) -join '\n') + '\nAPPROVE","total_cost_usd":0.25}'
+        try {
+            $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = "approve"
+            $plain = Start-FakeAlone -Work $work -Role "inspector" -TaskId "task-plain"
+            Assert-True -Condition ($plain.Process.WaitForExit(60000)) -Because "with no barrier it ends by itself (hang guard 60 s)"
+            Assert-Equal -Expected $expected -Actual $plain.Output.Result -Because "with no barrier configured the answer is byte for byte the one it always was"
+            Assert-Equal -Expected 0 -Actual @(Get-ChildItem -LiteralPath $markers).Count -Because "and no marker is written without PAGENTOS_FAKE_CLAUDE_MARKERS"
+
+            $env:PAGENTOS_FAKE_CLAUDE_MARKERS = $markers
+            $env:PAGENTOS_FAKE_CLAUDE_BARRIER = "worker:task-other=$open,inspector:task-one=$open"
+            $held = Start-FakeAlone -Work $work -Role "inspector" -TaskId "task-one"
+            $deadline = [datetime]::UtcNow.AddSeconds(60)
+            while (-not (Test-Path -LiteralPath (Join-Path $markers "inspector-task-one.started"))) {
+                if ([datetime]::UtcNow -gt $deadline -or $held.Process.HasExited) { throw "the run wrote no 'started' marker (hang guard 60 s)" }
+                Start-Sleep -Milliseconds 50
+            }
+            Assert-Equal -Expected "task-one:inspector" -Actual (Read-Marker -Path (Join-Path $markers "inspector-task-one.started")).in_flight -Because "the marker names the runs in flight - this one"
+            Assert-True -Condition (-not $held.Process.WaitForExit(3000)) -Because "the file is not there: the run does not end"
+            Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $markers "inspector-task-one.ended"))) -Because "nor does it say it ended"
+            $opened = [datetime]::UtcNow
+            [System.IO.File]::WriteAllText($open, "open")
+            Assert-True -Condition ($held.Process.WaitForExit(60000)) -Because "the file is there: the run ends (hang guard 60 s)"
+            $ended = Read-Marker -Path (Join-Path $markers "inspector-task-one.ended")
+            Assert-Equal -Expected "file" -Actual $ended.barrier -Because "it was the file that let it go, not the guard"
+            # The ORDER, not a lag: it let go after the file was written (a one-second ceiling here
+            # read 1.07 s under load, 2026-10-03). How soon is bounded by the hang guard above only.
+            $released = [datetime]::Parse([string]$ended.released_at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+            Assert-True -Condition ($released -ge $opened) -Because "it let go after the file appeared, not before: released $($released.ToString('o')), file written from $($opened.ToString('o'))"
+            Assert-Equal -Expected $expected -Actual $held.Output.Result -Because "and it answers as the scenario says"
+        }
+        finally { foreach ($name in $names) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue } }
+    }
+
     Test-Case "an approved task is worked on in its own worktree, inspected, and merged into the integration branch" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $main = Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "main")
@@ -1423,6 +1531,28 @@ try {
         Assert-Equal -Expected "awaiting_owner,awaiting_release,awaiting_real_evidence,done" `
             -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because "no state moved"
         Assert-True -Condition ($run.Report -match "YAYIN: ship-one") -Because "the release that waits is named"
+    }
+
+    Test-Case "a trial object is one Turkish line with its sentence, machine and state, and the old string still prints" {
+        $try = New-Task -Id "try-one" -State "awaiting_real_evidence"
+        $trial = [pscustomobject]@{
+            id = "ses-saat"; sentence = "Saat kaç?"; machine = "ev PC"; expect = "saati Türkçe söyler"
+            verdict = $null; said = $null; at = $null
+        }
+        $try | Add-Member -NotePropertyName owner_trials -NotePropertyValue @($trial, "Telefonda Ofis'i aç")
+        $root = New-Sandbox -Tasks @($try)
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-True -Condition ($run.Report -match "- try-one: ""Saat kaç\?"" — makine: ev PC — beklenen: saati Türkçe söyler — durum: denenmedi") -Because $run.Report
+        Assert-True -Condition ($run.Report.Contains("- try-one: Telefonda Ofis'i aç")) -Because "the old string form prints as before: $($run.Report)"
+        Assert-True -Condition (-not $run.Report.Contains("@{")) -Because "no raw PowerShell object: $($run.Report)"
+    }
+
+    Test-Case "a decided trial names its verdict in Turkish" {
+        $passed = [pscustomobject]@{ id = "a"; sentence = "S"; machine = "M"; expect = "E"; verdict = "oldu"; said = $null; at = "2026-10-03T00:00:00Z" }
+        $failed = [pscustomobject]@{ id = "b"; sentence = "S"; machine = "M"; expect = "E"; verdict = "olmadi"; said = "ses yok"; at = "2026-10-03T00:00:00Z" }
+        $rows = @((Format-TeamOwnerTrial -TaskId "t" -Trial $passed), (Format-TeamOwnerTrial -TaskId "t" -Trial $failed))
+        Assert-Equal -Expected 't: "S" — makine: M — beklenen: E — durum: oldu' -Actual $rows[0] -Because "oldu"
+        Assert-Equal -Expected 't: "S" — makine: M — beklenen: E — durum: olmadı (ses yok)' -Actual $rows[1] -Because "olmadı with the owner's words"
     }
 
     Test-Case "a release the owner approved is told apart from one that waits, and still starts nobody" {
@@ -2644,11 +2774,29 @@ try {
     }
 
     # Four tests below replay a store that refuses or fails a write at a moment defined by the
-    # SHAPE of a batch: both workers end, both inspections start together, the first one's look
-    # at the store is the next read. The pool gives a seat away when it is free, so that shape
-    # is no longer the only one. With one poll every six seconds both runs of a pair end in
-    # the same poll and are completed one after the other - the batch's shape, on purpose.
-    $onePoll = "-PollMilliseconds 6000"
+    # ORDER of a pair's runs: the second task's inspection is in flight when the first one's
+    # inspection ends, and stays in flight until the first one's result is applied. They pinned
+    # that order with one poll every six seconds and hoped both runs of a pair ended inside it;
+    # at about forty processes they did not (cycle-seat-pool, inspector 2). The fake's barrier
+    # now decides it (cycle-pool-test-barriers): task-one's worker waits until task-two's
+    # inspector has started, and task-two's inspector waits until task-one's work is on the
+    # integration branch. The cycle is one thread: once that merge is there, nothing of
+    # task-two's inspection is looked at before task-one's result has been written - or tried.
+    function Get-PairBarrier {
+        param([string]$Root, [string]$Markers)
+        $merged = Join-Path $Root ".claude\worktrees\integrate\c1\src\area\task-one.txt"
+        return @{ PAGENTOS_FAKE_CLAUDE_MARKERS = $Markers; PAGENTOS_FAKE_CLAUDE_BARRIER = "worker:task-one=inspector-task-two.started,inspector:task-two=$merged" }
+    }
+    function Assert-BarriersOpened {
+        <# Every barrier of the case was opened by the event it waited for, none by the hang guard:
+           a run let go by the guard means the order the case names did not happen. #>
+        param([string]$Markers, [string[]]$Runs)
+        foreach ($name in $Runs) {
+            $path = Join-Path $Markers "$name.ended"
+            Assert-True -Condition (Test-Path -LiteralPath $path) -Because "$name ended"
+            Assert-Equal -Expected "file" -Actual ([string](Read-Marker -Path $path).barrier) -Because "$name was let go by the event it waited for, not by the hang guard"
+        }
+    }
 
     Test-Case "each run is told how to reach the team's board: its seat, its task, the address and the token file's path" {
         # The board (ADR team-board, the owner's idea of 2026-10-03): board.ps1 reads
@@ -2818,11 +2966,18 @@ try {
         # window in which a stop could arrive unseen was the rest of the batch.
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $markers = Join-Path $root "markers"
+        Use-FakeHooks -Environment (Get-PairBarrier -Root $root -Markers $markers) -Body {
+            $script:appliedRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:appliedRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-BarriersOpened -Markers $markers -Runs @("worker-task-one", "inspector-task-two")
         $lines = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(GET /v1/team/queue|PUT /v1/team/queue/tasks/task-(one|two)) 200" } | ForEach-Object { ($_ -replace '^(\w+) /v1/team/queue/?(tasks/)?', '$1 ') -replace ' 200$', '' })
-        $tail = @($lines)[(@($lines).Count - 5)..(@($lines).Count - 1)] -join " | "
-        Assert-Equal -Expected "GET  | PUT task-one | GET  | PUT task-two | GET " -Actual $tail -Because "asked, written; asked, written; then the next pass's read: $($lines -join ' | ') :: calls $(@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ',') :: $(Get-FakeApiRequests -Api $api | Select-Object -Last 14) :: $((Get-FakeApiState -Api $api).tasks | ConvertTo-Json -Depth 6 -Compress)"
+        $tail = @($lines)[(@($lines).Count - 6)..(@($lines).Count - 1)] -join " | "
+        # Task-one's look and its write; the refill's read; task-two's look and its write; the last read.
+        # Written when the batch ended, task-one's 'merged' would follow task-two's look.
+        Assert-Equal -Expected "GET  | PUT task-one | GET  | GET  | PUT task-two | GET " -Actual $tail -Because "asked, written - while task-two's inspection was held in flight; then asked, written: $($lines -join ' | ') :: calls $(@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ',') :: $(Get-FakeApiRequests -Api $api | Select-Object -Last 14) :: $((Get-FakeApiState -Api $api).tasks | ConvertTo-Json -Depth 6 -Compress)"
     }
 
     Test-Case "a merge whose write could only be tried at the batch's end and was refused there cannot be taken back: the report NAMES the merge" {
@@ -2839,8 +2994,13 @@ try {
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $outage `
             -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $markers = Join-Path $root "markers"
+        Use-FakeHooks -Environment (Get-PairBarrier -Root $root -Markers $markers) -Body {
+            $script:namedRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:namedRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-BarriersOpened -Markers $markers -Runs @("worker-task-one", "inspector-task-two")
         $state = Get-FakeApiState -Api $api
         Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
         Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the other task was written"
@@ -2985,8 +3145,13 @@ try {
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
             -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $markers = Join-Path $root "markers"
+        Use-FakeHooks -Environment (Get-PairBarrier -Root $root -Markers $markers) -Body {
+            $script:forgottenRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:forgottenRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-BarriersOpened -Markers $markers -Runs @("worker-task-one", "inspector-task-two")
         $requests = @(Get-FakeApiRequests -Api $api)
         Assert-Equal -Expected 1 -Actual @($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 409" }).Count -Because "task-one's 'merged' was refused"
         Assert-True -Condition (@($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-two 503" }).Count -ge 1) -Because "and task-two's write failed in the same save: $($requests -join '; ')"
@@ -3004,14 +3169,24 @@ try {
         # that iteration (the merge is still the branch's last commit), not only at the batch's end.
         $stopped = New-Task -Id "task-one" -State "stopped" -Area @("src/area")
         $stopped.updated_at = "2026-09-30T09:00:00Z"
-        $faults = [pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-two"; status = 503; state = "inspecting"; assignee = "inspector"; times = 2 } }
+        # Every write of task-two as 'inspecting' by an inspector fails (it used to be the first two:
+        # the number of saves between them was the batch's). Its 'merged' is written.
+        $faults = [pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-two"; status = 503; state = "inspecting"; assignee = "inspector" } }
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $faults `
             -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @()
-        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments $onePoll -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        $markers = Join-Path $root "markers"
+        Use-FakeHooks -Environment (Get-PairBarrier -Root $root -Markers $markers) -Body {
+            $script:takenBackRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:takenBackRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
-        $writes = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-(one 409|two 503)" } | ForEach-Object { ($_ -replace '^PUT /v1/team/queue/tasks/', '') }) -join ", "
-        Assert-Equal -Expected "task-two 503, task-one 409, task-two 503" -Actual $writes -Because "the start's failed write, then the refusal and the failure in ONE save"
+        Assert-BarriersOpened -Markers $markers -Runs @("worker-task-one", "inspector-task-two")
+        $requests = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(GET /v1/team/queue|PUT /v1/team/queue/tasks/task-\w+) " } | ForEach-Object { ($_ -replace '^(\w+) /v1/team/queue/?(tasks/)?', '$1 ') })
+        $refused = [array]::IndexOf([string[]]$requests, "PUT task-one 409")
+        Assert-True -Condition ($refused -gt 0 -and [array]::LastIndexOf([string[]]$requests, "PUT task-one 409") -eq $refused) -Because "task-one's 'merged' was refused, once: $($requests -join ' | ')"
+        Assert-True -Condition (@($requests[0..($refused - 1)] | Where-Object { $_ -eq "PUT task-two 503" }).Count -ge 1) -Because "task-two's start was a failed write before it: $($requests -join ' | ')"
+        Assert-Equal -Expected "GET  200 | PUT task-one 409 | PUT task-two 503" -Actual ($requests[($refused - 1)..($refused + 1)] -join " | ") -Because "task-one's look at the store, then the refusal and the failure in ONE save: $($requests -join ' | ')"
         $state = Get-FakeApiState -Api $api
         Assert-Equal -Expected "stopped" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
         Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "task-two finished"
@@ -3532,19 +3707,73 @@ try {
     Test-Case "the pool: seats are per role - with three inspections and three workers runnable, three workers and two inspectors are in flight together, and the third inspection starts when one ends" {
         # 2026-10-01 22:15, the owner at the Ofis page: three inspections held the cycle's three
         # slots and every worker seat was empty, with eight tasks assigned.
+        # The order is the barrier's, not a clock's (a snapshot one second after a start was ten
+        # seconds late under load, cycle-seat-pool inspector 2): ins-a ends only when the other
+        # four runs of the first refill have started, and ins-b and the three workers end only
+        # when ins-c has started. Every status the cycle wrote is in the store's history.
         $tasks = @("ins-a", "ins-b", "ins-c" | ForEach-Object { New-Task -Id $_ -State "inspecting" -Area @("src/$_") })
         $tasks += @("wrk-d", "wrk-e", "wrk-f" | ForEach-Object { New-Task -Id $_ -Area @("src/$_") })
-        $root = New-Sandbox -Tasks $tasks
-        $hooks = Get-PoolHooks -Root $root -Seconds "inspector:ins-a=10,inspector:ins-b=20,worker:*=20"
-        Use-FakeHooks -Environment $hooks -Body { $script:roleRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 3 }
+        $api = Start-FakeApi -Tasks $tasks
+        $root = New-Sandbox -Tasks @()
+        $markers = Join-Path $root "markers"
+        $hooks = @{
+            PAGENTOS_FAKE_CLAUDE_MARKERS = $markers
+            PAGENTOS_FAKE_CLAUDE_BARRIER = ("inspector:ins-a=inspector-ins-b.started+worker-wrk-d.started+worker-wrk-e.started+worker-wrk-f.started," +
+                "inspector:ins-b=inspector-ins-c.started,worker:wrk-d=inspector-ins-c.started,worker:wrk-e=inspector-ins-c.started,worker:wrk-f=inspector-ins-c.started")
+        }
+        Use-FakeHooks -Environment $hooks -Body { $script:roleRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 3 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile }
         $run = $script:roleRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
-        $snapshots = Join-Path $root "snapshots"
-        Assert-Equal -Expected "ins-a:inspector,ins-b:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker" -Actual (Get-SnapshotRuns -Folder $snapshots -Name "worker-wrk-f") `
-            -Because "five runs: the three worker seats are full BESIDE the two inspections; the third inspection waits for an inspector's seat, not a worker's"
-        Assert-Equal -Expected "ins-b:inspector,ins-c:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker" -Actual (Get-SnapshotRuns -Folder $snapshots -Name "inspector-ins-c") `
-            -Because "the third inspection took the seat the first one left, while everything else was still running"
-        Assert-Equal -Expected "merged,merged,merged,merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-BarriersOpened -Markers $markers -Runs @("inspector-ins-a", "inspector-ins-b", "worker-wrk-d", "worker-wrk-e", "worker-wrk-f")
+        $state = Get-FakeApiState -Api $api
+        $seen = @(@($state.statuses) | ForEach-Object { (Get-RunNames -Status $_) -join "," })
+        Assert-True -Condition ($seen -contains "ins-a:inspector,ins-b:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker") `
+            -Because "five runs: the three worker seats are full BESIDE the two inspections; the third inspection waits for an inspector's seat, not a worker's: $($seen -join ' | ')"
+        foreach ($names in $seen) {
+            Assert-True -Condition (@($names -split "," | Where-Object { $_ -match ":inspector$" }).Count -le 2) -Because "never a third inspection beside two: $names"
+        }
+        Assert-Equal -Expected "ins-b:inspector,ins-c:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker" -Actual ([string](Read-Marker -Path (Join-Path $markers "inspector-ins-c.started")).in_flight) `
+            -Because "the third inspection took the seat the first one left, while everything else was still running (ins-b and the workers were held until it started)"
+        Assert-True -Condition ($seen -contains "ins-b:inspector,ins-c:inspector,wrk-d:worker,wrk-e:worker,wrk-f:worker") -Because "and the cycle's own status says the same: $($seen -join ' | ')"
+        Assert-Equal -Expected "merged,merged,merged,merged,merged,merged" -Actual (@($state.tasks | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+    }
+
+    Test-Case "the pool: -MaxRunsPerTask holds under the pool - two tasks side by side, one run each, and both are stopped with the reason" {
+        # The inspector of cycle-seat-pool, PROBE-P1: the ADR said the cap holds 'by the tests that
+        # held it'; none asserted the stop.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -ExtraArguments "-MaxRunsPerTask 1"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one,worker:task-two" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" } | Sort-Object) -join ",") -Because "one run a task: no inspection is started after it"
+        foreach ($id in @("task-one", "task-two")) {
+            $task = Get-TaskById -Queue $run.Queue -Id $id
+            Assert-Equal -Expected "stopped" -Actual $task.state -Because "${id}: $($run.Report)"
+            Assert-Equal -Expected "bu döngüde 1 koşu yapıldı ve iş bitmedi" -Actual ([string]$task.reason) -Because "${id} says why"
+            Assert-Equal -Expected 1 -Actual @($task.reports).Count -Because "${id}: its worker's report is kept"
+        }
+    }
+
+    Test-Case "the pool: two RETURNs stop a task while another task's worker is in flight - the stop is applied at once, and the run in flight is completed as ever" {
+        # PROBE-P2 of the same inspection. Task-two's worker is held until the cycle has collected
+        # task-one's second inspection (its report file is written when the cycle collects the run,
+        # and the stop is applied in that same step), so task-one is stopped while it is in flight.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")))
+        $markers = Join-Path $root "markers"
+        $collected = Join-Path $root "team\reports\c1\task-one-inspector-2.json"
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_MARKERS = $markers; PAGENTOS_FAKE_CLAUDE_BARRIER = "worker:task-two=$collected" } -Body {
+            $script:returnRun = Invoke-Cycle -Root $root -Scenario "return" -MaxParallel 2
+        }
+        $run = $script:returnRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-BarriersOpened -Markers $markers -Runs @("worker-task-two")
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "stopped/2" -Actual "$($one.state)/$([int]$one.returns)" -Because "two RETURNs stop it: $($run.Report)"
+        $first = @($run.Calls | ForEach-Object { "$($_.role):$($_.task)" })
+        Assert-Equal -Expected "worker:task-one,inspector:task-one,worker:task-one,inspector:task-one" -Actual (@($first | Where-Object { $_ -match "task-one$" }) -join ",") -Because "worked, returned, worked again, returned again - and nothing after the stop"
+        $two = Get-TaskById -Queue $run.Queue -Id "task-two"
+        Assert-Equal -Expected "stopped/2" -Actual "$($two.state)/$([int]$two.returns)" -Because "the run in flight was completed and its task went on to its own two RETURNs: $($run.Report)"
+        Assert-True -Condition ([string]$two.sha -match "^[0-9a-f]{40}$") -Because "its held worker's result was applied: $($two.sha)"
+        Assert-Equal -Expected "worker:task-two,inspector:task-two,worker:task-two,inspector:task-two" -Actual (@($first | Where-Object { $_ -match "task-two$" }) -join ",") -Because "every run once"
     }
 
     Test-Case "the pool: a changed team/cycle-settings.json is honoured at the next refill - no restart, and the arguments the cycle started with do not bind it" {
