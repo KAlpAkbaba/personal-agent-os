@@ -44,6 +44,17 @@ stack, on a bind mount, on a non-loopback or colliding port, and on the namespac
 off); voice: the simulator answers (free); a real vendor only with a separate
 `PAGENTOS_STAGING_VOICE_OPENAI_API_KEY` test key.
 
+Secrets and accounts by FIELD, not by env name (inspector's second return, 2026-10-04: a real
+CalDAV url/user/password and a hand-written `PAGENTOS_VOICE_AZURE_SPEECH_KEY` passed green, the
+name lists missed `CALDAV_` and `_SPEECH_KEY`). Now the env-name lists cover `CALDAV_` and any
+name ending in KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL, and - the sound check - the test walks the
+api's RESOLVED `Settings`: every str field whose name holds key/secret/password/token/credential
+is empty, a `staging-only*` literal, or set by exactly `${PAGENTOS_STAGING_*}` with no default
+(a `:-sk-real` default is a real key); every account field (`caldav_*`, `calendar_ics_url`,
+`mail_imap/smtp_host|user|password`, `mail_from`) is empty. MinIO's root user became
+`staging-only-artifacts` so the S3 access key passes the same rule. Real-account domains gained
+fastmail, zoho, gmx, mail.ru, proton.me, nextcloud, radicale and any `caldav.`/`carddav.` host.
+
 Reaching production (inspector's return, 2026-10-04). The compose text was clean but the api
 INHERITED `gods_eye_url = http://pagentos-core:4173/` from a Settings default, and from inside
 `pagentos-staging-api` the name `pagentos-core` resolved to 100.90.158.26 with 22/443/8001/4173
@@ -87,6 +98,14 @@ a deploy of an already-built sha 44 s. With ~0.85 GiB idle and a 5.25 GiB cap ag
 staging and a gate FIT together; the guard is up.ps1's 6 GB-free floor (a start under memory
 pressure is refused and says to ask the test-slot queue for `heavy`). Staging need not be OFF
 while a gate runs.
+
+Real run, 2026-10-04 09:03-09:16 UTC, under test-slot ticket `ts-3801d5c1e4e5` [heavy], while
+two gates ran on the dev stack (`gate-faster` [database,heavy] from 08:41Z, the lead's gate "API
+unit tests" [heavy] from 09:06Z): health ok on `6a21294c` (schema `0065`, environment `staging`,
+web 200) -> seed: owner session valid -> deploy `eac453fc` (origin/main) exit 0 in 470 s, health
+ok -> deploy back `6a21294c` exit 0 in 293 s, health ok -> seed again: valid. A probe row written
+before the first deploy and the owner sessions (2) were still there after both moves. docker
+stats after: api 305 MiB, minio 239, postgres 128, temporal 99, web 39, redis 4 (~0.8 GiB).
 
 ## Release (optional, not wired here)
 
