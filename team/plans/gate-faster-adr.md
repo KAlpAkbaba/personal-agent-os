@@ -10,8 +10,18 @@ Date: 2026-10-03/04. Card: gate-faster (gate-own-database + gate-parallel-suites
   (`build_engine(Settings().database_url)`). `services/api/tests/unit/test_gate_database_contract.py`
   reads the name from `quality-gate.ps1` (`$script:GateDatabaseVariable`) and resolves it from the
   Settings class, so the two halves cannot drift. conftest.py was NOT edited: it hard-codes no
-  database and has no second connection. Its `exclusive_database` advisory lock is per database
-  in PostgreSQL, so it no longer serialises a gate against an inspector.
+  database and has no second connection for the reset. Its `exclusive_database` advisory lock is
+  per database in PostgreSQL, so it no longer serialises a gate against an inspector.
+- **One server, its connections (returned 2026-10-04).** Two runs on two databases still share
+  the server's connections: two side by side on the dev server (`max_connections` 300) both died
+  on `too many clients already` (69+52 failed, 46+69 errors); one run alone peaks at 231. So
+  conftest.py WAS edited after all: a session fixture `server_run_slot` takes one of
+  `server_run_slots()` advisory-lock slots in the server-wide `postgres` database before anything
+  connects (`_RUN_CONNECTION_BUDGET = 240`, `_SERVER_HEADROOM_CONNECTIONS = 40`: one slot on the
+  dev server today, more on a larger one), waits up to 1800 s and says so in the log. Measured
+  after: the same two runs side by side, 178 passed + 11 xfailed each (269 s; the second waited
+  and ended at 525 s). Integration runs on one server are therefore still one at a time - but they
+  wait for each other instead of corrupting each other, and the schema reset is no longer shared.
 - **The name rule** (`scripts/lib/GateDatabase.ps1`): `pagentos_gate_<yyyyMMddHHmmss UTC>_<run>`
   or `pagentos_scratch_*`, only `[a-z0-9_]`, at most 63 characters. New- and Remove- refuse any
   other name before a command is sent (`pagentos`, `postgres`, `template1`, `pagentos_prod`, a
@@ -35,6 +45,9 @@ Date: 2026-10-03/04. Card: gate-faster (gate-own-database + gate-parallel-suites
   $url = Get-GateDatabaseUrl -BaseUrl (Get-GateSettingsDatabaseUrl -Uv (Get-Command uv).Source -ApiRoot services/api) -Name $db
   try { Invoke-WithGateDatabase -Variable PAGENTOS_DATABASE_URL -Value $url -Action { Push-Location services/api; uv run pytest tests/integration -q -m integration; Pop-Location } } finally { Remove-GateDatabase -Name $db }
   ```
+- **Its own suites in the gate.** `gate-database.tests.ps1` is the gate step "Gate database tool
+  (PS5.1 + the dev server)" right after the database is dropped; `gate-steps.tests.ps1` is "Gate
+  suite group (PS5.1, fake steps)" below the group (its cases time fake steps). Both are in ci.yml.
 - integrate-own-lock's `-BesideCycle` may be scheduled after this lands: the gate and an
   inspection no longer reset one database under each other.
 
@@ -48,6 +61,12 @@ Date: 2026-10-03/04. Card: gate-faster (gate-own-database + gate-parallel-suites
 tree`). Pass/fail is the exit code, as `Assert-ExitCode`. Every `Invoke-Step` and its
 `Assert-ExitCode` stay in `quality-gate.ps1`; between `Start-GateGroup` and `Complete-GateGroup`
 they are recorded and run by the group. `-GateSerial` runs all as before; `-GateMaxParallel n`.
+
+**A step that throws while it is recorded** (a missing tool: `throw "Windows PowerShell 5.1 not
+found"`) used to end the whole gate without its summary (returned 2026-10-04). Now it is a failed
+step in the sequential words (`FAILED: <the message>`), keeps its row in the listed order, and the
+rest of the group runs (gate-steps case 10). **Lanes** have their own case (9: two steps of one
+lane never overlap while a lane-less one runs beside them; 9b: the gate's wiring of the lane).
 
 **A failure** prints `=== <step> ===`, the step's whole log (failed steps first), and
 `FAILED: <what> exited with code <n>` - the same words as sequentially (case 7); the table keeps
