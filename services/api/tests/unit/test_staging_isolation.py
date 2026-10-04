@@ -9,8 +9,11 @@ infra/docker/docker-compose.staging.yml plus scripts/staging/*.ps1 (team/plans A
 * no production host, name or database anywhere (the tailnet address, `pagentos-core`, the
   `pagentos-prod*` containers, the `pagentos_prod` database, the tailnet DNS name);
 * no setting that points at a real account (a mail/calendar host or address, a provider
-  key) - and every `${...}` the compose interpolates is a `PAGENTOS_STAGING_*` name, so a
-  stray `.env` or a shell that carries the owner's real key cannot leak one in;
+  key) - and an ALLOW-LIST for every `$` of the compose's raw text, comments included: only
+  the `$$` escape and `${PAGENTOS_STAGING_X}` (optionally `:-`/`-` a fixed default with no
+  `$`); an unbraced `$NAME`, `${HOME}`, `${X:?..}` or a nested default is refused, so a
+  stray `.env` or a shell that carries the owner's real values cannot leak one in;
+* a build context is a relative path inside this repository - never a git URL or `git@`;
 * an ALLOW-LIST of what the file may say at all: the top-level keys (name, services,
   volumes, networks, the blackhole anchor) and each service's keys are closed sets, so
   anything else - volumes_from, secrets, configs, network_mode, pid, ipc, extends, env_file,
@@ -80,6 +83,15 @@ ACCOUNT_FIELD = re.compile(
     r"^(caldav_|calendar_ics_url$|mail_(imap|smtp)_(host|user|password)$|mail_from$)"
 )
 INTERPOLATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)")
+#: ALLOW-LIST for every `$` in the compose's RAW text (inspector's fourth return, 2026-10-04:
+#: an unbraced `$PAGENTOS_REDIS_URL` passed, and compose filled it from the shell). Allowed:
+#: the `$$` escape, and `${PAGENTOS_STAGING_X}` with at most a `:-`/`-` default of fixed text
+#: (no `$`, no `}`). Everything else - `$NAME`, `${HOME}`, `${X:?..}`, a nested default - is
+#: refused, comments included.
+STAGING_VARIABLE = re.compile(r"\$\{PAGENTOS_STAGING_[A-Z0-9_]+(?::?-[^${}]*)?\}")
+#: The one other `$` the file holds: the `${...}` placeholder inside a comment (it names no
+#: variable, so it can read nothing).
+COMMENT_PLACEHOLDER = "${...}"
 
 
 # ----------------------------------------------------------------------------- reading
@@ -139,6 +151,29 @@ def _staging_key_only(raw: str) -> bool:
     )
 
 
+def dollar_violations(raw: str) -> list[str]:
+    """Every `$` of the raw text that is neither `$$` nor an allowed staging variable."""
+    found = []
+    for number, line in enumerate(raw.splitlines(), 1):
+        at = 0
+        while (at := line.find("$", at)) >= 0:
+            if line.startswith("$$", at):
+                at += 2
+                continue
+            allowed = STAGING_VARIABLE.match(line, at)
+            if allowed:
+                at = allowed.end()
+                continue
+            if line.lstrip().startswith("#") and line.startswith(COMMENT_PLACEHOLDER, at):
+                at += len(COMMENT_PLACEHOLDER)
+                continue
+            found.append(
+                f"line {number}: {line[at : at + 40]!r} - only ${{PAGENTOS_STAGING_*}} may reach"
+            )
+            at += 1
+    return found
+
+
 def production_violations(texts: dict[str, str]) -> list[str]:
     found = []
     for name, text in texts.items():
@@ -153,11 +188,8 @@ def account_violations(compose: dict[str, Any], texts: dict[str, str]) -> list[s
     for name, text in texts.items():
         for match in REAL_ACCOUNT_MARKERS.finditer(text):
             found.append(f"{name}: names a real account domain ({match.group(0)})")
-        for var in INTERPOLATION.findall(text if name.endswith(".yml") else ""):
-            if not var.startswith("PAGENTOS_STAGING_"):
-                found.append(
-                    f"{name}: interpolates ${{{var}}} - only PAGENTOS_STAGING_* may reach staging"
-                )
+        if name.endswith(".yml"):
+            found += [f"{name}: {v}" for v in dollar_violations(text)]
     for svc_name, svc in (compose.get("services") or {}).items():
         if svc.get("env_file"):
             found.append(
@@ -219,6 +251,14 @@ NETWORK_SPEC_KEYS = frozenset({"name", "ipam"})
 SECURITY_OPTS = frozenset({"no-new-privileges:true"})
 
 
+def _local_context(context: str) -> bool:
+    """A build context is `.`/`..`-relative, no URL, no `git@`, no drive, inside the repo
+    (`github.com/x/y` and `https://...` are remote git contexts to docker)."""
+    if not context.startswith(".") or ":" in context or "@" in context or "\\" in context:
+        return False
+    return (DOCKER / context).resolve().is_relative_to(REPO)
+
+
 def schema_violations(compose: dict[str, Any]) -> list[str]:
     found = [
         f"top-level key {key!r} is not in the allow-list"
@@ -239,6 +279,9 @@ def schema_violations(compose: dict[str, Any]) -> list[str]:
             for key in (build if isinstance(build, dict) else {})
             if key not in BUILD_KEYS
         ]
+        context = build.get("context") if isinstance(build, dict) else None
+        if context is not None and not _local_context(str(context)):
+            found.append(f"{svc_name}: build context {context!r} is not a path in this repository")
         found += [
             f"{svc_name}: security_opt {opt!r} is not in the allow-list"
             for opt in svc.get("security_opt") or []
@@ -703,3 +746,67 @@ def test_checker_refuses_a_network_that_is_not_staging_own() -> None:
 
 def test_staging_uses_only_allowed_keys() -> None:
     assert schema_violations(_load(STAGING)) == []
+
+
+# Inspector 2026-10-04 (round 4): `PAGENTOS_REDIS_URL: $PAGENTOS_REDIS_URL` passed 47/47 green
+# and `docker compose config` filled it from the shell - the old scan saw only `${...}`. So the
+# RAW text is scanned for every `$` but the `$$` escape, comments included.
+_PLANTED_AFTER = "      PAGENTOS_RELEASE: ${PAGENTOS_STAGING_RELEASE:-}\n"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "      PAGENTOS_REDIS_URL: $PAGENTOS_REDIS_URL",
+        "      PAGENTOS_DATABASE_URL: ${PAGENTOS_DATABASE_URL}",
+        "      PAGENTOS_GODS_EYE_URL: ${HOME}",
+        "      PAGENTOS_GODS_EYE_URL: ${PAGENTOS_STAGING_GODS_EYE_URL:-$PAGENTOS_GODS_EYE_URL}",
+        "      PAGENTOS_GODS_EYE_URL: ${PAGENTOS_STAGING_GODS_EYE_URL:-${HOME}}",
+        "      - PAGENTOS_REDIS_URL=$PAGENTOS_REDIS_URL",
+        "      PAGENTOS_REDIS_URL: ${PAGENTOS_REDIS_URL:-redis://redis:6379/0}",
+        "      PAGENTOS_REDIS_URL: ${PAGENTOS_REDIS_URL-redis://redis:6379/0}",
+        "      PAGENTOS_REDIS_URL: ${PAGENTOS_STAGING_REDIS_URL:?unset}",
+        "      PAGENTOS_REDIS_URL: $$$PAGENTOS_REDIS_URL",
+        "      # PAGENTOS_REDIS_URL: $PAGENTOS_REDIS_URL",
+        "      PAGENTOS_REDIS_URL: ${pagentos_staging_redis_url}",
+    ],
+)
+def test_checker_refuses_every_dollar_but_a_staging_variable(line: str) -> None:
+    texts = _texts()
+    raw = texts["docker-compose.staging.yml"]
+    assert _PLANTED_AFTER in raw
+    texts["docker-compose.staging.yml"] = raw.replace(_PLANTED_AFTER, _PLANTED_AFTER + line + "\n")
+    assert account_violations(_load(STAGING), texts), line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '      command: ["sh", "-c", "echo $$HOME"]',
+        "      PAGENTOS_STAGING_PROBE: ${PAGENTOS_STAGING_PROBE}",
+        "      PAGENTOS_STAGING_PROBE: ${PAGENTOS_STAGING_PROBE:-local}",
+        "      PAGENTOS_STAGING_PROBE: ${PAGENTOS_STAGING_PROBE-}",
+    ],
+)
+def test_checker_keeps_the_escape_and_staging_variables(line: str) -> None:
+    texts = _texts()
+    raw = texts["docker-compose.staging.yml"]
+    texts["docker-compose.staging.yml"] = raw.replace(_PLANTED_AFTER, _PLANTED_AFTER + line + "\n")
+    assert account_violations(_load(STAGING), texts) == [], line
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        "https://github.com/owner/pagentos.git#main",
+        "git@github.com:owner/pagentos.git",
+        "github.com/owner/pagentos",
+        "C:/Users/alpak/src/pagentos",
+        "/home/owner/pagentos",
+        "../../..",
+    ],
+)
+def test_checker_refuses_a_build_context_outside_the_repository(context: str) -> None:
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["api"]["build"]["context"] = context
+    assert schema_violations(compose), context
