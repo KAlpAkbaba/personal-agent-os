@@ -61,6 +61,29 @@ measured on 1.62).
    absolute-form, where the path is checked. Cost: an https trusted origin is not reachable
    from a launched browser (fail closed; none is configured today).
 
+11. (Return 3, 2026-10-04.) **The address check is an allow-list, not a deny-list.** The
+   deny-list (`is_private`/`is_loopback`/... plus extra networks) had a hole for each new IPv6
+   spelling of an IPv4 address: `::ffff:100.90.158.26` (`::ffff:645a:9e1a`) was admitted, and a
+   dual-stack socket on the Linux host dials it as the Cloud Core API (GHSA-gwph-fp79-379w
+   class). Now `address_is_forbidden` parses (scope `%..` dropped; unparseable = forbidden),
+   unwraps every embedded IPv4 - `ipv4_mapped`, `sixtofour`, both Teredo ends, NAT64
+   `64:ff9b::/96` and `64:ff9b:1::/48` (RFC 6052 bit layout), IPv4-compatible `::/96` - and
+   admits only when the address AND every unwrapped IPv4 are `is_global`, not multicast
+   (224.0.0.1 is "global" to ipaddress) and outside `100.64.0.0/10`. The page guard, the
+   requested-url check and `EgressProxy.vet` share it. Unwrap is explicit so the verdict does
+   not depend on the Python patch release (3.12.7's `is_global` already follows the mapped
+   IPv4, older ones do not; NAT64 and `::a.b.c.d` are `is_global` there and are caught only by
+   the unwrap - the mutation test).
+12. (Return 3.) A page navigation ONLY the egress proxy refused ends `security_scope_error`, not
+   retryable, instead of `dependency_unavailable` (CONNECT refused -> tunnel failure) or the
+   proxy's empty 403 as "the page". The guard records the host:port of each main-frame document
+   it lets through; a proxy refusal since the op's mark with the same host:port is the
+   navigation's refusal. A refused sub-request of another host does not fail the page. A
+   redirect to `file:///` (Chromium's own `ERR_UNSAFE_REDIRECT`, never seen by the guard) maps
+   the same way. Residual: a sub-request to the same host:port as a page navigation that the
+   proxy refused would also fail the op - that host was already refused for the page, so the
+   op failing closed is accepted.
+
 **Residual risk / follow-up.** Follow-up task
 (not opened here): a host-level DOCKER-USER rule dropping the cloud-browser container's traffic
 to 100.64.0.0/10 and the host's own addresses (belt and braces against a bug in the proxy;

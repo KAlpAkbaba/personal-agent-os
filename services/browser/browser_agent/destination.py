@@ -6,7 +6,9 @@ same rule independently (defence in depth, review finding ADR-0050 addendum):
 ``http``/``https`` only, no userinfo, no loopback/private/link-local/CGNAT
 (Tailscale 100.64.0.0/10)/multicast/reserved destinations — neither as an IP
 literal nor via DNS (every resolved address is checked, so a rebinding name that
-resolves to one public and one private address is refused too).
+resolves to one public and one private address is refused too). The address check is an
+allow-list: global, non-multicast, non-CGNAT only, with every IPv4 address an IPv6 spelling
+embeds (``::ffff:``, 6to4, Teredo, NAT64, ``::a.b.c.d``) held to the same test.
 
 A refusal is ``security_scope_error`` (not retryable): the URL is not a browser
 failure and not a website failure, it is a destination the policy forbids.
@@ -53,14 +55,12 @@ _NUMERIC_HOST = re.compile(r"(0x[0-9a-f]+|[0-9]+)(\.(0x[0-9a-f]+|[0-9]+))*")
 
 _FORBIDDEN_HOST_SUFFIXES = (".local", ".internal", ".localhost", ".home.arpa")
 _FORBIDDEN_HOSTS = frozenset({"localhost", "metadata.google.internal"})
-# Tailscale/CGNAT is not in ipaddress's "private" set; the rest is covered by the
-# is_private/is_loopback/... flags but is spelled out for readers and tests.
-_EXTRA_FORBIDDEN_NETWORKS = (
-    ipaddress.ip_network("100.64.0.0/10"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("fc00::/7"),
-)
+# Tailscale/CGNAT: not global, but spelled out because it is the one range this policy
+# exists for (Cloud Core's own API is 100.90.158.26).
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+_NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
+_NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
+_IPV4_COMPATIBLE = ipaddress.ip_network("::/96")
 
 
 def _default_resolver(host: str) -> list[str]:
@@ -76,16 +76,43 @@ def _default_resolver(host: str) -> list[str]:
     return [info[4][0] for info in infos]
 
 
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
+    """Every IPv4 address an IPv6 spelling carries: IPv4-mapped, 6to4, both ends of Teredo,
+    NAT64 (RFC 6052 /96 and the local-use /48) and IPv4-compatible (``::a.b.c.d``)."""
+    found: list[ipaddress.IPv4Address] = []
+    if ip.ipv4_mapped is not None:
+        found.append(ip.ipv4_mapped)
+    if ip.sixtofour is not None:
+        found.append(ip.sixtofour)
+    if ip.teredo is not None:
+        found.extend(ip.teredo)
+    value = int(ip)
+    if ip in _NAT64_WELL_KNOWN or ip in _IPV4_COMPATIBLE:
+        found.append(ipaddress.IPv4Address(value & 0xFFFFFFFF))
+    if ip in _NAT64_LOCAL:  # RFC 6052: bits 48-63 and 72-87, 64-71 is "u"
+        found.append(ipaddress.IPv4Address(((value >> 64) & 0xFFFF) << 16 | (value >> 40) & 0xFFFF))
+    return found
+
+
+def _is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    # Multicast is "global" to ipaddress (224.0.0.1 is), never a host to read a page from.
+    return ip.is_global and not ip.is_multicast and ip not in _CGNAT
+
+
 def address_is_forbidden(address: str) -> bool:
+    """Allow-list (return 3 of browser-redirect-guard): an address is public only when it -
+    and every IPv4 address embedded in it - is global and outside 100.64.0.0/10. Anything
+    else, an unparseable string included, is forbidden. A deny-list of ranges had a hole for
+    every new spelling (``::ffff:100.90.158.26`` was admitted, GHSA-gwph-fp79-379w class)."""
     try:
         ip = ipaddress.ip_address(address.split("%", 1)[0])
     except ValueError:
         return True
-    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast:
+    if not _is_public(ip):
         return True
-    if ip.is_reserved or ip.is_unspecified:
-        return True
-    return any(ip in net for net in _EXTRA_FORBIDDEN_NETWORKS)
+    if isinstance(ip, ipaddress.IPv6Address):
+        return not all(_is_public(v4) for v4 in _embedded_ipv4(ip))
+    return False
 
 
 def _canonical_host(host: str) -> str:
@@ -288,6 +315,22 @@ class BlockedRequest:
         return self.main_frame and self.resource_type == "Document"
 
 
+def _host_port(url: str) -> tuple[str, int] | None:
+    """(canonical host, port) of a url - how a page navigation and a proxy refusal are
+    matched (the proxy sees a CONNECT's host:port only, never its path)."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").strip().lower().rstrip(".")
+    if not host or scheme not in ("http", "https", "ws", "wss"):
+        return None
+    default = 443 if scheme in ("https", "wss") else 80
+    return _canonical_host(host), default if port is None else port
+
+
 def _url_without_query(url: str) -> str:
     try:
         parts = urlsplit(url)
@@ -306,6 +349,9 @@ class RequestGuard:
     def __init__(self, check: Callable[[str], None]) -> None:
         self._check = check
         self.violations: list[BlockedRequest] = []
+        # (host, port) of every page navigation (main frame, Document) the guard let
+        # through - the egress proxy may still refuse it (it resolves on its own).
+        self.admitted_navigations: list[tuple[str, int]] = []
         self._tasks: set[asyncio.Task[None]] = set()
 
     async def attach(self, cdp: Any) -> None:
@@ -344,6 +390,13 @@ class RequestGuard:
         except Exception:  # never let an unchecked request through
             await self._fail(cdp, request_id)
             return
+        if str(event.get("frameId") or "") == main_frame_id and event.get("resourceType") in (
+            "Document",
+            None,
+        ):
+            key = _host_port(url)
+            if key is not None:
+                self.admitted_navigations.append(key)
         with contextlib.suppress(Exception):  # the page may be gone by now
             await cdp.send("Fetch.continueRequest", {"requestId": request_id})
 
@@ -407,6 +460,8 @@ class ProxyRefusal:
     method: str
     target: str  # scheme://host:port/path or host:port - never the query
     reason: str
+    host: str = ""  # canonical host and port, matched against the page's navigations
+    port: int = 0
 
 
 class EgressProxy:
@@ -531,7 +586,11 @@ class EgressProxy:
             except BrowserError as exc:
                 self.refusals.append(
                     ProxyRefusal(
-                        method=method.upper(), target=_url_without_query(url), reason=str(exc)[:200]
+                        method=method.upper(),
+                        target=_url_without_query(url),
+                        reason=str(exc)[:200],
+                        host=_canonical_host(host.strip("[]").lower().rstrip(".")),
+                        port=port,
                     )
                 )
                 writer.write(_REFUSED)

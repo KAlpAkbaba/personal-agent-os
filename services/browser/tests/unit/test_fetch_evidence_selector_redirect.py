@@ -423,6 +423,7 @@ def _targets(secret_port: int) -> list[str]:
         f"http://127.0.0.1:{secret_port}/secret",
         "http://169.254.169.254/latest/meta-data/",
         "http://evil.test/",
+        "http://[::ffff:100.90.158.26]:8001/",  # return 3: the IPv4-mapped Cloud Core API
     ]
 
 
@@ -598,6 +599,9 @@ class TestEgressProxyUnit:
             "169.254.169.254:80",
             "evil.test:443",
             "[::1]:{port}",
+            "[::ffff:100.90.158.26]:8001",  # return 3: IPv4-mapped tailnet
+            "[::ffff:645a:9e1a]:8001",
+            "[::ffff:100.64.0.1]:443",
         ],
     )
     async def test_a_tunnel_to_a_forbidden_destination_is_refused_and_never_dialled(
@@ -921,4 +925,165 @@ async def test_tab_new_with_a_redirecting_url_is_refused(guarded_worker: Worker,
             )
         assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR, target
         assert info.value.retryable is False
+        # the refused tab stays open (as it always has); close it so the six targets do
+        # not run into max_tabs
+        tabs = (await guarded_worker._execute("browser.tab_list", {"session_id": "s1"}))["tabs"]
+        await guarded_worker._execute(
+            "browser.tab_close", {"session_id": "s1", "index": tabs[-1]["index"]}
+        )
     assert sites.hits.paths == []
+
+
+# --------------------------------------------------------------------------- #
+# return 3, finding 2: a navigation ONLY the egress proxy refused is the policy's refusal
+# --------------------------------------------------------------------------- #
+#
+# The page guard and the proxy resolve separately; a name that resolves public for the guard
+# and private for the proxy got past the guard, the proxy refused it, and the op ended as a
+# retryable dependency_unavailable (CONNECT refused -> ERR_TUNNEL_CONNECTION_FAILED) or as a
+# "page" that was the proxy's empty 403. The contract says security_scope_error, not retryable.
+
+
+def _rebinding_resolver(host: str) -> list[str]:
+    """The proxy's view: ``rebind.test`` is the tailnet (the guard's view says public)."""
+    return ["100.90.158.26"] if host == "rebind.test" else _fake_resolver(host)
+
+
+async def _guard_and_proxy(worker: Worker) -> tuple[RequestGuard, _FakeCdp, EgressProxy]:
+    proxy = EgressProxy(resolver=_rebinding_resolver, dial=_dial_fixture)
+    await proxy.start()
+    worker._egress_proxy = proxy
+    guard = RequestGuard(_policy_check)
+    cdp = _FakeCdp()
+    await guard.attach(cdp)
+    return guard, cdp, proxy
+
+
+class TestProxyRefusalMappingUnit:
+    @pytest.mark.parametrize(
+        ("page_url", "proxy_request", "cause"),
+        [
+            (
+                "http://rebind.test:8080/a",
+                b"GET http://rebind.test:8080/a HTTP/1.1\r\nHost: rebind.test:8080\r\n\r\n",
+                None,  # http: Chromium shows the proxy's empty 403 as "the page"
+            ),
+            (
+                "https://rebind.test/a",
+                b"CONNECT rebind.test:443 HTTP/1.1\r\n\r\n",
+                "navigate: net::ERR_TUNNEL_CONNECTION_FAILED",
+            ),
+        ],
+    )
+    async def test_a_navigation_only_the_proxy_refused_is_security_scope_error(
+        self, tmp_path, page_url: str, proxy_request: bytes, cause: str | None
+    ) -> None:
+        worker = _worker(tmp_path)
+        guard, cdp, proxy = await _guard_and_proxy(worker)
+        try:
+            mark = worker._navigation_mark(guard)
+            await guard.on_request_paused(cdp, "MAIN", _paused(page_url, hop=True))
+            assert cdp.sent[-1][0] == "Fetch.continueRequest"  # the guard admitted it
+            assert (await _through(proxy, proxy_request)).startswith(b"HTTP/1.1 403")
+            error = (
+                None
+                if cause is None
+                else BrowserError(ErrorClass.DEPENDENCY_UNAVAILABLE, cause, retryable=True)
+            )
+            with pytest.raises(BrowserError) as info:
+                worker._raise_on_refused_navigation(guard, mark, op="browser.navigate", cause=error)
+        finally:
+            await worker._close_all_sessions()
+        assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR
+        assert info.value.retryable is False
+
+    async def test_a_refused_sub_request_does_not_fail_the_page(self, tmp_path) -> None:
+        worker = _worker(tmp_path)
+        guard, cdp, proxy = await _guard_and_proxy(worker)
+        try:
+            mark = worker._navigation_mark(guard)
+            await guard.on_request_paused(cdp, "MAIN", _paused("http://public.test:8080/"))
+            # an <img> of that page whose host the proxy finds in the tailnet
+            await guard.on_request_paused(
+                cdp, "MAIN", _paused("http://rebind.test:8080/i.png", kind="Image")
+            )
+            request = b"GET http://rebind.test:8080/i.png HTTP/1.1\r\nHost: rebind.test\r\n\r\n"
+            assert (await _through(proxy, request)).startswith(b"HTTP/1.1 403")
+            worker._raise_on_refused_navigation(guard, mark, op="browser.navigate")
+        finally:
+            await worker._close_all_sessions()
+
+    async def test_a_refusal_from_before_the_op_does_not_count(self, tmp_path) -> None:
+        worker = _worker(tmp_path)
+        guard, cdp, proxy = await _guard_and_proxy(worker)
+        try:
+            request = b"CONNECT rebind.test:443 HTTP/1.1\r\n\r\n"
+            assert (await _through(proxy, request)).startswith(b"HTTP/1.1 403")
+            mark = worker._navigation_mark(guard)
+            await guard.on_request_paused(cdp, "MAIN", _paused("https://rebind.test/"))
+            worker._raise_on_refused_navigation(guard, mark, op="browser.navigate")
+        finally:
+            await worker._close_all_sessions()
+
+    async def test_a_redirect_to_a_forbidden_scheme_is_security_scope_error(self, tmp_path) -> None:
+        # Chromium refuses a redirect to file:/// itself (ERR_UNSAFE_REDIRECT) before any
+        # interception sees it; it is still a redirect hop to a forbidden destination.
+        worker = _worker(tmp_path)
+        guard = RequestGuard(_policy_check)
+        mark = worker._navigation_mark(guard)
+        cause = BrowserError(
+            ErrorClass.DEPENDENCY_UNAVAILABLE,
+            "navigate: browser or CDP endpoint is not reachable/alive",
+            retryable=True,
+            evidence={"playwright_message": "Page.goto: net::ERR_UNSAFE_REDIRECT at http://x/"},
+        )
+        with pytest.raises(BrowserError) as info:
+            worker._raise_on_refused_navigation(guard, mark, op="browser.navigate", cause=cause)
+        assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR
+        assert info.value.retryable is False
+
+    def test_the_proxy_refuses_an_ipv4_mapped_tailnet_address(self) -> None:
+        proxy = EgressProxy(resolver=_fake_resolver)
+        for url, host, port, connect in (
+            ("http://[::ffff:100.90.158.26]:8001/v1/devices", "::ffff:100.90.158.26", 8001, False),
+            ("https://[::ffff:645a:9e1a]:8001/", "::ffff:645a:9e1a", 8001, True),
+        ):
+            with pytest.raises(BrowserError) as info:
+                proxy.vet(url=url, host=host, port=port, connect=connect)
+            assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR, url
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("capability", ["browser.navigate", "browser.fetch_evidence"])
+async def test_a_name_public_for_the_guard_and_private_for_the_proxy_is_refused(
+    guarded_worker: Worker, sites, capability: str
+) -> None:
+    await guarded_worker._egress_args()
+    guarded_worker._egress_proxy._resolver = _rebinding_resolver
+    await _open(guarded_worker)
+    rebind = f"http://rebind.test:{sites.port}/rebound"
+    for url in (rebind, f"{sites.base}/redir?to={rebind}"):
+        with pytest.raises(BrowserError) as info:
+            await guarded_worker._execute(
+                capability, {"session_id": "s1", "url": url, "timeout_ms": 8000}
+            )
+        assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR, url
+        assert info.value.retryable is False
+    assert "/rebound" not in sites.reached
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("capability", ["browser.navigate", "browser.fetch_evidence"])
+async def test_a_redirect_to_file_is_refused(guarded_worker: Worker, sites, capability) -> None:
+    await _open(guarded_worker)
+    with pytest.raises(BrowserError) as info:
+        await guarded_worker._execute(
+            capability,
+            {
+                "session_id": "s1",
+                "url": f"{sites.base}/redir?to=file:///C:/Windows/win.ini",
+                "timeout_ms": 8000,
+            },
+        )
+    assert info.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR
+    assert info.value.retryable is False

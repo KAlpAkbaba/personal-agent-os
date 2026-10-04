@@ -459,6 +459,15 @@ async def _stdin_lines(loop: asyncio.AbstractEventLoop) -> AsyncIterator[str]:
 # ----------------------------------------------------------------------- #
 
 
+@dataclass(frozen=True, slots=True)
+class _NavigationMark:
+    """Where the guard's and the egress proxy's records stood when an op started."""
+
+    violations: int
+    navigations: int
+    refusals: int
+
+
 @dataclass(slots=True)
 class SessionState:
     session_id: str
@@ -1221,7 +1230,7 @@ class Worker:
             try:
                 if not capability.startswith("browser.media_"):
                     await self._guard_current_page(state)
-                mark = guard.mark() if guard is not None else 0
+                mark = self._navigation_mark(guard)
                 try:
                     result = await handler(self, state, payload)
                 except BrowserError as exc:
@@ -1721,23 +1730,60 @@ class Worker:
         state.guard_cdp[id(page)] = cdp
         return state.request_guard
 
-    @staticmethod
+    def _navigation_mark(self, guard: RequestGuard | None) -> _NavigationMark:
+        proxy = self._egress_proxy
+        return _NavigationMark(
+            violations=guard.mark() if guard is not None else 0,
+            navigations=len(guard.admitted_navigations) if guard is not None else 0,
+            refusals=len(proxy.refusals) if proxy is not None else 0,
+        )
+
     def _raise_on_refused_navigation(
-        guard: RequestGuard | None, mark: int, *, op: str, cause: BaseException | None = None
+        self,
+        guard: RequestGuard | None,
+        mark: _NavigationMark,
+        *,
+        op: str,
+        cause: BaseException | None = None,
     ) -> None:
+        """``security_scope_error`` (not retryable) when a page navigation of the op - the
+        requested url or a redirect hop - was refused by the page guard, by the egress proxy
+        (return 3: it resolves on its own, so a name public for the guard may be private for
+        the proxy) or by Chromium itself for a redirect to a non-http scheme (file:///)."""
+        if isinstance(cause, BrowserError) and "ERR_UNSAFE_REDIRECT" in (
+            f"{cause.message} {(cause.evidence or {}).get('playwright_message', '')}"
+        ):
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                f"{op}: destination refused (a redirect hop leads to a forbidden scheme)",
+                retryable=False,
+            ) from cause
         if guard is None:
             return
-        refused = guard.main_frame_violation_since(mark)
-        if refused is None:
+        refused = guard.main_frame_violation_since(mark.violations)
+        if refused is not None:
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                f"{op}: destination refused "
+                f"({'a redirect hop' if refused.redirect_hop else 'the page navigation'} "
+                "leads to a forbidden destination)",
+                retryable=False,
+                evidence={"url": refused.url, "redirect_hop": refused.redirect_hop},
+            ) from cause
+        proxy = self._egress_proxy
+        if proxy is None:
             return
-        raise BrowserError(
-            ErrorClass.SECURITY_SCOPE_ERROR,
-            f"{op}: destination refused "
-            f"({'a redirect hop' if refused.redirect_hop else 'the page navigation'} "
-            "leads to a forbidden destination)",
-            retryable=False,
-            evidence={"url": refused.url, "redirect_hop": refused.redirect_hop},
-        ) from cause
+        navigations = set(guard.admitted_navigations[mark.navigations :])
+        blocked = next(
+            (r for r in proxy.refusals[mark.refusals :] if (r.host, r.port) in navigations), None
+        )
+        if blocked is not None:
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                f"{op}: destination refused (the egress proxy refused the page navigation)",
+                retryable=False,
+                evidence={"url": blocked.target},
+            ) from cause
 
     async def _verify_navigation(self, response: Any, final_url: str, *, op: str) -> None:
         """After a navigation: every url of the redirect chain and the final url pass the

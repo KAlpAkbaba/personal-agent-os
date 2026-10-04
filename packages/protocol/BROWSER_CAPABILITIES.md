@@ -698,8 +698,13 @@ before acting (the device is the side that sits on the owner's LAN and tailnet):
 `*.localhost`, `*.home.arpa` and cloud metadata names refused; IP literals and EVERY
 address the host resolves to must be outside loopback, RFC 1918, link-local
 (`169.254.0.0/16` incl. the metadata address), CGNAT `100.64.0.0/10` (the tailnet),
-multicast, reserved, unspecified, IPv6 loopback/link-local/ULA. A refusal is
-`security_scope_error` (not retryable) with the query string stripped from the evidence.
+multicast, reserved, unspecified, IPv6 loopback/link-local/ULA. On the worker this is an
+ALLOW-LIST (browser-redirect-guard return 3): an address is public only when it is global
+(Python's `is_global`), not multicast and outside `100.64.0.0/10`, AND every IPv4 address
+embedded in it passes the same test - IPv4-mapped (`::ffff:100.90.158.26` is the tailnet),
+6to4 (`2002::/16`), both ends of Teredo, NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) and
+IPv4-compatible (`::a.b.c.d`). Anything else, an unparseable address included, is refused. A
+refusal is `security_scope_error` (not retryable) with the query string stripped from the evidence.
 Discovery output (search hits, feeds, APIs) is third-party content and gets no exemption.
 The worker's `--allow-private-destinations` flag exists for the fixture-site test suite
 only; the companion never passes it.
@@ -727,7 +732,10 @@ from their first request, WebSockets, workers, beacons, each redirect hop - is a
 absolute-form request there and is held to the same policy; the proxy connects to the address
 it checked (no second DNS answer, so rebinding cannot move it). A refused connection is a
 `403` from the proxy (the page sees a failed sub-request; a refused page navigation is still
-`security_scope_error`). A tunnel (CONNECT: https, wss, and a ws:// WebSocket too) carries no
+`security_scope_error`, not retryable - also when ONLY the proxy refused it, e.g. a name the
+page guard resolved as public and the proxy as private: the proxy's refusals since the op began
+are matched to the page navigations' host:port). A redirect to a non-http scheme (`file:///`),
+which Chromium refuses itself (`ERR_UNSAFE_REDIRECT`), is `security_scope_error` too. A tunnel (CONNECT: https, wss, and a ws:// WebSocket too) carries no
 path, so it never gets the trusted-origin exception: the trusted origin is reached only by an
 absolute-form http request whose path is the report-view route. An https trusted origin is
 therefore not reachable from a launched browser (fail closed).
