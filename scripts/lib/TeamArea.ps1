@@ -24,8 +24,8 @@
         `onceki_bulgular: kapandi` line says the previous items are closed - one extra round,
         never a third (Get-TeamPriorFindings, Resolve-TeamReturnStop);
       * which changed files are the WORKER's when its branch contains the cycle's integration
-        branch (rebuilt on it, or merged with it): the files of both diffs, against the base
-        and against `integrate/<cycle>` (Select-TeamWorkerChangedFiles, Get-TeamWorkerChangedFiles).
+        branch (rebuilt on it, or merged with it): the files of its diff against
+        `integrate/<cycle>` (Select-TeamWorkerChangedFiles, Get-TeamWorkerChangedFiles).
 
     As in `TeamQueue.ps1`, every rule is a function that takes its inputs and returns its
     answer: this file starts no process, reads no file and writes no store. The one named
@@ -525,12 +525,12 @@ function Select-TeamWorkerChangedFiles {
     .DESCRIPTION
         BaseDiff is `git diff --name-only <base>...<branch>`, AlsoBaseDiff the same against the
         cycle's integration branch, ContainsAlsoBase whether the branch contains that branch.
-        Not contained: BaseDiff as it is (today's check). Contained: the files of BaseDiff that
-        are also in AlsoBaseDiff, in BaseDiff's order. A file the integration branch brought in
-        and the worker left alone is in BaseDiff only; a file the worker changed is in both,
-        also one the integration branch had changed before (unless the worker's bytes are the
-        integration branch's bytes: then there is nothing of the worker's to count). Paths are
-        compared as git wrote them.
+        Not contained: BaseDiff as it is (today's check). Contained: every file of AlsoBaseDiff -
+        first those also in BaseDiff, in BaseDiff's order, then the rest in AlsoBaseDiff's order.
+        A file the integration branch brought in and the worker left alone is in BaseDiff only
+        and is not counted. A file the worker changed is in AlsoBaseDiff, also one it took back
+        to main's bytes (then it is missing from BaseDiff: the reason AlsoBaseDiff, not the
+        intersection, is the answer). Paths are compared as git wrote them.
     #>
     param(
         [AllowEmptyCollection()][string[]]$BaseDiff = @(),
@@ -540,7 +540,11 @@ function Select-TeamWorkerChangedFiles {
     if (-not $ContainsAlsoBase) { return @($BaseDiff) }
     $also = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($path in @($AlsoBaseDiff)) { [void]$also.Add($path) }
-    return @(@($BaseDiff) | Where-Object { $also.Contains($_) })
+    $base = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($BaseDiff)) { [void]$base.Add($path) }
+    $both = @(@($BaseDiff) | Where-Object { $also.Contains($_) })
+    $alsoOnly = @(@($AlsoBaseDiff) | Where-Object { -not $base.Contains($_) })
+    return @($both + $alsoOnly)
 }
 
 function Get-TeamWorkerChangedFiles {
@@ -552,8 +556,9 @@ function Get-TeamWorkerChangedFiles {
     .DESCRIPTION
         Without -AlsoBase, when that branch does not exist, or when the worker's branch does not
         contain it (`git merge-base --is-ancestor`), the answer is Get-TeamChangedFiles':
-        `git diff --name-only <Base>...<Branch>`. Otherwise it is that diff intersected with
-        `git diff --name-only <AlsoBase>...<Branch>` (Select-TeamWorkerChangedFiles).
+        `git diff --name-only <Base>...<Branch>`. Otherwise it is the files of
+        `git diff --name-only <AlsoBase>...<Branch>`, ordered by the first diff where they are in
+        it (Select-TeamWorkerChangedFiles).
 
         The named exception to "this file starts no process": git is asked through -Git, a
         scriptblock `{ param($Directory, $Arguments) }` that returns Invoke-TeamGit's shape

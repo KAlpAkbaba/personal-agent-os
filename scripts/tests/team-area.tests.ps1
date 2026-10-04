@@ -1025,7 +1025,7 @@ Test-Case "worker-changed: pure - contained, nothing of the worker's own -> empt
 
 Test-Case "worker-changed: pure - paths are compared as written (case matters)" {
     $files = Select-TeamWorkerChangedFiles -BaseDiff @("Own.txt") -AlsoBaseDiff @("own.txt") -ContainsAlsoBase $true
-    Assert-Equal -Expected 0 -Actual @($files).Count -Because "git spells a path one way; a different spelling is a different entry"
+    Assert-List -Expected @("own.txt") -Actual $files -Because "git spells a path one way; a different spelling is a different entry, so Own.txt is not in both"
 }
 
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")

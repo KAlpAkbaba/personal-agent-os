@@ -18,8 +18,13 @@ ps1-bom-everywhere, aynı beş yabancı dosya).
 scripts/lib/TeamArea.ps1'e iki fonksiyon:
 
 - `Select-TeamWorkerChangedFiles -BaseDiff -AlsoBaseDiff -ContainsAlsoBase` - saf kural, git'siz
-  test edilir. İçermiyorsa BaseDiff olduğu gibi; içeriyorsa BaseDiff ∩ AlsoBaseDiff, BaseDiff'in
-  sırasıyla, yollar git'in yazdığı gibi (ordinal) karşılaştırılır.
+  test edilir. İçermiyorsa BaseDiff olduğu gibi. İçeriyorsa AlsoBaseDiff'in TÜM dosyaları: önce
+  BaseDiff'te de olanlar BaseDiff'in sırasıyla, sonra yalnız AlsoBaseDiff'te olanlar (işçinin
+  main haline geri aldığı yabancı dosyalar) AlsoBaseDiff'in sırasıyla. Sıra seçimi: listenin başı
+  bugünkü ret metninin sırası kalsın, geri alınanlar sona eklensin. Yollar git'in yazdığı gibi
+  (ordinal) karşılaştırılır.
+- İlk sürüm (3e9258f8) BaseDiff ∩ AlsoBaseDiff idi; denetçi 4 Ekim'de geri alma kaçışını buldu
+  (aşağıda), bu yüzden kesişim tek başına cevap değil.
 - `Get-TeamWorkerChangedFiles -RepoRoot -Branch [-Base main] [-AlsoBase <integrate/döngü>] [-Git]` -
   -AlsoBase yoksa, o dal yoksa (`rev-parse --verify refs/heads/<AlsoBase>`) ya da işçi dalı onu
   içermiyorsa (`merge-base --is-ancestor`, çıkış kodu 0 değilse) sonuç bugünkü
@@ -33,15 +38,30 @@ TeamArea.ps1 TeamRun/NativeProcess yüklemez, bağlama satırı tek satır kalı
 
 Alan kuralı, ret metni ('alan dışı dosya: ...'), -Base ve integrate.ps1'in kapı suçlama süzgeci değişmedi.
 
-## Kesişim neden güvenli
+## Neden güvenli (ve ilk sürümün yanlış iddiası)
 
-İşçinin değiştirdiği her dosya, entegrasyon dalının ucuna göre de farklıdır - tek istisna:
-işçinin dosyası entegrasyon dalındakiyle BAYT BAYT aynı ise (ör. yeniden kurulumun getirdiği hali
-hiç değiştirmemiş, ya da aynı içeriği yazmış). O durumda işçinin dalı o dosyaya entegrasyon dalının
-zaten taşıdığından başka bir şey katmaz; birleştirme o dosyada hiçbir şey değiştirmez, kaçan bir
-ihlal yoktur. Entegrasyon dalının değiştirdiği bir dosyayı işçi farklı içerikle yeniden değiştirirse
-iki farkta da görünür ve sayılır (test (f)). Kesişim yalnız işçi dalı entegrasyon dalını
-İÇERİYORSA uygulanır; içermeyen dalda sonuç birebir bugünkü (test (c)).
+İlk sürüm "bayt bayt aynı değişiklik tek kaçış, zararsız" diyordu. YANLIŞTI: kesişimde ikinci bir
+kaçış vardı - geri alma. İşçi, entegrasyon dalının değiştirdiği bir dosyayı main haline geri alırsa
+ya da entegrasyon dalının eklediği dosyayı silerse, o dosya main'e göre değişmemiştir
+(BaseDiff'te yok), ama entegrasyon dalına göre değişmiştir (AlsoBaseDiff'te var). Kesişim onu
+düşürüyordu; dal integrate'e birleşince başka bir kartın onaylı işi sessizce geri alınırdı.
+Kapanış: dal entegrasyon dalını içeriyorsa cevap AlsoBaseDiff'in tamamıdır (test (g), yeniden
+kurulmuş ve birleştirmeli iki dal; mutasyon "yalnız kesişim" ile ikisi de KIRMIZI).
+
+Bugünkü iddia: dal entegrasyon dalını içerdiğinde `git diff <integrate>...<dal>` = dalın ucunun
+entegrasyon dalının ucundan farkı. Dalın integrate'e birleşmesinin değiştireceği HER dosya bu
+listededir; listede olmayan bir dosya entegrasyon dalındakiyle bayt bayt aynıdır ve birleştirme onda
+hiçbir şey değiştirmez (yeniden kurulumun getirdiği yabancı dosyalar böyle düşer). Entegrasyon
+dalının dosyasını işçi farklı içerikle değiştirirse sayılır (test (f)). İçermeyen dalda sonuç
+birebir bugünkü (test (c)); integrate yoksa da öyle (test (e)).
+
+Kalan risk (yanlış ret yönünde, kaçış değil): dal integrate'i içeriyor VE integrate'in çatallandığı
+yerden sonra main'i de birleştirmişse, main'in yeni dosyaları AlsoBaseDiff'te görünür ve 'alan dışı'
+sayılır. Durdurur, ihlal kaçırmaz. Integrate zorla yeniden yazılıp dalın atası olmaktan çıkarsa
+bugünkü sonuca düşülür (yine yalnız fazla ret).
+
+Proje Yöneticisi'ne not: kart metnindeki "bayt bayt aynı değişiklik tek kaçış, zararsız" cümlesi
+aynı yanlışı taşır; bağlama kartında ya da kartın arşiv metninde düzeltilmeli.
 
 ## Bağlama (ayrı kart; cycle.ps1 team-engine ve onaylı başka kartlarda olduğu için bu kartın işi değil)
 
