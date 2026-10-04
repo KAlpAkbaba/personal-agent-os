@@ -199,6 +199,21 @@ def test_markdown_lists_five_samples_and_no_wav_path_inside_the_repository(
         tts_measure.render_markdown(tts_measure.merge_report(None, inside), repo)
 
 
+def test_voiced_check_share_is_reported_inside_synth_not_added(tmp_path: Path) -> None:
+    lines = [
+        LOAD,
+        _line(1, 500, 1000, voiced_check_ms=100),
+        _line(2, 1500, 1000, voiced_check_ms=300),
+    ]
+    machine = _machine(lines, range(1, 3))
+    assert [row["voiced_check_ms"] for row in machine["sentences"]] == [100.0, 300.0]
+    # 400 / 2000
+    assert machine["voiced_check_share"] == 0.2
+    assert machine["rtf_pooled"] == 1.0
+    text = tts_measure.render_markdown(tts_measure.merge_report(None, machine), tmp_path)
+    assert "pyin" in text
+
+
 def test_proxy_label_is_marked_as_proxy(tmp_path: Path) -> None:
     machine = _machine(FOUR, label="cpx32-bicimi", cpus_limit=4.0)
     text = tts_measure.render_markdown(tts_measure.merge_report(None, machine), tmp_path)

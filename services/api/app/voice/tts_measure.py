@@ -74,6 +74,7 @@ class SentenceResult:
     streamed: bool = False
     peak_rss_mb: float | None = None
     retries: int = 0
+    voiced_check_ms: float = 0.0
 
     @property
     def rtf(self) -> float:
@@ -117,6 +118,7 @@ def _sentence(row: dict[str, Any]) -> SentenceResult:
             streamed=streamed,
             peak_rss_mb=float(peak) if isinstance(peak, int | float) else None,
             retries=int(row.get("retries") or 0),
+            voiced_check_ms=_number(row, "voiced_check_ms") if "voiced_check_ms" in row else 0.0,
         )
     except ValueError as error:
         return SentenceResult(index, ok=False, reason=str(error))
@@ -187,6 +189,7 @@ def summarize_machine(
     rtfs = [r.rtf for r in ok]
     firsts = [r.first_audio_ms for r in ok]
     sum_audio = sum(r.audio_ms for r in ok)
+    sum_synth = sum(r.synth_ms for r in ok)
     peaks = [r.peak_rss_mb for r in ok if r.peak_rss_mb is not None]
     load = run.load or {}
     if isinstance(load.get("peak_rss_mb"), int | float):
@@ -215,6 +218,10 @@ def summarize_machine(
         "first_audio_ms_p95": _round(percentile(firsts, 95), 1),
         "peak_rss_mb": _round(max(peaks), 1) if peaks else None,
         "retries_total": sum(r.retries for r in ok),
+        # the share of synthesis time spent in upstream's per-clause pyin check (inside synth_ms)
+        "voiced_check_share": _round(sum(r.voiced_check_ms for r in ok) / sum_synth)
+        if sum_synth > 0
+        else None,
         "malformed_lines": len(run.malformed),
         "wav_dir": wav_dir,
         "sentences": [
@@ -226,6 +233,7 @@ def summarize_machine(
                 "first_audio_ms": _round(r.first_audio_ms, 1),
                 "rtf": _round(r.rtf),
                 "retries": r.retries,
+                "voiced_check_ms": _round(r.voiced_check_ms, 1),
             }
             for r in ok
         ],
@@ -334,6 +342,13 @@ def render_markdown(report: dict[str, Any], repo_root: Path) -> str:
             "- Model akış yapmıyor (streamed: false): ilk ses gecikmesi = tüm sentez süresi."
         )
     lines.append("- Yükleme süresi ayrı ölçülür; hiçbir cümlenin süresine girmez.")
+    for m in report["machines"]:
+        if m.get("voiced_check_share") is not None:
+            lines.append(
+                f"- {m['label']}: sentez süresinin {_tr(100 * m['voiced_check_share'], 1)} %'i "
+                "üst kaynağın cümle parçası başına sesli-kontrolünde (librosa pyin) geçti "
+                "(sentez süresinin içinde, ona eklenmedi)."
+            )
     lines.append(
         "- Tepe bellek: konteyner sürecinin o ana kadarki en yüksek RSS'i (yükleme dahil)."
     )

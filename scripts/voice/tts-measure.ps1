@@ -12,7 +12,8 @@
   3. Fills the named weight volume once: the three files by their pinned URLs, sha256-checked.
      A mismatch stops the run with a non-zero exit; nothing is synthesized, no evidence written.
   4. Runs the twenty OWNER_SENTENCES through `synthesize.py synth` with --network none,
-     --read-only, the weights mounted read-only, -Cpus passed to docker --cpus and -Threads to
+     --read-only, --memory 8g with no swap (an overrun is an OOM failure, never a swapping
+     slowdown that would distort RTF), the weights mounted read-only, -Cpus passed to docker --cpus and -Threads to
      torch. Every wait has a deadline; a container past it is killed and removed.
   5. Feeds the container's JSON lines to `python -m app.voice.tts_measure merge`, which merges
      this -Label into <EvidenceDir>/tts-freya-measure.json + .md (a re-run of a label replaces
@@ -34,9 +35,9 @@ param(
     [string]$EvidenceDir = "",
     [string]$Docker = "",
     [string]$Python = "",
-    [string]$Image = "pagentos-freya-measure:measure-1",
+    [string]$Image = "",
     [string]$WeightsVolume = "pagentos-freya-weights",
-    [string]$MemoryLimit = "4g",
+    [string]$MemoryLimit = "8g",
     [int]$TimeoutSec = 3600,
     [int]$BuildTimeoutSec = 3600,
     [int]$FillTimeoutSec = 1800,
@@ -54,6 +55,15 @@ $toolDir = Join-Path $repoRoot "tools/tts-measure"
 $apiDir = Join-Path $repoRoot "services/api"
 if (-not $EvidenceDir) { $EvidenceDir = Join-Path $repoRoot "docs/evidence" }
 if ($Threads -le 0) { $Threads = [Environment]::ProcessorCount }
+if (-not $Image) {
+    # Content-addressed tag: a changed Dockerfile / lock / script is a new image, never a stale one.
+    $parts = foreach ($name in @("Dockerfile", "requirements.txt", "fetch_code.py", "synthesize.py")) {
+        (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $toolDir $name)).Hash
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $digest = -join ($sha.ComputeHash([System.Text.Encoding]::ASCII.GetBytes($parts -join "`n")) | ForEach-Object { $_.ToString("x2") })
+    $Image = "pagentos-freya-measure:" + $digest.Substring(0, 12)
+}
 
 function Format-Argument([string]$Value) {
     if ($Value -eq "") { return '""' }
@@ -176,7 +186,7 @@ try {
     if (Test-Path -LiteralPath $wavDir) { Get-ChildItem -LiteralPath $wavDir -Filter "*.wav" | Remove-Item -Force }
     New-Item -ItemType Directory -Path $wavDir -Force | Out-Null
     $runArgs = @("run", "-i", "--rm", "--name", $container, "--network", "none", "--read-only",
-        "--tmpfs", "/tmp", "--memory", $MemoryLimit, "-e", "OMP_NUM_THREADS=$Threads")
+        "--tmpfs", "/tmp", "--memory", $MemoryLimit, "--memory-swap", $MemoryLimit, "-e", "OMP_NUM_THREADS=$Threads")
     if ($Cpus) { $runArgs += @("--cpus", $Cpus) }
     if (-not $onWindows) { $runArgs += @("--user", "$(& /usr/bin/id -u):$(& /usr/bin/id -g)") }
     $runArgs += @("-v", "${WeightsVolume}:/models:ro", "-v", "${wavDir}:/out", $Image,

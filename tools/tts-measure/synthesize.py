@@ -142,11 +142,13 @@ def fill_main(argv: list[str]) -> int:
 
 
 class Loaded:
-    """What ``load_pipeline`` returns: the pipeline and its retry counter."""
+    """What ``load_pipeline`` returns: the pipeline, its retry counter and the time spent in
+    upstream's per-clause voiced check (librosa pyin), so the report can show that share."""
 
-    def __init__(self, tts: Any, counter: list[int]) -> None:
+    def __init__(self, tts: Any, counter: list[int], voiced_ms: list[float] | None = None) -> None:
         self.tts = tts
         self.counter = counter
+        self.voiced_ms = voiced_ms if voiced_ms is not None else [0.0]
 
 
 def load_pipeline(models: Path, threads: int, seed: int) -> Loaded:
@@ -184,6 +186,13 @@ def load_pipeline(models: Path, threads: int, seed: int) -> Loaded:
     vocab_path = Path(pipeline_module.__file__).with_name("char_vocab.json")
     char_to_id = json.loads(vocab_path.read_text(encoding="utf-8"))
     tts = FreyaTTS(model, vae, char_to_id, device="cpu", seed=seed)
+    # Upstream's _voiced_ok runs librosa.pyin and returns True on ANY exception, which would
+    # switch its collapse guard off without a word. Run pyin once here, unguarded: it fails the
+    # load loudly if it cannot run, and its numba JIT compile lands in load time, not sentence 1.
+    import librosa
+
+    tone = np.sin(2 * np.pi * 200 * np.arange(16000) / 16000).astype(np.float32)
+    librosa.pyin(tone, fmin=70, fmax=400, sr=16000)
     counter = [0]
     original = tts._synth_one
 
@@ -193,8 +202,19 @@ def load_pipeline(models: Path, threads: int, seed: int) -> Loaded:
             counter[0] += 1
         return original(text, steps=steps, seed=seed)
 
+    voiced_ms = [0.0]
+    voiced = tts._voiced_ok
+
+    def timed(wav: Any) -> bool:
+        began = time.perf_counter()
+        try:
+            return voiced(wav)
+        finally:
+            voiced_ms[0] += (time.perf_counter() - began) * 1000.0
+
     tts._synth_one = counted  # the vendor file is never edited
-    return Loaded(tts, counter)
+    tts._voiced_ok = timed
+    return Loaded(tts, counter, voiced_ms)
 
 
 def _write_wav(path: Path, wav: Any) -> None:
@@ -251,6 +271,7 @@ def synth_main(
             index = int(row["index"])
             text = str(row["text"])
             before = loaded.counter[0]
+            voiced_before = loaded.voiced_ms[0]
             began = time.perf_counter()
             wav = loaded.tts.synthesize(text, steps=args.steps, seed=args.seed)
             synth_ms = (time.perf_counter() - began) * 1000.0
@@ -265,6 +286,8 @@ def synth_main(
                     "streamed": False,
                     "peak_rss_mb": peak_rss_mb(),
                     "retries": loaded.counter[0] - before,
+                    # inside synth_ms, not added to it: upstream's pyin check per clause
+                    "voiced_check_ms": round(loaded.voiced_ms[0] - voiced_before, 1),
                 }
             )
         except Exception as error:  # noqa: BLE001 - one sentence failing is a row, not a stop
