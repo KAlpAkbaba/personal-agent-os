@@ -488,8 +488,9 @@ $staleLimits = @{}
 $limitWindows = @{}
 $loweredRuns = New-Object System.Collections.ArrayList
 # A Cloud Core that does not know the status' model fields yet answers 422: it then gets the
-# status in the form it knows, for the rest of the cycle.
-$statusLegacy = $false
+# status in the form it knows, for the rest of the cycle (New-CycleStatus -Level: 0 with the team
+# engine's fields, 1 without them, 2 legacy).
+$statusLevel = 0
 # The usage limit ended the cycle: nothing further starts.
 $limitStop = $false
 # The usage limit is being waited out until then (UTC): the pool starts nothing, the runs in
@@ -547,8 +548,32 @@ function Get-LimitsDocument {
     }
 }
 
+function Get-StatusReturns {
+    <# team-engine: every returned task whose worker seat still owns it, with that seat - the Ofis
+       draws the '!' on the owner seat only, and an owner busy with another task shows the return
+       as "next". #>
+    $returns = New-Object System.Collections.ArrayList
+    if ($null -eq $script:queue) { return @() }
+    # The seats are read with the settings at the first refill; before that, -MaxParallel.
+    $seatTable = Get-Variable -Name seats -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $workerSeats = if ($seatTable -is [hashtable] -and $seatTable.ContainsKey("worker")) { [int]$seatTable["worker"] } else { $MaxParallel }
+    foreach ($task in @(Get-TeamTasks -Queue $script:queue)) {
+        if ([string]$task.state -ne "returned") { continue }
+        $known = Get-TeamTaskSeat -Task $task -Records $script:seatRecords
+        if ((Get-TeamWorkerSeatIndex -Seat $known.Seat) -le 0) { continue }
+        $claim = Get-TeamSeatClaim -OwnerSeat $known.Seat -WorkerSeats $workerSeats -GoneSince (ConvertFrom-TeamTimestamp -Text $known.GoneAt)
+        if ($claim.State -eq "released") { continue }
+        [void]$returns.Add([ordered]@{ task = [string]$task.id; owner_seat = $known.Seat })
+    }
+    return @($returns.ToArray())
+}
+
 function New-CycleStatus {
-    param([bool]$Legacy = $false)
+    <# -Level: 0 the team engine's fields too (run seats, the loop, the returns' owner seats);
+       1 without them (a Cloud Core that does not know them yet answers 422); 2 legacy (no model,
+       no limits). #>
+    param([int]$Level = 0)
+    $Legacy = ($Level -ge 2)
     $document = [ordered]@{
         cycle_id      = $dayId
         machine       = $Machine
@@ -557,12 +582,18 @@ function New-CycleStatus {
         runs          = @($script:liveRuns | ForEach-Object {
                 $entry = [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at }
                 if (-not $Legacy) { $entry["model"] = $_.model }
+                if ($Level -eq 0) { $entry["seat"] = [string](Get-TeamProperty -InputObject $_ -Name "seat" -Default $_.role) }
                 $entry
             })
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
         usage_limit   = [ordered]@{ state = $script:usageLimit.state; resets_at = $script:usageLimit.resets_at }
     }
     if (-not $Legacy) { $document["limits"] = (Get-LimitsDocument) }
+    if ($Level -eq 0) {
+        $document["loop_id"] = $script:loopId
+        $document["loop_started_at"] = (Get-TeamTimestamp -Now $script:processStart)
+        $document["returns"] = @(Get-StatusReturns)
+    }
     $document["updated_at"] = (Get-TeamTimestamp)
     return $document
 }
@@ -573,12 +604,25 @@ function Write-CycleStatus {
     if (-not $script:loopEnded) { Write-LoopFile }
     try {
         if ($useApi) {
-            try { Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Legacy $script:statusLegacy) }
-            catch {
-                if ($script:statusLegacy -or $_.Exception.Message -notmatch '^HTTP 422 ') { throw }
-                $script:statusLegacy = $true
-                Add-CycleNote -List "risks" -Text "Cloud Core canlı durumun model ve limit alanlarını henüz tanımıyor (422); eski biçimde yazıldı - Ofis sayfasında model ve limit görünmez (model-policy-api yayınlanınca düzelir)"
-                Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Legacy $true)
+            $saved = $false
+            if ($script:statusLevel -eq 0) {
+                # The engine's fields first; a store that does not know them yet (422) gets the
+                # status without them for the rest of this process - silently: nothing is lost
+                # that the Ofis could show today.
+                try { Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Level 0); $saved = $true }
+                catch {
+                    if ($_.Exception.Message -notmatch '^HTTP 422 ') { throw }
+                    $script:statusLevel = 1
+                }
+            }
+            if (-not $saved) {
+                try { Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Level $script:statusLevel) }
+                catch {
+                    if ($script:statusLevel -ge 2 -or $_.Exception.Message -notmatch '^HTTP 422 ') { throw }
+                    $script:statusLevel = 2
+                    Add-CycleNote -List "risks" -Text "Cloud Core canlı durumun model ve limit alanlarını henüz tanımıyor (422); eski biçimde yazıldı - Ofis sayfasında model ve limit görünmez (model-policy-api yayınlanınca düzelir)"
+                    Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Level 2)
+                }
             }
         }
         else { Write-TeamJson -Path $statusPath -Document (New-CycleStatus) }

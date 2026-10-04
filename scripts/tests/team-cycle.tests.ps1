@@ -2959,7 +2959,8 @@ try {
         $history = @($state.statuses)
         Assert-True -Condition (@($history | Where-Object { @($_.runs).Count -ge 1 }).Count -ge 2) -Because "the Ofis page still sees the runs in flight: $(@(Get-FakeApiRequests -Api $api) -join '; ')"
         Assert-Equal -Expected 0 -Actual @($history | Where-Object { $null -ne $_.PSObject.Properties["limits"] }).Count -Because "in the form that Cloud Core accepts"
-        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/status 422" }).Count -Because "the new form is tried once, not at every write"
+        # team-engine: two richer forms now (the engine's fields, then the model's) - each tried once.
+        Assert-Equal -Expected 2 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/status 422" }).Count -Because "each new form is tried once, not at every write"
         Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "model ve limit alanlarını henüz tanımıyor")).Count -Because "one line under the risks: $($run.Report)"
     }
 
@@ -3560,6 +3561,20 @@ try {
         Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "worker-3 has 50 minutes left on its claim: $($run.Report)"
         Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-b").state -Because "it waits"
         Assert-True -Condition ($run.Report -match "bekliyor: task-b -> worker-3") -Because $run.Report
+    }
+
+    Test-Case "engine: the live status names each run's seat, the loop, and every return with its owner seat (what the Ofis draws the '!' on)" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-a" -State "assigned" -Area @("src/a")), (New-ReturnedTask -Id "task-b" -Area @("src/b")))
+        Set-SeatRecords -Root $root -Records @{ "task-b" = @{ owner_seat = "worker-3"; session_id = "sess-b"; seat_gone_at = (Get-TeamTimestamp -Now ([datetime]::UtcNow.AddMinutes(-10))) } }
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json"); PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS = "2" }
+        Use-FakeHooks -Environment $hooks -Body { $script:statusRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:statusRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "worker-task-a.json")
+        Assert-Equal -Expected "task-a@worker-1" -Actual ((@($seen.runs) | ForEach-Object { "$($_.task)@$($_.seat)" }) -join ",") -Because "the run's seat by name"
+        Assert-True -Condition ([string]$seen.loop_id -match "^loop-" -and [string]$seen.loop_started_at) -Because "the loop by its id and its start: $($seen | ConvertTo-Json -Compress -Depth 5)"
+        Assert-Equal -Expected "task-b@worker-3" -Actual ((@($seen.returns) | ForEach-Object { "$($_.task)@$($_.owner_seat)" }) -join ",") -Because "the return and the seat it waits for"
     }
 
     Test-Case "engine: a returned task with no seat record is taken by the first free seat, fresh - as today" {
