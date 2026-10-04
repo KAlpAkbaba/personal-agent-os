@@ -22,7 +22,9 @@ from app.team import trials
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 INSPECTOR_ROLE = REPO_ROOT / ".claude" / "agents" / "inspector.md"
-ADR_TEXT = REPO_ROOT / "team" / "plans" / "owner-trials-wiring-adr.md"
+ADR_TEXT = (
+    REPO_ROOT / "docs" / "DECISIONS.md"
+)  # ADR-0258 addendum 1, numbered from team/plans/owner-trials-wiring-adr.md
 
 WHOLE = """Bulgular ...
 deneme: ses-saat
@@ -119,7 +121,10 @@ def test_a_malformed_block_is_skipped_never_raised(report: str) -> None:
 
 def test_the_adr_paragraph_example_parses() -> None:
     """The paragraph the lead pastes into the role file (see the xfail below) is checked here."""
-    blocks = _fenced_trial_blocks(ADR_TEXT.read_text(encoding="utf-8"))
+    decisions = ADR_TEXT.read_text(encoding="utf-8")
+    start = decisions.index("### ADR-0258 addendum 1")
+    end = decisions.find("\n### ", start + 1)
+    blocks = _fenced_trial_blocks(decisions[start : end if end != -1 else None])
     assert blocks, "the ADR carries the role paragraph's example block"
     for block in blocks:
         found = trials.parse_inspector_trials(block)
@@ -127,11 +132,6 @@ def test_the_adr_paragraph_example_parses() -> None:
         assert team_store.task_problems(_task("trial-task", found)) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ALAN_ISTEGI: the harness refused the worker's write to .claude/agents/inspector.md; "
-    "the lead pastes the paragraph from team/plans/owner-trials-wiring-adr.md, drops this mark",
-)
 def test_the_role_file_example_block_parses() -> None:
     blocks = _fenced_trial_blocks(INSPECTOR_ROLE.read_text(encoding="utf-8"))
     assert blocks, "inspector.md carries the trial form's example block"
@@ -180,12 +180,6 @@ def test_released_state_writes_nothing(tmp_path: Path) -> None:
 # ------------------------------------------------------------------ the ledger's vocabulary
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ALAN_ISTEGI: app/ledger/vocabulary.py (EVENT_TYPES) and the vocabulary-as-today case "
-    "of tests/unit/test_team_trials.py are outside this card's area; the lead adds both and "
-    "removes this mark",
-)
 def test_the_trial_events_are_in_the_ledger_vocabulary() -> None:
     assert trials.EVENT_TRIAL_PASSED in vocabulary.EVENT_TYPES
     assert trials.EVENT_TRIAL_FAILED in vocabulary.EVENT_TYPES
