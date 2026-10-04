@@ -281,6 +281,30 @@ def test_a_padded_answer_with_a_number_not_on_the_page_is_dropped(speech: str) -
     assert value is None
 
 
+def test_an_answer_naming_two_numbers_of_the_page_is_none() -> None:
+    # Both numbers stand on the page, but the answer does not say which one is watched:
+    # no guessing - the first (or any) of them is never picked.
+    value = extract.extract_number(
+        FakeProvider("19.499 TL, kargo 49,90 TL"),
+        "Ürün sayfası. Fiyat 19.499 TL, kargo 49,90 TL.",
+        label="fiyat",
+        condition="number_below:20000",
+    )
+    assert value is None
+
+
+def test_an_answer_longer_than_the_limit_is_none_even_with_one_page_number() -> None:
+    speech = "Efendim, sayfayı baştan sona okudum ve " * 6 + "fiyat 19.499 TL."
+    assert len(speech) > extract.MAX_ANSWER_CHARS
+    value = extract.extract_number(
+        FakeProvider(speech),
+        "Ürün sayfası. Fiyat 19.499 TL, kargo 49,90 TL.",
+        label="fiyat",
+        condition="number_below:20000",
+    )
+    assert value is None
+
+
 # ------------------------------------------------------------------ (5) failures
 
 
