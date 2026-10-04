@@ -689,6 +689,10 @@ Test-Case "engine seats: a seat that owns a return never starts a new task - the
     Assert-Equal -Expected "worker:task-b@worker-2" -Actual (Get-SeatedFill -Candidates @($fresh + $returned) -Claims $claims -InFlight @((New-SeatedRun "task-e" "worker" "worker-1"))) -Because "worker-2 frees while worker-1 works: the return, not the first new task of the queue"
     $wide = @{ worker = 3; inspector = 2; integrator = 1 }
     Assert-Equal -Expected "worker:task-f@worker-1" -Actual (Get-SeatedFill -Candidates @($fresh + $returned) -Claims $claims -Seats $wide -InFlight @((New-SeatedRun "task-e" "worker" "worker-2"), (New-SeatedRun "task-h" "worker" "worker-3"))) -Because "a seat that owns no return takes new work"
+    # worker-2 is free but its return cannot start yet (its files are held by an inspection in
+    # flight): worker-2 still takes no new task - it is kept for the return.
+    $blocked = New-SeatRun "task-b" "worker" @("src/task-x/part"); $blocked.Task.state = "returned"
+    Assert-Equal -Expected "worker:task-f@worker-1" -Actual (Get-SeatedFill -Candidates @($fresh + $blocked) -Claims $claims -InFlight @((New-SeatedRun "task-x" "inspector" "inspector"))) -Because "the second new task does not take worker-2 while worker-2's return waits"
 }
 
 Test-Case "engine seats: a claim lives while its seat is there; a seat that is gone keeps it for sixty minutes, then the return goes to any worker" {
@@ -3013,7 +3017,9 @@ try {
         # Cycle adr0224-02: three workers recorded at 3310 / 3295 / 3275 seconds - the two short
         # ones waited for the long one, because a batch was started and then waited for WHOLE.
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/a1")), (New-Task -Id "task-two" -Area @("src/a2")), (New-Task -Id "task-three" -Area @("src/a3")))
-        $hooks = Get-PoolHooks -Root $root -Seconds "worker:task-two=8"
+        # 15 s, not 8: runs start detached now (team-engine), and under a loaded machine the first
+        # worker's start plus its run took longer than 8 s once (the full suite of 2026-10-04).
+        $hooks = Get-PoolHooks -Root $root -Seconds "worker:task-two=15"
         Use-FakeHooks -Environment $hooks -Body { $script:poolRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
         $run = $script:poolRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
@@ -3120,7 +3126,9 @@ try {
         $tasks = @("ins-a", "ins-b", "ins-c" | ForEach-Object { New-Task -Id $_ -State "inspecting" -Area @("src/$_") })
         $tasks += @("wrk-d", "wrk-e", "wrk-f" | ForEach-Object { New-Task -Id $_ -Area @("src/$_") })
         $root = New-Sandbox -Tasks $tasks
-        $hooks = Get-PoolHooks -Root $root -Seconds "inspector:ins-a=10,inspector:ins-b=20,worker:*=20"
+        # 20 / 40 s, not 10 / 20: runs start detached now (team-engine); on a loaded machine (the
+        # real cycle beside the suite, 2026-10-04) the fifth start came after ins-a's 10 s had ended.
+        $hooks = Get-PoolHooks -Root $root -Seconds "inspector:ins-a=20,inspector:ins-b=40,worker:*=40"
         Use-FakeHooks -Environment $hooks -Body { $script:roleRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 3 }
         $run = $script:roleRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
