@@ -1,12 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const apiFetch = vi.fn();
-vi.mock("../../app/lib/session", () => ({
-  API_BASE: "http://core.test:8001",
-  apiFetch: (...args: unknown[]) => apiFetch(...args),
-  UnauthorizedError: class UnauthorizedError extends Error {},
-}));
+vi.mock("../../app/lib/session", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, apiFetch: (...args: unknown[]) => apiFetch(...args) };
+});
 
 import {
   type BoardNote,
@@ -101,19 +100,18 @@ describe("the test queue on the Ofis desks", () => {
 });
 
 describe("fetchSlotSigns", () => {
-  beforeEach(() => apiFetch.mockReset());
 
   it("reads the board's newest notes", async () => {
-    apiFetch.mockResolvedValue(new Response(JSON.stringify({ notes: [TAKE, WAIT], cards: {} })));
+    apiFetch.mockResolvedValueOnce(new Response(JSON.stringify({ notes: [TAKE, WAIT], cards: {} })));
     const signs = await fetchSlotSigns(NOW);
     expect(apiFetch).toHaveBeenCalledWith("/v1/team/board/notes?limit=100");
     expect(signs.get("worker-2")?.kind).toBe("test");
   });
 
   it("an unreachable or refusing board is no sign, never an error on the page", async () => {
-    apiFetch.mockResolvedValue(new Response("{}", { status: 503 }));
+    apiFetch.mockResolvedValueOnce(new Response("{}", { status: 503 }));
     expect((await fetchSlotSigns(NOW)).size).toBe(0);
-    apiFetch.mockRejectedValue(new Error("offline"));
+    apiFetch.mockRejectedValueOnce(new Error("offline"));
     expect((await fetchSlotSigns(NOW)).size).toBe(0);
   });
 });
