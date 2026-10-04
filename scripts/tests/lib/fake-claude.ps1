@@ -35,6 +35,8 @@
       PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS  the reset, seconds from now (default 3600)
       PAGENTOS_FAKE_CLAUDE_RAN_MODEL       "<role>=<id>": that role's modelUsage names <id>
           whatever --model said, as a tool that substituted the model itself would print
+      PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES  roles whose run FAILS with a long report that
+          quotes the limit words in its middle (model-policy-floor: not the limit)
 
     The pool's hooks (cycle-seat-pool), independent of the scenario as well - described where
     they are read: PAGENTOS_FAKE_CLAUDE_SECONDS (how long each run takes),
@@ -103,7 +105,7 @@ $here = (Get-Location).ProviderPath
 if ($env:TEMP -and (Test-Path -LiteralPath $env:TEMP)) { try { [System.IO.File]::WriteAllText((Join-Path $env:TEMP "fake-run-left-this.txt"), "x") } catch { } }
 
 if ($log) {
-    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; temp_env = [string]$env:TEMP; tmp_env = [string]$env:TMP; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
+    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; temp_env = [string]$env:TEMP; tmp_env = [string]$env:TMP; team_seat = [string]$env:PAGENTOS_TEAM_SEAT; team_task = [string]$env:PAGENTOS_TEAM_TASK; team_url = [string]$env:PAGENTOS_TEAM_URL; team_token_file = [string]$env:PAGENTOS_TEAM_TOKEN_FILE; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
     Add-SharedLine -Path $log -Line ($entry | ConvertTo-Json -Compress)
 }
 
@@ -214,6 +216,15 @@ if ($scenario -eq "silent") {
 if ($scenario -eq "slow") {
     Start-Sleep -Seconds 600
     exit 0
+}
+# model-policy-floor: PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES (comma separated) - that role's run
+# FAILS for another reason, and its long result text QUOTES the limit words in its middle.
+$quotingRoles = @(([string]$env:PAGENTOS_FAKE_CLAUDE_QUOTED_LIMIT_ROLES).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($quotingRoles -contains $role) {
+    $quote = "Report: the suite failed - 'usage limit reached' was not read as the limit`n`nThe suite failed. Its output:`n  expected 'Claude AI usage limit reached' to be read as the limit`n  You've hit your Opus limit " + [char]0x00B7 + " resets 8:40pm`n`nverdict: failed"
+    $session = [DateTimeOffset]::UtcNow.AddHours(3).ToUnixTimeSeconds()
+    Write-Answer -Text $quote -Cost 0.25 -IsError $true -EventLine (Get-LimitEvent -Status "allowed" -Type "five_hour" -ResetsAt $session)
+    exit 1
 }
 # The model policy: a run on a model the test named as limited answers what the real tool answers.
 $limitedModels = @(([string]$env:PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })

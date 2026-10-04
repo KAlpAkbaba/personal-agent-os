@@ -425,7 +425,7 @@ Test-Case "the fake gate speaks the real gate's words (the parser reads both)" {
     }
     Assert-True -Condition ($real.Contains('Write-Host "=== $Name ==="')) -Because "the real gate opens a step with === name ==="
     Assert-True -Condition ($real.Contains('Write-Host "FAILED: $($_.Exception.Message)"')) -Because "the real gate marks a failed step with 'FAILED: '"
-    Assert-True -Condition ($real -match '(?s)if \(\$failed\) \{\s*Write-Host "QUALITY GATE: FAIL"[^\r\n]*\s*exit 1') -Because "the real gate exits 1 when it says FAIL"
+    Assert-True -Condition ($real -match '(?s)if \(\$(script:)?failed\) \{\s*Write-Host "QUALITY GATE: FAIL"[^\r\n]*\s*exit 1') -Because "the real gate exits 1 when it says FAIL"
     Assert-True -Condition ($real -match 'Write-Host "QUALITY GATE: PASS"[^\r\n]*\s*exit 0') -Because "and 0 when it says PASS"
     Assert-True -Condition ($fake -match '(?m)^Write-Host "=== API unit tests ==="' -and $fake.Contains('Write-Host "FAILED: pytest (unit) exited with code 1"')) -Because "the fake uses the same marks"
 }

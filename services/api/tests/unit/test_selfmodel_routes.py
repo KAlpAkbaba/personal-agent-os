@@ -290,7 +290,9 @@ def test_post_index_refuses_while_the_background_refresher_holds_the_index(
     held across the request: holding it here would make the un-wired version
     block forever on it, and a hanging test proves nothing (it did, on the first
     attempt). Released, the wrong version answers 200 and this fails on the
-    status -- a red, not a stall.
+    status -- a red, not a stall. The deadline is a hang guard only, never the claim:
+    at 10 s the gate of 2026-10-04 (b98ed094) saw the request reach the route after the
+    holder had already let go (the POST took 41 s on a loaded machine) and answered 200.
     """
     import threading
 
@@ -300,7 +302,7 @@ def test_post_index_refuses_while_the_background_refresher_holds_the_index(
 
     def hold_the_index() -> None:
         with indexer._INDEX_LOCK:
-            release.wait(timeout=10.0)
+            release.wait(timeout=180.0)
 
     holder = threading.Thread(target=hold_the_index, daemon=True)
     holder.start()
@@ -313,7 +315,7 @@ def test_post_index_refuses_while_the_background_refresher_holds_the_index(
         response = client.post("/v1/selfmodel/index")
     finally:
         release.set()
-        holder.join(timeout=10.0)
+        holder.join(timeout=180.0)
     assert not holder.is_alive()
 
     assert response.status_code == 409

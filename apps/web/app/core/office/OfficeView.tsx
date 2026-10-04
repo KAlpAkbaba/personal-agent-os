@@ -5,9 +5,9 @@
 
 import Link from "next/link";
 
-import OfficePanel from "./OfficePanel";
+import OfficePanel, { type ChooseModel } from "./OfficePanel";
 import OfficeScene from "./OfficeScene";
-import type { OfficeView as Office } from "./officeApi";
+import type { ModelSetting, OfficeView as Office } from "./officeApi";
 import { energyOf } from "./officeEnergy";
 import { buildOffice, buildPanel } from "./officeModel";
 
@@ -18,6 +18,9 @@ export default function OfficeView({
   reducedMotion,
   onSelect,
   arriving = [],
+  modelNotice = null,
+  onChooseModel,
+  onToggleFallback,
 }: {
   view: Office;
   selected: string | null;
@@ -25,10 +28,16 @@ export default function OfficeView({
   reducedMotion: boolean;
   onSelect: (seat: string) => void;
   arriving?: string[];
+  /** The server's sentence after a refused setting, under the selector. */
+  modelNotice?: string | null;
+  onChooseModel?: ChooseModel;
+  /** Called with the whole setting, its fallback flipped. */
+  onToggleFallback?: (next: ModelSetting) => void;
 }) {
   const office = buildOffice(view);
   const bar = office.topBar;
   const energy = energyOf(view);
+  const panel = selected ? buildPanel(view, selected) : null;
   return (
     <div className="office" data-office="root">
       <div className="office-topbar" data-office="topbar">
@@ -39,6 +48,24 @@ export default function OfficeView({
         <span>{bar.runningAgents}</span>
         <span>{bar.estimated}</span>
         <span>Max limit: {bar.limit}</span>
+        <span>{bar.fable}</span>
+        <span>{bar.all}</span>
+        {view.models && (
+          <button
+            type="button"
+            className="office-toggle"
+            aria-pressed={view.models.fallback}
+            onClick={() =>
+              view.models && onToggleFallback?.({ ...view.models, fallback: !view.models.fallback })
+            }
+          >
+            yedek model: {view.models.fallback ? "açık" : "kapalı"}
+          </button>
+        )}
+        {bar.lowered && <span>{bar.lowered}</span>}
+        {bar.asOf && <span className="muted">({bar.asOf})</span>}
+        {/* the refusal is said beside the selector when one is open, else here */}
+        {modelNotice && !panel?.model && <span role="alert">{modelNotice}</span>}
         {offline && (
           <span className="office-offline" role="status">
             bağlantı yok
@@ -53,7 +80,11 @@ export default function OfficeView({
           onSelect={onSelect}
           arriving={arriving}
         />
-        <OfficePanel panel={selected ? buildPanel(view, selected) : null} />
+        <OfficePanel
+          panel={panel}
+          modelNotice={modelNotice}
+          onChooseModel={onChooseModel}
+        />
       </div>
       <div className="office-energy" data-office="energy" data-level={energy.level}>
         <div className="office-energy-meter">

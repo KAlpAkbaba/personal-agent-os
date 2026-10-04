@@ -279,7 +279,8 @@ function VoiceConsole() {
       </div>
       <p className="subtitle">
         Gerçek zamanlı konuşma — tarayıcı medya bacağı (M12 / D). Bu sayfa tanılama görünümüdür; oturum{" "}
-        <Link href="/core">Çekirdek</Link> ile paylaşılır ve sayfadan ayrılınca kapanmaz.
+        <Link href="/core">Çekirdek</Link> ile paylaşılır ve sayfadan ayrılınca kapanmaz.{" "}
+        <Link href="/voice/measure">Ölçüm kaydı</Link>
       </p>
 
       {/*

@@ -9,9 +9,27 @@
 
 # -E2E additionally runs the M1 device end-to-end test (opens/closes Notepad
 # in the interactive session; not suitable for headless CI).
+#
+# Test queue (the "test sirasi", scripts/lib/TeamTestSlots.ps1): before each HEAVY step the gate
+# asks the machine's queue for the step's kinds (database / desktop / heavy), WAITS until
+# ONAY - asking every -TestSlotPollSeconds, printing the BEKLE line once a minute - and holds
+# the slot for that step only. The gate goes ahead of every waiting agent, never ahead of a
+# run already going. Its wait is the WaitSeconds column of the summary. -NoTestSlots runs
+# the gate as before, asking nothing. -TestSlotStore is the queue's folder (tests);
+# -StepList <file.ps1> replaces the built-in steps with the file's own Invoke-Step calls
+# (tests of the gate's step machinery: nothing real runs).
 # -GateSerial runs every step one after another, as before the suite group (gate-faster);
 # -GateMaxParallel sets the group's width (0 = the named default, GateSteps.ps1: 3).
-param([switch]$Fast, [switch]$E2E, [switch]$GateSerial, [int]$GateMaxParallel = 0)
+param(
+  [switch]$Fast,
+  [switch]$E2E,
+  [switch]$NoTestSlots,
+  [string]$TestSlotStore = "",
+  [int]$TestSlotPollSeconds = 20,
+  [string]$StepList = "",
+  [switch]$GateSerial,
+  [int]$GateMaxParallel = 0
+)
 
 # "Continue", not "Stop": docker compose, alembic and next write progress to
 # stderr; under output redirection PS 5.1 would turn those lines into
@@ -49,8 +67,41 @@ $powershell5 = Resolve-Tool "powershell" @("C:\Windows\System32\WindowsPowerShel
 $results = New-Object System.Collections.ArrayList
 $failed = $false
 
+# The library sets StrictMode for its own sake; this script was written without it.
+. (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")
+Set-StrictMode -Off
+$script:SlotStore = if ($TestSlotStore) { $TestSlotStore } else { Get-TestSlotDefaultStore }
+$script:SlotTask = "gate:" + (Split-Path -Leaf $repoRoot)
+
+function Enter-GateTestSlot {
+  # Asks the queue for $Kinds and waits for ONAY; returns the ticket (or $null) and the wait.
+  # The queue is a courtesy between runs, not a gate step: a broken queue never fails the gate.
+  param([string]$What, [string[]]$Kinds)
+  $slot = [pscustomobject]@{ Ticket = $null; Waited = 0 }
+  if (@($Kinds).Count -eq 0 -or $NoTestSlots) { return $slot }
+  try {
+    $grant = Wait-TestSlotGrant -Store $script:SlotStore -Kind $Kinds -Task $script:SlotTask -Role "gate" -What $What -PollSeconds $TestSlotPollSeconds
+    $slot.Waited = $grant.WaitedSeconds
+    [void](Start-TestSlotRun -Store $script:SlotStore -Ticket $grant.Ticket -HolderPid $PID)
+    $slot.Ticket = $grant.Ticket
+    Write-Host "TEST SIRASI: ONAY $($grant.Ticket) ($($Kinds -join ',')) after $($slot.Waited) s" -ForegroundColor DarkGray
+  } catch {
+    Write-Host "TEST SIRASI: the queue failed ($($_.Exception.Message)); the step runs without a slot" -ForegroundColor Yellow
+  }
+  return $slot
+}
+
+function Exit-GateTestSlot {
+  param($Slot, [bool]$Ok)
+  if (-not $Slot.Ticket) { return }
+  try { Complete-TestSlotRun -Store $script:SlotStore -Ticket $Slot.Ticket -ExitCode $(if ($Ok) { "0" } else { "1" }) }
+  catch { Write-Host "TEST SIRASI: release failed ($($_.Exception.Message)); the slot frees when the gate ends" -ForegroundColor Yellow }
+}
+
 function Invoke-Step {
-  param([string]$Name, [scriptblock]$Action)
+  # -Kinds: the test-queue kinds this step needs (empty = a light step, no slot). A grouped
+  # step's kinds are asked for once, for the whole group, by Complete-GateGroup.
+  param([string]$Name, [scriptblock]$Action, [string[]]$Kinds = @())
   if ($null -ne $script:GateGroup) {
     # Between Start-GateGroup and Complete-GateGroup a step is RECORDED, not run: its
     # Invoke-GateSuite gives the script, its Assert-ExitCode the words of its FAILED line, and
@@ -62,7 +113,9 @@ function Invoke-Step {
     $thrown = ""
     try { & $Action | Out-Null } catch { $thrown = $_.Exception.Message } finally { $recorded = $script:GateRecording; $script:GateRecording = $null }
     if (-not $thrown -and $recorded.Script -and $recorded.What) {
-      [void]$script:GateGroup.Add((New-GateStep -Name $Name -Script $recorded.Script -What $recorded.What -Lane $recorded.Lane))
+      $step = New-GateStep -Name $Name -Script $recorded.Script -What $recorded.What -Lane $recorded.Lane
+      $step | Add-Member -NotePropertyName Kinds -NotePropertyValue @($Kinds)
+      [void]$script:GateGroup.Add($step)
       return
     }
     $why = if ($thrown) { $thrown } else { "a grouped step must call Invoke-GateSuite and Assert-ExitCode" }
@@ -71,6 +124,12 @@ function Invoke-Step {
   }
   Write-Host ""
   Write-Host "=== $Name ===" -ForegroundColor Cyan
+  $waited = 0
+  $slot = $null
+  if (@($Kinds).Count -gt 0) {
+    $slot = Enter-GateTestSlot -What $Name -Kinds $Kinds
+    $waited = $slot.Waited
+  }
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   $ok = $false
   try {
@@ -78,12 +137,15 @@ function Invoke-Step {
     $ok = $true
   } catch {
     Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
+  } finally {
+    if ($slot) { Exit-GateTestSlot -Slot $slot -Ok $ok }
   }
   $sw.Stop()
   [void]$script:results.Add([pscustomobject]@{
     Step = $Name
     Result = $(if ($ok) { "PASS" } else { "FAIL" })
     Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+    WaitSeconds = $waited
   })
   if (-not $ok) { $script:failed = $true }
 }
@@ -141,9 +203,14 @@ function Complete-GateGroup {
     $script:failed = $true
   }
   if (@($steps).Count -eq 0) {
-    foreach ($f in $refused) { [void]$script:results.Add([pscustomobject]@{ Step = $f.Name; Result = "FAIL"; Seconds = 0 }) }
+    foreach ($f in $refused) { [void]$script:results.Add([pscustomobject]@{ Step = $f.Name; Result = "FAIL"; Seconds = 0; WaitSeconds = 0 }) }
     return
   }
+  # The test queue: the kinds of every grouped step, asked for once and held for the group; the
+  # wait is written on the group's first row, so the summary's total counts it once.
+  $kinds = @($steps | Where-Object { $_.PSObject.Properties["Kinds"] } | ForEach-Object { $_.Kinds } | Where-Object { $_ } | Select-Object -Unique)
+  $slot = Enter-GateTestSlot -What "suite group" -Kinds $kinds
+  $waitRow = $slot.Waited
   $width = if ($GateMaxParallel -gt 0) { $GateMaxParallel } else { $script:GateStepMaxParallel }
   $lanes = @($steps | Where-Object { $_.Lane } | ForEach-Object { $_.Lane } | Select-Object -Unique)
   $logRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("pagentos-gate-steps-" + $PID + "-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
@@ -154,6 +221,7 @@ function Complete-GateGroup {
   $ran = @()
   try { $ran = @(Invoke-GateStepGroup -Steps $steps -LogRoot $logRoot -MaxParallel $width -PowerShellPath $powershell5) }
   catch { $groupError = $_.Exception.Message }
+  finally { Exit-GateTestSlot -Slot $slot -Ok ((-not $groupError) -and (Test-GateStepGroupPassed -Results $ran)) }
   $clock.Stop()
   if ($groupError) {
     foreach ($s in $steps) {
@@ -161,7 +229,7 @@ function Complete-GateGroup {
       Write-Host "=== $($s.Name) ===" -ForegroundColor Cyan
       Write-Host "FAILED: $($s.What): the suite group did not run: $groupError" -ForegroundColor Red
     }
-    foreach ($e in $entries) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0 }) }
+    foreach ($e in $entries) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0; WaitSeconds = $waitRow }); $waitRow = 0 }
     $script:failed = $true
     Remove-Item -LiteralPath $logRoot -Recurse -Force -ErrorAction SilentlyContinue
     return
@@ -184,9 +252,10 @@ function Complete-GateGroup {
   # The table in the LISTED order: the run results come back in the order of $steps.
   $next = 0
   foreach ($e in $entries) {
-    if ($e.PSObject.Properties["Failure"]) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0 }); continue }
+    if ($e.PSObject.Properties["Failure"]) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0; WaitSeconds = $waitRow }); $waitRow = 0; continue }
     $r = $ran[$next]; $next++
-    [void]$script:results.Add([pscustomobject]@{ Step = $r.Name; Result = $(if ($r.Outcome -eq "PASS") { "PASS" } else { "FAIL" }); Seconds = $r.Seconds })
+    [void]$script:results.Add([pscustomobject]@{ Step = $r.Name; Result = $(if ($r.Outcome -eq "PASS") { "PASS" } else { "FAIL" }); Seconds = $r.Seconds; WaitSeconds = $waitRow })
+    $waitRow = 0
     if ($r.Outcome -ne "PASS") { $script:failed = $true }
   }
   Remove-Item -LiteralPath $logRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -198,7 +267,10 @@ function Write-GateSummary {
   param([double]$WallSeconds)
   Write-Host ""
   Write-Host "=== Quality gate summary ===" -ForegroundColor Cyan
-  $script:results | Format-Table -AutoSize | Out-String | Write-Host
+  $script:results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+  $totalWait = 0
+  foreach ($r in $script:results) { $totalWait += $r.WaitSeconds }
+  Write-Host "Test queue wait, total: $totalWait s"
   Write-Host "gate wall time: $([math]::Round($WallSeconds)) s"
 }
 
@@ -211,6 +283,19 @@ function Find-Dotnet {
     }
   }
   throw "dotnet SDK not found"
+}
+
+if ($StepList) {
+  # Tests of the step machinery: the file's own Invoke-Step calls, then the summary and the
+  # same final words as the script's end.
+  . $StepList
+  Write-GateSummary -WallSeconds $gateClock.Elapsed.TotalSeconds
+  if ($script:failed) {
+    Write-Host "QUALITY GATE: FAIL" -ForegroundColor Red
+    exit 1
+  }
+  Write-Host "QUALITY GATE: PASS" -ForegroundColor Green
+  exit 0
 }
 
 # ---------------------------------------------------------------- fast checks
@@ -314,7 +399,7 @@ Invoke-Step "Other services lint (ruff)" {
   }
 }
 
-Invoke-Step "API unit tests" {
+Invoke-Step "API unit tests" -Kinds heavy {
   if (-not $uv) { throw "uv not found" }
   Push-Location $apiRoot
   try {
@@ -336,7 +421,7 @@ Invoke-Step "API unit tests" {
 # eight lines on a green run, measured.
 $script:DotnetTestLogger = "console;verbosity=minimal"
 
-Invoke-Step "Windows agent build + tests" {
+Invoke-Step "Windows agent build + tests" -Kinds heavy {
   $dotnet = Find-Dotnet
   $env:DOTNET_ROOT = Split-Path -Parent $dotnet
   Push-Location (Join-Path $repoRoot "devices/windows-agent")
@@ -379,7 +464,7 @@ Invoke-Step "Staged-update qualification (real candidate binary, sandbox engine)
 # ---------------------------------------------------------------- full checks
 
 if (-not $Fast) {
-  Invoke-Step "Dev stack up (docker compose)" {
+  Invoke-Step "Dev stack up (docker compose)" -Kinds database {
     if (-not $powershell5) { throw "powershell.exe not found" }
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\dev-up.ps1")
     Assert-ExitCode "dev-up.ps1"
@@ -398,7 +483,7 @@ if (-not $Fast) {
   $script:GateDatabaseUrl = $null
   $script:GateDatabaseCreated = $false
   try {
-    Invoke-Step "Alembic upgrade head" {
+    Invoke-Step "Alembic upgrade head" -Kinds database {
       [void](Invoke-GateDatabaseSweep -Now ([datetime]::UtcNow))
       New-GateDatabase -Name $script:GateDatabase
       $script:GateDatabaseCreated = $true
@@ -412,7 +497,7 @@ if (-not $Fast) {
       } finally { Pop-Location }
     }
 
-    Invoke-Step "API integration tests" {
+    Invoke-Step "API integration tests" -Kinds database,heavy {
       if (-not $script:GateDatabaseUrl) { throw "no gate database: the step before this one did not make it" }
       Write-Host "database: $($script:GateDatabase) (the gate's own; pagentos is not touched)"
       Push-Location $apiRoot
@@ -469,7 +554,7 @@ if (-not $Fast) {
     Assert-ExitCode "team-feed tests"
   }
 
-  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" {
+  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" -Kinds heavy {
     # M18.4 (spec §6): the idle colour is brought up on the new sha, verified, switched to,
     # the old colour drained; rollback is the switch in reverse. Proven under a fake docker
     # that knows the two colours and the edge; the first real handoff is the next release.
@@ -687,11 +772,21 @@ if (-not $Fast) {
     Assert-ExitCode "web-tailnet-https tests"
   }
 
+  Invoke-Step "Agent team board client (PS5.1, fake board, no model)" {
+    # The team's board (the owner's idea, 2026-10-03): scripts/team/board.ps1 posts and reads
+    # notes against a fake board on 127.0.0.1; an unreachable board is a warning and exit 0.
+    # Grouped: its fake board takes a port the system gives (port 0) and its folder is a GUID.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-board.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "team-board tests"
+  }
+
   Complete-GateGroup
 
   # Below the group, one by one as before: what shares something with a grouped suite or with
   # the desktop.
-  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
+  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" -Kinds heavy {
     # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
     # fake in place of the model and a git repository made for the test.
     # Not grouped: its pool cases time seats against each other and were red beside the group
@@ -722,6 +817,16 @@ if (-not $Fast) {
     Assert-ExitCode "team-area tests"
   }
 
+  Invoke-Step "Agent team test queue (PS5.1, real wrapper processes, temp stores)" {
+    # The owner's idea of 2026-10-02 (ONAY / BEKLE before a heavy run): the queue's rules with
+    # real wrapper processes and a store per case, and this gate's own use of it (-StepList).
+    # Not grouped: its cases wait on real processes with deadlines and start this gate itself.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-test-slots.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "team-test-slots tests"
+  }
+
   Invoke-Step "UTF-8 JSON decoding (PS5.1)" {
     # A real qualification record showed Turkish letters as mojibake: 5.1 decoded a
     # charset-less JSON body as Latin-1 while the database held correct UTF-8.
@@ -742,7 +847,7 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
-  Invoke-Step "Browser agent lint + tests" {
+  Invoke-Step "Browser agent lint + tests" -Kinds heavy {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\browser")
     try {
@@ -760,13 +865,13 @@ if (-not $Fast) {
 
   if ($E2E) {
     # Opens Notepad on the owner's desktop: never beside another window-opening step.
-    Invoke-Step "M1 device E2E (Notepad)" {
+    Invoke-Step "M1 device E2E (Notepad)" -Kinds desktop {
       & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\e2e-m1-device.ps1") -SkipBuild
       Assert-ExitCode "e2e-m1-device.ps1"
     }
   }
 
-  Invoke-Step "Web shell build" {
+  Invoke-Step "Web shell build" -Kinds heavy {
     $pnpm = Resolve-Tool "pnpm" @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
     if (-not $pnpm) { throw "pnpm not found" }
     Push-Location $repoRoot
@@ -778,7 +883,7 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
-  Invoke-Step "Web shell lint, unit tests and types (oxlint, vitest, tsc)" {
+  Invoke-Step "Web shell lint, unit tests and types (oxlint, vitest, tsc)" -Kinds heavy {
     # CI's web job, here: GitHub Actions is off (2026-09-19), so this gate is the only place
     # the web suite is ever run before a release. After the build, as in ci.yml: tsconfig
     # includes the types `next build` generates.

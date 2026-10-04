@@ -345,6 +345,10 @@ function Invoke-GateBlock {
     $apiRoot = $fakeUv.Dir
     . ([scriptblock]::Create((Get-GateFunctionText "Invoke-Step")))
     . ([scriptblock]::Create((Get-GateFunctionText "Assert-ExitCode")))
+    # The block's steps ask the test queue for their kinds; here they ask nothing (-NoTestSlots).
+    . ([scriptblock]::Create((Get-GateFunctionText "Enter-GateTestSlot")))
+    . ([scriptblock]::Create((Get-GateFunctionText "Exit-GateTestSlot")))
+    $NoTestSlots = $true
     $block = [scriptblock]::Create((Get-GateDatabaseBlockText))
     $printed = Invoke-Captured { . $block }
     $seen = @()

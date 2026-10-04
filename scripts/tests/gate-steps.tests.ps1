@@ -283,7 +283,7 @@ function Get-GateFunctionText {
 function Invoke-GateTwoWays {
     <# One failing fake suite through the gate's own functions, sequential and grouped. #>
     param([string]$Suite, [string]$Mode = "fail", [string]$Passing = "")
-    foreach ($fn in @("Invoke-Step", "Assert-ExitCode", "Get-StepFailureText", "Invoke-GateSuite", "Start-GateGroup", "Complete-GateGroup", "Write-GateSummary")) {
+    foreach ($fn in @("Invoke-Step", "Assert-ExitCode", "Get-StepFailureText", "Invoke-GateSuite", "Start-GateGroup", "Complete-GateGroup", "Write-GateSummary", "Enter-GateTestSlot", "Exit-GateTestSlot")) {
         . ([scriptblock]::Create((Get-GateFunctionText $fn)))
     }
     $powershell5 = $powershell
@@ -401,6 +401,40 @@ Test-Case "10. a grouped step that throws before it names its suite fails in the
         Assert-True (@($ways[$way] | Where-Object { $_ -eq "exit=1" }).Count -eq 1) "${way}: the gate exits 1"
         Assert-True (@($ways[$way] | Where-Object { $_ -match 'PASS  the passing case' }).Count -eq 1) "${way}: the other step still ran"
     }
+}
+
+# ------------------------------------------- 11: the group and the test queue
+
+Test-Case "11. the real gate (-StepList) asks the test queue once for its grouped steps' kinds, holds them while the steps run, and frees them after" {
+    # The merge with main (2026-10-04): a step asks the queue ("test sirasi") for its kinds; a
+    # grouped step's kinds are asked for by the group - one ticket, both kinds, released at its end.
+    $dir = New-CaseDir
+    $store = Join-Path $dir "slots"
+    $held = Join-Path $dir "held-during-run.txt"
+    $suite = Join-Path $dir "queue-suite.ps1"
+    $libPath = Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1"
+    # The suite looks at the queue while it runs: the gate's ticket must be "running" then.
+    [System.IO.File]::WriteAllText($suite, (". '$libPath'`r`n" +
+            "`$e = @(Get-TestSlotEntries -Store '$store' | Where-Object { `$_.role -eq 'gate' -and `$_.state -eq 'running' })`r`n" +
+            "[System.IO.File]::WriteAllText('$held', ((`$e | ForEach-Object { (@(`$_.kinds) -join ',') + '|' + `$_.what }) -join ';'))`r`nexit 0`r`n"), (New-Object System.Text.ASCIIEncoding))
+    $stepsFile = Join-Path $dir "steps.ps1"
+    [System.IO.File]::WriteAllText($stepsFile, ("Start-GateGroup`r`n" +
+            "Invoke-Step `"Queue step A`" -Kinds heavy { `$script = '$suite'; Invoke-GateSuite `$script; Assert-ExitCode `"queue suite A`" }`r`n" +
+            "Invoke-Step `"Queue step B`" -Kinds database { `$script = '$suite'; Invoke-GateSuite `$script; Assert-ExitCode `"queue suite B`" }`r`n" +
+            "Complete-GateGroup`r`n"), (New-Object System.Text.ASCIIEncoding))
+    $out = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File $gatePath -StepList $stepsFile -TestSlotStore $store -TestSlotPollSeconds 1 2>&1 | ForEach-Object { [string]$_ })
+    $code = $LASTEXITCODE
+    Assert-Equal 0 $code "the gate passed ($($out -join ' / '))"
+    Assert-True (Test-Path -LiteralPath $held) "the grouped suite ran"
+    $seen = [System.IO.File]::ReadAllText($held)
+    Assert-True ($seen -match '^(heavy,database|database,heavy)\|suite group$') "while the group ran, the gate held ONE ticket with both kinds for the suite group: '$seen'"
+    . $libPath
+    Set-StrictMode -Off
+    Assert-Equal 0 @(Get-TestSlotEntries -Store $store).Count "the ticket is released after the group"
+    $log = @([System.IO.File]::ReadAllLines((Get-TestSlotLogPath -Store $store)) | Where-Object { $_ -match 'role=gate' })
+    Assert-Equal 1 $log.Count "one run of the gate in the queue's log: $($log -join ' | ')"
+    Assert-True (@($out | Where-Object { $_ -match '^\s*Queue step A\s+PASS' }).Count -eq 1 -and @($out | Where-Object { $_ -match '^\s*Queue step B\s+PASS' }).Count -eq 1) "both rows in the table"
+    Assert-True (@($out | Where-Object { $_ -match '^Test queue wait, total: [0-9.]+ s$' }).Count -eq 1) "the summary counts the wait: $(@($out | Where-Object { $_ -match "queue wait" }) -join " | ")"
 }
 
 foreach ($p in @($script:Leftovers)) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }

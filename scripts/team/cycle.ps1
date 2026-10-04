@@ -45,8 +45,9 @@
     defaults). A run that comes back with the usage limit is started again at once on the
     next model down the chain (`"fallback": true`), and the report says 'model düşürüldü';
     a limited model starts no run until its reset (`team/limits.json` keeps that across
-    cycles). The inspector is never started on a model weaker than the one the worker's run
-    really used: when every model at least that strong is limited, the inspection waits.
+    cycles). The inspector is never started on a model weaker than the STRONGEST one the
+    task's worker runs really used (not the last run's: ADR-0214 addendum 10): when every
+    model at least that strong is limited, the inspection waits.
 
 .PARAMETER Model
     The model of a role the setting does not name (one of the three ids). The setting wins.
@@ -650,8 +651,9 @@ function Register-Limit {
 
 function Select-RunModel {
     <# The model a run of this role starts on now (Get-TeamRunModel); Model is $null when it
-       must wait. The inspector's floor is the model the worker's run of that task really used,
-       and the configured worker model when its entry does not say (Get-TeamInspectionFloor). #>
+       must wait. The inspector's floor is the strongest model the task's worker runs really
+       used, an entry that does not say counting as the configured worker model
+       (Get-TeamInspectionFloor). #>
     param([string]$Role, $Task = $null)
     $configured = [string](Get-TeamProperty -InputObject $script:modelSetting.roles -Name $Role -Default "")
     if (-not $configured) { $configured = [string]$script:modelSetting.roles.worker }
@@ -777,8 +779,23 @@ try {
             $label = if ($null -ne $Task) { [string]$Task.id } else { "cycle" }
             $runTemp = Join-Path $tempRoot ("{0}-{1}-{2}" -f $label, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
         }
-        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp
-        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp); model = $runModel }
+        # The run's seat on the team's board: its role, and for a worker the smallest number no
+        # live worker run holds - kept for the run's life (the board knows worker-1..9). The seat
+        # is not part of the status document (the status route refuses unknown run fields).
+        $seat = $Role
+        if ($Role -eq "worker") {
+            $held = @($script:liveRuns | Where-Object { $_.role -eq "worker" } | ForEach-Object { [string]$_.seat })
+            $seat = ""
+            for ($n = 1; $n -le 9; $n++) { if ($held -notcontains "worker-$n") { $seat = "worker-$n"; break } }
+        }
+        $taskLabel = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" })
+        $boardEnvironment = @{ PAGENTOS_TEAM_SEAT = $seat; PAGENTOS_TEAM_TASK = $taskLabel }
+        if ($useApi) {
+            $boardEnvironment["PAGENTOS_TEAM_URL"] = $QueueUrl
+            $boardEnvironment["PAGENTOS_TEAM_TOKEN_FILE"] = $QueueToken
+        }
+        $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp -Environment $boardEnvironment
+        $live = [pscustomobject]@{ task = $taskLabel; role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $seat }
         [void]$script:liveRuns.Add($live)
         $loweredFrom = ""
         if ([bool]$Pick.Lowered) {

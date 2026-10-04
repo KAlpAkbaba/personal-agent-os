@@ -98,6 +98,12 @@ class OpenAIEmbedder:
     model_id: str = field(init=False)
     model_version: str = field(init=False)
     _cache: OrderedDict[str, list[float]] = field(default_factory=OrderedDict, init=False)
+    #: Guards ``_cache`` and ``calls`` exactly as ``LocalEmbedder._lock`` does (ADR-0256):
+    #: request threads share the memory runtime's one embedder. Never held across the
+    #: request to the API.
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
     calls: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
@@ -108,14 +114,22 @@ class OpenAIEmbedder:
 
     def embed(self, text: str) -> list[float]:
         key = text.strip()[:MAX_INPUT_CHARS]
-        cached = self._cache.get(key)
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._cache.move_to_end(key)
         if cached is not None:
-            self._cache.move_to_end(key)
             return list(cached)
+        # The network call is OUTSIDE the lock: a cached text is answered while another
+        # thread waits on the API. Two threads that miss on the same text both pay for it -
+        # fractions of a micro-dollar, stored once (ADR-0256 addendum).
         vector = self._fetch(key or " ")
-        self._cache[key] = vector
-        if len(self._cache) > CACHE_SIZE:
-            self._cache.popitem(last=False)
+        with self._lock:
+            self.calls += 1
+            self._cache[key] = vector
+            self._cache.move_to_end(key)
+            if len(self._cache) > CACHE_SIZE:
+                self._cache.popitem(last=False)
         return list(vector)
 
     def _fetch(self, text: str) -> list[float]:
@@ -140,7 +154,6 @@ class OpenAIEmbedder:
             raise EmbeddingProviderError(
                 f"OpenAI embeddings answered {len(vector)} dimensions, expected {self.dim}"
             )
-        self.calls += 1
         norm = math.sqrt(sum(x * x for x in vector))
         return [x / norm for x in vector] if norm > 0.0 else vector
 
