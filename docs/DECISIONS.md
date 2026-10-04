@@ -22983,6 +22983,23 @@ refuses before any store (file or database) is reached, so all three stores answ
   to the legacy shape for that cycle. A clamp to 0..100 on the client closes it.
 - No migration, no setting, no compose change: released automatically under addendum 9.
 
+### ADR-0214 addendum 23 (2026-10-04): the Ofis names the Claude account the team runs under
+
+- Context: the owner switches the team between his Claude accounts when one runs out
+  (2026-10-03 hesap2, 2026-10-04 hesap3, through `%USERPROFILE%\.pagentos-team\team-account.txt`
+  and the team wrapper's `CLAUDE_CONFIG_DIR`) and asked to see the switch on the Ofis: "ana ekranda
+  da değiştiğini göreyim".
+- Decision: the cycle's live status carries `account`, the leaf of `CLAUDE_CONFIG_DIR`
+  (`.claude-hesap3`) or `varsayilan`; the status route accepts it as an optional folder name
+  (`^[A-Za-z0-9._-]+$`, 1-64 characters - an e-mail or a space is a 422, so an address can never
+  reach the store); the office answer passes it through; the top bar says `Hesap: Hesap 3` /
+  `Hesap: Ana hesap`, and nothing when an older cycle does not send it.
+- The field is sent only in the non-legacy shape. The API must be released before the cycle sends it
+  (the cycle runs from the lead branch, which takes this commit only with the release).
+- Tests: `test_the_status_names_the_claude_account_and_the_office_shows_it` (round trip, an older
+  cycle without it, four refused values), the contract half that reads `New-CycleStatus`, and the
+  office model's label test (mutation RED: the label returns null).
+
 ### ADR-0224 addendum 5 (2026-10-03): the STT corpus measured with layer 2 as production configures it
 
 Draft: `team/plans/stt-corpus-layer2-remeasure-adr.md` (numbered at the eleventh integration of d20261003).
@@ -23849,3 +23866,92 @@ The runs reach the board (`lead/board-wiring`): `Start-TeamRun -Environment` giv
 and with `-QueueUrl` the address and the token file's PATH (never the token); the seat is not written to
 the status document. The role text of this ADR is in the five role files. team-cycle 215/215, team-feed
 80/80; mutations RED (no seat; no token file path).
+
+## ADR-0283 — The Proje Yöneticisi's duty run for stopped tasks (2026-10-03)
+
+**Date.** 2026-10-03. **Status.** Accepted (Danışman, 2026-10-04), with the review below.
+
+### Context
+
+The owner, 2026-10-03: "Böyle bulgular bulunduğunda konuyu proje yöneticisine iletsinler, proje
+yöneticisi de sana iletsin; her seferinde bu süreci ben takip etmeyeyim." and "Proje Yöneticisi
+koltuğu var zaten, sadece rolü ve şemayı üzerine alması gerekmez mi?"
+
+A task the cycle STOPS (two inspector returns, `alan dışı dosya`, `entegrasyon dalında çakışma`,
+two failed runs) waited until a person saw it on the Ofis page. The cycle had a lead seat
+(`$seats.lead = 1`) but only ever started a lead run for the split of an approved idea.
+
+### Decision
+
+1. **Trigger.** At a refill, when the lead seat is free and `-NoDuty` was not given, the stopped
+   tasks this cycle has not handed at their current stop (`Get-TeamDutyCandidates`: id + the
+   `updated_at` it had when handed) start ONE lead run (`lead.md`, Bash and Edit excluded:
+   Read/Grep/Glob/Write). At most 8 tasks a run; the rest go to the next run. The duty comes before
+   a split in the one lead seat; the two never run at once. Set aside: a task whose reason starts
+   with `Danışman'a iletildi: ` (the Danışman has it - also across cycles), a task whose write the
+   store refused, one the cycle abandoned, one that had `-MaxRunsPerTask` runs (its worker cannot
+   run again in this cycle - handing it would loop), one whose return waits for another task's
+   files, and one already handed 3 times in this cycle (a hang guard on paid runs; said once under
+   the risks). A handed task that leaves `stopped` loses its entry, so its next stop is new even
+   inside the same second.
+2. **The card** (`New-TeamDutyCard`, TeamRun.ps1): per task id, title, area, depends_on, branch,
+   sha, returns, failed_runs, the stop reason, its last three report paths; and
+   `- duty_file: team/plans/<cycle>-duty-<n>.json` (the first free n).
+3. **The file and its judge** (`Read-TeamDutyFile`, `Test-TeamDuty`, TeamQueue.ps1):
+   `{ "decisions": [ { task, action, grant, reason } ] }`. Every task one of the listed ones, once;
+   action `return | grant_and_return | escalate`; reason non-blank, <= 1200 characters; grant only
+   with `grant_and_return`, a LIST of 1..5 plainly written repository-relative paths
+   (`ConvertTo-TeamAreaPath`), none lead-protected (`Get-TeamAreaProtection`: TeamArea.ps1's one
+   list), the area <= 25 entries. Any problem refuses the WHOLE file: nothing changes, and the
+   report's risks say `nöbet kararı reddedildi (duty-n): ...`. Without TeamArea.ps1 loaded the
+   judge refuses every file (fails closed); cycle.ps1 dot-sources it when it is there.
+4. **Apply** (`Complete-Duty`, `Invoke-DutyDecision`): `return` -> `returned`, reason
+   `Proje Yöneticisi: <reason>`; `grant_and_return` -> the area gains the paths, then the same;
+   `escalate` -> stays `stopped`, reason `Danışman'a iletildi: <reason>`, and a risks line. A task
+   that changed while the run worked (not stopped any more, another `updated_at`, or moved in the
+   store) is left alone and said. A return the protocol refuses (`Get-TeamAreaHolders`, then
+   `Test-TeamQueue` on a trial queue) is not forced: the task stays stopped with
+   `Proje Yöneticisi: <reason> (alan çakışması: <task>; o iş bitince)`; when the holder leaves the
+   work THIS script makes the return (`Resolve-DutyWaits`, at each refill). Every write goes
+   through `Save-PoolQueue` - the cycle's own path, API mode included.
+5. **The role text**: `.claude/agents/lead.md` gains "Nöbet: duran işler (Proje Yöneticisi)" -
+   (a) outside the area -> grant_and_return, (b) clear findings -> return with an explicit list,
+   (c) the third return -> change the approach, (d) integration conflict, protected file,
+   security/architecture, owner rule, release/host step, a hand-stopped task -> escalate. The
+   frontmatter is unchanged (pinned by test_team_guards_runner.py).
+
+### Consequences
+
+- The owner is no longer the one who notices stopped work; the Danışman sees only escalations.
+- On the first cycle after the merge the store's historical stopped tasks are handed too, 8 a
+  run, one run after the other while the lead seat is free; escalate the ones nobody should touch
+  (or run a cycle with `-NoDuty`) if that is not wanted.
+- A return the Proje Yöneticisi makes does not reset `returns`: the next inspector RETURN stops the
+  task again and hands it back (the "third return" of the role text).
+- Tests: scripts/tests/team-cycle.tests.ps1 (unit cases for the candidates, the file, the judge,
+  the card, fails-closed; cycle cases with the fake for return, grant, a protected grant refusing
+  the whole file, escalate, overlap, stopped again, none, no file, the split beside it, API mode).
+  The harness passes `-NoDuty` unless a case asks for the duty, so the runs other cases count are
+  unchanged.
+
+### Review (independent inspector, 2026-10-04) and what changed
+
+The inspector returned the change with two findings, both fixed by the Danışman on `lead/pm-duty`:
+
+1. **An owner's rejection was handed to the duty.** The Onay Merkezi's "Reddet" stops a task with
+   the owner's reason and no mark, so a duty decision could send a rejected idea to a worker and
+   overwrite his words. Now the rejection writes `Sahip reddetti: <reason>`
+   (`approvals.py OWNER_REJECTED_PREFIX`) and `Get-TeamDutyCandidates` never hands such a task
+   (`$script:TeamOwnerRejected`); a cycle test reads the API's constant (contract halves).
+2. **The hand-over record died with the cycle.** Every tick could hand the same stop to a paid
+   lead run again, for ever, and the PM's returns bypassed the hard cap of three. Now
+   `team/duty-ledger.json` (git-ignored, one machine's state) keeps each task's stamp and its
+   hand-over count across cycles: the next cycle does not hand the same stop again, and a task
+   handed three times in all (`$script:TeamDutyMaxHandovers`) is left to the Danışman, said in the
+   report. An unreadable ledger is said and costs at most one hand-over.
+
+Follow-ups, not blockers: the duty run writes with `acceptEdits` in the main checkout and reads
+untrusted report text - a `git status` check after the run (nothing but the duty file changed)
+belongs to the duty, as it does to the split; a folder grant covers pattern-protected files
+inside it (`TeamArea.ps1`, the lead's file); 8.3 short names are not refused (the diff area check
+catches them later).

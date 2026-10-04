@@ -41,6 +41,10 @@ GATES: dict[str, str] = {"awaiting_owner": "fikir", "awaiting_release": "yayin"}
 APPROVED_STATE = "approved"
 RELEASE_GATE_STATE = "awaiting_release"
 STOPPED_STATE = "stopped"
+#: What an owner's rejection puts in front of his reason. The Proje Yöneticisi's duty run is never
+#: handed a task stopped this way (pm-duty-stopped review 2026-10-04: a duty decision could send
+#: back a task the owner had rejected and overwrite his words); scripts/lib/TeamQueue.ps1 reads it.
+OWNER_REJECTED_PREFIX = "Sahip reddetti: "
 
 SUBSYSTEM_TEAM = "team"
 EVENT_TASK_APPROVED = "team.task.approved"
@@ -269,7 +273,7 @@ def decide(
         )
         task["state"] = to_state
         if decision == "reject":
-            task["reason"] = reason
+            task["reason"] = OWNER_REJECTED_PREFIX + reason
         if release_approval:
             task["release_approved"] = True
             task["release_approved_at"] = _stamp(at)

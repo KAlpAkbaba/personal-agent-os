@@ -128,7 +128,7 @@ def test_an_idea_is_approved_and_another_rejected_while_the_lock_is_held_on_post
     assert tasks[f"{prefix}a"]["state"] == "approved"
     assert (tasks[f"{prefix}b"]["state"], tasks[f"{prefix}b"]["reason"]) == (
         "stopped",
-        "şimdi değil",
+        "Sahip reddetti: şimdi değil",
     )
     assert tasks[f"{prefix}c"] == _task(f"{prefix}c")  # the idea nobody decided: untouched
     lock = store.read_lock()

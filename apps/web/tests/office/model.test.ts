@@ -128,6 +128,14 @@ describe("the office model", () => {
     expect(top.cycleId).toBe("döngü yok");
     expect(top.runningAgents).toBe("koşan ajan 0/6");
   });
+
+  it("names the Claude account the team runs under, as the owner says it", () => {
+    const v = twoWorkers();
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: ".claude-hesap3" } }).topBar.account).toBe("Hesap 3");
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: ".claude-hesap2" } }).topBar.account).toBe("Hesap 2");
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: "varsayilan" } }).topBar.account).toBe("Ana hesap");
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: undefined } }).topBar.account).toBeNull();
+  });
 });
 
 const names = (view: ReturnType<typeof busyCycle>) => buildOffice(view).seats.map((s) => s.name);

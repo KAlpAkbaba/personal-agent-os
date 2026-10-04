@@ -398,6 +398,12 @@ class StatusRequest(_Strict):
     #: ADR-0214 addendum 7. Optional: a cycle older than the model policy sends neither this
     #: nor a run's ``model``, and is still accepted.
     limits: _Limits | None = None
+    #: The Claude account the team runs under, as the team wrapper names it: the folder of
+    #: CLAUDE_CONFIG_DIR (".claude-hesap3") or "varsayilan". A folder name, never an e-mail -
+    #: the pattern refuses '@' and spaces. Optional: an older cycle does not send it.
+    account: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$"
+    )
     updated_at: _Stamp
 
 

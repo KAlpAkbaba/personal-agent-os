@@ -1371,3 +1371,21 @@ at minute 13 so the owner's office request rode the same gate. Released under th
 | 50.2 | The owner reaches the new office from the phone | `PROVEN_REAL` (transport) | `https://pagentos-core.tail0e6789.ts.net/core/office` 200 over the tailnet; `/api/v1/system/health` reports release `a5e68d92…`. The drawing itself is client-rendered after sign-in: the owner's own look is the evidence |
 | 50.3 | Moods, walk-in, tech office, CTO | `PROVEN_AUTOMATED` | `apps/web/tests/office/mood.test.tsx` 11 + office suite 87/87; mutations RED (tired bound, stopped-not-angry, nobody walks, walking under reduced motion); ADR-0272. The owner saw the moods live on the home PC's dev shell at 19:06 (worker 4 angry on `cycle-auto-release`, stopped after its second return - the mood was right) |
 | 50.4 | Run temp folders on E: | `PROVEN_REAL` | the 16:52 cycle created `E:\AI\tmp-team\owner-trials-page-worker-9e134492` and `cycle-auto-release-worker-fe3fdd84`; team-cycle 214/214 with the new case (two mutations RED); ADR-0214 addendum 19 |
+
+## Stage 51 — d20261003, eleventh integration: the team's board, the model picker, the guards, the Dene list, the test queue, the dark Ofis, the tick's -MaxHours (ADR-0273..0282)
+
+Released 2026-10-04 01:31 UTC (04:31 local) as main `eac453fc0ffc0e7d05d0c1803746c5f670f7c68f` (api-blue; previous
+`a5e68d92…` kept as last known good; no migration). Full gate PASS on `bf3e4ed9` (the merge commit's tree is identical),
+started 02:56, PASS 04:28 local. Three earlier runs were red, each on ONE test and none on the integration's own code:
+`95217a92` - team-integrate's contract test still looked for `$failed` after test-slots renamed it `$script:failed` (fixed,
+83/83, the no-exit mutation still fails the regex); `b98ed094` - the order-dependent ledger-explain integration test (passed
+alone; card `ledger-explain-test-order`); `b98ed094` rerun - the selfmodel refresher test's 10 s holder deadline (a loaded POST
+reached the route after the holder let go; 180 s hang guard now, the unwired-route mutation RED at 188 s). Released under the
+standing rule.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 51.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: eac453fc… is running as api-blue behind the edge`, device handoff 2/2, health through the edge settled at once, `aux: web up`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-blue is canonical (release eac453fc…)` |
+| 51.2 | The dark Ofis is served | `PROVEN_REAL` (transport) | `pagentos-prod-web` rebuilt 01:33 UTC; its CSS chunk carries the floor colour `#1b2143`; `/core/office` 200 over the tailnet. The look after sign-in is the owner's |
+| 51.3 | The tick passes -MaxHours | `PROVEN_AUTOMATED` | `scripts/tests/team-tick.tests.ps1` 7/7 with case 5b; the scheduled task passes `-MaxHours 12` since 2026-10-04 04:55 |
+| 51.4 | The scheduled tick runs again | `PROVEN_REAL` | the wrapper under %LOCALAPPDATA% was invisible to Task Scheduler (the desktop app's MSIX redirect; exit 0xFFFD0000); moved to `%USERPROFILE%\.pagentos-team`, a probe task saw it, the 01:00 tick ran and exited 3 (the lock of the running cycle - correct) |
