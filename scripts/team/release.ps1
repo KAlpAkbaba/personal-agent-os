@@ -18,8 +18,9 @@
          another release or cycle: stop.
       3. The lock is taken; the host is read ONCE over ssh (read-only: markers, the maintenance
          marker and window, health through the edge, the reconcile's last line) and the diff
-         between what production serves and the sha is read. Get-TeamReleaseDecision stops on a
-         migration that is not expand-only, a changed prod compose or edge, health not ok, a
+         between what production serves and the sha is read. Get-TeamReleaseDecision stops on
+         ANY changed migration (the Danışman releases those, 2026-10-04; the expand-only analyzer
+         is only an information line), a changed prod compose or edge, health not ok, a
          maintenance marker or a window within 30 minutes (scripts/lib/TeamRelease.ps1).
          A stop writes the reason into the report and into every task, which stays
          'awaiting_release' - where the Onay Merkezi shows it to the owner.
@@ -211,7 +212,7 @@ function Stop-Release {
     }
     $code = $exit
     try { Save-Queue } catch { Write-Host "the queue could not be written: $($_.Exception.Message)"; $code = 12 }
-    Save-Report -Result "durdu - sahibe bırakıldı" -Lines @(@($Decision.Reasons) | ForEach-Object { "durdu: $($_.Text)" })
+    Save-Report -Result "durdu - sahibe bırakıldı" -Lines (@(@($Decision.Reasons) | ForEach-Object { "durdu: $($_.Text)" }) + @(Get-TeamProperty -InputObject $Decision -Name "Notes" -Default @()))
     Write-Host "stopped: $why"
     exit $code
 }
@@ -287,8 +288,6 @@ try {
     $before = $facts.Host
     $lines = New-Object System.Collections.ArrayList
     [void]$lines.Add("önce: üretim $($before.Release) ($($before.Colour)), sağlık $($before.HealthStatus); kapı kaydı $($gate.Log)")
-    $migrationsSaid = @(@($facts.Diff.Migrations) | ForEach-Object { $_.Path })
-    if (@($migrationsSaid).Count -gt 0) { [void]$lines.Add("genişletme göçleri: " + ($migrationsSaid -join ", ")) }
 
     # ---- 4. a clean worktree at the sha - never the main checkout
     if (Test-Path -LiteralPath $worktree) { [void](Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("worktree", "remove", "--force", $worktree)) }

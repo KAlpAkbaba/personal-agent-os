@@ -98,3 +98,19 @@ Return 5 (Danışman, 2026-10-04 04:50): a WHITE list, so no new escape is left.
   script's preflight/migrate fails and nothing is promoted.
 - Of the repository's 65 real migrations the same 21 are expand-only before and after this
   change (0065 among them): the white list costs no real migration that passed before.
+
+Return 6 (Danışman, 2026-10-04 11:05): KARAR - a commit with a migration is never released
+by this step. Six rounds of review each found a new way past the analyzer (fullwidth names,
+raw SQL, now a lone CR that Python reads as a newline but the mask does not); masking Python
+with text is a class that does not close. So:
+- Any changed path under an `alembic/` or `migrations/` folder, or `alembic.ini`
+  (`Test-TeamMigrationChange`), stops the release with "göç içeren commit (...): otomatik yayın
+  göç yayınlamaz, Danışman yayınlar"; the tasks stay `awaiting_release` with the Onay Merkezi
+  line. env.py and a deleted version stop too - the rule reads paths, not Python.
+- The expand-only analyzer (`Get-TeamMigrationVerdict`) stays, but only as an information line
+  in the report ("bilgi (karara girmez) - göç çözümleyicisi: ..."); it no longer decides. A new
+  escape found in it is a note, not a return.
+- A commit without a migration releases under the earlier rules unchanged.
+- Cost: an expand-only migration (0065-like) now waits for the Danışman instead of going alone.
+  Accepted - a migration is rare next to code, and a wrong one is not reversible by a colour
+  switch.

@@ -9,8 +9,11 @@
     The first half is decisions - functions that take their inputs and return their answer, so
     the tests drive them without a repository or a host:
 
+      * Test-TeamMigrationChange: whether a changed path is a migration - a commit with one is
+        never released by this step (the Danışman's decision of 2026-10-04);
       * Get-TeamMigrationVerdict: whether an alembic version is expand-only, read conservatively
-        (an unreadable one, a changed or deleted existing one, is not);
+        (an unreadable one, a changed or deleted existing one, is not) - since 2026-10-04 only an
+        information line in the report, never part of the decision;
       * Read-TeamHostProbe / Get-TeamHostProbeCommand: the ONE read-only look at the host;
       * Get-TeamReleaseDecision: 'release' or 'stop', with every reason that stops it;
       * Test-TeamReleaseVerified: RELEASE, APPROVED_SHA, the reconcile's last line and the
@@ -19,8 +22,8 @@
     The second half reads the repository and the gate's records (git only; nothing here writes
     to a branch, a worktree or the host).
 
-    What does NOT become automatic (the addendum's own list) is exactly what stops here: a
-    migration that is not expand-only, the host's compose or edge, anything the gate did not
+    What does NOT become automatic (the addendum's own list) is exactly what stops here: any
+    migration (the Danışman releases those), the host's compose or edge, anything the gate did not
     pass, a maintenance window within 30 minutes, health that is not ok - and an earlier
     automatic release that was rolled back (team/release-blocked.json) until the lead looked.
 
@@ -40,9 +43,19 @@ $script:TeamReleaseHostPrefixes = @("infra/docker/edge/")
 # ---------------------------------------------------------------------------- migrations
 
 function Test-TeamMigrationPath {
-    <# Whether a repository path is an alembic version file. #>
+    <# Whether a repository path is an alembic version file (what the analyzer reads). #>
     param([Parameter(Mandatory = $true)][string]$Path)
     return ((($Path -replace '\\', '/')) -match '(^|/)alembic/versions/[^/]+\.py$')
+}
+
+function Test-TeamMigrationChange {
+    <#
+        Whether a changed path is migration territory - anything under an alembic/ or migrations/
+        folder, or alembic.ini. The Danışman's decision of 2026-10-04: a commit that changes one
+        is never released by this step, whatever the analyzer says.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return ((($Path -replace '\\', '/')) -match '(^|/)(alembic|migrations)/|(^|/)alembic\.ini$')
 }
 
 function Get-TeamPythonMask {
@@ -529,7 +542,8 @@ function Get-TeamReleaseDecision {
     #>
     param([Parameter(Mandatory = $true)]$Facts, [switch]$LocalOnly)
     $reasons = New-Object System.Collections.ArrayList
-    $add = { param([string]$Code, [string]$Text) [void]$reasons.Add([pscustomobject]@{ Code = $Code; Text = $Text }) }
+    $notes = New-Object System.Collections.ArrayList
+    $add ={ param([string]$Code, [string]$Text) [void]$reasons.Add([pscustomobject]@{ Code = $Code; Text = $Text }) }
 
     $sha = [string]$Facts.Sha
     $tip = [string]$Facts.MainTip
@@ -572,11 +586,17 @@ function Get-TeamReleaseDecision {
             & $add "diff_unreadable" ("yayındakiyle fark okunamadı: " + $(if ($null -ne $diff) { [string]$diff.Why } else { "okunmadı" }))
         }
         else {
-            $bad = @(@($diff.Migrations) | Where-Object { $null -ne $_ -and -not [bool]$_.ExpandOnly })
-            if (@($bad).Count -gt 0) {
-                & $add "migration" ("genişletme dışı göç: " + ((@($bad) | ForEach-Object { "$($_.Path) ($($_.Why))" }) -join ", "))
-            }
             $files = @(@($diff.Files) | ForEach-Object { ([string]$_) -replace '\\', '/' })
+            # Danışman 2026-10-04: a commit with a migration is never released by itself - the
+            # analyzer below is information, not a decision (masking Python with text kept leaking).
+            $migrationFiles = @($files | Where-Object { Test-TeamMigrationChange -Path $_ })
+            if (@($migrationFiles).Count -gt 0) {
+                & $add "migration" ("göç içeren commit (" + ($migrationFiles -join ", ") + "): otomatik yayın göç yayınlamaz, Danışman yayınlar")
+            }
+            foreach ($verdict in @(@($diff.Migrations) | Where-Object { $null -ne $_ })) {
+                $said = if ([bool]$verdict.ExpandOnly) { "genişletme" } else { "genişletme değil ($([string]$verdict.Why))" }
+                [void]$notes.Add("bilgi (karara girmez) - göç çözümleyicisi: $([string]$verdict.Path): $said")
+            }
             foreach ($file in $script:TeamReleaseHostFiles) {
                 if ($files -contains $file) { & $add "compose" "$file değişti: sunucunun compose'u imajın ötesinde değişiyor" }
             }
@@ -589,6 +609,7 @@ function Get-TeamReleaseDecision {
         Action  = $(if (@($all).Count -eq 0) { "release" } else { "stop" })
         Reasons = $all
         Reason  = ((@($all) | ForEach-Object { $_.Text }) -join "; ")
+        Notes   = @($notes.ToArray())
     }
 }
 
