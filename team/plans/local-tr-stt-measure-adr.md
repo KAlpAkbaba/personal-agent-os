@@ -80,6 +80,16 @@ uv run --no-sync python -m app.voice.stt_compare --folder <kayıtlar> --out docs
 `uv sync` elle kurulan paketi kaldırır: ölçümden önce `--no-sync` kullan ya da yeniden kur. Sahibin gerçek ölçümü
 (/voice/measure'da 20 + 10 cümle, ev PC'si; ofis ancak izinle) Onay Merkezi'ne yazılır.
 
+## Yerel kanıt (PROVEN_LOCAL, ev PC'si, 2026-10-04, sentetik ses - sahibin kaydı DEĞİL)
+
+`uv pip install sherpa-onnx==1.13.8` (worktree venv'i) + `download_model()` gerçek HF'den, dört hash tuttu
+(model `%TEMP%` altında, depo dışı). 30 cümle Windows "Microsoft Tolga" (tr-TR OneCore) sesiyle üretildi, 16 kHz mono.
+`python -m app.voice.stt_compare --engines sherpa-onnx:tr-zipformer-int8`: satır RAN, 30/30, 71,5 sn ses,
+WER 0,1724, CER 0,0393, niyeti değişen 8/30, komut cümlelerinde 3/10 ("ertele"->"erteli" iki kez, "sustur"->
+"susur"), gecikme p50/p95 137/184 ms, gerçek zaman çarpanı 0,098, süreç tepe belleği 171 MB.
+Dikkat: ilk dosyanın gecikmesi (3,1 s) model yüklemesini içerir ve çarpana girer (faster-whisper satırı da
+aynı biçimde tembel yükler); yüklemesiz çarpan ~0,055. Sentetik ses, sahibin sesindeki sonucu söylemez.
+
 ## Geri alma
 
 Kod: commit'ler geri alınır (veri göçü yok; 1-20 aynı). Cihaz: `uv pip uninstall sherpa-onnx sherpa-onnx-core` +
