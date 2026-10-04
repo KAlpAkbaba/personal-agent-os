@@ -22,7 +22,7 @@ pin = RELEASE (Danışman pinledi), reconcile OK, şema `0065_misheard_utterance
 `lead/roles-research-integrate` (fbfe98f1) + PY nöbet dalı (74361617, bağımsız denetim bekliyor).**
 **ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
 `team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
-yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). SIRADA: göreve `-MaxHours 12` ekle.**
+yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**
 **ÇALIŞAN SINIRI: `team/cycle-settings.json` max_parallel 4 (bellek ölçüldü: kapının birim adımı 21,7 GB; o adımda 3'e indir).**
 **DEV KABUĞU: ev PC'sindeki `next dev` (:3000) ana kopyanın dal değişimlerinde bozulabiliyor (telefonda 'Oturum kontrol ediliyor'
 takılı, web.err.log'da 'Blocked cross-origin'). Yeniden başlatma: süreç ağacını durdur, `scripts/voice/start-web-voice.ps1 -PnpmPath
