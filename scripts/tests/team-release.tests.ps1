@@ -518,6 +518,34 @@ Test-Case "each rule stops on its own, with its own reason" {
     }
 }
 
+Test-Case "Danışman 2026-10-04: ANY changed migration file stops - the analyzer's 'expand-only' does not release it" {
+    $clean = [pscustomobject]@{ Path = "services/api/alembic/versions/x.py"; ExpandOnly = $true; Why = "" }
+    # The inspector's lone-CR probe: the analyzer once called it expand-only; it stops on the path alone.
+    $loneCr = "def upgrade():`n    # harmless`r    op.execute('DROP TABLE users')`n    op.create_table('t', sa.Column('id', sa.Integer, primary_key=True))`n"
+    $probeVerdict = Get-TeamMigrationVerdict -Path "services/api/alembic/versions/y.py" -Status "A" -Text $loneCr
+    $paths = @(
+        @{ Files = @("services/api/alembic/versions/x.py"); Migrations = @($clean) },
+        @{ Files = @("services/api/alembic/versions/y.py"); Migrations = @($probeVerdict) },
+        @{ Files = @("services/api/alembic/env.py"); Migrations = @() },
+        @{ Files = @("services/api/alembic.ini"); Migrations = @() },
+        @{ Files = @("services/api/migrations/0001_x.sql"); Migrations = @() },
+        @{ Files = @("services\api\alembic\versions\z.py"); Migrations = @() }
+    )
+    foreach ($case in $paths) {
+        $diff = [pscustomobject]@{ Readable = $true; Why = ""; Files = $case.Files; Migrations = $case.Migrations }
+        $decision = Get-TeamReleaseDecision -Facts (New-Facts -Change @{ Diff = $diff })
+        Assert-Equal -Expected "stop" -Actual $decision.Action -Because "$($case.Files) is a migration change"
+        Assert-Equal -Expected "migration" -Actual (Get-StopCodes $decision) -Because "only the migration rule: $($decision.Reason)"
+        Assert-True -Condition ($decision.Reason -match "Danışman yayınlar") -Because "the Danışman releases it: $($decision.Reason)"
+    }
+    $info = Get-TeamReleaseDecision -Facts (New-Facts -Change @{ Diff = [pscustomobject]@{ Readable = $true; Why = ""; Files = @("services/api/alembic/versions/x.py"); Migrations = @($clean) } })
+    Assert-True -Condition ((@($info.Notes) -join " ") -match "bilgi.*çözümleyici.*x\.py.*genişletme") -Because "the analyzer is an information line: $(@($info.Notes) -join ' / ')"
+    foreach ($file in @("services/api/app/models.py", "services/api/tests/unit/test_migrations.py", "docs/migrations.md")) {
+        $diff = [pscustomobject]@{ Readable = $true; Why = ""; Files = @($file); Migrations = @() }
+        Assert-Equal -Expected "release" -Actual (Get-TeamReleaseDecision -Facts (New-Facts -Change @{ Diff = $diff })).Action -Because "$file is not a migration"
+    }
+}
+
 Test-Case "a window more than 30 minutes away, or one that has passed, does not stop it; 30 minutes exactly does" {
     foreach ($seconds in @("1801", "-60", "none")) {
         Assert-Equal -Expected "release" -Actual (Get-TeamReleaseDecision -Facts (New-Facts -Change @{ Host = (New-Probe -InSeconds $seconds) })).Action -Because "$seconds s"
@@ -766,15 +794,26 @@ try {
     Test-Case "a migration with drop_column in the diff: stop, no release command" {
         $box = New-Sandbox -Files @{ "services/api/alembic/versions/20261003_0066_contract.py" = $dropColumn }
         $run = Invoke-Release -Box $box
-        Assert-Stopped -Run $run -Words "genişletme dışı göç"
+        Assert-Stopped -Run $run -Words "göç içeren commit"
         Assert-True -Condition ($run.Task.reason -match "0066_contract") -Because "names the migration: $($run.Task.reason)"
     }
 
-    Test-Case "an expand-only migration (add_column nullable, create_table, create_index) is released" {
+    # Danışman kararı 2026-10-04: a commit with ANY migration is not released by this step - not
+    # even one the analyzer calls expand-only; the analyzer's verdict is an information line only.
+    Test-Case "Danışman 2026-10-04: an expand-only migration (add_column nullable, create_table, create_index) STOPS - the Danışman releases it; the analyzer is only an information line" {
         $box = New-Sandbox -Files @{ "services/api/alembic/versions/20261003_0066_expand.py" = $expandOnly }
+        $run = Invoke-Release -Box $box
+        Assert-Stopped -Run $run -Words "Danışman yayınlar"
+        Assert-True -Condition ($run.Task.reason -match "0066_expand") -Because "names the migration: $($run.Task.reason)"
+        Assert-True -Condition ($run.Report -match "bilgi.*çözümleyici.*0066_expand.*genişletme") -Because "the analyzer's verdict is in the report as information: $($run.Report)"
+    }
+
+    Test-Case "Danışman 2026-10-04: a commit WITHOUT a migration still releases under the earlier rules" {
+        $box = New-Sandbox -Files @{ "services/api/app/team/new_feature.py" = "VALUE = 1`n" }
         $run = Invoke-Release -Box $box
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
         Assert-Equal -Expected "released" -Actual $run.Task.state -Because $run.Output
+        Assert-Equal -Expected "standing_rule" -Actual $run.Task.release_approved_by -Because "by the standing rule"
     }
 
     Test-Case "a changed prod compose file: stop, no release command" {
