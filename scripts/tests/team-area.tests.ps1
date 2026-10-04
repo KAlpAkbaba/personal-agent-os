@@ -997,6 +997,134 @@ Test-Case "roles: worker.md still says a worker never touches a file outside its
     Assert-True -Condition ($text -cmatch 'never touch files outside your area') -Because "the binding sentence is kept"
 }
 
+# ----------------------------------------------------------------------- worker-changed
+# The files the area check counts as the worker's (Get-TeamWorkerChangedFiles): a branch
+# rebuilt on, or merged with, the cycle's integration branch carries OTHER cards' files in
+# its diff against main (3 October: integrate-own-lock, ps1-bom-everywhere). The pure rule
+# first, without git; then a sandbox repository under TEMP, removed after the cases.
+
+Test-Case "worker-changed: pure - the branch does not contain the integration branch -> the base diff, as it is" {
+    $files = Select-TeamWorkerChangedFiles -BaseDiff @("b.txt", "a.txt") -AlsoBaseDiff @("a.txt") -ContainsAlsoBase $false
+    Assert-List -Expected @("b.txt", "a.txt") -Actual $files -Because "nothing is taken away"
+}
+
+Test-Case "worker-changed: pure - contained -> the intersection, in the base diff's order" {
+    $files = Select-TeamWorkerChangedFiles -BaseDiff @("z/own.txt", "foreign.txt", "a/own.txt") -AlsoBaseDiff @("a/own.txt", "z/own.txt", "only-also.txt") -ContainsAlsoBase $true
+    Assert-List -Expected @("z/own.txt", "a/own.txt") -Actual $files -Because "only files in both diffs, never one that is only in the second"
+}
+
+Test-Case "worker-changed: pure - contained, nothing of the worker's own -> empty" {
+    $files = @(Select-TeamWorkerChangedFiles -BaseDiff @("foreign.txt") -AlsoBaseDiff @() -ContainsAlsoBase $true)
+    Assert-Equal -Expected 0 -Actual $files.Count -Because "the integration branch's files are not the worker's"
+}
+
+Test-Case "worker-changed: pure - paths are compared as written (case matters)" {
+    $files = Select-TeamWorkerChangedFiles -BaseDiff @("Own.txt") -AlsoBaseDiff @("own.txt") -ContainsAlsoBase $true
+    Assert-Equal -Expected 0 -Actual @($files).Count -Because "git spells a path one way; a different spelling is a different entry"
+}
+
+. (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
+. (Join-Path $repoRoot "scripts\lib\TeamRun.ps1")
+
+function Invoke-SandboxGit {
+    param([string]$Dir, [string[]]$Arguments)
+    $result = Invoke-TeamGit -WorkingDirectory $Dir -Arguments $Arguments
+    if (-not $result.Success) { throw "sandbox git $($Arguments -join ' ') failed: $($result.StdErr.Trim())" }
+    return $result
+}
+
+function Set-SandboxFile {
+    param([string]$Dir, [string]$Path, [string]$Text, [string]$Message)
+    $full = Join-Path $Dir $Path
+    $parent = Split-Path -Parent $full
+    if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Path $parent) }
+    [System.IO.File]::WriteAllText($full, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    [void](Invoke-SandboxGit -Dir $Dir -Arguments @("add", "--", $Path))
+    [void](Invoke-SandboxGit -Dir $Dir -Arguments @("commit", "-q", "-m", $Message))
+}
+
+$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("pagentos-area-" + [guid]::NewGuid().ToString("N"))
+[void](New-Item -ItemType Directory -Path $sandbox)
+try {
+    # main: the two files every branch starts from.
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("init", "-q", "-b", "main"))
+    foreach ($setting in @(@("user.name", "sandbox"), @("user.email", "sandbox@example.invalid"), @("core.autocrlf", "false"), @("commit.gpgsign", "false"))) {
+        [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("config", $setting[0], $setting[1]))
+    }
+    Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "main`n" -Message "main: own"
+    Set-SandboxFile -Dir $sandbox -Path "other/y.txt" -Text "main`n" -Message "main: other"
+    # integrate/c1: another card's approved work, a file outside this worker's area.
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "integrate/c1", "main"))
+    Set-SandboxFile -Dir $sandbox -Path "foreign/f.txt" -Text "another card`n" -Message "another card"
+    # (a) rebuilt on integrate/c1, changes only its own file.
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-rebased", "integrate/c1"))
+    Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "worker`n" -Message "worker: own"
+    # (b) the same, plus a change outside the area.
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-outside", "w-rebased"))
+    Set-SandboxFile -Dir $sandbox -Path "other/y.txt" -Text "worker`n" -Message "worker: outside"
+    # (c) from main, never touched integrate/c1.
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-plain", "main"))
+    Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "worker`n" -Message "worker: own"
+    # (d) from main, then integrate/c1 merged INTO the branch (a merge commit).
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-merged", "main"))
+    Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "worker`n" -Message "worker: own"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("merge", "-q", "--no-ff", "-m", "merge integrate/c1", "integrate/c1"))
+    # (f) rebuilt on integrate/c1, changes the other card's file again, differently.
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-redo", "integrate/c1"))
+    Set-SandboxFile -Dir $sandbox -Path "foreign/f.txt" -Text "the worker's own version`n" -Message "worker: foreign again"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "main"))
+
+    Test-Case "worker-changed: (a) rebuilt on integrate -> with -AlsoBase only its own file; without it the foreign file too (the 3 October fault)" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-rebased" -Base "main" -AlsoBase "integrate/c1"
+        Assert-List -Expected @("own/x.txt") -Actual $files -Because "the other card's file is not the worker's"
+        $today = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-rebased" -Base "main"
+        Assert-List -Expected @("foreign/f.txt", "own/x.txt") -Actual $today -Because "without -AlsoBase the answer is today's, the fault included"
+        Assert-List -Expected @(Get-TeamChangedFiles -RepoRoot $sandbox -Branch "w-rebased" -Base "main") -Actual $today -Because "and it is Get-TeamChangedFiles' answer"
+    }
+
+    Test-Case "worker-changed: (b) rebuilt on integrate plus a change outside the area -> exactly the worker's two files" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-outside" -Base "main" -AlsoBase "integrate/c1"
+        Assert-List -Expected @("other/y.txt", "own/x.txt") -Actual $files -Because "the outside change is still caught; the foreign file is not counted"
+    }
+
+    Test-Case "worker-changed: (c) a branch that does not contain integrate -> Get-TeamChangedFiles' answer, unchanged" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-plain" -Base "main" -AlsoBase "integrate/c1"
+        Assert-List -Expected @(Get-TeamChangedFiles -RepoRoot $sandbox -Branch "w-plain" -Base "main") -Actual $files -Because "the same files in the same order"
+        Assert-List -Expected @("own/x.txt") -Actual $files -Because "its own file"
+    }
+
+    Test-Case "worker-changed: (d) integrate merged into the branch -> the same answer as (a)" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-merged" -Base "main" -AlsoBase "integrate/c1"
+        Assert-List -Expected @("own/x.txt") -Actual $files -Because "the merged-in card's file is not the worker's"
+        Assert-List -Expected @("foreign/f.txt", "own/x.txt") -Actual @(Get-TeamChangedFiles -RepoRoot $sandbox -Branch "w-merged" -Base "main") -Because "today's check counts it (the fault)"
+    }
+
+    Test-Case "worker-changed: (e) an -AlsoBase branch that does not exist -> no error, today's answer" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-rebased" -Base "main" -AlsoBase "integrate/no-such-cycle"
+        Assert-List -Expected @("foreign/f.txt", "own/x.txt") -Actual $files -Because "a missing integration branch takes nothing away"
+    }
+
+    Test-Case "worker-changed: (f) the worker changes integrate's file again, differently -> the file is counted" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-redo" -Base "main" -AlsoBase "integrate/c1"
+        Assert-List -Expected @("foreign/f.txt") -Actual $files -Because "a real change to that file is the worker's and does not escape"
+    }
+
+    Test-Case "worker-changed: a branch that does not exist still fails as Get-TeamChangedFiles does" {
+        $threw = $false
+        try { [void](Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "no-such-branch" -Base "main" -AlsoBase "integrate/c1") } catch { $threw = $true }
+        Assert-True -Condition $threw -Because "a failed diff is never an empty list"
+    }
+}
+finally {
+    # git leaves read-only object files; clear the flag, then remove the sandbox.
+    Get-ChildItem -LiteralPath $sandbox -Recurse -Force -File -ErrorAction SilentlyContinue | ForEach-Object { $_.IsReadOnly = $false }
+    Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Test-Case "worker-changed: the sandbox repository is removed after the cases" {
+    Assert-True -Condition (-not (Test-Path -LiteralPath $sandbox)) -Because "nothing is left under TEMP: $sandbox"
+}
+
 # -------------------------------------------------------------------------------- gate
 
 Test-Case "gate: quality-gate.ps1 runs this suite as its own step, under PS 5.1, and reads its exit code" {
