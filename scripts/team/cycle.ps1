@@ -1006,6 +1006,23 @@ try {
     $dutyWaits = @{}
     $dutyCapNoted = @{}
     $dutyMaxTimes = 3
+    # The duty ledger (review 2026-10-04): $dutyHanded and a task's hand-over count outlive the
+    # cycle in team/duty-ledger.json, so the next tick does not hand the same stop again, and a
+    # task handed $script:TeamDutyMaxHandovers times in all goes to the Danışman. Unreadable =
+    # empty, and said: a broken ledger costs at most one more hand-over, never a stopped team.
+    $dutyLedgerPath = Join-Path $TeamRoot "duty-ledger.json"
+    $dutyTotal = @{}
+    $dutyLedgerProblem = ""
+    if (Test-Path -LiteralPath $dutyLedgerPath) {
+        try {
+            $ledger = Read-TeamJson -Path $dutyLedgerPath
+            foreach ($entry in @($ledger.PSObject.Properties)) {
+                $dutyHanded[[string]$entry.Name] = [string](Get-TeamProperty -InputObject $entry.Value -Name "stamp" -Default "")
+                $dutyTotal[[string]$entry.Name] = [int](Get-TeamProperty -InputObject $entry.Value -Name "times" -Default 0)
+            }
+        }
+        catch { $dutyLedgerProblem = "nöbet defteri okunamadı (team/duty-ledger.json): " + (([string]$_.Exception.Message) -replace '\s+', ' ') }
+    }
     # A cap, the stop flag or the usage limit ended the cycle: nothing new starts.
     $capped = $false
     # Refills in a row that moved a state and started nothing, with nothing in flight. One or
@@ -1142,16 +1159,41 @@ try {
     # şemayı üzerine alması gerekmez mi?"). A stopped task used to wait until a person noticed it on
     # the Ofis page. Now the lead seat, when it is free, takes a duty run of the split's safe shape.
 
+    function Save-DutyLedger {
+        <# team/duty-ledger.json: every task ever handed - the stamp of its current stop (empty when
+           it is no longer stopped) and its hand-over count. A write that fails is said; the
+           in-memory ledger still holds this cycle. #>
+        $document = [ordered]@{}
+        foreach ($id in @($script:dutyTotal.Keys | Sort-Object)) {
+            $document[[string]$id] = [ordered]@{ stamp = [string]$script:dutyHanded[$id]; times = [int]$script:dutyTotal[$id] }
+        }
+        try { Write-TeamJson -Path $script:dutyLedgerPath -Document $document }
+        catch { Add-CycleNote -List "risks" -Text ("nöbet defteri yazılamadı: " + (([string]$_.Exception.Message) -replace '\s+', ' ')) }
+    }
+
     function Get-DutyCandidates {
         <# The stopped tasks to hand a duty run now. Set aside: a task whose write the store refused
            (until it is read again), one the cycle gave up on, one whose return waits for another
            task's files, one handed $dutyMaxTimes times in this cycle (said once), and one that has
            had -MaxRunsPerTask runs - its worker could not be started again in this cycle. #>
+        if ($script:dutyLedgerProblem) {
+            Add-CycleNote -List "risks" -Text $script:dutyLedgerProblem
+            $script:dutyLedgerProblem = ""
+        }
         foreach ($id in @($script:dutyHanded.Keys)) {
             $now = @(Get-TeamTasks -Queue $script:queue | Where-Object { [string]$_.id -eq $id })
             if (@($now).Count -eq 0 -or [string]$now[0].state -ne "stopped") { $script:dutyHanded.Remove($id) }
         }
         $skip = @{}
+        foreach ($id in @($script:dutyTotal.Keys)) {
+            if ([int]$script:dutyTotal[$id] -lt $script:TeamDutyMaxHandovers) { continue }
+            $skip[[string]$id] = $true
+            $task = @(Get-TeamTasks -Queue $script:queue | Where-Object { [string]$_.id -eq $id -and [string]$_.state -eq "stopped" })
+            if (@($task).Count -gt 0 -and -not $script:dutyCapNoted.ContainsKey("total/$id")) {
+                $script:dutyCapNoted["total/$id"] = $true
+                Add-CycleNote -List "risks" -Text "nöbet: ${id}: toplam $($script:TeamDutyMaxHandovers) kez Proje Yöneticisi'ne verildi ve yine durdu; artık Danışman'ın"
+            }
+        }
         foreach ($id in @($script:staleIds.Keys) + @($script:abandoned.Keys) + @($script:dutyWaits.Keys)) { $skip[[string]$id] = $true }
         foreach ($id in @($script:runCount.Keys)) { if ([int]$script:runCount[$id] -ge $MaxRunsPerTask) { $skip[[string]$id] = $true } }
         foreach ($id in @($script:dutyTimes.Keys)) {
@@ -1180,8 +1222,10 @@ try {
             $id = [string]$task.id
             $script:dutyHanded[$id] = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
             $script:dutyTimes[$id] = 1 + [int]$script:dutyTimes[$id]
+            $script:dutyTotal[$id] = 1 + [int]$script:dutyTotal[$id]
             [void]$listed.Add([pscustomobject]@{ Id = $id; Updated = $script:dutyHanded[$id] })
         }
+        Save-DutyLedger
         $script:ownTries["$label/lead"] = 1 + [int]$script:ownTries["$label/lead"]
         try {
             $folder = Join-Path $repoRoot "team\plans"
@@ -1315,7 +1359,9 @@ try {
             foreach ($listed in @($duty.Tasks)) {
                 $script:dutyHanded.Remove([string]$listed.Id)
                 $script:dutyTimes[[string]$listed.Id] = [Math]::Max(0, [int]$script:dutyTimes[[string]$listed.Id] - 1)
+                $script:dutyTotal[[string]$listed.Id] = [Math]::Max(0, [int]$script:dutyTotal[[string]$listed.Id] - 1)
             }
+            Save-DutyLedger
             return
         }
         if (-not $Done.Ok) {

@@ -1938,6 +1938,47 @@ try {
         Assert-True -Condition ($run.Report -match "nöbet kararı reddedildi \(duty-1\): .*no decision file") -Because $run.Report
     }
 
+    Test-Case "duty: the ledger outlives the cycle - the next cycle does not hand the same stop again, and a task handed three times in all is the Danışman's" {
+        # Review 2026-10-04: the hand-over record lived in one cycle's memory, so every tick
+        # handed the same stop to a paid lead run again, for ever.
+        $root = New-Sandbox -Tasks @((New-Stopped))
+        $first = Invoke-DutyCycle -Root $root -Decisions @()
+        Assert-Equal -Expected 0 -Actual $first.ExitCode -Because ($first.StdOut + $first.StdErr)
+        Assert-Equal -Expected "lead" -Actual (Get-Roles -Run $first) -Because "the stop is handed once"
+        $ledger = Read-TeamJson -Path (Join-Path $root "team\duty-ledger.json")
+        Assert-Equal -Expected 1 -Actual ([int]$ledger."stuck-one".times) -Because "the ledger counts the hand-over"
+        Assert-Equal -Expected "2026-10-03T10:00:00Z" -Actual ([string]$ledger."stuck-one".stamp) -Because "and keeps the stop it was handed at"
+        Remove-Item -LiteralPath (Join-Path $root "fake.log") -Force -ErrorAction SilentlyContinue
+        $second = Invoke-DutyCycle -Root $root -Decisions @() -CycleId "c2"
+        Assert-Equal -Expected 0 -Actual $second.ExitCode -Because ($second.StdOut + $second.StdErr)
+        Assert-Equal -Expected "" -Actual (Get-Roles -Run $second) -Because "the next cycle does not hand the same stop again: $($second.Report)"
+
+        $worn = New-Sandbox -Tasks @((New-Stopped -Updated "2026-10-04T10:00:00Z"))
+        Write-TeamJson -Path (Join-Path $worn "team\duty-ledger.json") -Document ([ordered]@{ "stuck-one" = [ordered]@{ stamp = "2026-10-03T10:00:00Z"; times = 3 } })
+        $run = Invoke-DutyCycle -Root $worn -Decisions @((New-Decision -Reason "Yeniden dene"))
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "" -Actual (Get-Roles -Run $run) -Because "a NEW stop, but handed three times in all: the Danışman's"
+        Assert-Equal -Expected "stopped" -Actual (Get-TaskById -Queue $run.Queue -Id "stuck-one").state -Because "left as it was"
+        Assert-True -Condition ($run.Report -match "stuck-one: toplam 3 kez") -Because "the report says why: $($run.Report)"
+
+        $broken = New-Sandbox -Tasks @((New-Stopped))
+        [System.IO.File]::WriteAllText((Join-Path $broken "team\duty-ledger.json"), "{ not json")
+        $run = Invoke-DutyCycle -Root $broken -Decisions @()
+        Assert-Equal -Expected "lead" -Actual (Get-Roles -Run $run) -Because "a broken ledger costs one hand-over, never the team"
+        Assert-True -Condition ($run.Report -match "nöbet defteri okunamadı") -Because "and is said: $($run.Report)"
+    }
+
+    Test-Case "duty: a task the owner rejected in the Onay Merkezi is his - never handed, his words kept" {
+        $root = New-Sandbox -Tasks @((New-Stopped -Reason "Sahip reddetti: gerek yok"))
+        $run = Invoke-DutyCycle -Root $root -Decisions @((New-Decision -Action "grant_and_return" -Reason "Yeniden dene"))
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition (-not ((Get-Roles -Run $run) -match "lead")) -Because "no duty run for an owner's rejection: $(Get-Roles -Run $run)"
+        $task = Get-TaskById -Queue $run.Queue -Id "stuck-one"
+        Assert-Equal -Expected "stopped|Sahip reddetti: gerek yok" -Actual ("{0}|{1}" -f $task.state, $task.reason) -Because "his stop and his words stay"
+        $api = (Get-Content -LiteralPath (Join-Path $repoRoot "services\api\app\team\approvals.py") -Raw -Encoding UTF8)
+        Assert-True -Condition ($api -match [regex]::Escape('OWNER_REJECTED_PREFIX = "' + $script:TeamOwnerRejected + '"')) -Because "the API writes the prefix this script skips (contract halves)"
+    }
+
     Test-Case "duty: the split and the duty share the one lead seat - never two lead runs at once - and both are done" {
         $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"), (New-Stopped -Area @("src/stuck")))
         $snapshots = Join-Path $root "snapshots"

@@ -653,6 +653,14 @@ function ConvertTo-TeamSplitTasks {
 # first is the Danışman's: it is never handed to a duty run again until somebody else moves it.
 $script:TeamDutyEscalated = "Danışman'a iletildi: "
 $script:TeamDutyReturned = "Proje Yöneticisi: "
+# What the Onay Merkezi's "Reddet" puts in front of the owner's reason
+# (services/api/app/team/approvals.py OWNER_REJECTED_PREFIX). A task the owner stopped is his:
+# never handed to a duty run, so no decision can send it back or overwrite his words.
+$script:TeamOwnerRejected = "Sahip reddetti: "
+# How many duty runs one task is handed in all, across cycles (team/duty-ledger.json): after
+# that the Danışman decides. The ledger outlives a cycle, so a tick does not hand the same stop
+# again and again (review 2026-10-04: one paid lead run per tick, for ever).
+$script:TeamDutyMaxHandovers = 3
 $script:TeamDutyActions = @("return", "grant_and_return", "escalate")
 $script:TeamDutyMaxGrants = 5
 $script:TeamDutyMaxReason = 1200
@@ -686,6 +694,7 @@ function Get-TeamDutyCandidates {
         if (-not $id -or $Skip.ContainsKey($id)) { continue }
         $reason = [string](Get-TeamProperty -InputObject $task -Name "reason" -Default "")
         if ($reason.StartsWith($script:TeamDutyEscalated, [System.StringComparison]::Ordinal)) { continue }
+        if ($reason.StartsWith($script:TeamOwnerRejected, [System.StringComparison]::Ordinal)) { continue }
         $stamp = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
         if ($Handed.ContainsKey($id) -and [string]$Handed[$id] -ceq $stamp) { continue }
         [void]$found.Add($task)
