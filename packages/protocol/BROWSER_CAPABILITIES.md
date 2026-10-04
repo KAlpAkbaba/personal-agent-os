@@ -343,8 +343,20 @@ owner run without evidence on 2026-09-03).
 ```json
 {"url":"…","final_url":"…","title":"…","excerpt":"…","text_chars":18234,"fetched_at":"2026-09-03T09:00:00Z",
  "extraction_method":"dom_text","page_kind":"ok","http_status":200,
- "metadata":{…as extract…},"source_class":"news","query":"…","injection_markers":0,"links_count":142}
+ "metadata":{…as extract…},"source_class":"news","query":"…","injection_markers":0,"links_count":142,
+ "text_sha256":"…64 hex…","selector_matched":null}
 ```
+
+Optional payload field `selector` (2026-10-04): a CSS selector string of at most 200 characters
+(anything else - not a string, blank, longer, or a selector the browser cannot parse - is
+`validation_error`). `text_sha256` is the 64-hex sha256 of the page's text after whitespace is
+collapsed to single spaces and trimmed, taken from the elements the selector matches (joined by
+one newline, document order) or, without a selector, from the WHOLE primary text before the
+excerpt is cut at `excerpt_chars` - so a change past the excerpt still changes the hash.
+`selector_matched` is `true`/`false` when a selector was given, `null` without one. With a
+selector the excerpt is cut from the matched text. A selector that matches nothing is not a
+failure: `selector_matched:false`, `text_sha256:null`, `excerpt:""`. A navigation that reaches
+a forbidden destination on the way (§5a) is `security_scope_error` and returns no page text.
 
 The excerpt is verbatim page text (main/article region first, body fallback), never a
 paraphrase; `injection_markers` counts instruction-like patterns found in the page text
@@ -691,6 +703,23 @@ multicast, reserved, unspecified, IPv6 loopback/link-local/ULA. A refusal is
 Discovery output (search hits, feeds, APIs) is third-party content and gets no exemption.
 The worker's `--allow-private-destinations` flag exists for the fixture-site test suite
 only; the companion never passes it.
+
+**Every request, every redirect hop (browser-redirect-guard, 2026-10-04).** The rule above is
+not only for the REQUESTED url. The worker holds every request its pages send to it - each
+redirect hop, sub-requests (img, script, fetch/XHR, iframe documents) - through CDP `Fetch`
+interception at the request stage, so a forbidden request is failed BEFORE it is sent
+(Playwright's `page.route` is not called for redirect hops and is not used for this). A
+navigation (`navigate`, `tab_new`, `fetch_evidence`, or any op whose page navigation the guard
+refused) whose requested URL, any redirect hop or the final URL is a forbidden destination ends
+with `security_scope_error`, not retryable, and no page text is returned. After the navigation
+the worker checks the response's redirect chain and the address Chromium was served from
+again (a name the policy resolved as public but Chromium reached on a forbidden address - DNS
+rebinding - is refused). A forbidden sub-request is blocked and the page itself still reads. A
+check that cannot decide (DNS down) fails the request too (fail closed). The trusted-origin
+exception is unchanged: on the configured origin only the report-view route is admitted, for
+hops and sub-requests as well. Known gaps, closed only by a network-level egress rule (not in
+this version): WebSockets, service-worker and cross-site (out-of-process) iframe sub-requests,
+the first request of a popup before it is closed, and a rebinding sub-request.
 
 ## 6. Untrusted content boundary
 

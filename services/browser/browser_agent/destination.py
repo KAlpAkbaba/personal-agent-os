@@ -26,11 +26,14 @@ exception at all.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import ipaddress
 import re
 import socket
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import SplitResult, urlsplit
 
 from .errors import ALLOWED_NAV_SCHEMES, BrowserError, ErrorClass, redact_url
@@ -242,10 +245,131 @@ def _refuse(op: str, url: str, why: str) -> None:
     )
 
 
+def trusted_origin_admits(url: str, trusted_origin: TrustedOrigin | None) -> bool:
+    """True when ``url`` is the report-view route of the configured origin (and only then)."""
+    if trusted_origin is None:
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").strip().lower().rstrip(".")
+    return bool(host) and trusted_origin.admits(url, parts, host)
+
+
+# --------------------------------------------------------------------------- #
+# every request the browser sends (browser-redirect-guard, cycle d20261003)
+# --------------------------------------------------------------------------- #
+#
+# The checks above ran on the REQUESTED url only. A public page that redirects - or a
+# sub-request (img, fetch, iframe) - into the tailnet, loopback or link-local went through,
+# and the cloud worker sits on the Cloud Core host (changedetection.io GHSA-3c45-4pj5-ch7m
+# and GHSA-gwph-fp79-379w broke the same way). Playwright's ``page.route`` is not called for
+# redirect hops, so the guard is CDP ``Fetch`` interception at the request stage: Chromium
+# pauses EVERY request of the page - each redirect hop included - before it is sent, and
+# nothing continues unless the same policy admits it.
+
+_REQUEST_STAGE_PATTERNS = [{"urlPattern": "*", "requestStage": "Request"}]
+
+
+@dataclass(frozen=True, slots=True)
+class BlockedRequest:
+    """One request the guard failed because the policy forbids its destination."""
+
+    url: str  # scheme://host/path only - never the query (tokens live there)
+    resource_type: str
+    frame_id: str
+    main_frame: bool
+    redirect_hop: bool
+    reason: str
+
+    @property
+    def is_page_navigation(self) -> bool:
+        return self.main_frame and self.resource_type == "Document"
+
+
+def _url_without_query(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<unparseable>"
+    host = parts.hostname or ""
+    port = f":{parts.port}" if parts.port is not None else ""
+    return f"{parts.scheme}://{host}{port}{parts.path}"
+
+
+class RequestGuard:
+    """Holds every request of the pages it is attached to to ``check`` (a callable that
+    raises ``BrowserError`` for a forbidden url). Fails closed: a check that cannot decide
+    (DNS down) fails the request too, it is just not recorded as a policy refusal."""
+
+    def __init__(self, check: Callable[[str], None]) -> None:
+        self._check = check
+        self.violations: list[BlockedRequest] = []
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    async def attach(self, cdp: Any) -> None:
+        """Start intercepting on one page's CDP session (``context.new_cdp_session(page)``)."""
+        tree = await cdp.send("Page.getFrameTree")
+        main_frame_id = str(tree["frameTree"]["frame"]["id"])
+
+        def on_paused(event: dict[str, Any]) -> None:
+            task = asyncio.ensure_future(self.on_request_paused(cdp, main_frame_id, event))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+        cdp.on("Fetch.requestPaused", on_paused)
+        await cdp.send("Fetch.enable", {"patterns": _REQUEST_STAGE_PATTERNS})
+
+    async def on_request_paused(self, cdp: Any, main_frame_id: str, event: dict[str, Any]) -> None:
+        request_id = event["requestId"]
+        url = str((event.get("request") or {}).get("url") or "")
+        try:
+            await asyncio.to_thread(self._check, url)
+        except BrowserError as exc:
+            if exc.error_class in (ErrorClass.SECURITY_SCOPE_ERROR, ErrorClass.VALIDATION_ERROR):
+                frame_id = str(event.get("frameId") or "")
+                self.violations.append(
+                    BlockedRequest(
+                        url=_url_without_query(url),
+                        resource_type=str(event.get("resourceType") or ""),
+                        frame_id=frame_id,
+                        main_frame=frame_id == main_frame_id,
+                        redirect_hop="redirectedRequestId" in event,
+                        reason=str(exc)[:200],
+                    )
+                )
+            await self._fail(cdp, request_id)
+            return
+        except Exception:  # never let an unchecked request through
+            await self._fail(cdp, request_id)
+            return
+        with contextlib.suppress(Exception):  # the page may be gone by now
+            await cdp.send("Fetch.continueRequest", {"requestId": request_id})
+
+    @staticmethod
+    async def _fail(cdp: Any, request_id: str) -> None:
+        with contextlib.suppress(Exception):
+            await cdp.send(
+                "Fetch.failRequest", {"requestId": request_id, "errorReason": "BlockedByClient"}
+            )
+
+    def mark(self) -> int:
+        return len(self.violations)
+
+    def main_frame_violation_since(self, mark: int) -> BlockedRequest | None:
+        """The first refused page navigation (requested url or a redirect hop of a tab's
+        main frame) recorded after ``mark``; sub-requests and iframes are not one."""
+        return next((v for v in self.violations[mark:] if v.is_page_navigation), None)
+
+
 __all__ = [
     "TRUSTED_VIEW_PATH",
+    "BlockedRequest",
+    "RequestGuard",
     "TrustedOrigin",
     "address_is_forbidden",
     "parse_trusted_origin",
     "require_public_destination",
+    "trusted_origin_admits",
 ]
