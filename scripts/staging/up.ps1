@@ -21,6 +21,10 @@
     Build the `:local` images from this tree first (`docker compose build`).
 .PARAMETER AssumeFreeMB
     For tests only: use this as the free-memory figure instead of measuring it.
+.PARAMETER MeasuredFreeMB
+    deploy.ps1 passes the free memory it measured BEFORE building: the build's cache stays in
+    the Docker VM (2026-10-04: 13.2 GB free before two builds, 3.6 GB after, staging itself
+    0.84 GB), so a second measurement would refuse the deploy the first one allowed.
 .PARAMETER CheckOnly
     Run the refusals (memory, docker) and stop before starting anything.
 .EXAMPLE
@@ -31,6 +35,7 @@ param(
     [int]$TimeoutSec = 300,
     [switch]$Build,
     [int]$AssumeFreeMB = -1,
+    [int]$MeasuredFreeMB = -1,
     [switch]$CheckOnly
 )
 Set-StrictMode -Version Latest
@@ -48,12 +53,15 @@ function Get-FreeMemoryMB {
     return [int][math]::Floor([double]$os.FreePhysicalMemory / 1024)
 }
 
-$freeMB = if ($AssumeFreeMB -ge 0) { $AssumeFreeMB } else { Get-FreeMemoryMB }
+$source = ""
+if ($AssumeFreeMB -ge 0) { $freeMB = $AssumeFreeMB }
+elseif ($MeasuredFreeMB -ge 0) { $freeMB = $MeasuredFreeMB; $source = " (measured by deploy before its build)" }
+else { $freeMB = Get-FreeMemoryMB }
 if ($freeMB -lt $MinFreeMB) {
-    Write-Host "STAGING REFUSED: only $freeMB MB of memory is free; staging needs at least $MinFreeMB MB free to start (a gate or agents may be running - ask the test-slot queue for 'heavy', or try later)."
+    Write-Host "STAGING REFUSED: only $freeMB MB of memory is free$source; staging needs at least $MinFreeMB MB free to start (a gate or agents may be running - ask the test-slot queue for 'heavy', or try later)."
     exit 3
 }
-Write-Host "memory: $freeMB MB free (minimum $MinFreeMB MB) - ok"
+Write-Host "memory: $freeMB MB free$source (minimum $MinFreeMB MB) - ok"
 
 $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
 $docker = if ($dockerCmd) { $dockerCmd.Source } else { "C:\Program Files\Docker\Docker\resources\bin\docker.exe" }

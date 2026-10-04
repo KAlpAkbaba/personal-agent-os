@@ -82,6 +82,14 @@ $r = Invoke-Script "up.ps1" @("-AssumeFreeMB", "6143", "-CheckOnly")
 Assert-True ($r.Rc -eq 3) "up refuses one megabyte under the floor (exit $($r.Rc))"
 $r = Invoke-Script "up.ps1" @("-AssumeFreeMB", "8000", "-CheckOnly")
 Assert-True ($r.Rc -ne 3 -and $r.Out -match "memory: 8000 MB free") "up passes the memory check with 8000 MB free (exit $($r.Rc))"
+# Real run 2026-10-04: 13.2 GB free before deploy's builds, 3.6 GB after - the build's cache
+# stays in the Docker VM - so deploy hands up.ps1 the figure it measured BEFORE building.
+$r = Invoke-Script "up.ps1" @("-MeasuredFreeMB", "8000", "-CheckOnly")
+Assert-True ($r.Rc -ne 3 -and $r.Out -match "memory: 8000 MB free \(measured by deploy before its build\)") "up takes deploy's pre-build measurement (exit $($r.Rc))"
+$r = Invoke-Script "up.ps1" @("-MeasuredFreeMB", "4000", "-CheckOnly")
+Assert-True ($r.Rc -eq 3) "up still refuses when deploy's pre-build measurement is under the floor (exit $($r.Rc))"
+$deployText = [IO.File]::ReadAllText((Join-Path $stagingDir "deploy.ps1"))
+Assert-True ($deployText -match '-MeasuredFreeMB \$freeBeforeBuild') "deploy passes its pre-build measurement to up"
 
 Write-Host "staging: seed only talks to staging"
 foreach ($base in @("http://100.90.158.26:8001", "http://127.0.0.1:8001", "http://127.0.0.1:28000")) {

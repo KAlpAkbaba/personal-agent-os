@@ -73,7 +73,8 @@ Write-Host "sha $full is on $onRef - may be deployed (images :$tag)"
 if ($CheckOnly) { exit 0 }
 
 $upScript = Join-Path $PSScriptRoot "up.ps1"
-& powershell -NoProfile -File $upScript -CheckOnly
+$freeBeforeBuild = [int][math]::Floor([double](Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1024)
+& powershell -NoProfile -File $upScript -CheckOnly -MeasuredFreeMB $freeBeforeBuild
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
@@ -104,7 +105,7 @@ Remove-Item -Recurse -Force $tree
 
 $env:PAGENTOS_STAGING_RELEASE_TAG = $tag
 $env:PAGENTOS_STAGING_RELEASE = $full
-& powershell -NoProfile -File $upScript -TimeoutSec $TimeoutSec
+& powershell -NoProfile -File $upScript -TimeoutSec $TimeoutSec -MeasuredFreeMB $freeBeforeBuild
 $upRc = $LASTEXITCODE
 if ($upRc -ne 0) { Write-Host "STAGING DEPLOY FAILED: up.ps1 exited $upRc"; exit $upRc }
 
