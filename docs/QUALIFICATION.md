@@ -1404,3 +1404,17 @@ could be handed to the duty; the hand-over record died with the cycle), both fix
 | 52.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 002c6292… is running as api-green behind the edge`, health through the edge settled at once, `aux: web up`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical (release 002c6292…)` |
 | 52.2 | The duty run decides stopped tasks; an owner's rejection is never handed; the ledger outlives the cycle | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 255/255 with `duty: the ledger outlives the cycle` and `duty: a task the owner rejected` (both mutations RED: the ledger read removed, the owner skip removed); `services/api/tests/unit/test_team_approvals.py`, `test_team_approvals_while_running.py`, `tests/integration/test_team_approvals_postgres.py` on the dev stack 2/2. The first real duty run is the next cycle's |
 | 52.3 | The Ofis names the account | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_office.py::test_the_status_names_the_claude_account_and_the_office_shows_it` and its contract half; `apps/web/tests/office/model.test.ts` (mutation RED: the label returns null). Shown once a cycle started from this release writes its status |
+
+## Stage 53 — a duty decision's reason may be 4000 characters (ADR-0283 addendum 1)
+
+Released 2026-10-04 16:04 UTC (19:04 local) as main `321e43b04e1eb7f88f8d1afa4d3d1de1da305fa4` (api-blue; previous
+`002c6292…` kept as last known good; no migration). Full gate PASS on `29aa2232` (tree-equal), second run; the first stopped at
+`Alembic upgrade head` (`Can't locate revision '0066_watches'`): a worker's Postgres test had left the SHARED dev database at
+its branch's head. The Danışman downgraded the dev database to `0065` from the watch-engine worktree; card
+`dev-db-branch-migration-leak`. A power cut at about 16:00 local stopped the PC; the dev stack, the web shell and the cycle were
+brought back by the Danışman (no git damage found in the main checkout or the active worktrees).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 53.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 321e43b…`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-blue is canonical (release 321e43b…)` |
+| 53.2 | A long duty reason is a decision, not a broken file | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` (`duty: a sound decision file passes` takes 1341 characters; `a reason over 4000 characters` is refused; the old bound as a mutation RED). Real cause: duty-1 (1341) and duty-2 (1442) of 2026-10-04 were refused whole; the Danışman applied both by hand. Live from the next cycle start |

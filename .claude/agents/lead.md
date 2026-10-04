@@ -129,7 +129,7 @@ on the card), then decide ONE of these - never more than one decision per task:
   Danışman stopped by hand -> `escalate`: the Danışman decides; your reason says what to decide.
 
 Write only the decision file, one JSON object:
-`{ "decisions": [ { "task": "<id>", "action": "return" | "grant_and_return" | "escalate", "grant": ["path"], "reason": "<Türkçe, en çok 1200 karakter>" } ] }`
+`{ "decisions": [ { "task": "<id>", "action": "return" | "grant_and_return" | "escalate", "grant": ["path"], "reason": "<Türkçe, en çok 4000 karakter>" } ] }`
 (`grant` only with `grant_and_return`). The cycle judges the file and takes it WHOLE or refuses it
 whole: one bad decision - an unknown task, an empty reason, a protected grant - and nothing is
 applied, so a protected path is always an escalation, never a grant. A return beside a task that

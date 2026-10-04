@@ -848,7 +848,7 @@ $script:TeamOwnerRejected = "Sahip reddetti: "
 $script:TeamDutyMaxHandovers = 3
 $script:TeamDutyActions = @("return", "grant_and_return", "escalate")
 $script:TeamDutyMaxGrants = 5
-$script:TeamDutyMaxReason = 1200
+$script:TeamDutyMaxReason = 4000
 $script:TeamDutyMaxTasks = 8
 
 function Get-TeamDutyPrefix {
