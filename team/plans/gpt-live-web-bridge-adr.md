@@ -28,6 +28,18 @@ Varsayılan sağlayıcı, `openai-realtime` lehçesi, `localMode.ts`, yerel kip 
    içinden: id boş/bilinmiyor → gitmez; `iptal` → gitmez; `bitti` → ikinci kez gitmez. İptal kaynakları:
    kontrolcünün `disconnect()`'i (kapanıştan ÖNCE beklenir), bacak sökümü (`teardownLeg`, yeniden bağlanma dahil:
    yeni bacak = yeni satıcı oturumu) ve `disconnected` olayı (`session.closed` dahil).
+4a. (1. dönüş) `commentary` artık `boolean` döner: taşıyıcının `appendCommentary`'si yoksa kontrolcü
+   `delegation.commentary_unsupported` yazar ve `false` döner; köprü devri `bitti` DEĞİL `gonderilemedi`
+   işaretler, `delegation.undelivered` yazar (`delegation.done` yazılmaz) ve yeniden denemez. İptal edilmiş devirde
+   kalan araçlar koşmaz (döngü her araçtan önce durumu okur; testle korunur).
+4b. (1. dönüş) Relay her `/events` yanıtında oturumun BÜTÜN bekleyen sideband'ını döndürüp kuyruğu boşaltıyor
+   (brifingler o anda teslim sayılır). Köprü `say` satırlarını devrin sonucuna katar; geri kalan her çerçeveyi
+   (iptal yanıtında hepsini) kontrolcünün `onSideband`'ına verir — hiçbiri yere düşmez. `say` iptal yanıtında
+   da `onSideband`'a gider; `openai-live`'da `say` karşılıksız olduğundan yalnız tanılama satırına yazılır.
+4c. Tarayıcıda koşan araçlara `arguments: {}` gider; yerel kipin önce koşturduğu yerel adım (`runLocally`, örn.
+   kamera) devirde YOK. Yanıt yine dürüst (makbuzu relay kurar) ama yerel kipinkinden farklı olabilir.
+4d. İş metni son devirden beri duyulan BÜTÜN sahip transkripti parçalarıdır (sohbet dahil); satıcı devirle iş
+   metni göndermediği için kabul edildi.
 5. Araya girme devri iptal ETMEZ; yön değiştirme yeni bir devir olarak tek yönlendiriciden geçer.
 6. `?ses=live` → oturum açma gövdesine `prefer_provider:'openai-live'`; yoksa gövde bugünküyle birebir (anahtar yok).
    Kaynak: `deps.preferProvider`, verilmemişse `api.ts pagePreferProvider()` (sayfanın `location.search`'ü).
@@ -56,7 +68,7 @@ Türkçe desteği (hiçbir sayfada yok); WebRTC SDP uç noktası ve veri kanalı
 modelin konuşmasını kesen komut; satıcı tarafı devir iptal olayı; eşzamanlı birden çok client devri (yasak değil,
 belgelenmemiş); `commentary.appended` "söylendi" demek DEĞİL; `commentary.append`'in `delegation_id:null` kabulü.
 
-## Bilinen eksik (alan dışı)
+## Bilinen eksik (alan dışı — ALAN_ISTEGI ile istendi; kırmızı test: delegation.test.ts "the real WebRTC transport carries commentary to the data channel")
 - `webrtc.ts`: `appendCommentary` yok → gerçek veri kanalına commentary ancak 3 satırla gider
   (`appendCommentary(id,t){ for (const m of this.dialect.commentaryAppend?.(id,t) ?? []) this.send(m); }`).
   O gelene kadar kontrolcü `delegation.commentary_unsupported` günlüğü yazar; sahibin ölçümü bunu bekler.

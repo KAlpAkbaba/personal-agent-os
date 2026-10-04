@@ -1037,10 +1037,12 @@ export class VoiceSessionController {
       commentary: (delegationId, text) => {
         if (!transport.appendCommentary) {
           this.log(`delegation.commentary_unsupported ${delegationId}`);
-          return;
+          return false;
         }
         transport.appendCommentary(delegationId, text);
+        return true;
       },
+      sideband: (frame) => this.onSideband(frame),
       clock: () => this.now(),
       turn: () => this.snapshot.turn,
       log: (op) => this.log(op),

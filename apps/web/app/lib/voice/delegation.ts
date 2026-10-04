@@ -23,7 +23,7 @@
  */
 
 import type { VoiceSessionApi } from "./api";
-import type { ClientEvent, EventsResponse, ToolCallResponse } from "./contract";
+import type { ClientEvent, EventsResponse, SidebandFrame, ToolCallResponse } from "./contract";
 import { MAX_EVENT_TEXT_CHARS } from "./contract";
 import { NOT_UNDERSTOOD_TR, TOOL_FAILED_TR, saidFrames, speechOf, toolOf } from "./localMode";
 
@@ -32,13 +32,23 @@ export const DELEGATION_CANCELLED_EVENT = "delegation_cancelled";
 /** `/tool-calls` ids are `live-<delegation id>-<n>`: idempotent per delegation and tool. */
 export const DELEGATION_CALL_ID_PREFIX = "live-";
 
-export type DelegationState = "bekliyor" | "bitti" | "iptal";
+/** `gonderilemedi`: the result was ready but the transport had no way to say it. */
+export type DelegationState = "bekliyor" | "bitti" | "iptal" | "gonderilemedi";
 
 export type DelegationBridgeDeps = {
   api: Pick<VoiceSessionApi, "events" | "toolCall">;
   sessionId: string;
-  /** Say `text` as the commentary of `delegationId` (the transport's data channel). */
-  commentary: (delegationId: string, text: string) => void;
+  /**
+   * Say `text` as the commentary of `delegationId` (the transport's data channel).
+   * Returns false when the transport cannot carry it; the delegation is then not done.
+   */
+  commentary: (delegationId: string, text: string) => boolean;
+  /**
+   * The relay answers every `/events` call with ALL of the session's queued sideband and
+   * clears the queue (briefings are marked delivered then). The frames the bridge does not
+   * speak itself go here - the controller's own sideband handler - never to the floor.
+   */
+  sideband?: (frame: SidebandFrame) => void;
   /** Session-relative milliseconds for `t_ms`. */
   clock: () => number;
   turn: () => number;
@@ -100,6 +110,7 @@ export class DelegationBridge {
       if (tool && !tools.includes(tool)) tools.push(tool);
     }
     const lines = saidFrames(answer.pending_sideband);
+    this.handOn(answer.pending_sideband, (frame) => frame.event !== "say");
     if (tools.length === 0 && lines.length === 0) {
       this.deliver(delegationId, NOT_UNDERSTOOD_TR);
       return;
@@ -138,9 +149,15 @@ export class DelegationBridge {
       this.log(`delegation.late_result ${delegationId}`);
       return false;
     }
-    if (this.states.get(delegationId) === "bitti") return false;
+    // Each result is sent once: a finished or undeliverable delegation is not retried.
+    const state = this.states.get(delegationId);
+    if (state === "bitti" || state === "gonderilemedi") return false;
+    if (!this.deps.commentary(delegationId, text)) {
+      this.states.set(delegationId, "gonderilemedi");
+      this.log(`delegation.undelivered ${delegationId}`);
+      return false;
+    }
     this.states.set(delegationId, "bitti");
-    this.deps.commentary(delegationId, text);
     this.log(`delegation.done ${delegationId}`);
     return true;
   }
@@ -151,7 +168,9 @@ export class DelegationBridge {
     this.states.set(delegationId, "iptal");
     this.log(`delegation.cancelled ${delegationId} ${reason}`);
     try {
-      await this.deps.api.events(this.deps.sessionId, [this.cancelledEvent(delegationId, reason)]);
+      const answer = await this.deps.api.events(this.deps.sessionId, [this.cancelledEvent(delegationId, reason)]);
+      // Nothing is said for a cancelled delegation, so every queued frame is handed on.
+      this.handOn(answer.pending_sideband, () => true);
     } catch (error) {
       this.log(`delegation.cancel_report_failed ${delegationId} ${messageOf(error)}`);
     }
@@ -171,6 +190,10 @@ export class DelegationBridge {
       turn: this.deps.turn(),
       payload: { event: DELEGATION_CANCELLED_EVENT, delegation_id: delegationId, reason },
     };
+  }
+
+  private handOn(frames: SidebandFrame[] | undefined, pick: (frame: SidebandFrame) => boolean): void {
+    for (const frame of frames ?? []) if (pick(frame)) this.deps.sideband?.(frame);
   }
 
   private tMs(): number {
