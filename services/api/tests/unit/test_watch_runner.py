@@ -15,9 +15,6 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from app.watch import compare, extract, runner, service
-from app.watch.models import Watch, WatchReading
-from app.watch.reader import Observation
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -25,6 +22,9 @@ from sqlalchemy.pool import StaticPool
 from app.assistant_chat import ChatAnswer
 from app.ledger.models import ActivityEventRow
 from app.notifications.models import NotificationRow
+from app.watch import compare, extract, runner, service
+from app.watch.models import Watch, WatchReading
+from app.watch.reader import Observation
 
 NOON = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)  # 15:00 in Istanbul - outside quiet hours
 
@@ -263,7 +263,12 @@ def test_a_padded_answer_still_yields_the_number_on_the_page(speech: str) -> Non
 
 @pytest.mark.parametrize(
     "speech",
-    ["9.499 TL", "9.499 TL efendim.", "15.000 TL efendim.", "on dokuz bin dört yüz doksan dokuz lira"],
+    [
+        "9.499 TL",
+        "9.499 TL efendim.",
+        "15.000 TL efendim.",
+        "on dokuz bin dört yüz doksan dokuz lira",
+    ],
 )
 def test_a_padded_answer_with_a_number_not_on_the_page_is_dropped(speech: str) -> None:
     # '9.499' is a substring of '19.499' but not a number on the page.

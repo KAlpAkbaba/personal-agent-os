@@ -3,8 +3,8 @@
 Asked only when the page changed, the condition is numeric, and neither the selector nor our
 tr-TR parser found exactly one number. The page is untrusted: it reaches the model only
 inside the marked block, the provider has no tools (``app.assistant_chat``), and the answer
-must be the number AS WRITTEN on the page - a literal that does not occur in the page text is
-an invented number and is dropped before our own parser reads it.
+must be the number AS WRITTEN on the page - a number in the answer that is not a whole number
+of the page text is an invented number and is dropped before our own parser reads it.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Final
 
 from app.assistant_chat import ChatProvider
-from app.watch.compare import normalize_text, parse_tr_number
+from app.watch.compare import _TOKEN, normalize_text, parse_tr_number
 
 UNTRUSTED_BEGIN: Final = "<<<GÜVENİLMEZ_SAYFA_METNİ_BAŞI>>>"
 UNTRUSTED_END: Final = "<<<GÜVENİLMEZ_SAYFA_METNİ_SONU>>>"
@@ -20,6 +20,8 @@ UNTRUSTED_END: Final = "<<<GÜVENİLMEZ_SAYFA_METNİ_SONU>>>"
 #: one extraction a small, cheap request whatever the worker returned.
 MAX_PAGE_CHARS: Final = 6000
 NOTHING: Final = "YOK"
+#: A one-number answer with a polite phrase around it; anything longer is not an answer.
+MAX_ANSWER_CHARS: Final = 160
 
 
 def _fenced(text: str) -> str:
@@ -54,9 +56,13 @@ def extract_number(
     )
     if not answer.ok:
         return None
-    literal = normalize_text(answer.speech).strip("\"'`“”‘’ ")
-    if not literal or literal.upper() == NOTHING or len(literal) > 40:
+    # The provider speaks with the voice prompt ("19.499 TL efendim."): the number tokens of
+    # the answer are what must stand on the page as whole tokens ('9.499' inside '19.499' is
+    # not), never the words around them.
+    reply = normalize_text(answer.speech)
+    tokens = set(_TOKEN.findall(reply))
+    if not tokens or len(reply) > MAX_ANSWER_CHARS:
         return None
-    if literal not in normalize_text(text):
+    if not tokens <= set(_TOKEN.findall(normalize_text(text))):
         return None  # not on the page: an invented number
-    return parse_tr_number(literal)
+    return parse_tr_number(" ".join(sorted(tokens)))
