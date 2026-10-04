@@ -97,10 +97,20 @@ def _view(event: dict[str, Any]) -> EventView:
     )
 
 
-def answered_event_id(briefing: Any) -> str | None:
-    """The activity event the briefing's first sentence stands on."""
-    refs = briefing.executive[0].evidence_refs if briefing.executive else ()
-    return next((r["ref"] for r in refs if r.get("kind") == "activity_event"), None)
+def answered_event(briefing: Any, events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The activity the briefing answered with: the first activity-event reference of the
+    executive sentences, in speaking order, that is an activity of its own.
+
+    Not executive[0] alone: a qualified research opens with the qualification sentence,
+    whose evidence is the research.qualified VERDICT (an annotation); the research it
+    answered stands on the next sentence (engine._research_executive).
+    """
+    by_id = {str(e["event_id"]): e for e in events if e["event_type"] not in ANNOTATION_EVENT_TYPES}
+    refs = (r for s in briefing.executive for r in s.evidence_refs)
+    return next(
+        (by_id[r["ref"]] for r in refs if r.get("kind") == "activity_event" and r["ref"] in by_id),
+        None,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -151,10 +161,14 @@ def test_backfill_is_idempotent_and_the_briefing_matches_the_ledger(settings: Se
         assert narration is not None and narration.artifact_id == record.artifact_id
 
     # on a timestamp tie the engine read one of the leaders; judge it by the one it read
-    answered = answered_event_id(briefing)
-    latest = next((e for e in leaders if e["event_id"] == answered), None)
+    answered = answered_event(briefing, events)
+    latest = answered if answered in leaders else None
     if leaders:
-        assert latest is not None, (answered, [e["event_id"] for e in leaders], record.speech)
+        assert latest is not None, (
+            answered and answered["event_id"],
+            [e["event_id"] for e in leaders],
+            record.speech,
+        )
 
     if latest is not None and latest["event_type"] == "research.failed":
         # A failed research is the newest activity (a workflow integration test that ran

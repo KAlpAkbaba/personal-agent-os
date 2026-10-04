@@ -19,12 +19,13 @@ import pytest
 from app.explain.classify import classify
 from app.explain.engine import EventView, EvidenceSource, explain
 from tests.integration.test_ledger_explain_over_real_runs import (
-    answered_event_id,
+    answered_event,
     expected_latest_activity,
 )
 
 NOW = datetime(2026, 10, 4, 1, 24, tzinfo=UTC)
 QUESTION = "Son yaptıklarını anlat"
+JOB_ID = "2c1c0d2e-0000-4000-8000-000000000001"
 
 
 class FakeEventSource:
@@ -75,9 +76,7 @@ def _ev(event_id: str, minutes_ago: float, event_type: str, subsystem: str) -> E
         status="completed",
         severity="info",
         factual_summary=f"{event_type} kaydı.",
-        research_job_id="2c1c0d2e-0000-4000-8000-000000000001"
-        if event_type == "research.completed"
-        else None,
+        research_job_id=JOB_ID if event_type.startswith("research.") else None,
     )
 
 
@@ -101,9 +100,13 @@ def _old_rule(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     )
 
 
+def _briefing(source: FakeEventSource) -> Any:
+    return explain(cast(EvidenceSource, source), QUESTION, classify(QUESTION, now=NOW), now=NOW)
+
+
 def _engine_answer(source: FakeEventSource) -> str | None:
-    briefing = explain(cast(EvidenceSource, source), QUESTION, classify(QUESTION, now=NOW), now=NOW)
-    return answered_event_id(briefing)
+    answered = answered_event(_briefing(source), source.api_rows())
+    return str(answered["event_id"]) if answered else None
 
 
 CASES = {
@@ -161,3 +164,21 @@ def test_only_telemetry_in_the_week_is_still_answered_from_it() -> None:
     source = FakeEventSource([_row(web)])
     leaders = expected_latest_activity(source.api_rows(), now=NOW)
     assert [e["event_id"] for e in leaders] == [web.event_id] == [_engine_answer(source)]
+
+
+def test_a_qualified_research_is_judged_by_the_research_not_by_its_verdict() -> None:
+    """A research.qualified row of the same job makes the engine open with "Research Engine
+    gerçek ortam doğrulamasını başarıyla geçti", whose evidence is the VERDICT row (an
+    annotation, never a leader). The research it answered stands on the next sentence;
+    reading executive[0] alone found no leader and was a false red (inspector, a34a20fc)."""
+    qualified = _ev("ev-qualified", 10, "research.qualified", "research")
+    source = FakeEventSource([_row(RESEARCH), _row(qualified)])
+    rows = source.api_rows()
+    briefing = _briefing(source)
+    assert briefing.executive[0].evidence_refs[0]["ref"] == qualified.event_id
+
+    leaders = expected_latest_activity(rows, now=NOW)
+    assert [e["event_id"] for e in leaders] == [RESEARCH.event_id]
+    answered = answered_event(briefing, rows)
+    assert answered is not None and answered["event_id"] == RESEARCH.event_id
+    assert answered in leaders
