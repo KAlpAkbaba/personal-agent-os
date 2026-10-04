@@ -16,10 +16,16 @@
               and its exit code is this script's exit code. The slot is released when the
               command ends - and also when this wrapper is killed (the slot belongs to this
               process: pid and start time). Nothing is killed, and no run is refused for being long.
-      status  The queue in Turkish: who runs what since when, who waits.
+              A run holding 'database' leaves the dev database at the schema it found
+              (scripts/lib/TestSlots.ps1): it reads the alembic revision before the command and,
+              when the command moved it, downgrades back from the run's own tree - success or
+              failure. A downgrade that fails holds the database: every later 'database' ask
+              or run answers DURDU (exit 6) until `unblock`.
+      status  The queue in Turkish: who runs what since when, who waits; a hold's DURDU line.
       who     Short, by seat name: who is testing what right now and the waiting line -
               ask it before you plan a heavy run.
       release -Ticket <ticket>   gives a ticket (or a place in line) back.
+      unblock The Danışman lifts the database hold after repairing the database.
 
     Common: -Store <folder> (default %LOCALAPPDATA%\PagentOS\test-slots), -DryRun (validates
     the request and prints DRYRUN, touches nothing), -NowUtc <ISO time> (tests only), -Seat
@@ -32,8 +38,9 @@
     answer and the exit code are the same.
 
     Exit codes: 0 ONAY / done; 3 BEKLE; 2 a bad request; 4 the ticket is unknown or void
-    (ask again); 5 the queue itself failed. `run` returns the COMMAND's exit code once the
-    command started (127 when it could not be started).
+    (ask again); 5 the queue itself failed; 6 DURDU, the database is held. `run` returns the
+    COMMAND's exit code once the command started (127 when it could not be started), and 8
+    when the command passed but the database could not be restored.
 
     The arguments are parsed by hand on purpose: under `powershell -File` the binder reads
     `--` as a parameter name and refuses it, so a param() block cannot take "run -- cmd".
@@ -50,6 +57,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamBoard.ps1")
+. (Join-Path $repoRoot "scripts\lib\TestSlots.ps1")
 
 function Write-Problem {
     param([string]$Text)
@@ -59,7 +67,7 @@ function Write-Problem {
 function Exit-BadRequest {
     param([string]$Text)
     Write-Problem $Text
-    Write-Problem 'kullanım: ask -Kind <database|desktop|heavy>[,...] -Task <id> -Role <role> -What "<bir satır>" | run -Ticket <bilet> -- <komut...> | status | release -Ticket <bilet>'
+    Write-Problem 'kullanım: ask -Kind <database|desktop|heavy>[,...] -Task <id> -Role <role> -What "<bir satır>" | run -Ticket <bilet> -- <komut...> | status | release -Ticket <bilet> | unblock'
     exit 2
 }
 
@@ -139,6 +147,35 @@ function Send-BoardEvent {
 $seat = [string](Get-Opt "seat")
 if (-not $seat -and $env:PAGENTOS_TEAM_SEAT) { $seat = [string]$env:PAGENTOS_TEAM_SEAT }
 
+function Restore-SlotSchema {
+    <# After a 'database' run: put the database back at the recorded revision from the run's
+       own tree, verify it, and on any failure hold the database. $true when it is where the
+       run found it. #>
+    param([Parameter(Mandatory = $true)]$Guard)
+    $expected = $Guard.Before.Revision
+    $after = Get-TestSlotSchemaRevision -AlembicDir $Guard.Dir
+    if ($after.Ok -and $after.Revision -eq $expected) { Write-Problem "SEMA_KORUMA ayni $expected"; return $true }
+    $found = if ($after.Ok) { $after.Revision } else { "?" }
+    $problem = $after.Error
+    if ($after.Ok) {
+        $restore = Invoke-TestSlotSchemaRestore -AlembicDir $Guard.Dir -Revision $expected
+        $check = Get-TestSlotSchemaRevision -AlembicDir $Guard.Dir
+        if ($restore.Ok -and $check.Ok -and $check.Revision -eq $expected) {
+            Write-Problem "SEMA_KORUMA geri_alindi $found -> $expected ('$($Guard.Before.Database)')"
+            return $true
+        }
+        $problem = if (-not $restore.Ok) { $restore.Error } elseif (-not $check.Ok) { $check.Error } else { "after the downgrade the database is at '$($check.Revision)'" }
+    }
+    $hold = [pscustomobject][ordered]@{
+        at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); task = [string]$entry.task; role = [string]$entry.role
+        ticket = $ticket; database = $Guard.Before.Database; tree = $Guard.Dir; found = $found; expected = $expected; error = $problem
+    }
+    Set-TestSlotDatabaseHold -Store $store -Hold $hold
+    Write-Problem "SEMA_KORUMA BASARISIZ: $found -> $expected geri alınamadı ($problem)"
+    Write-Problem (Format-TestSlotHoldLine -Hold $hold)
+    return $false
+}
+
 try {
     switch ($verb) {
         "ask" {
@@ -152,6 +189,10 @@ try {
             if ($dryRun) {
                 Write-Output ("DRYRUN ask kinds={0} task={1} role={2} what={3}" -f ($kinds -join ","), $task, $role, $what)
                 exit 0
+            }
+            if ($kinds -contains "database") {
+                $hold = Get-TestSlotDatabaseHold -Store $store
+                if ($null -ne $hold) { Write-Output (Format-TestSlotHoldLine -Hold $hold); exit 6 }
             }
             $r = Invoke-TestSlotAsk -Store $store -Kind $kinds -Task $task -Role $role -What $what -NowUtc $now -Seat $seat
             Write-Output $r.Line
@@ -167,12 +208,36 @@ try {
                 Write-Output ("DRYRUN run ticket={0} command={1}" -f $ticket, (ConvertTo-NativeArgumentLine -Arguments @($command)))
                 exit 0
             }
-            try { [void](Start-TestSlotRun -Store $store -Ticket $ticket -HolderPid $PID -NowUtc $now) }
+            $entry = $null
+            try { $entry = @(Start-TestSlotRun -Store $store -Ticket $ticket -HolderPid $PID -NowUtc $now) | Select-Object -Last 1 }
             catch {
                 if ($_.Exception.Message -like "TICKET_VOID:*") { Write-Problem $_.Exception.Message; exit 4 }
                 throw
             }
+            $guard = $null
+            if (@($entry.kinds) -contains "database") {
+                $hold = Get-TestSlotDatabaseHold -Store $store
+                if ($null -ne $hold) {
+                    [void](Remove-TestSlotTicket -Store $store -Ticket $ticket)
+                    Write-Problem (Format-TestSlotHoldLine -Hold $hold)
+                    exit 6
+                }
+                $cwd = (Get-Location).ProviderPath
+                $alembicDir = Find-TestSlotAlembicDir -StartDirectory $cwd
+                if (-not $alembicDir) { Write-Problem "SEMA_KORUMA ağaç yok: $cwd üstünde services\api\alembic.ini yok - şema kaydı ve geri alma yok" }
+                else {
+                    $before = Get-TestSlotSchemaRevision -AlembicDir $alembicDir
+                    if (-not $before.Ok) { Write-Problem "SEMA_KORUMA kaydedilemedi ($($before.Error)) - geri alma YOK, bu koşu korumasız" }
+                    elseif (-not $before.HasTable -or -not $before.Revision) { Write-Problem "SEMA_KORUMA kayıt yok: '$($before.Database)' içinde alembic_version yok - geri alma yok" }
+                    elseif ($before.Revision -like "*,*") { Write-Problem "SEMA_KORUMA birden çok baş ($($before.Revision)) - geri alma yok" }
+                    else {
+                        Write-Problem "SEMA_KORUMA kayit $($before.Revision) ('$($before.Database)', ağaç $alembicDir)"
+                        $guard = [pscustomobject]@{ Dir = $alembicDir; Before = $before }
+                    }
+                }
+            }
             $code = 127
+            $restoreFailed = $false
             try {
                 $exe = $command[0]
                 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
@@ -196,13 +261,29 @@ try {
                 }
             }
             finally {
+                # Still holding the slot: nobody else starts on the database while it is put back.
+                if ($null -ne $guard) {
+                    try { $restoreFailed = -not (Restore-SlotSchema -Guard $guard) }
+                    catch { $restoreFailed = $true; Write-Problem "SEMA_KORUMA BASARISIZ: $($_.Exception.Message)" }
+                }
                 $freed = Complete-TestSlotRun -Store $store -Ticket $ticket -ExitCode ([string]$code) -PassThru
                 if ($null -ne $freed) { Send-BoardEvent -Event "free" -Entry $freed -ExitCode ([string]$code) }
             }
+            if ($restoreFailed -and $code -eq 0) { exit 8 }
             exit $code
         }
         "status" {
             foreach ($line in @(Get-TestSlotStatusText -Store $store -NowUtc $now)) { Write-Output $line }
+            $hold = Get-TestSlotDatabaseHold -Store $store
+            if ($null -ne $hold) { Write-Output (Format-TestSlotHoldLine -Hold $hold) }
+            exit 0
+        }
+        "unblock" {
+            if ($dryRun) { Write-Output "DRYRUN unblock"; exit 0 }
+            $hold = Get-TestSlotDatabaseHold -Store $store
+            if ($null -eq $hold) { Write-Output "kilit yok"; exit 0 }
+            [void](Clear-TestSlotDatabaseHold -Store $store)
+            Write-Output ("KİLİT KALDIRILDI: " + (Format-TestSlotHoldLine -Hold $hold))
             exit 0
         }
         "who" {

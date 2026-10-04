@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     The 'database' slot leaves the dev database at the schema it found
     (scripts/lib/TestSlots.ps1, scripts/team/test-slot.ps1 run).

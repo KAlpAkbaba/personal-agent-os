@@ -1,0 +1,46 @@
+# ADR (taslak, numarayı PY verir): Bir 'database' test slotu dev veritabanını bulduğu şemada bırakır
+
+Tarih: 2026-10-04. Kart: dev-db-branch-migration-leak. İlgili: ADR-0282 (test sırası).
+
+## Bağlam
+2026-10-04 17:33'te 29aa2232 üzerindeki yayın kapısı 'Alembic upgrade head' adımında
+`Can't locate revision identified by '0066_watches'` ile kırmızı oldu. watch-engine işçisinin
+Postgres testleri, 'database' slotuyla PAYLAŞILAN dev yığında koştu; entegrasyon paketinin
+`migrated_database` fikstürü dev veritabanını o dalın yeni başına (0066) taşıdı ve orada bıraktı.
+Main dahil başka hiçbir ağaç 0066'yı bilmiyor; onların alembic'i başlayamadı. Danışman, watch-engine
+worktree'sinden elle 0065'e indirdi.
+
+## Karar
+`scripts/team/test-slot.ps1 run`, biletin türleri arasında `database` varsa (`scripts/lib/TestSlots.ps1`):
+1. Komuttan önce koşunun kendi ağacının (çalışma klasöründen yukarı `services\api\alembic.ini`)
+   ayarlarıyla `alembic_version` tablosunu HAM okur (alembic'siz: bilinmeyen bir revizyon da okunur)
+   ve `SEMA_KORUMA kayit <rev>` yazar.
+2. Komut bittikten sonra (başarılı ya da başarısız, `finally` içinde, slot hâlâ tutulurken)
+   revizyon değiştiyse, yeni revizyonu bilen tek ağaç olan koşunun kendi ağacından
+   `uv run alembic downgrade <kayıt>` çalıştırır ve sonucu yeniden okuyarak doğrular.
+3. Geri alma ya da doğrulama başarısızsa `<store>\database-hold.json` yazılır, `SEMA_KORUMA BASARISIZ`
+   ve bir DURDU satırı basılır; komut başarılı idiyse koşunun çıkış kodu 8 olur. Kilit durdukça her
+   `database` ask'i ve run'ı DURDU ile reddedilir (çıkış 6; komut hiç başlamaz), `status` kilidi
+   gösterir. Danışman veritabanını onarıp `test-slot.ps1 unblock` ile kilidi kaldırır.
+4. Kayıt yoksa (alembic_version tablosu yok) geri alma yapılmaz: geri almak `downgrade base`, yani
+   her şeyi silmek olurdu. Kayıt okunamazsa (Postgres kapalı, uv yok) bu yüksek sesle söylenir ve koşu
+   korumasız devam eder.
+
+## Değerlendirilen seçenek: dal başına geçici veritabanı (CREATE DATABASE ... TEMPLATE)
+Her dal testi kendi atılabilir veritabanında koşsa paylaşılan veritabanına hiç dokunulmaz; bu
+yapısal olarak daha temiz. Bugün seçilmedi çünkü: (a) entegrasyon paketi ve conftest
+(`exclusive_database`, `migrated_database`) tek `PAGENTOS_DATABASE_URL`'e bağlı, Temporal işçileri ve
+canlı-API uyarısı da aynı veritabanını varsayıyor - değişiklik `services/api/tests` ve kapının
+kendisine yayılır (bu kartın alanı dışında); (b) TEMPLATE kopyası, şablona açık bağlantı varken
+başarısız olur (dev API / Temporal işçisi bağlı tutar); (c) geri alma bugünkü sızıntıyı tek
+dosyada kapatıyor. Önerim: ayrı bir kart olarak, `test-slot.ps1 run -ScratchDatabase` gibi bir
+seçenekle başlayıp entegrasyon paketinin URL'i dışarıdan almasını sağlamak.
+
+## Bilinen sınırlar
+- Kapı (`quality-gate.ps1`) slotları kütüphaneden doğrudan alır, `test-slot.ps1`'den geçmez: kırmızı
+  kalan bir kapı koşusu dev veritabanını kendi dalının başında bırakabilir. Kapsamak bu kartın
+  alanı dışında (takip kartı).
+- `test-slot.ps1` dışında (slotsuz) elle koşulan alembic ya da pytest korunmaz.
+- Downgrade fonksiyonu eksik/yanlış yazılmış bir göç geri alınamaz: tam olarak bu durumda kilit devreye
+  girer ve Danışman bakar.
+- Her korunan koşu 2-4 `uv run python` yoklaması ekler (her biri birkaç saniye).
