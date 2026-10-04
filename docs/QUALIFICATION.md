@@ -1357,3 +1357,35 @@ rule; the compose change (the `web` aux service) is the owner's approved "Sunucu
 | 49.3 | The phone reaches it over tailnet HTTPS | `PROVEN_REAL` | first run exit 3 (certificates not enabled); the owner enabled HTTPS in the Tailscale admin console (16:5x local); re-run: `SERVED https://pagentos-core.tail0e6789.ts.net -> http://127.0.0.1:3000 (tailnet only)`, `--status` exit 0; from the home PC over the tailnet `/`, `/core/office`, `/api/v1/system/health` 200 with a verified certificate (ssl_verify_result 0), health release `e6682a61…` |
 | 49.4 | The gate's two red runs of the day were not code defects of the released content | `PROVEN_REAL` | `fda57727`: C: full (`OSError(28)`, Docker's engine stopped - restarted by the lead); `176c11c8`: 12 ruff errors in a new test (fixed); `e6127370`: Unity's player build fails with TEMP on E: (measured: passes in 56 s with TEMP on C:) and the test hid the cause behind an IOException - the test now reads the log with shared access (regression test RED with `FileShare.Read`) |
 | 49.5 | The dev web shell opens from the phone | `PROVEN_REAL` | before: the page hung at "Oturum kontrol ediliyor..." (Next blocked its dev scripts for `100.92.148.30`); after `allowedDevOrigins`: a script chunk fetched from the Cloud Core over the tailnet 200 (1 MB), no blocked request in the dev server's log; the owner's screenshot shows the Ofis room |
+
+## Stage 50 — d20261003, tenth integration: the Ofis comes alive (moods, walk-in, tech office, the CTO), the Proje Yöneticisi, run temp folders on E: (ADR-0272, ADR-0214 addenda 19-20)
+
+Released 2026-10-03 16:12 UTC (19:12 local) as main `a5e68d92d9271ececec51da01b713e43a394e28c` (api-green; previous
+`e6682a61…` kept as last known good; no migration, no compose change). Full gate PASS on `7a6531ef` (the merge commit's tree
+is identical), started 17:37, PASS 19:09 local. The first run of this integration (`ffa1e4fe`, without the office) was stopped
+at minute 13 so the owner's office request rode the same gate. Released under the standing rule.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 50.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: a5e68d92… is running as api-green behind the edge`, health through the edge settled at once; `aux: web up`; recovery supervisor re-pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical`; `pagentos-prod-web` healthy, restart count 0, started 16:13:30 UTC (rebuilt) |
+| 50.2 | The owner reaches the new office from the phone | `PROVEN_REAL` (transport) | `https://pagentos-core.tail0e6789.ts.net/core/office` 200 over the tailnet; `/api/v1/system/health` reports release `a5e68d92…`. The drawing itself is client-rendered after sign-in: the owner's own look is the evidence |
+| 50.3 | Moods, walk-in, tech office, CTO | `PROVEN_AUTOMATED` | `apps/web/tests/office/mood.test.tsx` 11 + office suite 87/87; mutations RED (tired bound, stopped-not-angry, nobody walks, walking under reduced motion); ADR-0272. The owner saw the moods live on the home PC's dev shell at 19:06 (worker 4 angry on `cycle-auto-release`, stopped after its second return - the mood was right) |
+| 50.4 | Run temp folders on E: | `PROVEN_REAL` | the 16:52 cycle created `E:\AI\tmp-team\owner-trials-page-worker-9e134492` and `cycle-auto-release-worker-fe3fdd84`; team-cycle 214/214 with the new case (two mutations RED); ADR-0214 addendum 19 |
+
+## Stage 51 — d20261003, eleventh integration: the team's board, the model picker, the guards, the Dene list, the test queue, the dark Ofis, the tick's -MaxHours (ADR-0273..0282)
+
+Released 2026-10-04 01:31 UTC (04:31 local) as main `eac453fc0ffc0e7d05d0c1803746c5f670f7c68f` (api-blue; previous
+`a5e68d92…` kept as last known good; no migration). Full gate PASS on `bf3e4ed9` (the merge commit's tree is identical),
+started 02:56, PASS 04:28 local. Three earlier runs were red, each on ONE test and none on the integration's own code:
+`95217a92` - team-integrate's contract test still looked for `$failed` after test-slots renamed it `$script:failed` (fixed,
+83/83, the no-exit mutation still fails the regex); `b98ed094` - the order-dependent ledger-explain integration test (passed
+alone; card `ledger-explain-test-order`); `b98ed094` rerun - the selfmodel refresher test's 10 s holder deadline (a loaded POST
+reached the route after the holder let go; 180 s hang guard now, the unwired-route mutation RED at 188 s). Released under the
+standing rule.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 51.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: eac453fc… is running as api-blue behind the edge`, device handoff 2/2, health through the edge settled at once, `aux: web up`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-blue is canonical (release eac453fc…)` |
+| 51.2 | The dark Ofis is served | `PROVEN_REAL` (transport) | `pagentos-prod-web` rebuilt 01:33 UTC; its CSS chunk carries the floor colour `#1b2143`; `/core/office` 200 over the tailnet. The look after sign-in is the owner's |
+| 51.3 | The tick passes -MaxHours | `PROVEN_AUTOMATED` | team-tick 7/7 with case 5b; the scheduled task does not pass it yet (set after this release) |
+| 51.4 | The scheduled tick runs again | `PROVEN_REAL` | the wrapper under %LOCALAPPDATA% was invisible to Task Scheduler (the desktop app's MSIX redirect; exit 0xFFFD0000); moved to `%USERPROFILE%\.pagentos-team`, a probe task saw it, the 01:00 tick ran and exited 3 (the lock of the running cycle - correct) |

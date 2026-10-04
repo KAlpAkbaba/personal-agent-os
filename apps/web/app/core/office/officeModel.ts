@@ -20,6 +20,7 @@ import {
   type SeatId,
   type SeatState,
 } from "./officeApi";
+import { type Mood, moodOf } from "./officeMood";
 
 export const REPORT_LINE_CAP = 40;
 export const SHA_SHORT = 12;
@@ -29,7 +30,7 @@ const SEAT_NAME_TR = new Map<SeatId, string>([
   ["researcher", "Araştırmacı"],
   ["integrator", "Entegratör"],
   ["inspector", "Denetleyici"],
-  ["owner", "Sahip"],
+  ["owner", "CTO"],
 ]);
 const WORKER_SEAT = /^worker-([1-9]\d*)$/;
 
@@ -144,6 +145,8 @@ export type DrawnSeat = {
   badge: string | null;
   /** `×3` when the seat has more than one live run. */
   runCount: string | null;
+  /** How the character feels (officeMood.ts). */
+  mood: Mood;
   /** `şu an: <model> (düşürüldü)` while a live run is on another model than configured. */
   lowered: string | null;
   ariaLabel: string;
@@ -255,11 +258,15 @@ function severalRuns(agent: OfficeAgent): OfficeRun[] {
   return runs.length > 1 ? runs : [];
 }
 
-function drawSeat(agent: OfficeAgent, ownerCount: number): DrawnSeat {
+function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now: Date = new Date()): DrawnSeat {
   const known = seatName(agent.seat);
   const name = known ?? agent.seat;
   const owner = agent.seat === "owner";
-  const state: SeatState = owner ? "waiting" : agent.state;
+  // Only a worker's seat shows a returned task: the inspector (or another non-worker seat) whose
+  // last task came back is the one that SENT it back - the worker fixes it (the owner, 2026-10-03:
+  // "denetleyici neden hala ünlemde?"). Its panel still names the task it sent back.
+  const sentBack = agent.state === "returned" && !WORKER_SEAT.test(agent.seat);
+  const state: SeatState = owner || sentBack ? "waiting" : agent.state;
   const runs = state === "working" ? severalRuns(agent).length : 0;
   const lowered = owner ? null : loweredText(agent);
   return {
@@ -272,12 +279,13 @@ function drawSeat(agent: OfficeAgent, ownerCount: number): DrawnSeat {
     label: state === "working" ? (agent.task_title ?? agent.task_id) : null,
     badge: owner ? String(ownerCount) : null,
     runCount: runs > 0 ? `×${runs}` : null,
+    mood: moodOf({ ...agent, state }, task, now),
     lowered,
     ariaLabel: `${name}, ${STATE_TR[state]}${runs > 0 ? `, ${runs} koşu` : ""}${lowered ? `, ${lowered}` : ""}`,
   };
 }
 
-export function buildOffice(view: OfficeView) {
+export function buildOffice(view: OfficeView, now: Date = new Date()) {
   const cycle = view.cycle;
   const topBar: TopBar = {
     cycleId: cycle.cycle_id ?? "döngü yok",
@@ -293,7 +301,9 @@ export function buildOffice(view: OfficeView) {
   };
   return {
     topBar,
-    seats: view.agents.map((agent) => drawSeat(agent, view.approvals.length)),
+    seats: view.agents.map((agent) =>
+      drawSeat(agent, view.approvals.length, agent.task_id ? view.tasks[agent.task_id] : undefined, now),
+    ),
     approvals: view.approvals.map((a) => ({
       taskId: a.task_id,
       title: a.title,

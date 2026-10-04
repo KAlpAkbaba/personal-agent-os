@@ -1,6 +1,9 @@
-/* The Ofis page. Own class prefix `office-`. The room paints its own light floor and walls
- * (the owner's reference: a bright office of amber and navy robots), so it reads the same on
- * the Kokpit's dark ground and on a light one; the bars around it follow the page's tokens. */
+/* The Ofis page. Own class prefix `office-`. A tech office (the owner, 2026-10-03: "güzel
+ * teknoloji bir ofis yap, motive olsunlar"): a dark wall with a night-city window, a live wall
+ * screen and a server rack, a neon strip, a light tiled floor, and characters that feel
+ * (officeMood.ts) and walk in when they take a new task. The room paints its own colours, so
+ * it reads the same on the Kokpit's dark ground and on a light one. Every motion stops under
+ * prefers-reduced-motion. */
 
 .office {
   /* the characters (officeRobots.tsx) */
@@ -10,26 +13,49 @@
   --office-navy: #3a46a8;
   --office-navy-shade: #262d73;
   --office-face: #1d2152;
+  --office-face-angry: #8a1f2d;
   --office-eye: #ffffff;
   --office-gold: #ffd25a;
   --office-prop: #1d2152;
   --office-skin: #f0c39a;
   --office-hair: #2b2238;
   --office-trousers: #262d73;
+  --office-tear: #6ec6ff;
+  --office-steam-angry: #ff7a59;
   /* the furniture */
   --office-desk: #e3a35a;
   --office-desk-edge: #b2702e;
   --office-monitor: #2b2f3d;
   --office-screen: #7ccaf0;
+  --office-screen-2: #1d2b4f;
+  --office-screen-error: #ff8f8f;
+  --office-code: #1d2152;
   --office-chair: #8b8fa3;
   --office-key: #d8dbe3;
-  --office-board: #3d4458;
+  --office-mug: #f1f4fb;
+  --office-steam: #ffffff;
+  --office-board: #11183a;
   --office-leaf: #4fae6b;
   --office-pot: #c9773e;
+  --office-rack: #2a2f45;
+  --office-rack-unit: #3b4160;
+  --office-rack-slot: #161a2a;
+  --office-led-green: #4ade80;
+  --office-led-blue: #38d9ff;
+  --office-frame: #3b4470;
+  --office-sky: #1b1f3f;
+  --office-moon: #fff2b0;
+  --office-city: #2c335c;
+  --office-city-light: #ffd25a;
+  --office-neon: #38d9ff;
   /* the room */
-  --office-floor-a: #e9ecf2;
-  --office-floor-b: #dfe3eb;
-  --office-wall: #c3c9d6;
+  /* a dark floor (the owner, 2026-10-03: "arka plan beyaz olduğu için hiçbir şey gözükmüyor") */
+  --office-floor-a: #1b2143;
+  --office-floor-b: #20274d;
+  --office-grid: rgba(56, 217, 255, 0.13);
+  --office-label: #cfe9ff;
+  --office-wall-top: #1e2347;
+  --office-wall-bottom: #2b3366;
   --office-wall-edge: #a9b0c0;
   --office-ink: #1d2152;
   --office-bubble: #ffffff;
@@ -85,9 +111,10 @@
   border-radius: 12px;
 }
 
-/* The room: a wall strip at the top for the shelf, the board and the plants, a tiled floor
- * under the desks, a strip at the bottom for the sofa and the water cooler. The furniture
- * is absolutely placed (`.office-decor`), so it never takes a grid cell. */
+/* The room: a dark wall at the top (window, wall screen, rack) above a neon strip, a light
+ * tiled floor with a faint cyan grid under the desks, a strip at the bottom for the sofa, the
+ * coffee machine and the cleaning robot. The furniture is absolutely placed (`.office-decor`),
+ * so it never takes a grid cell. */
 .office-floor {
   position: relative;
   display: grid;
@@ -95,14 +122,17 @@
   grid-template-columns: repeat(auto-fill, minmax(max(7rem, calc(25% - 0.75rem)), 1fr));
   gap: 0.75rem;
   padding: 0.75rem;
-  padding-top: 4.75rem;
-  padding-bottom: 3.25rem;
+  padding-top: 6.6rem;
+  padding-bottom: 3.4rem;
   color: var(--office-ink);
   background:
-    linear-gradient(var(--office-wall) 0, var(--office-wall) 3.6rem, var(--office-wall-edge) 3.6rem, var(--office-wall-edge) 4rem, transparent 4rem),
+    linear-gradient(var(--office-wall-top) 0, var(--office-wall-bottom) 5.4rem, var(--office-neon) 5.4rem, var(--office-neon) 5.55rem, transparent 5.55rem),
+    linear-gradient(90deg, var(--office-grid) 1px, transparent 1px) 0 0 / 2.5rem 2.5rem,
+    linear-gradient(var(--office-grid) 1px, transparent 1px) 0 0 / 2.5rem 2.5rem,
     repeating-conic-gradient(var(--office-floor-a) 0% 25%, var(--office-floor-b) 0% 50%) 0 0 / 2.5rem 2.5rem;
   border: 3px solid var(--office-wall-edge);
   border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(56, 217, 255, 0.25), 0 8px 24px rgba(16, 20, 48, 0.35);
 }
 
 .office-seat {
@@ -124,16 +154,16 @@
 }
 
 .office-seat:hover {
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(56, 217, 255, 0.1);
 }
 
 .office-seat[aria-pressed="true"] {
-  background: rgba(255, 255, 255, 0.65);
-  border-color: var(--office-navy);
+  background: rgba(56, 217, 255, 0.16);
+  border-color: var(--office-neon);
 }
 
 .office-seat:focus-visible {
-  outline: 3px solid var(--office-navy);
+  outline: 3px solid var(--office-neon);
   outline-offset: 2px;
 }
 
@@ -145,7 +175,7 @@
   white-space: nowrap;
   font-size: 0.72rem;
   font-weight: 600;
-  color: var(--office-navy-shade);
+  color: var(--office-label);
 }
 
 .office-figure {
@@ -153,6 +183,8 @@
   max-width: 8rem;
   height: auto;
   overflow: visible;
+  /* a soft light behind each character so navy and amber read on the dark floor */
+  filter: drop-shadow(0 0 6px rgba(124, 202, 240, 0.28));
 }
 
 /* the name badge under the desk, like a name card */
@@ -203,16 +235,23 @@
   height: auto;
 }
 
-.office-decor-shelf {
-  top: 0.45rem;
-  left: 1rem;
-  width: 4.6rem;
+.office-decor-window {
+  top: 0.55rem;
+  left: 0.9rem;
+  width: 8.2rem;
 }
 
-.office-decor-board {
+.office-decor-screen {
   top: 0.55rem;
-  left: 6.4rem;
-  width: 3.6rem;
+  left: 10rem;
+  width: 8.2rem;
+  filter: drop-shadow(0 0 6px rgba(56, 217, 255, 0.45));
+}
+
+.office-decor-rack {
+  top: 0.35rem;
+  right: 3.6rem;
+  width: 2.6rem;
 }
 
 .office-decor-plant {
@@ -220,8 +259,8 @@
 }
 
 .office-decor-plant-a {
-  top: 0.7rem;
-  right: 1.2rem;
+  top: 2.6rem;
+  right: 0.8rem;
 }
 
 .office-decor-plant-b {
@@ -229,10 +268,10 @@
   left: 0.9rem;
 }
 
-.office-decor-cooler {
+.office-decor-coffee {
   bottom: 0.35rem;
   left: 50%;
-  width: 1.4rem;
+  width: 1.7rem;
   transform: translateX(-50%);
 }
 
@@ -242,9 +281,15 @@
   width: 5rem;
 }
 
+.office-decor-vacuum {
+  bottom: 0.3rem;
+  left: 4rem;
+  width: 1.8rem;
+}
+
 @media (max-width: 40rem) {
-  .office-decor-board,
-  .office-decor-cooler {
+  .office-decor-screen,
+  .office-decor-coffee {
     display: none;
   }
 }
@@ -331,7 +376,9 @@
   background: transparent;
 }
 
-/* typing: the two arm frames alternate; without motion preference they never move */
+/* ------------------------------------------------------------------ the characters' motion */
+
+/* typing: the two arm frames alternate; tired hands are slower */
 .office-arms-b {
   visibility: hidden;
 }
@@ -342,6 +389,11 @@
 
 .office-typing .office-arms-b {
   animation: office-frame-b 0.5s steps(1) infinite;
+}
+
+.office-tired .office-arms-a,
+.office-tired .office-arms-b {
+  animation-duration: 1.3s;
 }
 
 @keyframes office-frame-a {
@@ -362,7 +414,7 @@
   }
 }
 
-/* a working robot's eyes blink now and then, its screen glows */
+/* a working robot's eyes blink now and then, its screen glows, its code scrolls */
 .office-typing .office-eye {
   transform-box: fill-box;
   transform-origin: center;
@@ -390,6 +442,153 @@
   }
 }
 
+.office-typing .office-code {
+  animation: office-code 1.6s steps(4) infinite;
+}
+
+@keyframes office-code {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-3px);
+    opacity: 0.6;
+  }
+}
+
+.office-typing .office-desk-glow {
+  animation: office-neon 3s ease-in-out infinite;
+}
+
+@keyframes office-neon {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* a character that just took a new task walks in to its desk, bobbing */
+.office-arriving .office-body {
+  animation: office-walk-in 2.4s ease-out both;
+}
+
+@keyframes office-walk-in {
+  0% {
+    transform: translate(-70px, 0);
+    opacity: 0.2;
+  }
+  15% {
+    transform: translate(-58px, -4px);
+    opacity: 1;
+  }
+  30% {
+    transform: translate(-44px, 0);
+  }
+  45% {
+    transform: translate(-30px, -4px);
+  }
+  60% {
+    transform: translate(-17px, 0);
+  }
+  75% {
+    transform: translate(-6px, -3px);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+/* angry: steam puffs, a small shake */
+.office-feels-angry .office-steam circle {
+  animation: office-puff 1.4s ease-out infinite;
+}
+
+.office-feels-angry .office-steam circle:nth-child(2n) {
+  animation-delay: 0.7s;
+}
+
+@keyframes office-puff {
+  0% {
+    transform: translateY(2px);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(-7px);
+    opacity: 0;
+  }
+}
+
+.office-feels-angry .office-body {
+  animation: office-shake 0.5s ease-in-out infinite;
+}
+
+@keyframes office-shake {
+  25% {
+    transform: translateX(-0.8px);
+  }
+  75% {
+    transform: translateX(0.8px);
+  }
+}
+
+/* tired: a drop of sweat slides down; sad: a tear falls */
+.office-sweat {
+  animation: office-drip 2.2s ease-in infinite;
+}
+
+.office-tear {
+  animation: office-drip 2.8s ease-in infinite;
+}
+
+@keyframes office-drip {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+}
+
+/* relaxed: the tea steams, the body breathes slowly */
+.office-steam-tea {
+  animation: office-tea 2.6s ease-in-out infinite;
+}
+
+@keyframes office-tea {
+  0% {
+    transform: translateY(2px);
+    opacity: 0;
+  }
+  40% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+}
+
+.office-feels-relaxed .office-body {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: office-breathe 4.5s ease-in-out infinite;
+}
+
+@keyframes office-breathe {
+  50% {
+    transform: scaleY(1.02);
+  }
+}
+
+/* the returned task's "!" */
 .office-warning {
   animation: office-blink 1.2s steps(1) infinite;
 }
@@ -400,12 +599,105 @@
   }
 }
 
+/* ------------------------------------------------------------------ the room's motion */
+
+.office-led {
+  animation: office-led 1.8s steps(1) infinite;
+}
+
+.office-led-1 {
+  animation-delay: 0.6s;
+}
+
+.office-led-2 {
+  animation-delay: 1.2s;
+}
+
+@keyframes office-led {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.office-bar {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  animation: office-bar 3.2s ease-in-out infinite;
+}
+
+.office-bar-1 {
+  animation-delay: -0.5s;
+}
+
+.office-bar-2 {
+  animation-delay: -1.1s;
+}
+
+.office-bar-3 {
+  animation-delay: -1.7s;
+}
+
+.office-bar-4 {
+  animation-delay: -2.3s;
+}
+
+.office-bar-5 {
+  animation-delay: -2.9s;
+}
+
+@keyframes office-bar {
+  0%,
+  100% {
+    transform: scaleY(0.45);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.office-city-blink {
+  animation: office-led 5s steps(1) infinite;
+}
+
+.office-decor-vacuum {
+  animation: office-vacuum 26s ease-in-out infinite;
+}
+
+@keyframes office-vacuum {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  45% {
+    transform: translateX(14rem);
+  }
+  50% {
+    transform: translateX(14rem) scaleX(-1);
+  }
+  95% {
+    transform: translateX(0) scaleX(-1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .office-typing .office-arms-a,
   .office-typing .office-arms-b,
   .office-typing .office-eye,
   .office-typing .office-screen-on,
-  .office-warning {
+  .office-typing .office-code,
+  .office-typing .office-desk-glow,
+  .office-arriving .office-body,
+  .office-feels-angry .office-steam circle,
+  .office-feels-angry .office-body,
+  .office-feels-relaxed .office-body,
+  .office-sweat,
+  .office-tear,
+  .office-steam-tea,
+  .office-warning,
+  .office-led,
+  .office-bar,
+  .office-city-blink,
+  .office-decor-vacuum {
     animation: none;
   }
 }

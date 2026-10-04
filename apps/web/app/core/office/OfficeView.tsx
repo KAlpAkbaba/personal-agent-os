@@ -17,6 +17,7 @@ export default function OfficeView({
   offline,
   reducedMotion,
   onSelect,
+  arriving = [],
   modelNotice = null,
   onChooseModel,
   onToggleFallback,
@@ -26,6 +27,7 @@ export default function OfficeView({
   offline: boolean;
   reducedMotion: boolean;
   onSelect: (seat: string) => void;
+  arriving?: string[];
   /** The server's sentence after a refused setting, under the selector. */
   modelNotice?: string | null;
   onChooseModel?: ChooseModel;
@@ -76,6 +78,7 @@ export default function OfficeView({
           selected={selected}
           reducedMotion={reducedMotion}
           onSelect={onSelect}
+          arriving={arriving}
         />
         <OfficePanel
           panel={panel}

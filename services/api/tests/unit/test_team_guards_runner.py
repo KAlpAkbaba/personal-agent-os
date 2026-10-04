@@ -49,7 +49,7 @@ DETAIL_MAX = 400
 LEAD_FRONTMATTER = (
     "---\n"
     "name: lead\n"
-    "description: Proje Hakimi — owns the roadmap and the definition of done, splits and "
+    "description: Proje Yöneticisi — owns the roadmap and the definition of done, splits and "
     "assigns work, sends back what is wrong, merges, reports to the owner. Use to run a team "
     "cycle.\n"
     "tools: Read, Grep, Glob, Bash, Edit, Write, Agent\n"

@@ -1,5 +1,5 @@
 {
-  "max_parallel": 3,
+  "max_parallel": 4,
   "max_inspectors": 2,
   "max_integrators": 1,
   "run_temp_root": "E:\\AI\\tmp-team"

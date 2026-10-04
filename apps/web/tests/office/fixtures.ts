@@ -34,6 +34,14 @@ export function twoWorkers(): OfficeView {
         task_title: "İkinci iş",
         since: "2026-10-01T10:05:00Z",
       };
+    if (agent.seat === "worker-4")
+      return {
+        ...agent,
+        state: "returned" as const,
+        task_id: "t-back",
+        task_title: "Geri dönen iş",
+        since: null,
+      };
     if (agent.seat === "inspector")
       return {
         ...agent,
@@ -77,6 +85,16 @@ export function twoWorkers(): OfficeView {
         branch: "team/cycle/worker-two",
         sha: null,
         reason: null,
+        report: null,
+      },
+      "t-back": {
+        title: "Geri dönen iş",
+        state: "returned",
+        goal: "dönen hedef",
+        acceptance: "dönen kabul",
+        branch: "team/cycle/back",
+        sha: null,
+        reason: "test eksik",
         report: null,
       },
       "t-old": {

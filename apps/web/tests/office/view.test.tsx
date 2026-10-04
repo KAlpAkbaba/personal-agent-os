@@ -115,7 +115,7 @@ describe("the office with every run on the page", () => {
       );
       expect(seat).toContain("var(--office-shirt)");
     }
-    expect(html).toContain('aria-label="Çalışan 4, bekliyor"');
+    expect(html).toContain('aria-label="Çalışan 4, döndü"');
     expect(html).not.toContain('data-seat="worker-5"');
   });
 

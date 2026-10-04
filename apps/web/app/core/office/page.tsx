@@ -23,6 +23,7 @@ import {
   type OfficeView as Office,
 } from "./officeApi";
 import { chooseModel, selectSeat } from "./officeModel";
+import { arrivals } from "./officeMood";
 import "./office.css";
 
 function useReducedMotion(): boolean {
@@ -47,11 +48,20 @@ export default function OfficePage() {
   const [modelNotice, setModelNotice] = useState<string | null>(null);
   const saving = useRef(false);
   const reducedMotion = useReducedMotion();
+  // the seats that just took a new task walk in to their desks for a moment
+  const [arriving, setArriving] = useState<string[]>([]);
+  const lastAnswer = useRef<Office | null>(null);
 
   useEffect(() => {
     const poller = createOfficePoller({
       fetch: fetchOffice,
       onData: (next) => {
+        const walked = arrivals(lastAnswer.current, next);
+        lastAnswer.current = next;
+        if (walked.length > 0) {
+          setArriving(walked);
+          window.setTimeout(() => setArriving([]), 2600);
+        }
         setView(next);
         // The poll's setting takes over once it is the stored one (or a newer one).
         setChosen((mine) =>
@@ -119,6 +129,7 @@ export default function OfficePage() {
           selected={selected}
           offline={offline}
           reducedMotion={reducedMotion}
+          arriving={arriving}
           onSelect={(seat) => setSelected((current) => selectSeat(current, seat))}
           modelNotice={modelNotice}
           onChooseModel={onChooseModel}
