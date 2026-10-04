@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -31,13 +32,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.identity.dependencies import require_owner_session
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import InvalidVocabulary
-from app.team import approvals, models_setting, office, trials
+from app.team import approvals, models_setting, office, progress, trials
 from app.team import store as team_store
 
 router = APIRouter(dependencies=[Depends(require_owner_session)])
 
 #: services/api/app/team/routes.py -> the repository root's ``team/``.
 DEFAULT_TEAM_ROOT = Path(__file__).resolve().parents[4] / "team"
+#: The repository tree whose roadmap and v1.0 matrix the Ofis's İlerleme strip reads.
+DEFAULT_PROGRESS_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _team_root(request: Request) -> Path:
@@ -521,6 +524,20 @@ async def read_office(request: Request) -> dict[str, Any]:
             approvals.list_pending(queue, root, store),
             team_store.utcnow(),
             models=_models_in_force(store),
-        )
+        ) | {"progress": _progress(request)}
 
     return await asyncio.to_thread(load)
+
+
+def _progress(request: Request) -> dict[str, Any]:
+    """The İlerleme strip (office-progress): additive, so a page that predates it ignores it."""
+    # The api image ships neither document: production mounts the two, read-only, under
+    # PAGENTOS_PROGRESS_ROOT (infra/docker/docker-compose.prod.yml); a checkout reads its tree.
+    root = (
+        getattr(request.app.state, "progress_root", None)
+        or os.environ.get("PAGENTOS_PROGRESS_ROOT", "").strip()
+        or DEFAULT_PROGRESS_ROOT
+    )
+    settings = getattr(request.app.state, "settings", None)
+    release = (getattr(settings, "release", None) or "").strip()
+    return progress.progress(Path(root), as_of=release or None)
