@@ -221,15 +221,15 @@ function Format-TeamBoardConsult {
     $lines.Add($pad + "seçenekler: " + (@(Get-TeamBoardField $Note "options" @()) -join " | "))
     $lines.Add($pad + "eğilimi: " + (Get-TeamBoardField $Note "my_lean"))
     $files = @(Get-TeamBoardField $Note "files" @())
-    if ($files.Count -gt 0) { $lines.Add($pad + "dosyalar: " + ($files -join ", ")) }
+    if (@($files).Count -gt 0) { $lines.Add($pad + "dosyalar: " + ($files -join ", ")) }
     $route = [string](Get-TeamBoardField $Note "route")
     if ($route) { $lines.Add($pad + "yönlendirme: " + $route) }
     if ($null -ne $Card) {
         $lines.Add($pad + "kart: " + (Get-TeamBoardField $Card "title"))
         $goal = @(Get-TeamBoardField $Card "goal" @())
-        if ($goal.Count -gt 0) { $lines.Add($pad + "hedef: " + ($goal -join " / ")) }
+        if (@($goal).Count -gt 0) { $lines.Add($pad + "hedef: " + ($goal -join " / ")) }
         $acceptance = @(Get-TeamBoardField $Card "acceptance" @())
-        if ($acceptance.Count -gt 0) { $lines.Add($pad + "kabul: " + ($acceptance -join " / ")) }
+        if (@($acceptance).Count -gt 0) { $lines.Add($pad + "kabul: " + ($acceptance -join " / ")) }
     }
     $lines.Add($pad + ("cevap: board.ps1 post -Kind cevap -ReplyTo {0} -Choice <A/B/C | 'başka: ...'> -Text '<neden>'; bağlam: board.ps1 context -Note {0}" -f $Note.id))
     return $lines.ToArray()
@@ -248,11 +248,11 @@ function Format-TeamBoardContext {
         foreach ($l in @(Get-TeamBoardField $card "goal" @())) { $lines.Add("  Hedef: " + $l) }
         foreach ($l in @(Get-TeamBoardField $card "acceptance" @())) { $lines.Add("  Kabul: " + $l) }
         $area = @(Get-TeamBoardField $card "area" @())
-        if ($area.Count -gt 0) { $lines.Add("  Alan: " + ($area -join ", ")) }
+        if (@($area).Count -gt 0) { $lines.Add("  Alan: " + ($area -join ", ")) }
     }
     else { $lines.Add("Kart: kuyrukta bulunamadı (" + $note.task + ")") }
     $answers = @(Get-TeamBoardField $Context "answers" @())
-    if ($answers.Count -eq 0) { $lines.Add("Cevaplar: henüz yok") }
+    if (@($answers).Count -eq 0) { $lines.Add("Cevaplar: henüz yok") }
     foreach ($a in $answers) { $lines.Add("Cevap: " + (Format-TeamBoardLine -Note $a).Trim()) }
     if ($DiffHead) {
         $lines.Add($DiffHead)
@@ -273,8 +273,8 @@ function Get-TeamBoardBranchDiff {
         try { $out = @(& git -C $RepoRoot diff --stat "main...$ref" 2>$null) } catch { continue }
         if ($LASTEXITCODE -eq 0) {
             $stat = @($out | Where-Object { [string]$_ } | ForEach-Object { ([string]$_).Trim() })
-            if ($stat.Count -eq 0) { $stat = @("fark yok") }
-            if ($stat.Count -gt 25) { $stat = @($stat[0..19]) + @("...") + @($stat[-1]) }
+            if (@($stat).Count -eq 0) { $stat = @("fark yok") }
+            if (@($stat).Count -gt 25) { $stat = @($stat[0..19]) + @("...") + @($stat[-1]) }
             return [pscustomobject]@{ Head = $head; Lines = $stat }
         }
     }

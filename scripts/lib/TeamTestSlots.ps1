@@ -543,13 +543,13 @@ function Get-TestSlotEstimateMinutes {
     try { $lines = [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8) } catch { return 0 }
     foreach ($line in $lines) {
         $f = @{}
-        foreach ($part in ($line -split "`t")) { $kv = $part -split "=", 2; if ($kv.Count -eq 2) { $f[$kv[0]] = $kv[1] } }
+        foreach ($part in ($line -split "`t")) { $kv = $part -split "=", 2; if (@($kv).Count -eq 2) { $f[$kv[0]] = $kv[1] } }
         if (-not $f.ContainsKey("ran_s") -or $f["exit"] -eq "holder-gone" -or $f["exit"] -eq "released") { continue }
         $runs += [pscustomobject]@{ What = [string]$f["what"]; Kinds = [string]$f["kinds"]; Ran = [int]$f["ran_s"] }
     }
     $same = @($runs | Where-Object { $_.What -eq [string]$Entry.what })
-    if ($same.Count -eq 0) { $same = @($runs | Where-Object { $_.Kinds -eq (@($Entry.kinds) -join ",") }) }
-    if ($same.Count -eq 0) { return 0 }
+    if (@($same).Count -eq 0) { $same = @($runs | Where-Object { $_.Kinds -eq (@($Entry.kinds) -join ",") }) }
+    if (@($same).Count -eq 0) { return 0 }
     $last = @($same | Select-Object -Last $script:TestSlotEstimateRuns)
     $mean = ($last | Measure-Object -Property Ran -Average).Average
     return [int][math]::Max(1, [math]::Ceiling($mean / 60))
@@ -610,14 +610,14 @@ function New-TestSlotBoardNote {
         $names = @($before | ForEach-Object { Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $_) } | Select-Object -Unique)
         $position = 1
         foreach ($w in $line) { if ($w.ticket -eq $Entry.ticket) { break }; $position++ }
-        $ahead = if ($names.Count -gt 0) { "önümde " + ($names -join ", ") } else { "önümde kimse yok" }
+        $ahead = if (@($names).Count -gt 0) { "önümde " + ($names -join ", ") } else { "önümde kimse yok" }
         $text = "{0}: test sırası bekliyorum ({1}: {2}), sıram {3}, {4}" -f $name, $kinds, $what, $position, $ahead
     }
     else {
         $started = ConvertFrom-TestSlotTime ([string]$Entry.started_at)
         $ran = if ($null -ne $started) { [int][math]::Max(0, [math]::Round(($now - $started).TotalMinutes)) } else { 0 }
         $next = @($line | Select-Object -First 1)
-        $after = if ($next.Count -gt 0) { "sıradaki: " + (Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $next[0])) } else { "sırada kimse yok" }
+        $after = if (@($next).Count -gt 0) { "sıradaki: " + (Get-TestSlotSeatName -Name (Get-TestSlotEntryName -Entry $next[0])) } else { "sırada kimse yok" }
         $text = "{0}: {1} bitti ({2} dk, çıkış {3}); {4}" -f $name, $what, $ran, $ExitCode, $after
     }
     if ($text.Length -gt $script:TestSlotNoteTextMax) { $text = $text.Substring(0, $script:TestSlotNoteTextMax - 1) + "…" }
@@ -648,8 +648,8 @@ function Get-TestSlotWhoText {
     $held = @($entries | Where-Object { $_.state -eq "granted" -or $_.state -eq "running" } | Sort-Object -Property @{ Expression = { [long]$_.seq } })
     $line = @(Get-TestSlotQueue -Entries $entries)
     $lines = New-Object System.Collections.ArrayList
-    if ($held.Count -eq 0 -and $line.Count -eq 0) { [void]$lines.Add("Şu an test yapan yok, sırada kimse yok."); return @($lines) }
-    [void]$lines.Add(("Şu an test yapan: {0}, sırada: {1}" -f $held.Count, $line.Count))
+    if (@($held).Count -eq 0 -and @($line).Count -eq 0) { [void]$lines.Add("Şu an test yapan yok, sırada kimse yok."); return @($lines) }
+    [void]$lines.Add(("Şu an test yapan: {0}, sırada: {1}" -f @($held).Count, @($line).Count))
     foreach ($e in $held) {
         $since = if ($e.started_at) { $e.started_at } else { $e.granted_at }
         $at = ConvertFrom-TestSlotTime ([string]$since)

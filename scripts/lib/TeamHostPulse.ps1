@@ -84,7 +84,7 @@ function Measure-TeamTempItems {
     $tooLarge = $false
     $prefixes = @{}
     if (-not [System.IO.Directory]::Exists($Path)) {
-        return [pscustomobject]@{ Count = 0; TooLarge = $false; TopPrefix = ''; Missing = $true }
+        return [pscustomobject]@{ 'Count' = 0; TooLarge = $false; TopPrefix = ''; Missing = $true }
     }
     $letters = [regex]'^\p{L}+'
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -107,7 +107,7 @@ function Measure-TeamTempItems {
     foreach ($key in @($prefixes.Keys | Sort-Object)) {
         if ($prefixes[$key] -gt $best) { $best = $prefixes[$key]; $top = $key }
     }
-    return [pscustomobject]@{ Count = $count; TooLarge = $tooLarge; TopPrefix = $top; Missing = $false }
+    return [pscustomobject]@{ 'Count' = $count; TooLarge = $tooLarge; TopPrefix = $top; Missing = $false }
 }
 
 function Get-TeamDriveFree {
@@ -186,7 +186,7 @@ function Get-TeamRunTree {
     $visited = @{ $rootPid = $true }
     $queue = New-Object System.Collections.Queue
     $queue.Enqueue(@($rootPid, $started, $rootBefore))
-    while ($queue.Count -gt 0) {
+    while (@($queue).Count -gt 0) {
         $node = $queue.Dequeue()
         $parentPid = [int]$node[0]
         $parentCreated = [datetime]$node[1]
@@ -330,7 +330,7 @@ function Test-TeamHostPulse {
         }
     }
 
-    return [pscustomobject]@{ Ok = ($reasons.Count -eq 0); Reasons = $reasons.ToArray() }
+    return [pscustomobject]@{ Ok = (@($reasons).Count -eq 0); Reasons = $reasons.ToArray() }
 }
 
 function Compare-TeamTempGrowth {
@@ -375,9 +375,9 @@ function Format-TeamPulseLine {
         else { $line += ', ' + $letter + ': ' + (Get-TeamPulseGb $free) + ' GB' }
     }
     $orphans = @($Pulse.Orphans)
-    if ($orphans.Count -gt 0) {
+    if (@($orphans).Count -gt 0) {
         $names = @($orphans | ForEach-Object { [string](Get-TeamPulseValue $_ 'Name' '') }) -join ', '
-        $line += ' - biten koşudan kalan süreç: ' + $orphans.Count + ' (' + $names + ')'
+        $line += ' - biten koşudan kalan süreç: ' + @($orphans).Count + ' (' + $names + ')'
     }
     if (-not $Check.Ok) {
         $line += ' - yeni iş başlatılmadı: ' + (@($Check.Reasons) -join ' / ')
