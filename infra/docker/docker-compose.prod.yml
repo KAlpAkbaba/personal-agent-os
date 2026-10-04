@@ -184,6 +184,8 @@ services:
       PAGENTOS_MEMORY_RERANK_MODEL: ${PAGENTOS_MEMORY_RERANK_MODEL:-onnx-community/bge-reranker-v2-m3-ONNX#int8}
       PAGENTOS_MEMORY_RERANK_CACHE_DIR: /srv/pagentos/var/models
       PAGENTOS_MEMORY_RERANK_TOP_K: ${PAGENTOS_MEMORY_RERANK_TOP_K:-20}
+      # office-progress: where the Ofis's İlerleme strip reads the roadmap and the v1.0 list.
+      PAGENTOS_PROGRESS_ROOT: /srv/pagentos/progress
     volumes:
       # ADR-0200: the embedding model files, shared by both colours (see the env above).
       - ${PAGENTOS_MODELS_DIR:-/mnt/pagentos-data/models}:/srv/pagentos/var/models
@@ -200,6 +202,9 @@ services:
       - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/LAST_BACKUP.json:/var/lib/pagentos-backup/LAST_BACKUP.json:ro
       - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/drills:/var/lib/pagentos-backup/drills:ro
       - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/failures:/var/lib/pagentos-backup/failures:ro
+      # office-progress: the two documents the strip counts, read-only, from the release checkout.
+      - ../../docs/ROADMAP.md:/srv/pagentos/progress/docs/ROADMAP.md:ro
+      - ../../docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:/srv/pagentos/progress/docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:ro
     ports:
       # The ONE published socket, and only on the tailnet address. If PAGENTOS_BIND_IP
       # is unset the stack refuses to start rather than defaulting to 0.0.0.0.

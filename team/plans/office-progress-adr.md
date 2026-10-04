@@ -70,9 +70,18 @@ shows until they are applied). The card's "Sıralı plan %25" was an illustratio
         - ../../docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:/srv/pagentos/progress/docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:ro
   ```
 
-  `test_the_production_api_mounts_both_documents_read_only_under_that_root` is RED until it is
-  applied. A file bind mount follows the checkout's inode: the release script must not replace the
+  Applied in this change (return 2, the compose file was added to the area);
+  `test_the_production_api_mounts_both_documents_read_only_under_that_root` guards it. A file bind mount follows the checkout's inode: the release script must not replace the
   files by rename after the container starts, or the container keeps the old copy until restart
   (a blue/green release restarts the colour anyway).
+
+- **Recovery bundle (the inspector's return 1, 2026-10-04):** this change edits
+  `infra/docker/docker-compose.prod.yml`, so the release that ships it is marked
+  `RECOVERY_BUNDLE_STALE` by `scripts/cloud/release-cloud-core-bluegreen.sh` (the compose-change
+  check). Until the bundle is refreshed the recovery timer reconciles against the previous tree's
+  inputs, and the NEXT release that changes compose again is refused with exit 83. Required step
+  after this release: re-run `install-recovery-supervisor.sh <the full 40-hex release sha>` on the
+  Cloud Core. The Danışman (Proje Yöneticisi) does it - it is within its authority; it is NOT an
+  owner step and does not go into the owner's batch.
 
 - The strip changes with the documents: a release that edits the table changes the number.
