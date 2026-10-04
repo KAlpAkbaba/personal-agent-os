@@ -445,6 +445,9 @@ Test-Case "duty: a sound decision file passes, for each of the three actions" {
     $problems = @(Get-DutyProblems -Decisions $sound -Listed @("stuck-one", "stuck-two", "stuck-three") -Tasks $two)
     Assert-Equal -Expected 0 -Actual @($problems).Count -Because ($problems -join "; ")
     Assert-Equal -Expected 0 -Actual @(Get-DutyProblems -Decisions @((New-Decision -Action "grant_and_return" -Grant @("docs/one.md")))).Count -Because "one grant, written as a one-entry list"
+    # The first real duty run (2026-10-04 15:13) wrote a sound 1341-character instruction that
+    # changed the approach on a fourth return; a 1200 bound refused the WHOLE file, both decisions.
+    Assert-Equal -Expected 0 -Actual @(Get-DutyProblems -Decisions @((New-Decision -Reason ("ç" * 1341)))).Count -Because "a long, real instruction is a decision, not a broken file"
 }
 
 $dutyBroken = @(
@@ -453,7 +456,7 @@ $dutyBroken = @(
     @{ Name = "an action of another kind"; Decision = { New-Decision -Action "merge" }; Says = "is not an action" },
     @{ Name = "an empty reason"; Decision = { New-Decision -Reason "" }; Says = "reason" },
     @{ Name = "a blank reason"; Decision = { New-Decision -Reason "   " }; Says = "reason" },
-    @{ Name = "a reason over 1200 characters"; Decision = { New-Decision -Reason ("x" * 1201) }; Says = "1200" },
+    @{ Name = "a reason over 4000 characters"; Decision = { New-Decision -Reason ("x" * 4001) }; Says = "4000" },
     @{ Name = "a grant with a plain return"; Decision = { New-Decision -Grant @("docs/extra.md") }; Says = "only with grant_and_return" },
     @{ Name = "a grant with an escalation"; Decision = { New-Decision -Action "escalate" -Grant @("docs/extra.md") }; Says = "only with grant_and_return" },
     @{ Name = "grant_and_return without a grant"; Decision = { New-Decision -Action "grant_and_return" }; Says = "1 to 5" },

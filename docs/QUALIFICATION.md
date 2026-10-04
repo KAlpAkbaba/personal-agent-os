@@ -1389,3 +1389,18 @@ standing rule.
 | 51.2 | The dark Ofis is served | `PROVEN_REAL` (transport) | `pagentos-prod-web` rebuilt 01:33 UTC; its CSS chunk carries the floor colour `#1b2143`; `/core/office` 200 over the tailnet. The look after sign-in is the owner's |
 | 51.3 | The tick passes -MaxHours | `PROVEN_AUTOMATED` | `scripts/tests/team-tick.tests.ps1` 7/7 with case 5b; the scheduled task passes `-MaxHours 12` since 2026-10-04 04:55 |
 | 51.4 | The scheduled tick runs again | `PROVEN_REAL` | the wrapper under %LOCALAPPDATA% was invisible to Task Scheduler (the desktop app's MSIX redirect; exit 0xFFFD0000); moved to `%USERPROFILE%\.pagentos-team`, a probe task saw it, the 01:00 tick ran and exited 3 (the lock of the running cycle - correct) |
+
+## Stage 52 — the Proje Yöneticisi's duty run for stopped tasks, and the Ofis names the Claude account (ADR-0283, ADR-0214 addendum 23)
+
+Released 2026-10-04 12:07 UTC (15:07 local) as main `002c6292cc0de9fd1c87423a30757b4b5ea64961` (api-green; previous
+`eac453fc…` kept as last known good; no migration). Full gate PASS on `5711e33f` (the merge commit's tree is identical),
+started 12:05, PASS 15:03 local; it waited 72 minutes in the test queue behind a worker's own full gate whose unit-test child
+had hung (140 MB, about one CPU second per 30 s for over two hours) - the Danışman stopped that child; the case is in card
+`pm-stuck-run-check`. The duty change was reviewed by an independent inspector (RETURN, two findings: an owner's rejection
+could be handed to the duty; the hand-over record died with the cycle), both fixed before the gate.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 52.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 002c6292… is running as api-green behind the edge`, health through the edge settled at once, `aux: web up`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical (release 002c6292…)` |
+| 52.2 | The duty run decides stopped tasks; an owner's rejection is never handed; the ledger outlives the cycle | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 255/255 with `duty: the ledger outlives the cycle` and `duty: a task the owner rejected` (both mutations RED: the ledger read removed, the owner skip removed); `services/api/tests/unit/test_team_approvals.py`, `test_team_approvals_while_running.py`, `tests/integration/test_team_approvals_postgres.py` on the dev stack 2/2. The first real duty run is the next cycle's |
+| 52.3 | The Ofis names the account | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_office.py::test_the_status_names_the_claude_account_and_the_office_shows_it` and its contract half; `apps/web/tests/office/model.test.ts` (mutation RED: the label returns null). Shown once a cycle started from this release writes its status |

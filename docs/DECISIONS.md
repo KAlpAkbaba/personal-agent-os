@@ -23955,3 +23955,12 @@ untrusted report text - a `git status` check after the run (nothing but the duty
 belongs to the duty, as it does to the split; a folder grant covers pattern-protected files
 inside it (`TeamArea.ps1`, the lead's file); 8.3 short names are not refused (the diff area check
 catches them later).
+
+### ADR-0283 addendum 1 (2026-10-04): a decision reason may be 4000 characters
+
+The first real duty run (2026-10-04 15:13, cycle d20261004) wrote two sound decisions; one was a
+1341-character instruction that changed the approach on a fourth return (a deny-list became an
+allow-list), as the role text asks. The 1200 bound refused the WHOLE file, so neither was applied
+(the Danışman applied them by hand). The bound is a guard against a runaway file, not a style rule:
+it is 4000 now, in `TeamQueue.ps1` and in the role text. `team-cycle.tests.ps1` accepts a 1341
+character reason and still refuses 4001 (the old bound as a mutation: RED).
