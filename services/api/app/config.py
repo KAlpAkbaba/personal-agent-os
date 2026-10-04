@@ -146,6 +146,13 @@ class Settings(BaseSettings):
     voice_realtime_openai_eagerness: str = "low"  # low | medium | high | auto
     voice_realtime_openai_transcription_model: str = "gpt-4o-transcribe"
     voice_realtime_openai_timeout_s: float = 15.0
+    # gpt-live-provider (d20261004): OpenAI GPT-Live as a SECOND realtime candidate, for
+    # MEASUREMENT only. Off by default; on, it is registered only when the same OpenAI key
+    # is present, and it still does not win a session that names no preference (it is not
+    # in voice_realtime_provider_preference) - only `prefer_provider: "openai-live"` does.
+    # Turkish on GPT-Live is UNVERIFIED by the vendor pages (team/plans/gpt-live-provider-adr.md).
+    voice_realtime_openai_live_enabled: bool = False
+    voice_realtime_openai_live_model: str = "gpt-live-1"
 
     # Device broker (M1). Heartbeat interval is sent to agents in the welcome
     # frame; liveness timeout is heartbeat_interval * liveness_factor.

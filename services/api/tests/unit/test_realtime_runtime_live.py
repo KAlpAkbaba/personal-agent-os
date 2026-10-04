@@ -7,20 +7,29 @@ name at the head of the preference order - selection is still by capability, and
 unknown name is ignored (never a 422) with the reason in ``reasons``.
 """
 
+# ruff: noqa: F811 - the shared `wired` fixture is imported and then named as a parameter
 from __future__ import annotations
+
+import json
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from app.config import Settings
+from app.voice import providers_openai_live as live_module
+from app.voice import providers_openai_realtime as realtime_module
+from app.voice.providers_openai_live import TICKET_HEADER, OpenAILiveProvider
+from app.voice.providers_openai_realtime import OpenAIRealtimeProvider
 from app.voice.realtime_sessions.routes import CreateSessionRequest
 from app.voice.realtime_sessions.runtime import (
     RealtimeVoiceRuntime,
     default_providers,
     inactive_candidates,
 )
+from tests.unit.test_voice_realtime_sessions import _create, wired  # noqa: F401
 
-VENDOR_KEY = "sk-test-live-0000000000000000"
+VENDOR_KEY = "unit-test-openai-live-vendor-key-sentinel-never-leaves-the-server"
 LIVE = "openai-live"
 
 
@@ -96,3 +105,90 @@ def test_create_session_body_accepts_prefer_provider() -> None:
 def test_create_session_body_rejects_a_malformed_prefer_provider(bad: str) -> None:
     with pytest.raises(ValidationError):
         CreateSessionRequest.model_validate({"prefer_provider": bad})
+
+
+# ----------------------------------------------- through the real application object
+
+
+def _register_live(runtime: RealtimeVoiceRuntime, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both real adapters, as production has them with the setting on: openai-realtime
+    (its mint faked) and openai-live. Live ties openai-realtime on every capability
+    preference (semantic, WebRTC), so only the preference order can decide."""
+
+    class _Mint:
+        def json(self) -> Any:
+            return {"value": "ek_fake", "expires_at": 0, "session": {"id": "sess_rt"}}
+
+    monkeypatch.setattr(realtime_module, "_send", lambda *_a, **_k: _Mint())
+    for provider in (OpenAIRealtimeProvider(VENDOR_KEY), OpenAILiveProvider(VENDOR_KEY)):
+        runtime.providers[provider.name] = provider
+
+
+def test_route_prefer_provider_picks_live_and_the_sdp_exchange_works(
+    wired, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _identity, runtime, *_ = wired
+    _register_live(runtime, monkeypatch)
+    sent: list[Any] = []
+
+    def fake_send(req: Any, **_k: Any) -> Any:
+        sent.append(req)
+
+        class _R:
+            def json(self) -> Any:
+                return {"session": {"id": "live_1"}, "transport": {"type": "webrtc", "sdp": "ANS"}}
+
+        return _R()
+
+    monkeypatch.setattr(live_module, "_send", fake_send)
+
+    default = _create(client)
+    assert default["provider"] == "openai-realtime"  # no preference -> the default selection
+
+    created = _create(client, prefer_provider=LIVE)
+    assert created["provider"] == LIVE
+    cred = created["credential"]
+    descriptor = cred["transport_descriptor"]
+    assert descriptor["dialect"] == "openai-live"
+    assert VENDOR_KEY not in json.dumps(created)
+
+    response = client.post(
+        descriptor["sdp_exchange_url"],
+        content=b"v=0\r\noffer",
+        headers={"Content-Type": "application/sdp", descriptor["ticket_header"]: cred["secret"]},
+    )
+    assert response.status_code == 201, response.text
+    assert response.text == "ANS"
+    assert response.headers["content-type"].startswith("application/sdp")
+    assert sent[0].json_body["transport"] == {"type": "webrtc", "sdp": "v=0\r\noffer"}
+    # single use: the same ticket is refused the second time, without a vendor call
+    again = client.post(
+        descriptor["sdp_exchange_url"],
+        content=b"v=0\r\noffer",
+        headers={"Content-Type": "application/sdp", descriptor["ticket_header"]: cred["secret"]},
+    )
+    assert again.status_code == 422
+    assert VENDOR_KEY not in again.text
+    assert len(sent) == 1
+
+
+def test_route_sdp_exchange_is_refused_for_a_session_of_another_provider(
+    wired, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _identity, runtime, *_ = wired
+    _register_live(runtime, monkeypatch)
+    created = _create(client)  # openai-realtime's session
+    response = client.post(
+        f"/v1/voice/realtime/sessions/{created['session_id']}/live-sdp",
+        content=b"v=0",
+        headers={"Content-Type": "application/sdp", TICKET_HEADER: "x"},
+    )
+    assert response.status_code in (404, 409, 422)
+
+
+def test_route_unknown_prefer_provider_is_ignored_and_a_malformed_one_is_422(wired) -> None:
+    client, *_ = wired
+    created = _create(client, prefer_provider="no-such-provider")
+    assert created["provider"] != "no-such-provider"
+    bad = client.post("/v1/voice/realtime/sessions", json={"prefer_provider": "Not Valid"})
+    assert bad.status_code == 422
