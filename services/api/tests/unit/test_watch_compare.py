@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from app.watch import compare
 from app.watch.compare import Prior
 

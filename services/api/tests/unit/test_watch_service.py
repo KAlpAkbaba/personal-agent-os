@@ -11,9 +11,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from app.watch import compare, runner, service
-from app.watch.models import Watch, WatchReading
-from app.watch.reader import CloudReader, Observation
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, inspect, select
 from sqlalchemy.orm import sessionmaker
@@ -26,6 +23,9 @@ from app.ledger.models import ActivityEventRow
 from app.main import create_app
 from app.notifications.models import NotificationRow
 from app.research.browser_gateway import PageDigest
+from app.watch import compare, runner, service
+from app.watch.models import Watch, WatchReading
+from app.watch.reader import CloudReader, Observation
 from tests.identity_support import authenticate, install_identity
 
 NOON = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
