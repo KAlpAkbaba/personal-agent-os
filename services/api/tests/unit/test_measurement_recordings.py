@@ -126,10 +126,36 @@ def test_the_bytes_read_back_are_the_bytes_sent(recordings):
     assert recordings.read_audio("ofis", 20, T0) == audio
 
 
-def test_the_last_sentence_of_the_office_is_ofis_20(recordings):
+def test_the_last_owner_sentence_of_the_office_is_still_ofis_20(recordings):
     item = put(recordings, "ofis", 20)
     assert item["file"] == "ofis-20.wav"
     assert item["reference"] == stt_compare.OWNER_SENTENCES[19]
+
+
+def test_the_command_sentences_are_21_to_30_and_31_is_refused(recordings):
+    first = put(recordings, "ev", 21)
+    last = put(recordings, "ofis", 30)
+    assert (first["file"], first["reference"]) == (
+        "ev-21.wav",
+        stt_compare.OFFLINE_COMMAND_SENTENCES[0],
+    )
+    assert (last["file"], last["reference"]) == (
+        "ofis-30.wav",
+        stt_compare.OFFLINE_COMMAND_SENTENCES[9],
+    )
+    for number in (31, "31"):
+        with pytest.raises(Refusal) as refused:
+            recordings.save("ev", number, audio_wav_base64=b64(wav()), now=T0)
+        assert refused.value.code == "invalid_index"
+        assert "30" in refused.value.message
+    # the manifest carries the command sentences, and "delete everything" reaches them
+    manifest = recordings.manifest(T0)
+    assert [(i["file"], i["reference"]) for i in manifest["items"]] == [
+        ("ev-21.wav", stt_compare.OFFLINE_COMMAND_SENTENCES[0]),
+        ("ofis-30.wav", stt_compare.OFFLINE_COMMAND_SENTENCES[9]),
+    ]
+    assert recordings.delete_all() == 2
+    assert recordings.list_items(T0) == []
 
 
 def test_a_second_save_replaces_audio_and_metadata_and_there_is_still_one_item(recordings, store):
@@ -163,7 +189,7 @@ REFUSALS = [
     ("audio_too_large", {"audio_wav_base64": b64(wav(1) + bytes(1_048_576))}),
     ("invalid_place", {"place": "araba"}),
     ("invalid_index", {"index": 0}),
-    ("invalid_index", {"index": 21}),
+    ("invalid_index", {"index": 31}),
     ("transcript_too_long", {"browser_transcript": "a" * 501}),
     ("engine_too_long", {"browser_engine": "e" * 65}),
     ("capture_too_many_keys", {"capture": {f"k{n}": n for n in range(21)}}),
@@ -190,7 +216,7 @@ def test_each_refusal_has_its_own_code_and_writes_nothing(recordings, store, cod
 def test_the_refusal_codes_are_distinct_per_cause():
     causes = [code for code, _ in REFUSALS]
     assert len(causes) == 16
-    assert len(set(causes)) == 14  # index 0 / 21 share one, the two capture shapes share one
+    assert len(set(causes)) == 14  # index 0 / 31 share one, the two capture shapes share one
 
 
 def test_an_oversize_body_is_refused_before_it_is_decoded(recordings, store, monkeypatch):
@@ -390,9 +416,10 @@ def test_the_manifest_of_one_place_holds_that_place_only(recordings):
 
 def test_the_layout_is_every_key_that_can_exist():
     slots = measurement.slots()
-    assert len(slots) == 40
-    assert slots[0] == ("ev", 1) and slots[-1] == ("ofis", 20)
+    assert len(slots) == 60
+    assert slots[0] == ("ev", 1) and slots[29] == ("ev", 30) and slots[-1] == ("ofis", 30)
     assert len(stt_compare.OWNER_SENTENCES) == 20
+    assert len(stt_compare.MEASUREMENT_SENTENCES) == 30
     assert measurement.RETENTION_DAYS == 30
 
 

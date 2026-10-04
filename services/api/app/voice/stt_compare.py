@@ -16,6 +16,11 @@ Per engine:
   engine did, not what the repair hides) and their :func:`intent_signature` is compared.
 * **latency p50/p95** - wall time per file. The file is sent in one go, so for a streaming
   engine this is processing time, not first-token latency.
+* **real-time factor** - Σ processing time / Σ audio time of the files that came back (0,05 =
+  twenty times faster than speech); ``None`` where it cannot be measured, never 0. A local
+  engine's row also carries the process's peak memory (``None`` where it cannot be read).
+* **intent changes on the command sentences** - the same count over the ten offline command
+  sentences (numbers 21-30) alone: the cheap always-on layer would act on exactly these.
 * **the ten worst sentences**, every engine's transcript side by side.
 
 An engine that cannot run is a ROW (``NOT_RUN`` and why), never an absence. A file an engine
@@ -62,12 +67,20 @@ from app.voice.providers import (
     is_wav,
     wav_duration_ms,
 )
+from app.voice.providers_sherpa import (
+    REASON_MODEL_HASH,
+    REASON_MODEL_MISSING,
+    REASON_NOT_INSTALLED,
+    SherpaOnnxSTTProvider,
+)
 from app.voice.providers_soniox import SONIOX_DEFAULT_MODEL, SONIOX_URL_US, SonioxSTTProvider
 from app.voice.spoken_device import resolve_without_device_phrase
 
 #: 1.1: the ``recorded_live`` rows - ``source`` on every row, ``heard_live_by``,
 #: ``from_browser`` and the items' ``browser_engine``.
-REPORT_SCHEMA_VERSION = "1.1"
+#: 1.2 (local-tr-stt-measure): every row's ``real_time_factor``, ``peak_memory_bytes`` (local
+#: rows only), ``commands_ran`` and ``intent_changes_commands``; the report's two notes.
+REPORT_SCHEMA_VERSION = "1.2"
 MANIFEST_NAME = "manifest.json"
 TEMPLATE_NAME = "manifest.template.json"
 
@@ -82,7 +95,6 @@ STATUS_NOT_RUN = "NOT_RUN"
 STATUS_FAILED = "FAILED"
 
 REASON_NOT_CONFIGURED = "not configured"
-REASON_NOT_INSTALLED = "not installed"
 REASON_NO_FILE_INPUT = "no file input"
 REASON_NOT_SELECTED = "not selected"
 REASON_NO_RECORDING = "no usable recording"
@@ -138,6 +150,27 @@ OWNER_SENTENCES: tuple[str, ...] = (
     "Bundan sonra cevapları kısa tut.",
     "Görüşürüz, dinlemeyi bırak.",
 )
+
+#: Ten sentences for the companion's offline commands (packages/protocol/device-voice.json
+#: ``offline_commands``: alarm.stop, alarm.snooze, listening.off, time.tell), numbers 21-30
+#: after the owner's twenty: five of its own templates and five natural ways of saying them
+#: that no template matches. The three listening sentences resolve to no server intent, so an
+#: intent change is counted on them only when a mishearing turns them INTO an action.
+OFFLINE_COMMAND_SENTENCES: tuple[str, ...] = (
+    "Alarmı kapat.",
+    "Alarmı ertele.",
+    "Saat kaç?",
+    "Dinlemeyi kapat.",
+    "Mikrofonu kapat.",
+    "Alarmı kapatır mısın?",
+    "Beş dakika daha ertele.",
+    "Şu an saat kaç acaba?",
+    "Artık dinleme.",
+    "Alarmı sustur lütfen.",
+)
+
+#: The measurement set, in recording order: 1-20 the owner's, 21-30 the commands.
+MEASUREMENT_SENTENCES: tuple[str, ...] = OWNER_SENTENCES + OFFLINE_COMMAND_SENTENCES
 
 
 class ManifestError(ValueError):
@@ -238,6 +271,61 @@ def intent_changed(reference: str, hypothesis: str) -> bool:
     return intent_signature(reference) != intent_signature(hypothesis)
 
 
+def is_command_sentence(reference: str) -> bool:
+    """Whether ``reference`` is one of the ten offline command sentences (punctuation and
+    case aside): the item counts in ``intent_changes_commands``."""
+    forms = {normalize_for_compare(sentence) for sentence in OFFLINE_COMMAND_SENTENCES}
+    return normalize_for_compare(reference) in forms
+
+
+def process_peak_memory_bytes() -> int | None:
+    """This process's peak memory so far (Windows: peak working set; Linux: max RSS), or
+    None when it cannot be read. One number for the PROCESS, not for an engine."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class _Counters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            # without restype/argtypes the call answers 0 (the integrator measured it)
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.K32GetProcessMemoryInfo.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(_Counters),
+                wintypes.DWORD,
+            ]
+            kernel32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+            counters = _Counters()
+            counters.cb = ctypes.sizeof(_Counters)
+            if not kernel32.K32GetProcessMemoryInfo(
+                kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+            ):
+                return None
+            return int(counters.PeakWorkingSetSize) or None
+        import resource
+
+        peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if not peak:
+            return None
+        return peak if sys.platform == "darwin" else peak * 1024  # Linux reports KiB
+    except (OSError, AttributeError, ImportError, ValueError):
+        return None
+
+
 def percentile(values: Sequence[float], percent: float) -> float | None:
     """Nearest-rank percentile; None for an empty set."""
     if not values:
@@ -326,7 +414,7 @@ def load_manifest(folder: Path) -> tuple[str, list[Recording]]:
 
 
 def write_manifest_template(folder: Path) -> Path:
-    """Write ``manifest.template.json`` (the twenty sentences to record). It is a template
+    """Write ``manifest.template.json`` (the thirty sentences to record). It is a template
     and never the manifest itself: an existing ``manifest.json`` is not touched."""
     path = folder / TEMPLATE_NAME
     template = {
@@ -337,7 +425,7 @@ def write_manifest_template(folder: Path) -> Path:
         ),
         "items": [
             {"file": f"{index:02d}.wav", "reference": sentence, "recorded_where": "masa"}
-            for index, sentence in enumerate(OWNER_SENTENCES, start=1)
+            for index, sentence in enumerate(MEASUREMENT_SENTENCES, start=1)
         ],
     }
     path.write_text(json.dumps(template, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -358,6 +446,8 @@ class Engine:
     reason: str = ""
     #: Who receives the audio when it does run - named in the summary.
     destination: str = ""
+    #: Runs in this process: its row carries the process's peak memory.
+    local: bool = False
 
 
 def configured_engines(
@@ -408,6 +498,19 @@ def configured_engines(
             local if installed else None,
             reason="" if installed else REASON_NOT_INSTALLED,
             destination="bu bilgisayar (yerel, ses dışarı çıkmaz)",
+            local=True,
+        )
+    )
+    # local-tr-stt-measure: the on-device streaming Turkish recogniser, measured only.
+    sherpa = SherpaOnnxSTTProvider()
+    sherpa_status = sherpa.status()
+    engines.append(
+        Engine(
+            "sherpa-onnx:tr-zipformer-int8",
+            sherpa if sherpa_status.ok else None,
+            reason=sherpa_status.reason,
+            destination="bu bilgisayar (yerel, ses dışarı çıkmaz)",
+            local=True,
         )
     )
     # A browser API on a live microphone: there is no way to hand it a file.
@@ -431,6 +534,10 @@ class _Tally:
         self.latencies: list[float] = []
         self.sentence_wers: list[float] = []
         self.intent_changes = 0
+        #: Σ audio of the files that have a latency: the real-time factor's denominator.
+        self.timed_audio_ms = 0
+        self.commands = 0
+        self.command_intent_changes = 0
 
     def score(
         self,
@@ -459,8 +566,12 @@ class _Tally:
         self.ran += 1
         if latency_ms is not None:
             self.latencies.append(latency_ms)
+            self.timed_audio_ms += int(item.get("audio_ms") or 0)
         self.sentence_wers.append(score.wer)
         self.intent_changes += int(changed)
+        if is_command_sentence(recording.reference):
+            self.commands += 1
+            self.command_intent_changes += int(changed)
 
     @staticmethod
     def fail(
@@ -487,6 +598,11 @@ class _Tally:
         row["intent_changes"] = self.intent_changes
         row["latency_p50_ms"] = percentile(self.latencies, 50)
         row["latency_p95_ms"] = percentile(self.latencies, 95)
+        row["real_time_factor"] = (
+            round(sum(self.latencies) / self.timed_audio_ms, 4) if self.timed_audio_ms else None
+        )
+        row["commands_ran"] = self.commands
+        row["intent_changes_commands"] = self.command_intent_changes if self.commands else None
 
 
 def run_comparison(
@@ -564,6 +680,10 @@ def run_comparison(
             "intent_changes": None,
             "latency_p50_ms": None,
             "latency_p95_ms": None,
+            "real_time_factor": None,
+            "peak_memory_bytes": None,
+            "commands_ran": 0,
+            "intent_changes_commands": None,
             "errors": [],
             "source": SOURCE_FILE,
         }
@@ -607,6 +727,8 @@ def run_comparison(
                 )
                 tally.fail(row, item, engine.label, recording, error_class)
         tally.close(row)
+        if engine.local:
+            row["peak_memory_bytes"] = process_peak_memory_bytes()
 
     tried = [row for row in engine_rows if row["status"] != STATUS_NOT_RUN]
     live = [row for row in tried if row["source"] == SOURCE_RECORDED_LIVE]
@@ -622,6 +744,13 @@ def run_comparison(
             "numbers left as spoken; Turkish letters kept"
         ),
         "latency": "wall time per file sent in one go: processing time, not first-token latency",
+        "real_time_factor": (
+            "sum of processing time / sum of audio time of the files that came back"
+        ),
+        "memory": (
+            "peak_memory_bytes: the measuring PROCESS's peak so far when a local row closed "
+            "(every engine runs in one process), not one engine's own"
+        ),
         "recordings": {
             "listed": len(recordings),
             "usable": len(usable),
@@ -687,6 +816,8 @@ _REASON_TR = {
     REASON_NO_FILE_INPUT: "dosyadan ölçülemez (canlı mikrofon ister)",
     REASON_NOT_SELECTED: "bu çalıştırmada seçilmedi",
     REASON_NO_RECORDING: "ölçülecek kayıt yok",
+    REASON_MODEL_MISSING: "Türkçe model eksik (dosya yok)",
+    REASON_MODEL_HASH: "Türkçe model dosyası sabitlenen hash ile tutmuyor; yüklenmedi",
     SKIP_NOT_FOUND: "dosya yok",
     SKIP_NOT_WAV: "WAV değil (yalnız WAV ölçülür)",
 }
@@ -732,6 +863,22 @@ def summary_tr(report: dict[str, Any]) -> list[str]:
             f"{_tr_number(row['latency_p95_ms'], 0)} | "
             f"{row['files_ran']} ölçüldü, {row['files_failed']} hata"
         )
+    for row in report["engines"]:
+        if row["status"] != STATUS_RAN:
+            continue
+        extra = []
+        if row.get("real_time_factor") is not None:
+            extra.append(f"gerçek zaman çarpanı {_tr_number(row['real_time_factor'], 3)}")
+        if row.get("peak_memory_bytes") is not None:
+            megabytes = row["peak_memory_bytes"] / 1_048_576
+            extra.append(f"süreç tepe belleği {_tr_number(megabytes, 0)} MB")
+        if row.get("commands_ran"):
+            extra.append(
+                f"Komut cümleleri: niyeti değişen {row['intent_changes_commands']} / "
+                f"{row['commands_ran']}"
+            )
+        if extra:
+            lines.append(f"{row['label']}: " + "; ".join(extra))
     sent = report["audio_sent_to"]
     if sent:
         names = "; ".join(f"{entry['engine']} -> {entry['destination']}" for entry in sent)
@@ -776,7 +923,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--write-template",
         action="store_true",
-        help=f"write {TEMPLATE_NAME} (the twenty sentences) into the folder and stop",
+        help=f"write {TEMPLATE_NAME} (the thirty sentences) into the folder and stop",
     )
     return parser.parse_args(argv)
 
@@ -797,7 +944,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.write_template:
         _say(f"Şablon yazıldı: {write_manifest_template(folder)}")
         _say(
-            "Yirmi cümleyi birer kez kaydedin (WAV, PCM 16-bit, mono, 16 kHz), dosyaları bu "
+            "Otuz cümleyi birer kez kaydedin (WAV, PCM 16-bit, mono, 16 kHz), dosyaları bu "
             f"klasöre koyun, şablonun adını {MANIFEST_NAME} yapın ve komutu yeniden çalıştırın."
         )
         return EXIT_OK
@@ -863,6 +1010,8 @@ if __name__ == "__main__":  # pragma: no cover - the module entry point
 
 __all__ = [
     "MANIFEST_NAME",
+    "MEASUREMENT_SENTENCES",
+    "OFFLINE_COMMAND_SENTENCES",
     "OWNER_SENTENCES",
     "REPORT_SCHEMA_VERSION",
     "TEMPLATE_NAME",
@@ -876,7 +1025,9 @@ __all__ = [
     "load_manifest",
     "main",
     "normalize_for_compare",
+    "is_command_sentence",
     "percentile",
+    "process_peak_memory_bytes",
     "run_comparison",
     "score_pair",
     "summary_tr",

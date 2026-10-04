@@ -22,6 +22,13 @@ from app.voice.providers import (
     STTResult,
     synthesize_wav,
 )
+from app.voice.providers_sherpa import (
+    REASON_MODEL_HASH,
+    REASON_MODEL_MISSING,
+    REASON_NOT_INSTALLED,
+    ModelStatus,
+    SherpaOnnxSTTProvider,
+)
 
 OFIS_REF = "Ofis bilgisayarımdan hesap makinesini aç"
 OFIS_HEARD = "Ofisü bilgisayarında hesap makinesini açın"
@@ -397,19 +404,23 @@ def test_a_manifest_item_without_a_reference_is_refused(tmp_path: Path) -> None:
         sc.load_manifest(folder)
 
 
-def test_the_template_holds_twenty_sentences_and_never_replaces_a_manifest(tmp_path: Path) -> None:
+def test_the_template_holds_thirty_sentences_and_never_replaces_a_manifest(tmp_path: Path) -> None:
     folder = tmp_path / "bos"
     folder.mkdir()
     path = sc.write_manifest_template(folder)
     assert path == folder / sc.TEMPLATE_NAME
     template = json.loads(path.read_text(encoding="utf-8"))
-    assert len(template["items"]) == 20
+    assert len(template["items"]) == 30
     assert template["items"][0] == {
         "file": "01.wav",
         "reference": "Ofis bilgisayarımdan hesap makinesini aç.",
         "recorded_where": "masa",
     }
     assert template["items"][9]["reference"] == "Iğdır'ın hava durumu nasıl?"
+    # the owner's twenty first, numbered as before; the ten command sentences after them
+    assert [i["reference"] for i in template["items"][:20]] == list(sc.OWNER_SENTENCES)
+    assert [i["reference"] for i in template["items"][20:]] == list(sc.OFFLINE_COMMAND_SENTENCES)
+    assert template["items"][29]["file"] == "30.wav"
     assert not (folder / sc.MANIFEST_NAME).exists()
 
 
@@ -420,6 +431,11 @@ def _no_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (sc.OPENAI_KEY_ENV, sc.SONIOX_KEY_ENV, sc.AZURE_KEY_ENV):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(FasterWhisperSTTProvider, "available", lambda self: False)
+    monkeypatch.setattr(
+        SherpaOnnxSTTProvider,
+        "status",
+        lambda self: ModelStatus(False, REASON_NOT_INSTALLED, "sherpa-onnx kurulu değil"),
+    )
 
 
 def test_configured_engines_lists_every_engine_with_or_without_a_key(
@@ -433,6 +449,7 @@ def test_configured_engines_lists_every_engine_with_or_without_a_key(
         ("soniox:stt-rt-v5", True, "not configured"),
         ("azure:tr-TR", True, "not configured"),
         ("faster-whisper:large-v3-turbo", True, "not installed"),
+        ("sherpa-onnx:tr-zipformer-int8", True, "not installed"),
         ("chrome-web-speech", True, "no file input"),
     ]
     with_keys = sc.configured_engines({sc.OPENAI_KEY_ENV: "sk-x", sc.SONIOX_KEY_ENV: " k "})
@@ -453,7 +470,7 @@ def test_cli_with_no_credentials_writes_the_table_and_exits_zero(
     assert sc.main(["--folder", str(folder), "--out", str(out)]) == sc.EXIT_OK
     report = json.loads(out.read_text(encoding="utf-8"))
     assert {row["status"] for row in report["engines"]} == {sc.STATUS_NOT_RUN}
-    assert len(report["engines"]) == 6
+    assert len(report["engines"]) == 7
     assert report["audio_sent_to"] == []
     assert "NOT_RUN" in capsys.readouterr().out
 
@@ -586,3 +603,121 @@ def test_the_report_schema_is_one_point_two_for_the_real_time_factor(
     (tmp_path / sc.TEMPLATE_NAME).rename(tmp_path / sc.MANIFEST_NAME)
     assert sc.REPORT_SCHEMA_VERSION == "1.2"
     assert sc.run_comparison(tmp_path, [])["schema_version"] == "1.2"
+
+
+# ------------------------------------- local-tr-stt-measure: the on-device row and the factor
+
+SHERPA = "sherpa-onnx:tr-zipformer-int8"
+
+
+def test_the_sherpa_row_is_right_after_faster_whisper_and_says_why_it_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_keys(monkeypatch)
+    labels = [engine.label for engine in sc.configured_engines({})]
+    assert labels[labels.index("faster-whisper:large-v3-turbo") + 1] == SHERPA
+    for status, reason, tr in (
+        (ModelStatus(False, REASON_NOT_INSTALLED, "x"), "not installed", "kurulu değil"),
+        (ModelStatus(False, REASON_MODEL_MISSING, "x"), "model missing", "model eksik"),
+        (ModelStatus(False, REASON_MODEL_HASH, "x"), "model hash mismatch", "hash"),
+    ):
+        monkeypatch.setattr(SherpaOnnxSTTProvider, "status", lambda self, s=status: s)
+        [row] = [e for e in sc.configured_engines({}) if e.label == SHERPA]
+        assert (row.provider, row.reason) == (None, reason)
+        assert row.destination == "bu bilgisayar (yerel, ses dışarı çıkmaz)"
+        assert tr in sc._REASON_TR[row.reason]
+
+
+def test_an_installed_sherpa_with_a_verified_model_is_a_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_keys(monkeypatch)
+    monkeypatch.setattr(SherpaOnnxSTTProvider, "status", lambda self: ModelStatus(True, "", ""))
+    [row] = [e for e in sc.configured_engines({}) if e.label == SHERPA]
+    assert isinstance(row.provider, SherpaOnnxSTTProvider) and row.reason == ""
+    assert row.local is True
+
+
+def test_the_real_time_factor_is_processing_time_over_audio_time(tmp_path: Path) -> None:
+    refs = ["bir", "iki"]
+    folder = _folder(tmp_path, refs)
+    engine = ScriptedSTT({ref: ref for ref in refs})
+    # 100 ms and 300 ms of processing
+    ticks: Iterator[float] = iter([0.0, 0.1, 1.0, 1.3])
+    report = sc.run_comparison(folder, [sc.Engine("a", engine)], clock=lambda: next(ticks))
+    audio_ms = sum(item["audio_ms"] for item in report["items"])
+    assert audio_ms > 0
+    assert _row(report, "a")["real_time_factor"] == pytest.approx(400.0 / audio_ms, abs=1e-4)
+
+
+def test_the_real_time_factor_is_null_without_audio_time_never_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = _folder(tmp_path, ["bir"])
+    monkeypatch.setattr(sc, "wav_duration_ms", lambda audio: 0)
+    ticks: Iterator[float] = iter([0.0, 0.2])
+    row = _row(
+        sc.run_comparison(
+            folder, [sc.Engine("a", ScriptedSTT({"bir": "bir"}))], clock=lambda: next(ticks)
+        ),
+        "a",
+    )
+    assert row["status"] == sc.STATUS_RAN
+    assert row["real_time_factor"] is None
+    # a row that did not run has none either
+    absent = sc.run_comparison(folder, [sc.Engine("b", None, reason=sc.REASON_NOT_CONFIGURED)])
+    assert _row(absent, "b")["real_time_factor"] is None
+
+
+def test_peak_memory_is_written_on_the_local_row_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = _folder(tmp_path, ["bir"])
+    monkeypatch.setattr(sc, "process_peak_memory_bytes", lambda: 123_456_789)
+    report = sc.run_comparison(
+        folder,
+        [
+            sc.Engine("cloud", ScriptedSTT({"bir": "bir"})),
+            sc.Engine("local", ScriptedSTT({"bir": "bir"}), local=True),
+        ],
+    )
+    assert _row(report, "cloud")["peak_memory_bytes"] is None
+    assert _row(report, "local")["peak_memory_bytes"] == 123_456_789
+    monkeypatch.setattr(sc, "process_peak_memory_bytes", lambda: None)
+    again = sc.run_comparison(folder, [sc.Engine("local", ScriptedSTT({"bir": "bir"}), local=True)])
+    assert _row(again, "local")["peak_memory_bytes"] is None
+
+
+def test_the_process_peak_memory_reads_a_positive_number_here() -> None:
+    peak = sc.process_peak_memory_bytes()
+    assert peak is None or peak > 1_000_000
+
+
+def test_ten_command_sentences_and_the_owners_twenty_unchanged() -> None:
+    assert len(sc.OFFLINE_COMMAND_SENTENCES) == 10
+    assert len(set(sc.OFFLINE_COMMAND_SENTENCES)) == 10
+    assert len(sc.OWNER_SENTENCES) == 20
+    assert sc.OWNER_SENTENCES[0] == "Ofis bilgisayarımdan hesap makinesini aç."
+    assert sc.OWNER_SENTENCES[19] == "Görüşürüz, dinlemeyi bırak."
+    assert sc.MEASUREMENT_SENTENCES == sc.OWNER_SENTENCES + sc.OFFLINE_COMMAND_SENTENCES
+    assert not set(sc.OWNER_SENTENCES) & set(sc.OFFLINE_COMMAND_SENTENCES)
+    # the companion's own templates and the natural ways of saying them that no template has
+    assert "Alarmı kapat." in sc.OFFLINE_COMMAND_SENTENCES
+    assert "Alarmı kapatır mısın?" in sc.OFFLINE_COMMAND_SENTENCES
+
+
+def test_the_command_sentences_intent_changes_are_counted_apart(tmp_path: Path) -> None:
+    owner, command = sc.OWNER_SENTENCES[6], sc.OFFLINE_COMMAND_SENTENCES[0]
+    folder = _folder(tmp_path, [owner, command, sc.OFFLINE_COMMAND_SENTENCES[2]])
+    engine = ScriptedSTT(
+        {
+            owner: "Alarmı on dakika ertele.",
+            command: "Alarmı kapatma.",  # heard as the opposite: an intent change
+            sc.OFFLINE_COMMAND_SENTENCES[2]: sc.OFFLINE_COMMAND_SENTENCES[2],
+        }
+    )
+    assert sc.intent_changed(command, "Alarmı kapatma.")
+    report = sc.run_comparison(folder, [sc.Engine("a", engine)])
+    row = _row(report, "a")
+    assert (row["commands_ran"], row["intent_changes_commands"]) == (2, 1)
+    assert any("Komut cümleleri" in line and "1 / 2" in line for line in report["summary_tr"])
