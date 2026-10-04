@@ -1008,9 +1008,14 @@ Test-Case "worker-changed: pure - the branch does not contain the integration br
     Assert-List -Expected @("b.txt", "a.txt") -Actual $files -Because "nothing is taken away"
 }
 
-Test-Case "worker-changed: pure - contained -> the intersection, in the base diff's order" {
+Test-Case "worker-changed: pure - contained -> the intersection in the base diff's order, then the second diff's own files" {
     $files = Select-TeamWorkerChangedFiles -BaseDiff @("z/own.txt", "foreign.txt", "a/own.txt") -AlsoBaseDiff @("a/own.txt", "z/own.txt", "only-also.txt") -ContainsAlsoBase $true
-    Assert-List -Expected @("z/own.txt", "a/own.txt") -Actual $files -Because "only files in both diffs, never one that is only in the second"
+    Assert-List -Expected @("z/own.txt", "a/own.txt", "only-also.txt") -Actual $files -Because "a file only in the second diff is one the worker took back to main: it is counted"
+}
+
+Test-Case "worker-changed: pure - contained, the worker only took integrate's files back -> those files" {
+    $files = Select-TeamWorkerChangedFiles -BaseDiff @() -AlsoBaseDiff @("foreign/g.txt", "shared/z.txt") -ContainsAlsoBase $true
+    Assert-List -Expected @("foreign/g.txt", "shared/z.txt") -Actual $files -Because "undoing another card's change is a change outside the area"
 }
 
 Test-Case "worker-changed: pure - contained, nothing of the worker's own -> empty" {
@@ -1053,6 +1058,7 @@ try {
     }
     Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "main`n" -Message "main: own"
     Set-SandboxFile -Dir $sandbox -Path "other/y.txt" -Text "main`n" -Message "main: other"
+    Set-SandboxFile -Dir $sandbox -Path "shared/z.txt" -Text "main`n" -Message "main: shared"
     # integrate/c1: another card's approved work, a file outside this worker's area.
     [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "integrate/c1", "main"))
     Set-SandboxFile -Dir $sandbox -Path "foreign/f.txt" -Text "another card`n" -Message "another card"
@@ -1072,6 +1078,24 @@ try {
     # (f) rebuilt on integrate/c1, changes the other card's file again, differently.
     [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-redo", "integrate/c1"))
     Set-SandboxFile -Dir $sandbox -Path "foreign/f.txt" -Text "the worker's own version`n" -Message "worker: foreign again"
+    # (g) integrate/c2: another card changes main's shared/z.txt and adds foreign/g.txt; the
+    # worker, rebuilt on it, changes its own file and takes BOTH back to main (the inspector's
+    # escape of 4 October: with the intersection alone these vanished from the list).
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "integrate/c2", "main"))
+    Set-SandboxFile -Dir $sandbox -Path "shared/z.txt" -Text "another card`n" -Message "another card: shared"
+    Set-SandboxFile -Dir $sandbox -Path "foreign/g.txt" -Text "another card`n" -Message "another card: new file"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-revert", "integrate/c2"))
+    Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "worker`n" -Message "worker: own"
+    Set-SandboxFile -Dir $sandbox -Path "shared/z.txt" -Text "main`n" -Message "worker: shared back to main"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("rm", "-q", "--", "foreign/g.txt"))
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("commit", "-q", "-m", "worker: the other card's new file removed"))
+    # (g) merged variant: from main, own change, integrate/c2 merged in, then both taken back.
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-revert-merged", "main"))
+    Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "worker`n" -Message "worker: own"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("merge", "-q", "--no-ff", "-m", "merge integrate/c2", "integrate/c2"))
+    Set-SandboxFile -Dir $sandbox -Path "shared/z.txt" -Text "main`n" -Message "worker: shared back to main"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("rm", "-q", "--", "foreign/g.txt"))
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("commit", "-q", "-m", "worker: the other card's new file removed"))
     [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "main"))
 
     Test-Case "worker-changed: (a) rebuilt on integrate -> with -AlsoBase only its own file; without it the foreign file too (the 3 October fault)" {
@@ -1107,6 +1131,17 @@ try {
     Test-Case "worker-changed: (f) the worker changes integrate's file again, differently -> the file is counted" {
         $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-redo" -Base "main" -AlsoBase "integrate/c1"
         Assert-List -Expected @("foreign/f.txt") -Actual $files -Because "a real change to that file is the worker's and does not escape"
+    }
+
+    Test-Case "worker-changed: (g) the worker takes integrate's files back to main -> they are counted" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-revert" -Base "main" -AlsoBase "integrate/c2"
+        Assert-List -Expected @("own/x.txt", "foreign/g.txt", "shared/z.txt") -Actual $files -Because "undoing another card's change and deleting its file are the worker's changes"
+        Assert-List -Expected @("own/x.txt") -Actual @(Get-TeamChangedFiles -RepoRoot $sandbox -Branch "w-revert" -Base "main") -Because "the diff against main alone does not see them"
+    }
+
+    Test-Case "worker-changed: (g) the same after merging integrate into the branch -> they are counted" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-revert-merged" -Base "main" -AlsoBase "integrate/c2"
+        Assert-List -Expected @("own/x.txt", "foreign/g.txt", "shared/z.txt") -Actual $files -Because "a merge commit does not hide the take-back"
     }
 
     Test-Case "worker-changed: a branch that does not exist still fails as Get-TeamChangedFiles does" {
