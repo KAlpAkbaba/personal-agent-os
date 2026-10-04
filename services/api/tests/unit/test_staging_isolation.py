@@ -55,16 +55,24 @@ PRODUCTION_MARKERS = (
 #: Hosts and domains of real mail / calendar / identity accounts.
 REAL_ACCOUNT_MARKERS = re.compile(
     r"gmail\.com|googlemail|google\.com|outlook\.|office365|hotmail|live\.com|icloud|"
-    r"yahoo\.|yandex|protonmail|calendar\.google|graph\.microsoft",
+    r"yahoo\.|yandex|protonmail|proton\.me|calendar\.google|graph\.microsoft|fastmail|"
+    r"zoho|gmx\.|mail\.ru|caldav\.|carddav\.|nextcloud|radicale",
     re.IGNORECASE,
 )
 
 #: Settings that would connect the api to a real account or a paid provider. In staging each
 #: is absent, empty, or (for a key) an interpolation of a PAGENTOS_STAGING_* variable.
 ACCOUNT_SETTINGS = re.compile(
-    r"^PAGENTOS_(MAIL_|CALENDAR_ICS_URL|SMTP_|IMAP_|GOOGLE_|MICROSOFT_|GRAPH_|WEBPUSH_)"
+    r"^PAGENTOS_(MAIL_|CALDAV_|CALENDAR_ICS_URL|SMTP_|IMAP_|GOOGLE_|MICROSOFT_|GRAPH_|WEBPUSH_)"
 )
-KEY_SETTINGS = re.compile(r"(API_KEY|_TOKEN|_SECRET_KEY|_CLIENT_SECRET)$")
+KEY_SETTINGS = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$")
+#: The same idea on the api's RESOLVED Settings (field names, any position): every such str
+#: field is empty, a `staging-only*` literal, or set from a PAGENTOS_STAGING_* variable.
+SECRET_FIELD = re.compile(r"key|secret|password|passwd|token|credential", re.IGNORECASE)
+#: Settings fields that bind the api to an account; in staging they stay empty.
+ACCOUNT_FIELD = re.compile(
+    r"^(caldav_|calendar_ics_url$|mail_(imap|smtp)_(host|user|password)$|mail_from$)"
+)
 INTERPOLATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)")
 
 
@@ -114,6 +122,17 @@ def _texts() -> dict[str, str]:
 # can prove the check sees what it is for.
 
 
+def _staging_key_only(raw: str) -> bool:
+    """`${PAGENTOS_STAGING_X}` / `${PAGENTOS_STAGING_X:-}` and nothing else: no literal around
+    it and no default that could itself be a key."""
+    refs = list(re.finditer(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}", raw))
+    return (
+        bool(refs)
+        and all(m.group(1).startswith("PAGENTOS_STAGING_") and not m.group(2) for m in refs)
+        and not re.sub(r"\$\{[^}]*\}", "", raw).strip()
+    )
+
+
 def production_violations(texts: dict[str, str]) -> list[str]:
     found = []
     for name, text in texts.items():
@@ -147,11 +166,10 @@ def account_violations(compose: dict[str, Any], texts: dict[str, str]) -> list[s
                 found.append(f"{svc_name}: {key}={value!r} connects a real account")
             if KEY_SETTINGS.search(key) and value.strip():
                 # Either a literal staging-only constant, or ONLY PAGENTOS_STAGING_* variables.
-                vars_ = INTERPOLATION.findall(value)
-                literal_ok = not vars_ and value.strip().startswith("staging-only")
-                if not literal_ok and not (
-                    vars_ and all(v.startswith("PAGENTOS_STAGING_") for v in vars_)
-                ):
+                literal_ok = not INTERPOLATION.findall(value) and value.strip().startswith(
+                    "staging-only"
+                )
+                if not literal_ok and not _staging_key_only(value):
                     found.append(
                         f"{svc_name}: {key} carries a key that is not a PAGENTOS_STAGING_* test key"
                     )
@@ -336,6 +354,25 @@ def settings_violations(settings: dict[str, Any]) -> list[str]:
     ]
 
 
+def secret_violations(settings: dict[str, Any], env: dict[str, str]) -> list[str]:
+    """Every secret-named or account field of the resolved Settings, whatever its env name."""
+    found = []
+    for field, value in settings.items():
+        if not isinstance(value, str) or not value.strip():
+            continue
+        if ACCOUNT_FIELD.match(field):
+            found.append(f"settings.{field} is set - it connects a real account")
+            continue
+        if not SECRET_FIELD.search(field) or value.strip().startswith("staging-only"):
+            continue
+        if not _staging_key_only(env.get(f"PAGENTOS_{field.upper()}", "")):
+            found.append(
+                f"settings.{field} carries a secret that is neither staging-only nor a "
+                "PAGENTOS_STAGING_* test key"
+            )
+    return found
+
+
 def network_violations(compose: dict[str, Any]) -> list[str]:
     found = []
     networks = compose.get("networks") or {}
@@ -409,6 +446,43 @@ def test_checker_catches_a_route_to_the_tailnet() -> None:
     texts = _texts()
     texts["docker-compose.staging.yml"] += '\n      - "pagentos-core:100.90.158.26"\n'
     assert production_violations(_blackhole_lines_removed(texts))
+
+
+def test_staging_api_settings_carry_no_secret_or_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _env(_load(STAGING)["services"]["api"])
+    assert secret_violations(_effective_settings(env, monkeypatch), env) == []
+
+
+def test_checker_catches_a_planted_caldav_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Inspector 2026-10-04: a real CalDAV account passed the name-based checks green.
+    for key, value in (
+        ("PAGENTOS_CALDAV_URL", "https://caldav.fastmail.com/dav/"),
+        ("PAGENTOS_CALDAV_USER", "owner@fastmail.com"),
+        ("PAGENTOS_CALDAV_PASSWORD", "hunter2-real"),
+    ):
+        compose = copy.deepcopy(_load(STAGING))
+        compose["services"]["api"]["environment"][key] = value
+        env = _env(compose["services"]["api"])
+        assert account_violations(compose, _texts()), key
+        assert secret_violations(_effective_settings(env, monkeypatch), env), key
+
+
+def test_checker_catches_a_planted_vendor_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Inspector 2026-10-04: a hand-written Azure speech key passed green (_SPEECH_KEY was not
+    # in the name list) - so the check reads every secret-named field of the resolved Settings.
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["api"]["environment"]["PAGENTOS_VOICE_AZURE_SPEECH_KEY"] = "0123" * 8
+    env = _env(compose["services"]["api"])
+    assert account_violations(compose, _texts())
+    assert secret_violations(_effective_settings(env, monkeypatch), env)
+    # A staging variable whose DEFAULT is a real key is still a real key.
+    compose = copy.deepcopy(_load(STAGING))
+    compose["services"]["api"]["environment"]["PAGENTOS_VOICE_OPENAI_API_KEY"] = (
+        "${PAGENTOS_STAGING_VOICE_OPENAI_API_KEY:-sk-real}"
+    )
+    env = _env(compose["services"]["api"])
+    assert account_violations(compose, _texts())
+    assert secret_violations(_effective_settings(env, monkeypatch), env)
 
 
 def test_checker_catches_a_planted_shared_volume() -> None:
