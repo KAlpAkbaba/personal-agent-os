@@ -58,3 +58,8 @@ bildirsin, o da Danışman'a bildirsin." Staging (scripts/staging/, 127.0.0.1:28
 - First real round (2026-10-05, staging 6a21294c): health broke at 256 concurrent (p95 8.6-9.2 s
   > 5 s); misheard held to 128; watch routes 404 - staging was deployed 2026-10-04 09:15, before
   the watch engine release: staging is not redeployed after a release.
+- Second run (2026-10-05 16:14 UTC, same staging 6a21294c, run-scenario.ps1 by hand): health held
+  to 128 concurrent (p95 4526 ms) and broke at 256 (p95 10051 ms > 5000 ms, 0 errors); the planted
+  scenario failed as planted (DELETE /v1/watches/<zero id>: expected 200, actual 404); :8000,
+  https :28001 and `x@127.0.0.1:28001` refused with exit 2 before any request. The retest closes
+  the planted card only after staging carries the fix: a release to main must also redeploy staging.
