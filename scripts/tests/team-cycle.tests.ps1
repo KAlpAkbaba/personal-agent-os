@@ -3998,7 +3998,7 @@ try {
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
         $calls = Get-WorkerCalls -Run $run -Id "task-b"
         Assert-Equal -Expected 1 -Actual @($calls).Count -Because "one fixing run"
-        Assert-Equal -Expected "worker-2" -Actual $calls[0].seat -Because "the owner seat, not the lowest free one"
+        Assert-Equal -Expected "worker-2" -Actual $calls[0].team_seat -Because "the owner seat, not the lowest free one"
         Assert-Equal -Expected "sess-old-b" -Actual $calls[0].resume -Because "the run that fixes it resumes the session that built it"
         Assert-True -Condition ([bool]$calls[0].came_back -and [bool]$calls[0].came_back_report) -Because "with the reason and the inspector's report in its prompt"
         Assert-True -Condition ([bool]$calls[0].keeps_session) -Because "and keeps its session for the next return"
@@ -4015,14 +4015,14 @@ try {
         $run = $script:busyRun
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
         $workers = @($run.Calls | Where-Object { $_.role -eq "worker" } | Sort-Object -Property at)
-        $onTwo = @($workers | Where-Object { $_.seat -eq "worker-2" } | ForEach-Object { $_.task }) -join ","
-        Assert-Equal -Expected "task-b,task-e,task-b" -Actual $onTwo -Because "worker-2 built task-b, took a new task while it was inspected, then fixed task-b - and nothing else: $(@($workers | ForEach-Object { "$($_.task)@$($_.seat)" }) -join ' ')"
+        $onTwo = @($workers | Where-Object { $_.team_seat -eq "worker-2" } | ForEach-Object { $_.task }) -join ","
+        Assert-Equal -Expected "task-b,task-e,task-b" -Actual $onTwo -Because "worker-2 built task-b, took a new task while it was inspected, then fixed task-b - and nothing else: $(@($workers | ForEach-Object { "$($_.task)@$($_.team_seat)" }) -join ' ')"
         $b = @(Get-WorkerCalls -Run $run -Id "task-b" | Sort-Object -Property at)
         $e = @(Get-WorkerCalls -Run $run -Id "task-e")[0]
         Assert-Equal -Expected 2 -Actual @($b).Count -Because "built once, fixed once"
         Assert-Equal -Expected $b[0].session -Actual $b[1].resume -Because "the fix resumed the session of the run that built it"
         Assert-True -Condition ($b[1].at -ge ($e.at + [TimeSpan]::FromSeconds(11.5).Ticks)) -Because "the fix waited for worker-2's run of task-e to end"
-        Assert-Equal -Expected "worker-1" -Actual (@(Get-WorkerCalls -Run $run -Id "task-f")[0]).seat -Because "worker-1 took the new task while the return waited for worker-2"
+        Assert-Equal -Expected "worker-1" -Actual (@(Get-WorkerCalls -Run $run -Id "task-f")[0]).team_seat -Because "worker-1 took the new task while the return waited for worker-2"
         Assert-Equal -Expected "merged,merged,merged,merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because $run.Report
     }
 
@@ -4035,7 +4035,7 @@ try {
         $calls = @(Get-WorkerCalls -Run $run -Id "task-b" | Sort-Object -Property at)
         Assert-Equal -Expected "sess-gone|" -Actual ((@($calls) | ForEach-Object { $_.resume }) -join "|") -Because "the resume was tried, then a fresh run"
         Assert-True -Condition ([bool]$calls[1].fallback_said -and [bool]$calls[1].came_back_report) -Because "the fresh run is told, and has the inspector's report"
-        Assert-Equal -Expected "worker-1" -Actual $calls[1].seat -Because "on the same seat"
+        Assert-Equal -Expected "worker-1" -Actual $calls[1].team_seat -Because "on the same seat"
         $task = Get-TaskById -Queue $run.Queue -Id "task-b"
         Assert-Equal -Expected "merged" -Actual $task.state -Because $run.Report
         Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0)) -Because "a session the tool no longer has is nobody's failure"
@@ -4068,7 +4068,7 @@ try {
         $a = @(Get-WorkerCalls -Run $run -Id "task-a")[0]
         $c = @(Get-WorkerCalls -Run $run -Id "task-c")[0]
         $inspection = @($run.Calls | Where-Object { $_.role -eq "inspector" -and $_.task -eq "task-a" })[0]
-        Assert-Equal -Expected "worker-1|worker-1" -Actual "$($a.seat)|$($c.seat)" -Because "one seat, two tasks"
+        Assert-Equal -Expected "worker-1|worker-1" -Actual "$($a.team_seat)|$($c.team_seat)" -Because "one seat, two tasks"
         Assert-True -Condition ($c.at -lt ($inspection.at + [TimeSpan]::FromSeconds(6).Ticks)) -Because "the worker did not idle while its work was inspected"
         Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because $run.Report
         $records = Read-TeamJson -Path (Join-Path $root "team\logs\seats.json")
@@ -4083,7 +4083,7 @@ try {
         $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
         $calls = @(Get-WorkerCalls -Run $run -Id "task-b")
         Assert-Equal -Expected 1 -Actual @($calls).Count -Because ($run.StdOut + $run.StdErr + $run.Report)
-        Assert-Equal -Expected "worker-1" -Actual $calls[0].seat -Because "any worker"
+        Assert-Equal -Expected "worker-1" -Actual $calls[0].team_seat -Because "any worker"
         Assert-Equal -Expected "" -Actual $calls[0].resume -Because "another worker does not resume worker-3's session"
         Assert-True -Condition ($run.Report -match "task-b: worker-3 61 dakikadır yok; geri dönen iş herhangi bir çalışana verildi") -Because "the reason: $($run.Report)"
 
@@ -4113,7 +4113,7 @@ try {
         $root = New-Sandbox -Tasks @((New-ReturnedTask -Id "task-b" -Area @("src/b")))
         $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2
         $calls = @(Get-WorkerCalls -Run $run -Id "task-b")
-        Assert-Equal -Expected "worker-1|" -Actual "$($calls[0].seat)|$($calls[0].resume)" -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker-1|" -Actual "$($calls[0].team_seat)|$($calls[0].resume)" -Because ($run.StdOut + $run.StdErr + $run.Report)
         Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-b").state -Because $run.Report
     }
 
@@ -4283,7 +4283,7 @@ try {
             $workers = @($calls | Where-Object { $_.role -eq "worker" })
             Assert-Equal -Expected "task-1,task-2,task-3,task-4" -Actual ((@($workers | ForEach-Object { $_.task }) | Sort-Object) -join ",") -Because "each worker ran once - no run was started twice"
             $fourth = @($workers | Where-Object { $_.task -eq "task-4" })[0]
-            Assert-Equal -Expected "worker-4" -Actual $fourth.seat -Because "the adopted runs kept worker-1..3; the free seat was filled - no seat double-booked"
+            Assert-Equal -Expected "worker-4" -Actual $fourth.team_seat -Because "the adopted runs kept worker-1..3; the free seat was filled - no seat double-booked"
             Assert-True -Condition ($fourth.at -lt ($first.at + [TimeSpan]::FromSeconds(25).Ticks)) -Because "the free seat was filled while the adopted runs were still live"
             $queue = Read-TeamJson -Path (Join-Path $root "team\queue.json")
             Assert-Equal -Expected "merged,merged,merged,merged" -Actual (@(Get-TeamTasks -Queue $queue | ForEach-Object { $_.state }) -join ",") -Because "the adopted runs' reports were read and their tasks went on"
