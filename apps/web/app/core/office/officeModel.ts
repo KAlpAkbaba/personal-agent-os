@@ -75,6 +75,19 @@ export const TASK_STATE_TR: Record<string, string> = {
  * şekilde güncelleyelim"). A duty return that waits for another task's files names the seat that
  * holds them; a task with the Danışman says so; anything else is null (the plain state text).
  */
+/** A seat name in the accusative: "Çalışan 2" -> "Çalışan 2'yi", "Denetleyici" -> "Denetleyici'yi". */
+export function accusative(name: string): string {
+  const digit = /(\d)$/.exec(name);
+  if (digit) {
+    const suffix = ["'ı", "'i", "'yi", "'ü", "'ü", "'i", "'yı", "'yi", "'i", "'u"][Number(digit[1])];
+    return `${name}${suffix}`;
+  }
+  const vowels = name.toLocaleLowerCase("tr").match(/[aeıioöuü]/g);
+  const last = vowels ? vowels[vowels.length - 1] : "e";
+  const harmony = "aı".includes(last) ? "ı" : "ei".includes(last) ? "i" : "ou".includes(last) ? "u" : "ü";
+  return /[aeıioöuü]$/i.test(name) ? `${name}'y${harmony}` : `${name}'${harmony}`;
+}
+
 export function waitText(view: OfficeView, task: OfficeTask | undefined): { short: string; long: string } | null {
   if (!task || task.state !== "stopped") return null;
   const reason = task.reason ?? "";
@@ -84,7 +97,7 @@ export function waitText(view: OfficeView, task: OfficeTask | undefined): { shor
     const agent = view.agents.find((a) => a.task_id === holder && a.state === "working");
     const seat = agent ? seatName(agent.seat) : null;
     const title = view.tasks[holder]?.title ?? holder;
-    if (seat) return { short: `${seat}'i bekliyor`, long: `Sırada: ${seat} "${title}" işini bitirince başlayacak` };
+    if (seat) return { short: `${accusative(seat)} bekliyor`, long: `Sırada: ${seat} "${title}" işini bitirince başlayacak` };
     return { short: "sırasını bekliyor", long: `Sırada: "${title}" işi bitince başlayacak` };
   }
   if (/^\s*Danışman'a iletildi:/.test(reason)) return { short: "Danışman'da", long: "Danışman'a iletildi: karar onda" };

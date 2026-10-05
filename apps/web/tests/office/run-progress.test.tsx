@@ -8,7 +8,7 @@ vi.mock("../../app/lib/session", () => ({
 }));
 
 import OfficePanel from "../../app/core/office/OfficePanel";
-import { buildOffice, buildPanel, panelProgress, waitText } from "../../app/core/office/officeModel";
+import { accusative, buildOffice, buildPanel, panelProgress, waitText } from "../../app/core/office/officeModel";
 import { twoWorkers } from "./fixtures";
 
 // The owner, 2026-10-05: "tıkladığımda ajanların çalıştıkları kısımda kodun yüzde kaçını yazdığı
@@ -84,5 +84,18 @@ describe("a stopped task names what it waits for", () => {
     const parked = { ...view.tasks[waiting.task_id!], reason: "Danışman'a iletildi: entegrasyon dalında çakışma" };
     expect(waitText(view, parked)!.short).toBe("Danışman'da");
     expect(waitText(view, { ...parked, reason: "1: gerçek bir hata" })).toBeNull();
+  });
+});
+
+describe("the seat name in Turkish accusative", () => {
+  it("follows the number's sound and the name's last vowel", () => {
+    expect(accusative("Çalışan 1")).toBe("Çalışan 1'i");
+    expect(accusative("Çalışan 2")).toBe("Çalışan 2'yi");
+    expect(accusative("Çalışan 3")).toBe("Çalışan 3'ü");
+    expect(accusative("Çalışan 4")).toBe("Çalışan 4'ü");
+    expect(accusative("Çalışan 6")).toBe("Çalışan 6'yı");
+    expect(accusative("Çalışan 9")).toBe("Çalışan 9'u");
+    expect(accusative("Denetleyici")).toBe("Denetleyici'yi");
+    expect(accusative("Araştırmacı")).toBe("Araştırmacı'yı");
   });
 });
