@@ -97,13 +97,12 @@ describe("the test room", () => {
   });
 
   // The inspector, 2026-10-05: <TestRoom> was never mounted - the Ofis did not show the Test
-  // odası (an acceptance item). RED until OfficeView.tsx (outside this card's area) takes the
-  // test seats and draws the room beside the software team (ALAN_ISTEGI).
+  // odası (an acceptance item). OfficeView takes the test seats and draws the room beside the
+  // software team; page.tsx reads them from the board with every office poll.
   it("the Ofis page itself shows the Test odası beside the software team", () => {
     const seats = testRoomFromBoard([note("tester-2", "iş: saglik (tj-r1-2)", "2026-10-05T12:00:00Z")], NOW);
-    const extra = { testSeats: seats } as Record<string, unknown>;
     const html = renderToStaticMarkup(
-      <OfficeView view={twoWorkers()} selected={null} offline={false} reducedMotion={false} onSelect={() => {}} {...extra} />,
+      <OfficeView view={twoWorkers()} selected={null} offline={false} reducedMotion={false} onSelect={() => {}} testSeats={seats} />,
     );
     expect(html).toContain("Test odası");
     expect(html.match(/data-test-seat="/g)?.length).toBe(5);

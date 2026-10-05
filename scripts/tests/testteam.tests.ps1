@@ -804,6 +804,35 @@ Test-Case "the board takes the test team's seats and the Danışman's, so the ro
     }
 }
 
+Test-Case "a round sends its breaking report to the board as test-lead, addressed to the Danışman's seat" {
+    # The inspector, 2026-10-05: a round that posted the report with no -To survived every test.
+    $work = New-Work
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"yuk","scenario":"scripts/testteam/scenarios/yuk.json","improvise":true}]}'
+        $fake = New-FakeTester -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        # A stand-in board.ps1: one line per post, its arguments joined by '|'.
+        $posts = Join-Path $work "posts.log"
+        $fakeBoard = Join-Path $work "board.ps1"
+        Write-Utf8 $fakeBoard ("[IO.File]::AppendAllText('$posts', ((@(`$args) -join '|') + [Environment]::NewLine), (New-Object Text.UTF8Encoding(`$false)))")
+        $out = & $powershell -NoProfile -File $testRound -Round "rb" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -BoardScript $fakeBoard 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
+        $lines = @([System.IO.File]::ReadAllLines($posts, [System.Text.Encoding]::UTF8) | Where-Object { $_ -match "kopma noktası" })
+        Assert-Equal -Expected 1 -Actual @($lines).Count -Because "one breaking report note: $out"
+        Assert-True -Condition ($lines[0] -match '(^|\|)-Seat\|test-lead(\||$)') -Because "posted as test-lead: $($lines[0])"
+        Assert-True -Condition ($lines[0] -match '(^|\|)-To\|danisman(\||$)') -Because "addressed to the Danışman: $($lines[0])"
+    }
+    finally {
+        Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ============================================================================ the role files
 
 Write-Host ""

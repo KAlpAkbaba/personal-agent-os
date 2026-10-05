@@ -134,6 +134,28 @@ def test_a_field_that_breaks_the_rules_is_a_422(store: board.Board, fields) -> N
     assert store.read(now=NOW) == []
 
 
+TEST_TEAM_SEATS = ("test-lead", "tester-1", "tester-2", "tester-3", "tester-4", "danisman")
+NOT_TEST_TEAM_SEATS = ("tester-0", "tester-5", "tester-1-", "Tester-1", "test-lead-1", "danışman")
+
+
+@pytest.mark.parametrize("seat", TEST_TEAM_SEATS)
+def test_the_test_teams_seats_and_the_danisman_post_and_are_addressed(
+    store: board.Board, seat: str
+) -> None:
+    # The test team (scripts/testteam/) posts as test-lead / tester-1..4 and sends the
+    # breaking-point report to the Danışman's seat.
+    posted = store.post(_note(seat=seat, to="danisman", text="kopma noktası"), now=NOW)
+    assert (posted["seat"], posted["to"]) == (seat, "danisman")
+
+
+@pytest.mark.parametrize("field", ["seat", "to"])
+@pytest.mark.parametrize("seat", NOT_TEST_TEAM_SEATS)
+def test_a_seat_beside_the_test_teams_is_a_422(store: board.Board, seat: str, field: str) -> None:
+    refused = _refused(lambda: store.post(_note(**{field: seat}), now=NOW))
+    assert refused.status == 422, refused.problems
+    assert store.read(now=NOW) == []
+
+
 def test_a_note_missing_a_field_is_a_422(store: board.Board) -> None:
     body = _note()
     del body["kind"]

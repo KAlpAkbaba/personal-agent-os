@@ -57,6 +57,8 @@ param(
     [string]$SlotStore = "",
     [int]$RunMinutes = 60,
     [switch]$NoBoard,
+    # For the tests: a stand-in for scripts\team\board.ps1.
+    [string]$BoardScript = "",
     [switch]$Retest,
     [string]$BaseUrl = "http://127.0.0.1:28001",
     [int]$AllowTestPort = 0,
@@ -114,7 +116,8 @@ function Send-Note {
     # The board never stops the round (board.ps1 says UYARI and exits 0 when it cannot post).
     param([string]$Seat, [string]$Text, [string]$To = "")
     if ($NoBoard) { return }
-    $arguments = @("-NoProfile", "-File", (Join-Path $repoRoot "scripts\team\board.ps1"), "post", "-Seat", $Seat, "-Task", "test-team", "-Kind", "bilgi", "-Text", $Text)
+    $board = if ($BoardScript) { $BoardScript } else { Join-Path $repoRoot "scripts\team\board.ps1" }
+    $arguments = @("-NoProfile", "-File", $board, "post", "-Seat", $Seat, "-Task", "test-team", "-Kind", "bilgi", "-Text", $Text)
     if ($To) { $arguments += @("-To", $To) }
     try { & $powershell @arguments 2>&1 | ForEach-Object { Write-Host "  pano: $_" } } catch { Write-Host "  pano: UYARI: $($_.Exception.Message)" }
 }

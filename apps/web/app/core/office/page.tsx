@@ -24,6 +24,7 @@ import {
 } from "./officeApi";
 import { chooseModel, selectSeat } from "./officeModel";
 import { arrivals } from "./officeMood";
+import { fetchTestRoom, testRoomFromBoard, type TestSeat } from "./officeTestRoom";
 import "./office.css";
 
 function useReducedMotion(): boolean {
@@ -51,6 +52,8 @@ export default function OfficePage() {
   // the seats that just took a new task walk in to their desks for a moment
   const [arriving, setArriving] = useState<string[]>([]);
   const lastAnswer = useRef<Office | null>(null);
+  // the test team's room, read from the board with every office poll
+  const [testSeats, setTestSeats] = useState<TestSeat[]>(() => testRoomFromBoard([], new Date()));
 
   useEffect(() => {
     const poller = createOfficePoller({
@@ -63,6 +66,7 @@ export default function OfficePage() {
           window.setTimeout(() => setArriving([]), 2600);
         }
         setView(next);
+        void fetchTestRoom().then(setTestSeats);
         // The poll's setting takes over once it is the stored one (or a newer one).
         setChosen((mine) =>
           mine && !saving.current && next.models && next.models.updated_at >= mine.updated_at
@@ -134,6 +138,7 @@ export default function OfficePage() {
           modelNotice={modelNotice}
           onChooseModel={onChooseModel}
           onToggleFallback={save}
+          testSeats={testSeats}
         />
       )}
     </FamilyPage>

@@ -90,3 +90,11 @@ bildirsin, o da Danışman'a bildirsin." Staging (scripts/staging/, 127.0.0.1:28
 8. **Outside this card's area (red contract tests committed):** `services/api/app/team/board.py`
    SEAT_PATTERN must accept `test-lead`, `tester-1..4` and `danisman`;
    `apps/web/app/core/office/OfficeView.tsx` must take `testSeats` and mount `<TestRoom>`.
+9. **Board seats (closed 2026-10-05).** `SEAT_PATTERN` in `board.py` and `TeamBoard.ps1` (one
+   string, a unit test compares) adds `test-lead|tester-[1-4]|danisman`; `tester-0`, `tester-5`
+   stay refused as seat and as `to`. The live board refuses `test-lead` until this reaches the
+   Cloud Core (HTTP 422 on main, 2026-10-05). `test-round.ps1 -BoardScript` lets a test see the
+   round's own posts: the breaking report goes as `test-lead` with `-To danisman`.
+10. **Test odası mounted (closed 2026-10-05).** `OfficeView` takes `testSeats` and draws
+   `<TestRoom>` under the scene; `page.tsx` reads the board with every office poll and starts
+   from five waiting seats.
