@@ -17,7 +17,7 @@ import {
   FakeSpeechDetector,
   FakeTransport,
 } from "../../app/lib/voice/fake";
-import type { SidebandFrame } from "../../app/lib/voice/contract";
+import type { SessionCredential, SidebandFrame } from "../../app/lib/voice/contract";
 import { NOT_UNDERSTOOD_TR, TOOL_FAILED_TR } from "../../app/lib/voice/localMode";
 import type { RealtimeTransport } from "../../app/lib/voice/transport";
 import { WebRtcTransport } from "../../app/lib/voice/webrtc";
@@ -416,9 +416,63 @@ describe("controller + openai-live", () => {
     expect(t.controller.getSnapshot().sidebandLog).toContain("plan değişti: brifing (rev 4)");
   });
 
-  it("the real WebRTC transport carries commentary to the data channel", () => {
+  it("the real WebRTC transport carries commentary to the data channel", async () => {
     // Without it no delegation result ever reaches GPT-Live in the real shell.
     expect(typeof (WebRtcTransport.prototype as RealtimeTransport).appendCommentary).toBe("function");
+    const sent: string[] = [];
+    const channel = {
+      readyState: "connecting",
+      onopen: null as (() => void) | null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+      send: (data: string) => sent.push(data),
+      close: () => undefined,
+    };
+    const pc = {
+      ontrack: null,
+      onconnectionstatechange: null,
+      connectionState: "new",
+      createDataChannel: () => {
+        queueMicrotask(() => {
+          channel.readyState = "open";
+          channel.onopen?.();
+        });
+        return channel;
+      },
+      addTrack: () => ({ replaceTrack: async () => undefined }),
+      addTransceiver: () => undefined,
+      createOffer: async () => ({ type: "offer", sdp: "v=0 offer" }),
+      setLocalDescription: async () => undefined,
+      setRemoteDescription: async () => undefined,
+      close: () => undefined,
+    };
+    const transport = new WebRtcTransport({
+      peerConnectionFactory: () => pc as unknown as RTCPeerConnection,
+      fetchImpl: (async () => new Response("v=0 answer", { status: 201 })) as unknown as typeof fetch,
+    });
+    const mic = { getAudioTracks: () => [{ id: "mic-track" }] } as unknown as MediaStream;
+    await transport.connect(
+      {
+        kind: "webrtc",
+        sdp_exchange_url: "https://provider.example/live",
+        data_channel: "oai-events",
+        dialect: "openai-live",
+      },
+      {
+        provider: "openai-live",
+        secret: "ephemeral-test",
+        expires_at: "2099-01-01T00:00:00Z",
+        transport: "webrtc",
+        session_ref: "ref-live",
+      } satisfies SessionCredential,
+      { microphone: mic, now: () => 1 },
+    );
+    transport.appendCommentary("d1", LIGHTS_SPEECH);
+    expect(sent.map((s) => JSON.parse(s) as unknown)).toEqual([
+      { type: "session.commentary.append", delegation_id: "d1", content: LIGHTS_SPEECH },
+    ]);
+    transport.close();
   });
 
   it("the vendor closing the session cancels the pending delegation", async () => {

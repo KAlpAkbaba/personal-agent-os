@@ -38,7 +38,7 @@ describe("transport descriptor", () => {
   });
 
   it("names dialects explicitly; there is no default vendor", () => {
-    expect(knownDialects()).toEqual(["openai-realtime"]);
+    expect(knownDialects()).toEqual(["openai-live", "openai-realtime"]);
     expect(() => dialectFor(undefined)).toThrow(TransportConfigError);
     expect(() => dialectFor("mystery")).toThrow(/unknown event dialect/);
     expect(dialectFor("openai-realtime").name).toBe("openai-realtime");
