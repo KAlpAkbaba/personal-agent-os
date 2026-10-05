@@ -68,7 +68,8 @@ def _matrix(rows: list[tuple[str, str]]) -> str:
 def test_the_real_roadmap_jarvis_table_is_16_rows_4_have_5_partial_7_missing_41_percent():
     # 2026-10-05: the owner's five JARVIS rows (calls him, home stock, follows him outside,
     # verifies what he hears, his conversations) - 12 rows at 62% became 17 at 47%; the same day the
-    # owner cut the workshop, the holograms and the NEVER row (15 rows, 43%), then added his money: 16 rows, 6.5 of 16 = 41%.
+    # owner cut the workshop, the holograms and the NEVER row (15 rows, 43%), then added his
+    # money: 16 rows, 6.5 of 16 = 41%.
     jarvis = progress.parse_jarvis((REPO / progress.ROADMAP).read_text(encoding="utf-8"))
     assert jarvis is not None
     assert (jarvis["have"], jarvis["partial"], jarvis["missing"], jarvis["never"]) == (4, 5, 7, 0)
