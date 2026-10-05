@@ -143,6 +143,87 @@ def test_only_the_allowlisted_forms_delete(text: str) -> None:
     assert resolved.intent is expected, resolved
 
 
+#: Return 4: the deleting intents match the WHOLE sentence or nothing. A verbal-noun object
+#: ("silmeyi unut" - forget about deleting), a negation or one extra word deletes nothing.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Nöbetleri silmeyi unut.",
+        "Nöbetlerimi silmeyi unut.",
+        "Nöbetleri kaldırmayı unut.",
+        "Nöbeti silmeyi unut.",
+        "Fiyat nöbetini silmeyi unut.",
+        "Fiyat nöbetini silmeyi unut lütfen.",
+        "Nöbetleri unutmayı unut.",
+        "Nöbetleri silme lütfen.",
+        "Nöbetleri sakın silme.",
+        "Nöbetleri asla silme.",
+        "Nöbetleri silmeyin.",
+        "Nöbetleri hemen silme.",
+        "Nöbetleri yarın sil.",
+        "Nöbetleri sonra kaldır.",
+        "Nöbetlerden birini unut.",
+        "Nöbetleri silip yenisini kur.",
+        "Nöbetleri değil alarmı sil.",
+        "Silmeyi unut, fiyat nöbetini kaldır.",
+    ],
+)
+def test_a_sentence_off_the_whole_pattern_deletes_nothing(text: str) -> None:
+    resolved = resolve_intent(text)
+    assert resolved.intent not in (Intent.WATCH_FORGET_ALL, Intent.WATCH_REMOVE), resolved
+
+
+def test_nobetleri_silmeyi_unut_is_none() -> None:
+    # Return 4, the inspector's finding: "forget about deleting" deleted every watch.
+    resolved = resolve_intent("Nöbetleri silmeyi unut.")
+    assert resolved.intent is Intent.NONE, resolved
+
+
+@pytest.mark.parametrize(
+    ("text", "intent_name"),
+    [
+        ("Lütfen nöbetleri sil.", "WATCH_FORGET_ALL"),
+        ("Nöbetlerin hepsini sil.", "WATCH_FORGET_ALL"),
+        ("Tüm nöbetlerimi iptal et.", "WATCH_FORGET_ALL"),
+        ("Nöbetleri silin lütfen.", "WATCH_FORGET_ALL"),
+        ("Bu nöbeti kaldır.", "WATCH_REMOVE"),
+        ("Home Assistant nöbetini kaldır.", "WATCH_REMOVE"),
+        ("Fiyat nöbetini kaldırın.", "WATCH_REMOVE"),
+    ],
+)
+def test_the_whole_patterns_still_delete(text: str, intent_name: str) -> None:
+    assert resolve_intent(text).intent is getattr(Intent, intent_name)
+
+
+#: Return 4: the Turkish numeral, strictly - a dot groups thousands in threes, a comma is the
+#: decimal mark; any other shape is not read (None) so the model's argument stands.
+@pytest.mark.parametrize(
+    ("said", "condition"),
+    [
+        ("1.250,75", "number_below:1250.75"),
+        ("20.000", "number_below:20000"),
+        ("40,5", "number_below:40.5"),
+        ("1.250", "number_below:1250"),
+        ("1250", "number_below:1250"),
+        ("1.000.000", "number_below:1000000"),
+        ("12.345,6", "number_below:12345.6"),
+        ("0,99", "number_below:0.99"),
+        ("20 bin", "number_below:20000"),
+        ("1,5 milyon", "number_below:1500000"),
+        ("yirmi bin", "number_below:20000"),
+        ("1.25", None),
+        ("1.2.3", None),
+        ("12.34", None),
+        ("1.2345", None),
+        ("1,2,3", None),
+    ],
+)
+def test_the_turkish_numeral_is_read_strictly(said: str, condition: str | None) -> None:
+    resolved = resolve_intent(f"Fiyat {said} liranın altına inerse haber ver.")
+    assert resolved.intent is Intent.WATCH_CREATE, resolved
+    assert resolved.watch_condition == condition
+
+
 def test_a_question_about_deleting_is_a_query_never_a_delete() -> None:
     assert resolve_intent("Nöbetleri sildin mi?").intent is Intent.WATCH_LIST
 
@@ -404,6 +485,27 @@ def test_a_spoken_comma_decimal_wins_whole(wired) -> None:
     answer = _tool(client, sid, "watch.create", {"url": SHOP_URL, "condition": "number_above:40.5"})
     assert answer["status"] == "succeeded", answer
     assert [w.condition for w in _watches(factory)] == ["number_above:40.5"]
+
+
+def test_a_thousands_dot_and_a_decimal_comma_win_whole(wired) -> None:
+    # Return 4: "1.250,75" was number_below:1325 and overwrote the model's right argument.
+    client, factory = wired
+    sid = _session(client)
+    _say(client, sid, "Fiyat 1.250,75 liranın altına inerse haber ver.")
+    answer = _tool(
+        client, sid, "watch.create", {"url": SHOP_URL, "condition": "number_below:1250.75"}
+    )
+    assert answer["status"] == "succeeded", answer
+    assert [w.condition for w in _watches(factory)] == ["number_below:1250.75"]
+
+
+def test_a_numeral_not_read_for_certain_leaves_the_models_condition(wired) -> None:
+    client, factory = wired
+    sid = _session(client)
+    _say(client, sid, "Fiyat 1.2.3 liranın altına inerse haber ver.")
+    answer = _tool(client, sid, "watch.create", {"url": SHOP_URL, "condition": "number_below:123"})
+    assert answer["status"] == "succeeded", answer
+    assert [w.condition for w in _watches(factory)] == ["number_below:123"]
 
 
 def test_the_turn_record_carries_the_watch_fields(wired) -> None:
