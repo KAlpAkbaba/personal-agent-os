@@ -534,6 +534,16 @@
   }
 }
 
+/* sleepy (held by the usage limit, the owner 2026-10-05): the Zz drifts up and fades */
+.office-zz {
+  animation: office-zz 3s ease-in-out infinite;
+}
+
+@keyframes office-zz {
+  0%, 100% { opacity: 0.35; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-3px); }
+}
+
 /* tired: a drop of sweat slides down; sad: a tear falls */
 .office-sweat {
   animation: office-drip 2.2s ease-in infinite;
@@ -691,6 +701,7 @@
   .office-feels-angry .office-body,
   .office-feels-relaxed .office-body,
   .office-sweat,
+  .office-zz,
   .office-tear,
   .office-steam-tea,
   .office-warning,

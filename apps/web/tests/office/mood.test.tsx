@@ -63,7 +63,16 @@ describe("how a character feels", () => {
     const view = twoWorkers();
     expect(moodOf(view.agents.find((a) => a.seat === "lead")!, undefined, NOW)).toBe("relaxed");
     expect(moodOf(view.agents.find((a) => a.seat === "owner")!, undefined, NOW)).toBe("happy");
-    expect(Object.keys(MOOD_TR).toSorted()).toEqual(["angry", "focused", "happy", "relaxed", "sad", "tired"]);
+    expect(Object.keys(MOOD_TR).toSorted()).toEqual([
+      "angry",
+      "focused",
+      "happy",
+      "relaxed",
+      "sad",
+      "sleepy",
+      "tired",
+      "waiting",
+    ]);
   });
 
   it("buildOffice carries each seat's mood from the clock it is given", () => {
@@ -153,5 +162,55 @@ describe("the tech office", () => {
 
   it("names the owner's seat CTO", () => {
     expect(seatHtml(render(twoWorkers()), "owner")).toContain("CTO");
+  });
+});
+
+// The owner, 2026-10-05: "limitten dolayı işler yarıda kaldıysa ajanlar masalarında uyuklasın,
+// ekstra bir sorundan dolayı işler yarım kaldıysa sadece kızgın olsunlar; limitten dolayı yeni iş
+// gelmiyorsa onlar da uyuklasın - böylece ayırt edebilelim."
+describe("the usage limit, a wait and a real problem look different", () => {
+  const view = twoWorkers();
+  const back = view.tasks["t-back"];
+  const returned = view.agents.find((a) => a.seat === "worker-4")!;
+  const idle = { ...returned, seat: "worker-3", state: "waiting" as const, task_id: null };
+
+  it("while the limit holds, a seat with nothing to do and a sent-back seat doze", () => {
+    expect(moodOf(idle, undefined, NOW, true)).toBe("sleepy");
+    expect(moodOf(returned, back, NOW, true)).toBe("sleepy");
+    expect(moodOf(idle, undefined, NOW, false)).toBe("relaxed");
+    expect(moodOf(returned, back, NOW, false)).toBe("sad");
+  });
+
+  it("a run the limit cut dozes, limit or not by now", () => {
+    const cut = { ...back, report: { role: "worker", at: "", outcome: "başarısız: Max kullanım limiti", summary: [] } };
+    expect(moodOf(returned, cut, NOW, false)).toBe("sleepy");
+  });
+
+  it("a stop for a real problem stays angry even under the limit", () => {
+    const stopped = { ...back, state: "stopped", reason: "1: olumsuz emir silmeye gidiyor" };
+    expect(moodOf(returned, stopped, NOW, true)).toBe("angry");
+    expect(moodOf(returned, stopped, NOW, false)).toBe("angry");
+  });
+
+  it("a stop that only waits - for another task's files, or with the Danışman - waits calmly", () => {
+    const files = { ...back, state: "stopped", reason: "Proje Yöneticisi: testi ekle (alan çakışması: watch-voice; o iş bitince)" };
+    const parked = { ...back, state: "stopped", reason: "Danışman'a iletildi: entegrasyon dalında çakışma" };
+    expect(moodOf(returned, files, NOW)).toBe("waiting");
+    expect(moodOf(returned, parked, NOW)).toBe("waiting");
+    expect(MOOD_TR.sleepy).toBe("uyukluyor");
+    expect(MOOD_TR.waiting).toBe("sırasını bekliyor");
+  });
+
+  it("the drawing: Zz over a dozing head, no '!' over a dozing or waiting seat, '!' over an angry one", () => {
+    const limited = twoWorkers();
+    limited.cycle = { ...limited.cycle, usage_limit: { state: "waiting", resets_at: "2026-10-01T12:00:00Z" } };
+    const html = render(limited);
+    const seat4 = seatHtml(html, "worker-4");
+    expect(seat4).toContain("office-mood-sleepy");
+    expect(seat4).toContain("office-zz");
+    expect(buildOffice(limited, NOW).seats.find((s) => s.seat === "worker-4")!.warning).toBe(false);
+    const angry = twoWorkers();
+    angry.tasks["t-back"] = { ...angry.tasks["t-back"], state: "stopped", reason: "gerçek bir hata" };
+    expect(buildOffice(angry, NOW).seats.find((s) => s.seat === "worker-4")!.warning).toBe(true);
   });
 });
