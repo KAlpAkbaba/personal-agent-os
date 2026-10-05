@@ -106,5 +106,34 @@ saved per gate - a projection from the quiet sequential numbers, not a measureme
 that stays: the api unit suite (2398 s), team-cycle (821 s), the Windows agent build (182 s),
 browser (222 s), integration (229 s).
 
+**Measured on the branch, 2026-10-05** (the 25 grouped suites; `-OnlyStep` slices, the api unit
+suite left to the lead's gate; the lead's full gate on main ran beside EVERY run below - its api
+unit step during the width-3 and serial runs, its later steps during the width-2 run - and an
+utterance corpus beside the serial one; so the loads are close, not equal):
+
+| | serial (`-GateSerial`) | group, width 3 (the default) | group, width 2 |
+|---|---|---|---|
+| team-integrate (lane) | 982 | 2157 | 1281 |
+| team-feed (lane) | 257 | 362 | 207 |
+| blue/green | 867 | 852 | 976 |
+| the other 22 | 403 | 359 | 335 |
+| **wall** | **2509** | **2523** | **1487** |
+
+At width 3 there was **no saving**: team-integrate (git-heavy, the lane) ran 2.2 times slower beside
+two other suites and the lane became the whole wall. At width 2 the group saved **1022 s (17 min)**
+against the serial run. The card fixes the default at 3 (`$script:GateStepMaxParallel`, case 6b);
+the measurement says 2 on this machine: the lead decides (`-GateMaxParallel 2` meanwhile). Where
+the time still is: the api unit suite (about 40 min), team-cycle (1108-1658 s, sequential), the
+Windows agent tests (392-805 s; its Unity test fails under memory load, GetLastError 1455 / past
+600 s), web build (455 s), recovery supervisor (446 s), integration (343 s).
+The rest of that day's gate on the branch: every other step green, except team-cycle's board case
+and the browser engine-probe case, both of which read the worker seat's own environment (the board
+address variable; Git Bash's '/tmp' warning in this session) - team-cycle green with them unset
+(261/0); the browser step needs the lead's gate. A deliberate red (agent-audit made to exit 4 in a
+scratch copy) failed the gate with `FAILED: agent audit tests exited with code 4`, its log in the
+output, and `QUALITY GATE: FAIL`.
+A gate killed from outside (twice that day another session restarted its gate and this one died in
+the same second, exit 1, no summary) is not a defect the gate can fix; kill a gate by its PID.
+
 **Risk.** Suites with timing assumptions flake under load (team-cycle's pool, team-integrate's
 300 s native-tool timeout); the group raises load. Two gates at once are worse than either.
