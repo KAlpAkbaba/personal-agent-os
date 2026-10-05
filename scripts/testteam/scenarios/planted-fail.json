@@ -1,0 +1,9 @@
+{
+  "id": "planted-fail",
+  "family": "ekilmis-hata",
+  "why": "PLANTED: proves the path failure -> software card -> fix -> retest; deleting a watch that is not there must say 404, the planted expectation says 200",
+  "planted": true,
+  "steps": [
+    { "name": "olmayan nöbeti sil", "method": "DELETE", "path": "/v1/watches/00000000-0000-0000-0000-000000000000", "expect_status": 200 }
+  ]
+}

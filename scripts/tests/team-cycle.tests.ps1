@@ -1498,6 +1498,31 @@ try {
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "src\area\task-one.txt"))) -Because "the work is on its branch, not in the main checkout"
     }
 
+    Test-Case "with -TestTeam the test team's round runs beside the cycle in its own process; the software team's workers keep working" {
+        # test-team (the owner, 2026-10-03): two teams, separate. The round is a stand-in that
+        # writes what it was started with; the software tasks run on their own seats as ever.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-two"))
+        $marker = Join-Path $root "round.marker"
+        $fakeRound = Join-Path $root "fake-round.ps1"
+        [System.IO.File]::WriteAllText($fakeRound, "[System.IO.File]::WriteAllText('$marker', (`$args -join ' '))", (New-Object System.Text.UTF8Encoding($false)))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -ExtraArguments "-TestTeam -TestRoundScript '$fakeRound'"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        for ($i = 0; $i -lt 50 -and -not (Test-Path -LiteralPath $marker); $i++) { Start-Sleep -Milliseconds 200 }
+        Assert-True -Condition (Test-Path -LiteralPath $marker) -Because "the round was started: $($run.StdOut)"
+        $started = [System.IO.File]::ReadAllText($marker)
+        Assert-True -Condition ($started -match '-Round t-c1\b') -Because "its own round, named after the cycle: $started"
+        Assert-True -Condition ($started -match [regex]::Escape((Join-Path $root "team"))) -Because "the same team root: $started"
+        Assert-Equal -Expected "merged,merged" -Actual ((@(Get-TeamTasks -Queue $run.Queue) | ForEach-Object { $_.state }) -join ",") -Because "both software tasks were worked on: $($run.StdOut)"
+        Assert-Equal -Expected 4 -Actual @($run.Calls).Count -Because "a worker and an inspector each, no software seat for the test team"
+        Assert-True -Condition ($run.StdOut -match "test ekibi turu t-c1") -Because "the cycle says it: $($run.StdOut)"
+
+        Remove-Item -LiteralPath $marker -Force
+        $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $plain -Scenario "approve" -ExtraArguments "-TestRoundScript '$fakeRound'"
+        Start-Sleep -Milliseconds 800
+        Assert-True -Condition (-not (Test-Path -LiteralPath $marker)) -Because "without -TestTeam no round starts"
+    }
+
     Test-Case "the report is the protocol's, in Turkish, and the queue holds forty lines of each run" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "idea-one" -State "awaiting_owner" -Area @()))
         $run = Invoke-Cycle -Root $root -Scenario "approve"
