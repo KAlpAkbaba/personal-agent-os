@@ -290,6 +290,56 @@ _FILLER: Final = frozenset(
         "tamam",
     }
 )
+#: Folded stems of things a house does not stock: "Evde kimse kalmadı", "Evde elektrik bitti",
+#: "Listeye not ekle", "Görevi listeden sil" are about people, utilities, notes and tasks. A
+#: place word ("evde") or a bare "listeye" lets an unknown item in; these never are.
+_NOT_GOODS: Final = frozenset(
+    {
+        "kimse",
+        "kimsecik",
+        "insan",
+        "misafir",
+        "para",
+        "nakit",
+        "elektrik",
+        "dogalgaz",
+        "gaz",
+        "internet",
+        "wifi",
+        "sinyal",
+        "sarj",
+        "isik",
+        "enerji",
+        "zaman",
+        "vakit",
+        "yer",
+        "sabir",
+        "huzur",
+        "keyif",
+        "umut",
+        "ses",
+        "not",
+        "gorev",
+        "is",
+        "toplanti",
+        "randevu",
+        "etkinlik",
+        "hatirlatma",
+        "sarki",
+        "video",
+        "film",
+        "dizi",
+        "mesaj",
+        "mail",
+        "eposta",
+        "link",
+        "kisi",
+        "numara",
+    }
+)
+#: The words that may qualify "X listesine / listesinden" as the shopping list; any other
+#: qualifier ("çalma listesine", "yapılacaklar listesinden") names another list.
+_SHOP_QUALIFIERS: Final = frozenset({"alisveris", "market", "bakkal", "pazar", "ev", "mutfak"})
 #: Words that may follow the verb without changing what was said.
 _TAIL: Final = frozenset({"efendim", "ya", "galiba", "sanirim", "artik", "bile"})
 
@@ -426,6 +476,8 @@ def _item_words(words: list[str]) -> list[str] | None:
         return None
     if not all(re.search(r"[^\W\d_]", w) for w in kept):
         return None
+    if any(fold(w) in _NOT_GOODS or _stem(fold(w)) in _NOT_GOODS for w in kept):
+        return None
     return kept
 
 
@@ -455,7 +507,9 @@ def _parse_level(words: list[str], folded: list[str]) -> HouseholdCommand | None
     if found is None:
         return None
     level, width = found
-    item = _item_words(words[: end - width])
+    # "Bir kahve aldım", "İki paket süt aldım": the count is not the name.
+    named, _ = _quantity(words[: end - width])
+    item = _item_words(named) if named else None
     if item is None:
         return None
     key = item_key(" ".join(item))
@@ -496,15 +550,23 @@ def _quantity(words: list[str]) -> tuple[list[str], str | None]:
 def _parse_list_edit(
     words: list[str], folded: list[str], anchors: frozenset[str], verbs: frozenset[str], action: str
 ) -> HouseholdCommand | None:
-    if not any(f in anchors for f in folded):
+    anchor_at = next((i for i, f in enumerate(folded) if f in anchors), None)
+    if anchor_at is None:
         return None
     verb_at = next((i for i, f in enumerate(folded) if f in verbs), None)
     if verb_at is None:
         return None
+    qualified = folded[anchor_at].startswith("listesi")
+    qualifier = anchor_at - 1 if qualified and anchor_at > 0 else None
+    if qualifier is not None and folded[qualifier] not in _SHOP_QUALIFIERS:
+        return None  # "çalma listesine", "yapılacaklar listesinden": another list
     rest = [
         w
         for i, (w, f) in enumerate(zip(words, folded, strict=True))
-        if i != verb_at and f not in anchors and f not in _POLITE and f not in _SHOP_WORDS
+        if i not in (verb_at, qualifier)
+        and f not in anchors
+        and f not in _POLITE
+        and f not in _SHOP_WORDS
     ]
     quantity: str | None = None
     if action == ACTION_ADD:

@@ -36,6 +36,20 @@ stock, down to the toilet paper", the owner, 2026-10-05).
    `household.list_read` (query). The router's `household_item/level/quantity` win over the
    model's `item/level/quantity`; no item is a question ("Hangi ürün efendim?").
 
+## Second round (inspector, 2026-10-06)
+
+- A cycle is counted from the last depletion, or from the last purchase when that came after
+  the reminder window had opened (`service.cycle_start`): bought late, the next run-out is a
+  cycle after the purchase, and a reminder sent before the late purchase does not silence the
+  next cycle. Alternative rejected: "never remind within N hours of a purchase" - it only moves
+  the false reminder to hour N+1.
+- "X listesine / listesinden" is the shopping list only when X is alışveriş/market/bakkal/
+  pazar/ev/mutfak; any other qualifier (çalma, yapılacaklar, oynatma) is another list.
+- A bounded deny-list of things a house does not stock (`_NOT_GOODS`: people, money,
+  utilities, notes, tasks, songs...) closes the place gate ("evde kimse kalmadı") and the bare
+  "listeye not ekle". An allow-list would refuse "evde lazer toner bitti", which the owner may say.
+- A count in a level sentence is not the name ("Bir kahve aldım" -> kahve).
+
 ## Needs outside this card's area (ALAN_ISTEGI)
 
 - `app/voice/realtime_sessions/service.py`: copy `household_item`, `household_level`,

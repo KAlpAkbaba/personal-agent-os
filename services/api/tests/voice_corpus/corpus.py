@@ -7335,6 +7335,7 @@ def _household_cases() -> list[UtteranceCase]:
         ("household.out.3", "Süt bitmiş.", "süt", "bitti", "paraphrase"),
         ("household.bought.1", "Süt aldım.", "süt", "var", "canonical"),
         ("household.bought.2", "Tuvalet kağıdı aldık.", "tuvalet kağıdı", "var", "paraphrase"),
+        ("household.bought.3", "Bir kahve aldım.", "kahve", "var", "regression"),
     ):
         cases.extend(
             _with_variants(
@@ -7373,6 +7374,14 @@ def _household_cases() -> list[UtteranceCase]:
             "household_list_add",
             "household.list_add",
             {"item": "kedi maması"},
+            "paraphrase",
+        ),
+        (
+            "household.add.4",
+            "Market listesine süt ekle.",
+            "household_list_add",
+            "household.list_add",
+            {"item": "süt"},
             "paraphrase",
         ),
         (
@@ -7472,6 +7481,13 @@ def _household_cases() -> list[UtteranceCase]:
         ("household.neighbour.message", "Mesajını aldım."),
         ("household.neighbour.battery", "Telefonun şarjı azaldı."),
         ("household.neighbour.question", "Süt bitti mi?"),
+        # Inspector, 2026-10-06: a place is not a stock, and not every list is the shopping list.
+        ("household.neighbour.nobody", "Evde kimse kalmadı."),
+        ("household.neighbour.money", "Evde para kalmadı."),
+        ("household.neighbour.power", "Evde elektrik bitti."),
+        ("household.neighbour.playlist", "Oynatma listesine ekle."),
+        ("household.neighbour.note", "Listeye not ekle."),
+        ("household.neighbour.task", "Görevi listeden sil."),
     ):
         cases.append(
             UtteranceCase(

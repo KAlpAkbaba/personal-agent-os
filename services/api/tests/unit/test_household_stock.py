@@ -112,10 +112,37 @@ def test_the_owner_s_sentences_parse(sentence, action, item, level, quantity) ->
         "Ne aldın?",
         "Markete ne zaman gidelim",
         "Beni unutma",
+        # Another list (inspector, 2026-10-06): the shopping list is not every list.
+        "Çalma listesine bu şarkıyı ekle",
+        "Yapılacaklar listesine toplantı ekle",
+        "Oynatma listesine ekle",
+        "Listeye not ekle",
+        "Görevi listeden sil",
+        "Yapılacaklar listesinden toplantıyı çıkar",
+        # A place does not make any noun a stock (inspector, 2026-10-06).
+        "Evde kimse kalmadı",
+        "Evde hiç kimse kalmadı",
+        "Evde para kalmadı",
+        "Evde elektrik bitti",
+        "Evde internet bitti",
     ],
 )
 def test_the_neighbours_do_not_parse(sentence) -> None:
     assert parse.parse_sentence(sentence) is None
+
+
+@pytest.mark.parametrize(
+    ("sentence", "item", "level"),
+    [
+        ("Bir kahve aldım", "kahve", "var"),
+        ("İki paket süt aldım", "süt", "var"),
+        ("Bir tuvalet kağıdı aldım", "tuvalet kağıdı", "var"),
+        ("Market listesine süt ekle", "süt", None),
+    ],
+)
+def test_a_count_is_not_part_of_the_name(sentence, item, level) -> None:
+    command = parse.parse_sentence(sentence)
+    assert command is not None and (command.item, command.level) == (item, level)
 
 
 @pytest.mark.parametrize(
@@ -294,6 +321,32 @@ def test_a_long_overdue_rhythm_does_not_nag(db) -> None:
     _cycle(db, "ekmek", starts)
     stale = starts[-1] + timedelta(days=7 * 3)
     assert service.due_reminders(db, now=stale) == []
+
+
+def test_a_late_restock_does_not_remind_at_once(db) -> None:
+    """Inspector, 2026-10-06: bought on day 66 against a prediction of day 63, and the next
+    hour's pass said "birkaç gün içinde bitebilir" of what had just been bought."""
+    for start in (DAY0, DAY0 + timedelta(days=21)):
+        _cycle(db, "tuvalet kağıdı", [start])
+    service.set_level(db, "tuvalet kağıdı", "bitti", now=DAY0 + timedelta(days=42))
+    bought = DAY0 + timedelta(days=66)
+    service.set_level(db, "tuvalet kağıdı", "var", now=bought)
+    assert reminders.remind_due(db, now=bought + timedelta(minutes=1)) == 0
+    assert reminders.remind_due(db, now=bought + timedelta(hours=1)) == 0
+    assert service.shopping_list(db, now=bought + timedelta(hours=1)).soon == []
+    # The rhythm still holds: counted from the purchase, a few days before.
+    due_at = bought + timedelta(days=21 - service.lead_days(21.0), hours=1)
+    assert reminders.remind_due(db, now=due_at) == 1
+
+
+def test_a_reminder_before_a_late_restock_does_not_silence_the_next_cycle(db) -> None:
+    starts = [DAY0 + timedelta(days=21 * k) for k in range(3)]
+    _cycle(db, "süt", starts)
+    assert reminders.remind_due(db, now=starts[-1] + timedelta(days=19)) == 1
+    bought = starts[-1] + timedelta(days=30)  # bought late, never said "bitti"
+    service.set_level(db, "süt", "var", now=bought)
+    assert reminders.remind_due(db, now=bought + timedelta(hours=1)) == 0
+    assert reminders.remind_due(db, now=bought + timedelta(days=19)) == 1
 
 
 def test_the_reminder_loop_counts_its_passes(factory) -> None:

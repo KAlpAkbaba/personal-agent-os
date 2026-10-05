@@ -292,11 +292,25 @@ def lead_days(cycle_days: float) -> int:
     return max(1, min(3, round(cycle_days / 7)))
 
 
-def predicted_out_at(row: HouseholdItem) -> datetime | None:
+def cycle_start(row: HouseholdItem) -> datetime | None:
+    """Where the current cycle is counted from: the last depletion - or the last purchase when
+    it came after the reminder window had already opened. Bought on day 66 against a run-out
+    predicted for day 63, the next run-out is about a cycle after the purchase, not "now"."""
     depleted = _aware(row.depleted_at)
     if row.cycle_days is None or depleted is None:
         return None
-    return depleted + timedelta(days=row.cycle_days)
+    restocked = _aware(row.restocked_at)
+    window_opens = depleted + timedelta(days=row.cycle_days - lead_days(row.cycle_days))
+    if restocked is not None and restocked >= window_opens:
+        return restocked
+    return depleted
+
+
+def predicted_out_at(row: HouseholdItem) -> datetime | None:
+    start = cycle_start(row)
+    if start is None or row.cycle_days is None:
+        return None
+    return start + timedelta(days=row.cycle_days)
 
 
 def _is_soon(row: HouseholdItem, now: datetime) -> bool:
@@ -317,8 +331,8 @@ def due_reminders(db: Session, *, now: datetime) -> list[HouseholdItem]:
         if not _is_soon(row, now):
             continue
         reminded = _aware(row.reminded_at)
-        depleted = _aware(row.depleted_at)
-        if reminded is not None and depleted is not None and reminded >= depleted:
+        start = cycle_start(row)
+        if reminded is not None and start is not None and reminded >= start:
             continue
         due.append(row)
     return sorted(due, key=lambda r: r.name)
@@ -379,6 +393,7 @@ __all__ = [
     "clean_level",
     "clean_name",
     "clean_quantity",
+    "cycle_start",
     "due_reminders",
     "find_item",
     "forget_item",
