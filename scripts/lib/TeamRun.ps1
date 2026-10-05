@@ -526,7 +526,11 @@ function Start-TeamDetachedRun {
         [void](New-Item -ItemType Directory -Force -Path $TempDirectory)
         foreach ($name in @("TEMP", "TMP", "TMPDIR")) { $psi.EnvironmentVariables[$name] = $TempDirectory }
     }
-    foreach ($name in @($Environment.Keys)) { $psi.EnvironmentVariables[[string]$name] = [string]$Environment[$name] }
+    # An empty value REMOVES the name: what the starter inherited is not handed down.
+    foreach ($name in @($Environment.Keys)) {
+        $value = [string]$Environment[$name]
+        if ($value) { $psi.EnvironmentVariables[[string]$name] = $value } else { $psi.EnvironmentVariables.Remove([string]$name) }
+    }
     $process = [System.Diagnostics.Process]::Start($psi)
     [void]$process.Handle   # the exit code stays readable after it ends
     $process.StandardInput.Close()

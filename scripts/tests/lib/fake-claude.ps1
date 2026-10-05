@@ -234,7 +234,11 @@ if ($snapshotDir -and $statusFile) {
     if ([string]$env:PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS -match '^\d{1,3}$') { $snapshotAfter = [int]$env:PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS }
     Start-Sleep -Seconds $snapshotAfter
     if (-not (Test-Path -LiteralPath $snapshotDir)) { [void](New-Item -ItemType Directory -Force -Path $snapshotDir) }
-    if (Test-Path -LiteralPath $statusFile) { Copy-Item -LiteralPath $statusFile -Destination (Join-Path $snapshotDir "$role-$taskId.json") -Force }
+    # The loop may be rewriting the file at that moment (a sharing violation): try again, as a reader would.
+    for ($try = 1; $try -le 30 -and (Test-Path -LiteralPath $statusFile); $try++) {
+        try { Copy-Item -LiteralPath $statusFile -Destination (Join-Path $snapshotDir "$role-$taskId.json") -Force; break }
+        catch { Start-Sleep -Milliseconds 100 }
+    }
 }
 #   PAGENTOS_FAKE_CLAUDE_HEARTBEAT + PAGENTOS_FAKE_CLAUDE_STATUS: a worker run stays 7 s and appends the status
 #     file's updated_at to <heartbeat> once a second - a reader's view of whether the status is refreshed.

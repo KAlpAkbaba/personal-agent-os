@@ -65,3 +65,6 @@ geri gönderecek"; "Döngüyü kaldırabiliriz. Direkt bir sirkülasyon şeklind
 - A broken successor start leaves the handover file: the watchdog's next loop adopts the runs.
 - Detached runs survive a crashed loop too; a loop that dies without a handover leaves them
   running and they are not adopted (their tasks are taken up again as before) - risk noted.
+- A loop without the store hands its runs no board address - not even one it inherited itself
+  (an empty value in Start-TeamDetachedRun's -Environment removes the name). Found when the
+  suite ran inside a team run whose own PAGENTOS_TEAM_URL leaked into the sandboxed loop's runs.

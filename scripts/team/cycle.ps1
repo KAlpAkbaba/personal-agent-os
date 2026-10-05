@@ -967,7 +967,8 @@ try {
         $stem = Join-Path (Join-Path $cycleDir "running") ("{0}-{1}-{2}" -f $taskLabel, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
         # The team's board (the run's seat, its task, the address and the token file's path): the
         # seat is $Seat, the same name the status and the return's owner carry.
-        $boardEnvironment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = $taskLabel }
+        # Without the API no address is handed down - not even one this loop itself inherited.
+        $boardEnvironment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = $taskLabel; PAGENTOS_TEAM_URL = ""; PAGENTOS_TEAM_TOKEN_FILE = "" }
         if ($useApi) {
             $boardEnvironment["PAGENTOS_TEAM_URL"] = $QueueUrl
             $boardEnvironment["PAGENTOS_TEAM_TOKEN_FILE"] = $QueueToken
