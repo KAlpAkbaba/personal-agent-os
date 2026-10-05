@@ -646,3 +646,64 @@ def test_a_quarter_past_without_its_cedilla_is_not_night():
     assert parsed.local_time == "07:15"
     night = parse_when_text("yarın gece on birde uyandır", now=NOW, timezone="Europe/Istanbul")
     assert night.local_time == "23:00"
+
+
+# ------------------------------- the inspector's second return of 2026-10-05 (RED first)
+#
+# The sentence is cut into two parts that never overlap: the title, and the rest the clock
+# is read from. The title's left edge is "beni" when it stands before the title, else the
+# end of the clock phrase ("sonra", "geçe", "kala", "buçukta", a suffixed clock "7'de").
+# A daypart, a day name or a number inside the title never touches the clock or repeats.
+
+#: (sentence, scheduled_for in UTC, the song). NOW is Monday 2026-10-05 10:00 UTC (13:00
+#: in Istanbul, UTC+3), so "yarın 07:00" is 04:00 UTC on the 6th and "cuma" is the 9th.
+SPLIT_FORMS = [
+    ("On dakika sonra Şımarık'la uyandır.", "2026-10-05T10:10:00Z", "Şımarık"),
+    ("Yarım saat sonra Sezen Aksu çalarak uyandır.", "2026-10-05T10:30:00Z", "Sezen Aksu"),
+    ("İki saat sonra Şımarık ile uyandır.", "2026-10-05T12:00:00Z", "Şımarık"),
+    ("Yarın 7'de beni Akşam Güneşi ile uyandır.", "2026-10-06T04:00:00Z", "Akşam Güneşi"),
+    (
+        "Cuma 7'de beni Pazartesi Sendromu ile uyandır.",
+        "2026-10-09T04:00:00Z",
+        "Pazartesi Sendromu",
+    ),
+    (
+        "Yarın sekize çeyrek kala Gece Yolcuları ile uyandır.",
+        "2026-10-06T04:45:00Z",
+        "Gece Yolcuları",
+    ),
+    # Kept green from the first return.
+    ("Yarın sabah yediyi çeyrek geçe Bella Ciao ile uyandır.", "2026-10-06T04:15:00Z", "Bella Ciao"),
+    ("Yarın 7'de beni Duman'ın Bu Akşam'ıyla uyandır.", "2026-10-06T04:00:00Z", "Duman'ın Bu Akşam"),
+    ("Yarın 6'da beni On Dakika ile uyandır.", "2026-10-06T03:00:00Z", "On Dakika"),
+]
+
+
+@pytest.mark.parametrize(("text", "at", "song"), SPLIT_FORMS)
+def test_the_title_and_the_clock_never_overlap(session, device, text, at, song):
+    resolved, out = _create_from(session, device, text)
+    assert resolved.intent is Intent.ALARM_CREATE
+    assert resolved.media_query == song
+    assert out["execution_status"] == "executed", out["speech"]
+    assert out["alarm"]["scheduled_for"] == at, out["speech"]
+    assert not (out["alarm"]["recurrence"] or {}).get("weekdays"), out["alarm"]["recurrence"]
+
+
+@pytest.mark.parametrize(("text", "song"), [(t, s) for t, _, s in SPLIT_FORMS])
+def test_the_clock_text_keeps_nothing_of_the_title(text, song):
+    from app.voice.intents import alarm_text_without_song
+
+    rest = alarm_text_without_song(text).split()
+    for word in song.split():
+        assert not any(left.startswith(word) for left in rest), rest
+
+
+def test_an_alarm_created_with_a_media_url_carries_it_as_its_song(session, device):
+    """The ADR addendum: a url given at creation is the alarm's own song, so it plays
+    BEFORE the global wake song - and the global one only when it fails."""
+    alarms_service.set_wake_song(session, url=WAKE_SONG, title="Genel")
+    alarm = _alarm(session, media={"url": ALARM_SONG, "title": "Şımarık"})
+    assert alarms_service.alarm_dict(alarm)["song"] == {"url": ALARM_SONG, "title": "Şımarık"}
+    device.results["browser.media_play"] = _play_only()
+    _fire(session, device, alarm)
+    assert _played_urls(device)[:2] == [ALARM_SONG, WAKE_SONG]

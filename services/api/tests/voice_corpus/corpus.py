@@ -1031,6 +1031,15 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
         ("a.song.7", "Yarın sabah yediyi çeyrek geçe Bella Ciao ile uyandır.", "07:15", None),
         ("a.song.8", "Yarın 7'de beni Duman'ın Bu Akşam'ıyla uyandır.", "07:00", None),
         ("a.song.9", "Yarın 6'da beni On Dakika ile uyandır.", "06:00", None),
+        # The title and the clock never overlap (inspector's second return, 2026-10-05): the
+        # title starts after "beni", else where the clock phrase ends ("sonra", "kala", "7'de").
+        # A relative row has no fixed local_time; "weekdays": None says it never repeats.
+        ("a.song.10", "On dakika sonra Şımarık'la uyandır.", None, None),
+        ("a.song.11", "Yarım saat sonra Sezen Aksu çalarak uyandır.", None, None),
+        ("a.song.12", "İki saat sonra Şımarık ile uyandır.", None, None),
+        ("a.song.13", "Yarın 7'de beni Akşam Güneşi ile uyandır.", "07:00", None),
+        ("a.song.14", "Cuma 7'de beni Pazartesi Sendromu ile uyandır.", "07:00", None),
+        ("a.song.15", "Yarın sekize çeyrek kala Gece Yolcuları ile uyandır.", "07:45", None),
     ]
     # A pointing word names no song: the alarm is set, nothing is searched.
     for case_id, text in [
@@ -1052,12 +1061,11 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
             )
         )
     for case_id, text, local_time, weekdays in forms:
-        expected: dict[str, object] = {
-            "local_time": local_time,
-            "resolved_media_url": CORPUS_SEARCH_HIT_URL,
-        }
-        if weekdays is not None:
-            expected["weekdays"] = weekdays
+        expected: dict[str, object] = {"resolved_media_url": CORPUS_SEARCH_HIT_URL}
+        if local_time is not None:
+            expected["local_time"] = local_time
+        # A one-shot row asserts it never repeats ("Pazartesi Sendromu" is a title).
+        expected["weekdays"] = weekdays
         cases.extend(
             _with_variants(
                 UtteranceCase(
