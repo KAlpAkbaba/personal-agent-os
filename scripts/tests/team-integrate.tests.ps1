@@ -158,6 +158,28 @@ Test-Case "the lead's run may touch docs/, .github/, team/, the gate's list, BUI
     Assert-Equal -Expected 0 -Actual @(Get-TeamLeadRefusedFiles -Changed @("docs/DECISIONS.md") -NamedFiles @()).Count -Because "one allowed file, nothing named"
 }
 
+Test-Case "own lock (6, the rule): what a wiring took out of the gate script - a moved line and a comment are not a removed step; a case-only rename is" {
+    $before = "# steps fail via Assert-ExitCode`nInvoke-Step `"A`" {`n  Assert-ExitCode `"a`"`n}`nInvoke-Step `"B`" {`n  Assert-ExitCode `"b`"`n}`nWrite-Host `"QUALITY GATE: PASS`"`nexit 0"
+    Assert-Equal -Expected 0 -Actual @(Get-TeamGateShrink -Before $before -After $before).Count -Because "the same file"
+    $moved = "# steps fail via Assert-ExitCode`nInvoke-Step `"B`" {`n  Assert-ExitCode `"b`"`n}`nInvoke-Step `"A`" {`n  Assert-ExitCode `"a`"`n}`nWrite-Host `"QUALITY GATE: PASS`"`nexit 0"
+    Assert-Equal -Expected 0 -Actual @(Get-TeamGateShrink -Before $before -After $moved).Count -Because "two steps that swapped places"
+    Assert-Equal -Expected 0 -Actual @(Get-TeamGateShrink -Before $before -After ($before -replace "# steps fail via Assert-ExitCode", "# a step fails")).Count -Because "a comment that named Assert-ExitCode"
+    Assert-Equal -Expected 0 -Actual @(Get-TeamGateShrink -Before $before -After $before.Replace("`r`n", "`n").Replace("`n", "`r`n")).Count -Because "CRLF for LF"
+    Assert-Equal -Expected 'silinen satır: Assert-ExitCode "a"' -Actual (@(Get-TeamGateShrink -Before $before -After ($before -creplace '  Assert-ExitCode "a"', '  Assert-ExitCode "A"')) -join "|") -Because "a rename by case only is a rename"
+    $gone = @(Get-TeamGateShrink -Before $before -After "")
+    Assert-Equal -Expected 5 -Actual @($gone).Count -Because "a deleted file takes every step, every check and the last word: $($gone -join ' | ')"
+    Assert-Equal -Expected 0 -Actual @(Get-TeamGateShrink -Before "" -After $before).Count -Because "a new gate takes nothing"
+}
+
+Test-Case "own lock (4, the rule): a result is written onto the store's copy only while it is still the task the step took" {
+    $was = [pscustomobject]@{ id = "t-one"; state = "merged"; integration_branch = "integrate/c1"; sha = ("a" * 40); title = "x" }
+    Assert-Equal -Expected "" -Actual (Get-TeamStepResultConflict -Was $was -Now ([pscustomobject]@{ id = "t-one"; state = "merged"; integration_branch = "integrate/c1"; sha = ("a" * 40); title = "renamed" })) -Because "another field changed: no conflict"
+    Assert-True -Condition ((Get-TeamStepResultConflict -Was $was -Now ([pscustomobject]@{ id = "t-one"; state = "returned"; integration_branch = "integrate/c1"; sha = ("a" * 40) })) -match "state") -Because "returned by a new inspection"
+    Assert-True -Condition ((Get-TeamStepResultConflict -Was $was -Now ([pscustomobject]@{ id = "t-one"; state = "merged"; integration_branch = "integrate/c2"; sha = ("a" * 40) })) -match "integration_branch") -Because "on another integration branch"
+    Assert-True -Condition ((Get-TeamStepResultConflict -Was $was -Now ([pscustomobject]@{ id = "t-one"; state = "merged"; integration_branch = "integrate/c1"; sha = ("b" * 40) })) -match "sha") -Because "merged again with another sha"
+    Assert-True -Condition ((Get-TeamStepResultConflict -Was $was -Now $null) -match "yok") -Because "gone from the store"
+}
+
 Test-Case "the lead's card carries each task's section and the rule the script will hold it to" {
     $notes = @([pscustomobject]@{ Id = "task-one"; Title = "the first"; Area = @("src/a"); Worker = "mount it in src/wiring/mount.txt"; Inspector = ""; Named = @("src/wiring/mount.txt") })
     $card = New-TeamLeadMergeCard -CycleId "c1" -Branch "integrate/c1" -Notes $notes
@@ -483,7 +505,9 @@ Write-Host "the step, in a repository of its own, with fakes in place of the gat
 $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $sandboxes = New-Object System.Collections.ArrayList
 $fakeApis = New-Object System.Collections.ArrayList
-$utf8 = New-Object System.Text.UTF8Encoding($false)
+# Steps a test started without waiting (two steps at once): stopped, with their trees, in the end.
+$stepProcesses = New-Object System.Collections.ArrayList
+$utf8 =New-Object System.Text.UTF8Encoding($false)
 
 # The lead's run, when a test needs it to DO something (fake-claude's lead only writes splits).
 # The same protocol: the role file in the arguments, the card on standard input, the result
@@ -497,6 +521,12 @@ for ($i = 0; $i -lt $Rest.Length; $i++) {
     if ($Rest[$i] -eq "--append-system-prompt-file") { $roleFile = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--allowedTools") { $tools = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--model") { $model = $Rest[$i + 1] }
+}
+# The tree as this run FOUND it, one line per run ("<model>|<git status --porcelain, ';'-joined>"):
+# a retry one model down must start on a clean tree, whatever the limited run wrote.
+if ($env:PAGENTOS_FAKE_LEAD_STATUS) {
+    $found = @(& git.exe status --porcelain 2>$null | Where-Object { $_ }) -join ";"
+    Add-Content -LiteralPath $env:PAGENTOS_FAKE_LEAD_STATUS -Value "$model|$found" -Encoding UTF8
 }
 # What the run leaves behind is started FIRST, before its input is read - as the real tool starts
 # its hooks and servers. A command that is let run before it is in its job (created running, or
@@ -543,13 +573,26 @@ if ($env:PAGENTOS_FAKE_LEAD_CARD) { [System.IO.File]::WriteAllText($env:PAGENTOS
 # The model policy: a run started on a model the test named as limited answers the line the real
 # tool answered on 2026-10-02 (no rate_limit_event; the result starts with "duration_api_ms") and does nothing else.
 $limitedModels = @(([string]$env:PAGENTOS_FAKE_LEAD_LIMITED_MODELS).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# A copy of a lock file as it is WHILE the run works (before a limited run answers, too).
+if ($env:PAGENTOS_FAKE_LEAD_LOCK -and $env:PAGENTOS_FAKE_LEAD_LOCK_COPY -and (Test-Path -LiteralPath $env:PAGENTOS_FAKE_LEAD_LOCK)) {
+    # Read as a holder lets it be read (the step's own lock is held open while it works).
+    $held = [System.IO.File]::Open($env:PAGENTOS_FAKE_LEAD_LOCK, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try { $text = (New-Object System.IO.StreamReader($held)).ReadToEnd() } finally { $held.Dispose() }
+    [System.IO.File]::WriteAllText($env:PAGENTOS_FAKE_LEAD_LOCK_COPY, $text)
+}
 if ($model -and $limitedModels -contains $model) {
+    # A limited run that WROTE before it answered (the real tool can work for minutes before the limit).
+    foreach ($relative in @(([string]$env:PAGENTOS_FAKE_LEAD_LIMITED_WRITES) -split ";" | Where-Object { $_.Trim() })) {
+        $target = Join-Path $here ($relative.Trim() -replace "/", "\")
+        $folder = Split-Path -Parent $target
+        if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+        Add-Content -LiteralPath $target -Value "written by a run that was then limited" -Encoding ASCII
+    }
     [Console]::Out.Write('{"duration_api_ms":0,"total_cost_usd":0,"modelUsage":{},"terminal_reason":"api_error","is_error":true,"num_turns":1,"subtype":"success","api_error_status":429,"api_error":"model_requires_usage_credits","result":"You''re out of usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.","type":"result","duration_ms":640}')
     exit 1
 }
 # A run that never ends by itself: the step's cap is what ends it.
 if ($env:PAGENTOS_FAKE_LEAD_HANG -eq "1") { Start-Sleep -Seconds 120 }
-if ($env:PAGENTOS_FAKE_LEAD_LOCK -and $env:PAGENTOS_FAKE_LEAD_LOCK_COPY) { Copy-Item -LiteralPath $env:PAGENTOS_FAKE_LEAD_LOCK -Destination $env:PAGENTOS_FAKE_LEAD_LOCK_COPY -Force }
 function Invoke-LeadGit {
     # A lead that does with git what its card forbids: one command per ';', before or after it writes.
     param([string]$Lines)
@@ -563,6 +606,8 @@ foreach ($relative in @(([string]$env:PAGENTOS_FAKE_LEAD_WRITES) -split ";" | Wh
     if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
     Add-Content -LiteralPath $target -Value "wired by the lead" -Encoding ASCII
 }
+# A wiring that EDITS a file (the gate script): a script the test wrote, run in the worktree.
+if ($env:PAGENTOS_FAKE_LEAD_EDIT) { & $env:PAGENTOS_FAKE_LEAD_EDIT }
 Invoke-LeadGit -Lines $env:PAGENTOS_FAKE_LEAD_GIT_AFTER
 if ($env:PAGENTOS_FAKE_LEAD_COMMIT -eq "1") {
     & git.exe add -A 2>&1 | Out-Null
@@ -703,9 +748,14 @@ function Invoke-Integrate {
         [string]$Caps = "-GateMinutes 3 -LeadMinutes 3", [string]$GateScript = "",
         # > 0: the step's output goes to a FILE and its exit is waited for this long at most. A command
         # the step leaked inherits the step's handles; on a pipe the read would wait for it for ever.
-        [int]$BoundSeconds = 0
+        [int]$BoundSeconds = 0,
+        # The step's own lock file (API mode). Always the sandbox's: a test never touches the machine's real one.
+        [string]$StepLock = "",
+        # Started and NOT waited for: the answer is the process and its output file (Wait-IntegrateProcess).
+        [switch]$NoWait
     )
     $tools = "$Root-tools"
+    if (-not $StepLock) { $StepLock = Join-Path $tools "integrate-step.lock" }
     $leadScript = if ($Lead -eq "stand-in") { Join-Path $tools "lead-stand-in.ps1" } else { Join-Path $Root "scripts\tests\lib\fake-claude.ps1" }
     $set = @{
         PAGENTOS_FAKE_GATE_SCENARIO = $Gate; PAGENTOS_FAKE_GATE_NAMES = $Names; PAGENTOS_FAKE_GATE_LOG = (Join-Path $tools "gate.log")
@@ -723,7 +773,20 @@ function Invoke-Integrate {
         $(if ($ToolsFromPath) { "" } else { " -UvPath '" + (Join-Path $tools "uv.cmd") + "' -PnpmPath '" + (Join-Path $tools "pnpm.cmd") + "'" }) +
         " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','$leadScript'" +
         $(if ($QueueUrl) { " -QueueUrl '$QueueUrl' -QueueToken '$QueueTokenFile'" } else { "" }) +
+        " -StepLockPath '$StepLock'" +
         $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" })
+        if ($NoWait) {
+            $outFile = Join-Path $tools ("step-output-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
+            $start = New-Object System.Diagnostics.ProcessStartInfo
+            $start.FileName = $powershell
+            $start.Arguments = ConvertTo-NativeArgumentLine -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ($command + " *> '$outFile'; exit `$LASTEXITCODE"))
+            $start.WorkingDirectory = $Root
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $process = [System.Diagnostics.Process]::Start($start)
+            [void]$stepProcesses.Add($process)
+            return [pscustomobject]@{ Process = $process; OutFile = $outFile }
+        }
         if ($BoundSeconds -gt 0) {
             $outFile = Join-Path $tools "step-output.txt"
             $start = New-Object System.Diagnostics.ProcessStartInfo
@@ -761,6 +824,20 @@ function Invoke-Integrate {
         Skipped = @(& $lines (Join-Path $Root "team\reports\integrate-skipped.log"))
     }
 }
+
+function Wait-IntegrateProcess {
+    <# A step started with -NoWait, waited for $Seconds at most; one that does not end is stopped WITH its tree, then said. #>
+    param($Started, [int]$Seconds = 300)
+    if (-not $Started.Process.WaitForExit($Seconds * 1000)) {
+        Stop-TeamProcessTree -ProcessId $Started.Process.Id
+        [void]$Started.Process.WaitForExit(15000)
+        throw "the step started without waiting did not end within $Seconds s (stopped with its tree)"
+    }
+    $said = if (Test-Path -LiteralPath $Started.OutFile) { [string](Get-Content -LiteralPath $Started.OutFile -Raw) } else { "" }
+    return [pscustomobject]@{ ExitCode = $Started.Process.ExitCode; Output = $said }
+}
+
+function Get-StepLockPath { param([string]$Root) return (Join-Path "$Root-tools" "integrate-step.lock") }
 
 function Get-TaskById {
     param($Queue, [string]$Id)
@@ -1970,12 +2047,14 @@ try {
     Write-Host "the queue and the lock on the Cloud Core (the fake listener of the cycle's tests)"
 
     function Start-FakeApi {
-        param([object[]]$Tasks = @(), $Lock = $null, $Models = $null)
+        param([object[]]$Tasks = @(), $Lock = $null, $Models = $null, $Faults = $null)
         $work = Join-Path $env:TEMP ("pagentos-integapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
         [void](New-Item -ItemType Directory -Force -Path $work)
         [void]$sandboxes.Add($work)
         $lockDocument = if ($null -ne $Lock) { $Lock } else { New-TeamLockReleased }
         $seed = [pscustomobject]@{ queue = (New-Queue -Tasks $Tasks); lock = $lockDocument }
+        # The store broken on purpose (the listener's `faults`): a task's write refused, and so on.
+        if ($null -ne $Faults) { $seed | Add-Member -NotePropertyName faults -NotePropertyValue $Faults }
         # The model setting the store holds (ADR-0214 addendum 7); without one the listener answers the defaults.
         if ($null -ne $Models) { $seed | Add-Member -NotePropertyName models -NotePropertyValue $Models }
         [System.IO.File]::WriteAllText((Join-Path $work "seed.json"), (ConvertTo-Json -InputObject $seed -Depth 12), $utf8)
@@ -2043,12 +2122,14 @@ try {
         Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^GET /v1/team/queue/models 200" }).Count -Because "it was asked once"
     }
 
-    Test-Case "a red gate whose verdict could not be written to the store (a task changed while the gate ran) is not a silent wait: the next run writes it, without a second gate" {
+    Test-Case "a red gate whose verdict could not be written to the store (the store refused the write) is not a silent wait: the next run writes it, without a second gate" {
         $root = New-Sandbox -Work $two
         $tasks = @(Get-TeamTasks -Queue (Read-TeamJson -Path (Join-Path $root "team\queue.json")))
-        $api = Start-FakeApi -Tasks $tasks
+        # The store refuses the first write of task-one's verdict. (A task that was only CHANGED while the gate ran no
+        # longer stops the write: the step reads it again and writes its result on top - integrate-own-lock.)
+        $api = Start-FakeApi -Tasks $tasks -Faults ([pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-one"; state = "returned"; status = 503; times = 1 } })
         Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document (New-Queue)
-        # What somebody else does during the gate's hour: task-one is written in the store, so the step's copy of it is stale.
+        # What somebody else does during the gate's hour: task-one is written in the store.
         $hook = Join-Path "$root-tools" "change-task-one.ps1"
         $marker = Join-Path "$root-tools" "changed-once"
         [System.IO.File]::WriteAllText($hook, (@(
@@ -2066,7 +2147,7 @@ try {
         Assert-Equal -Expected 12 -Actual $first.ExitCode -Because $first.Output
         $state = Get-FakeApiState -Api $api
         $stored = @($state.tasks | Where-Object { $_.id -eq "task-one" })[0]
-        Assert-Equal -Expected "merged" -Actual $stored.state -Because "the stale write was refused: the store does not have the verdict yet"
+        Assert-Equal -Expected "merged" -Actual $stored.state -Because "the write was refused: the store does not have the verdict yet"
         Assert-Equal -Expected "changed while the gate ran" -Actual $stored.title -Because "and the other writer's change was not overwritten"
         Assert-True -Condition ($first.Report -match "kuyruk yazılamadı") -Because "the report says the queue was not written: $($first.Report)"
         Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "the lock was released"
@@ -2136,8 +2217,258 @@ try {
         Assert-Equal -Expected "" -Actual $run.Report -Because "a run that started nothing writes no report for the branch"
         Assert-True -Condition (@($run.Skipped).Count -eq 1 -and $run.Skipped[0] -match "kilit GMKADIRAKBABA makinesinde") -Because "it says so in its own line: $($run.Skipped -join ' / ')"
     }
+
+    # ------------------------------------------------------------------ the step's own lock (integrate-own-lock)
+    Write-Host ""
+    Write-Host "the step's own lock: the cycle is not paused for a gate; two gates never overlap; a result the cycle overtook is dropped"
+
+    function New-ApiSandbox {
+        <# A sandbox whose queue lives in the fake store (the files hold none), and the store; -Lock is the CYCLE's lock there. #>
+        param([hashtable[]]$Work, $Lock = $null)
+        $root = New-Sandbox -Work $Work
+        $tasks = @(Get-TeamTasks -Queue (Read-TeamJson -Path (Join-Path $root "team\queue.json")))
+        $api = Start-FakeApi -Tasks $tasks -Lock $Lock
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document (New-Queue)
+        return [pscustomobject]@{ Root = $root; Api = $api }
+    }
+
+    function Get-StoredTask { param($Api, [string]$Id) return @((Get-FakeApiState -Api $Api).tasks | Where-Object { $_.id -eq $Id })[0] }
+
+    # A cycle of THIS machine that is running now: its lock names this machine and a live process (this suite's own).
+    $liveCycleLock = { New-TeamLock -Machine "MAIL" -CycleId "d20261003" -Now ([datetime]::UtcNow.AddMinutes(-10)) }
+
+    Test-Case "own lock (1): with -BesideCycle the step runs beside a live cycle of this machine and never touches the cycle's lock - the store's lock is equal before and after, no POST to the lock route, and the branch ends on main" {
+        $box = New-ApiSandbox -Work $one -Lock (& $liveCycleLock)
+        $lockBefore = ConvertTo-Json -InputObject (Get-FakeApiState -Api $box.Api).lock -Compress
+        $run = Invoke-Integrate -Root $box.Root -Gate "green" -QueueUrl $box.Api.Url -QueueTokenFile $box.Api.TokenFile -ExtraArguments "-BesideCycle"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected $lockBefore -Actual (ConvertTo-Json -InputObject (Get-FakeApiState -Api $box.Api).lock -Compress) -Because "the cycle's lock is the cycle's: not taken, not released, not written"
+        $posts = @(Get-FakeApiRequests -Api $box.Api | Where-Object { $_ -match "^POST /v1/team/queue/lock" })
+        Assert-Equal -Expected 0 -Actual @($posts).Count -Because "no POST to the lock route: $($posts -join '; ')"
+        $task = Get-StoredTask -Api $box.Api -Id "task-one"
+        Assert-Equal -Expected "awaiting_release" -Actual $task.state -Because "the branch went through the gate as in the lock-free case"
+        Assert-Equal -Expected (Get-Sha -Root $box.Root -Revision "main") -Actual $task.sha -Because "with main's sha"
+        Assert-True -Condition (Test-OnBranch -Root $box.Root -Revision "main" -File "src/a/task-one.txt") -Because "the task's file is on main"
+        Assert-Equal -Expected 1 -Actual @($run.GateCalls).Count -Because "one gate"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-StepLockPath -Root $box.Root))) -Because "the step's own lock is gone after it"
+    }
+
+    Test-Case "own lock (2): without -BesideCycle a live cycle of this machine still stops the step: exit 3, the skipped line, nothing written" {
+        $box = New-ApiSandbox -Work $one -Lock (& $liveCycleLock)
+        $lockBefore = ConvertTo-Json -InputObject (Get-FakeApiState -Api $box.Api).lock -Compress
+        $requestsBefore = @(Get-FakeApiRequests -Api $box.Api).Count
+        $run = Invoke-Integrate -Root $box.Root -Gate "green" -QueueUrl $box.Api.Url -QueueTokenFile $box.Api.TokenFile
+        Assert-Equal -Expected 3 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 0 -Actual (@($run.GateCalls).Count + @($run.LeadCalls).Count) -Because "nothing was started"
+        $requests = @(Get-FakeApiRequests -Api $box.Api | Select-Object -Skip $requestsBefore)
+        Assert-Equal -Expected 0 -Actual @($requests | Where-Object { $_ -notmatch "^GET " }).Count -Because "no write at all: $($requests -join '; ')"
+        Assert-Equal -Expected $lockBefore -Actual (ConvertTo-Json -InputObject (Get-FakeApiState -Api $box.Api).lock -Compress) -Because "the cycle's lock is untouched"
+        Assert-True -Condition (@($run.Skipped).Count -eq 1 -and $run.Skipped[0] -match "kilit MAIL makinesinde") -Because "the skipped line: $($run.Skipped -join ' / ')"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-StepLockPath -Root $box.Root))) -Because "the step's own lock is not left behind"
+    }
+
+    Test-Case "own lock (3): two steps at once - exactly one gate runs, the second says the lock is held and exits 3, and the first finishes" {
+        $box = New-ApiSandbox -Work $one
+        $tools = "$($box.Root)-tools"
+        $holding = Join-Path $tools "gate-holding"
+        $release = Join-Path $tools "gate-release"
+        $hook = Join-Path $tools "hold-gate.ps1"
+        [System.IO.File]::WriteAllText($hook, (@(
+                    "Set-Content -LiteralPath '$holding' -Value 'the gate runs' -Encoding ASCII",
+                    "`$until = [datetime]::UtcNow.AddSeconds(150)",
+                    "while (-not (Test-Path -LiteralPath '$release') -and [datetime]::UtcNow -lt `$until) { Start-Sleep -Milliseconds 100 }") -join "`r`n"), $utf8)
+        $first = Invoke-Integrate -Root $box.Root -Gate "green" -QueueUrl $box.Api.Url -QueueTokenFile $box.Api.TokenFile -ExtraArguments "-BesideCycle" -Environment @{ PAGENTOS_FAKE_GATE_HOOK = $hook } -NoWait
+        try {
+            $until = [datetime]::UtcNow.AddSeconds(180)
+            while (-not (Test-Path -LiteralPath $holding)) {
+                if ($first.Process.HasExited) { throw "the first step ended before its gate held: $(Get-Content -LiteralPath $first.OutFile -Raw -ErrorAction SilentlyContinue)" }
+                if ([datetime]::UtcNow -gt $until) { throw "the first step's gate did not start within 180 s" }
+                Start-Sleep -Milliseconds 200
+            }
+            Assert-True -Condition (Test-Path -LiteralPath (Get-StepLockPath -Root $box.Root)) -Because "the first step holds its own lock while its gate runs"
+            $second = Invoke-Integrate -Root $box.Root -Gate "green" -QueueUrl $box.Api.Url -QueueTokenFile $box.Api.TokenFile -ExtraArguments "-BesideCycle"
+            Assert-Equal -Expected 3 -Actual $second.ExitCode -Because $second.Output
+            Assert-True -Condition (@($second.Skipped).Count -eq 1 -and $second.Skipped[0] -match "entegrasyon adımı" -and $second.Skipped[0] -match "pid $($first.Process.Id)") -Because "the second says whose the lock is: $($second.Skipped -join ' / ')"
+        }
+        finally { Set-Content -LiteralPath $release -Value "go" -Encoding ASCII }
+        $done = Wait-IntegrateProcess -Started $first -Seconds 300
+        Assert-Equal -Expected 0 -Actual $done.ExitCode -Because $done.Output
+        Assert-Equal -Expected 1 -Actual @(Get-Content -LiteralPath (Join-Path $tools "gate.log") | Where-Object { $_.Trim() }).Count -Because "exactly one gate ran"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-StoredTask -Api $box.Api -Id "task-one").state -Because "the first step finished the branch"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-StepLockPath -Root $box.Root))) -Because "and its lock is gone"
+    }
+
+    Test-Case "own lock (3): a lock file left by a dead step is taken over, and the report says so" {
+        $box = New-ApiSandbox -Work $one
+        $dead = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\cmd.exe") -ArgumentList "/c exit 0" -PassThru -WindowStyle Hidden
+        if (-not $dead.WaitForExit(30000)) { try { $dead.Kill() } catch { }; throw "the short process did not end" }
+        $deadPid = $dead.Id
+        $left = [pscustomobject]@{ pid = $deadPid; process_started_at = "2026-10-03T01:02:03.0000000Z"; machine = "MAIL"; taken_at = "2026-10-03T01:02:04Z" }
+        [System.IO.File]::WriteAllText((Get-StepLockPath -Root $box.Root), (ConvertTo-Json -InputObject $left -Compress), $utf8)
+        $run = Invoke-Integrate -Root $box.Root -Gate "green" -QueueUrl $box.Api.Url -QueueTokenFile $box.Api.TokenFile -ExtraArguments "-BesideCycle"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-True -Condition ($run.Report -match "devralındı" -and $run.Report -match "pid $deadPid") -Because "the takeover is said, with the dead pid: $($run.Report)"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-StoredTask -Api $box.Api -Id "task-one").state -Because "the step ran"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Get-StepLockPath -Root $box.Root))) -Because "and its lock is gone"
+    }
+
+    Test-Case "own lock (3): the step's lock is held while it works and gone after each of six ends - green, red gate, refused wiring, moved ref, every model limited, a thrown error" {
+        $all = "claude-fable-5-1,claude-opus-5-5,claude-sonnet-5-5"
+        $ends = @(
+            @{ Name = "green"; Code = 0; Gate = "green"; Writes = ""; Environment = @{}; GateScript = "" },
+            @{ Name = "red gate"; Code = 6; Gate = "red"; Writes = ""; Environment = @{}; GateScript = "" },
+            @{ Name = "refused wiring"; Code = 7; Gate = "green"; Writes = "src/a/extra.txt"; Environment = @{}; GateScript = "" },
+            @{ Name = "moved ref"; Code = 13; Gate = "green"; Writes = ""; Environment = @{ PAGENTOS_FAKE_LEAD_GIT_AFTER = "update-ref refs/heads/integrate/c1 refs/heads/main" }; GateScript = "" },
+            @{ Name = "every model limited"; Code = 7; Gate = "green"; Writes = ""; Environment = @{ PAGENTOS_FAKE_LEAD_LIMITED_MODELS = $all }; GateScript = "" },
+            @{ Name = "a thrown error"; Code = 12; Gate = "green"; Writes = ""; Environment = @{}; GateScript = "missing" })
+        foreach ($end in $ends) {
+            $how = $end.Name
+            $box = New-ApiSandbox -Work $one
+            $lockPath = Get-StepLockPath -Root $box.Root
+            $copy = Join-Path "$($box.Root)-tools" "step-lock-during.json"
+            $environment = @{ PAGENTOS_FAKE_LEAD_LOCK = $lockPath; PAGENTOS_FAKE_LEAD_LOCK_COPY = $copy }
+            foreach ($name in @($end.Environment.Keys)) { $environment[$name] = $end.Environment[$name] }
+            $gateScript = if ($end.GateScript) { Join-Path "$($box.Root)-tools" "no-such-gate.ps1" } else { "" }
+            $run = Invoke-Integrate -Root $box.Root -Gate $end.Gate -Names "src/a/task-one.txt" -Lead "stand-in" -LeadWrites $end.Writes -Environment $environment -GateScript $gateScript `
+                -QueueUrl $box.Api.Url -QueueTokenFile $box.Api.TokenFile -ExtraArguments "-BesideCycle"
+            Assert-Equal -Expected $end.Code -Actual $run.ExitCode -Because "${how}: $($run.Output)"
+            Assert-True -Condition (Test-Path -LiteralPath $copy) -Because "${how}: the lock file was there while the lead's run worked"
+            $during = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($copy))
+            Assert-True -Condition ([int]$during.pid -gt 0 -and [int]$during.pid -ne $PID) -Because "${how}: it named the step's process: $([System.IO.File]::ReadAllText($copy))"
+            Assert-True -Condition (-not (Test-Path -LiteralPath $lockPath)) -Because "${how}: the step's lock is gone after it"
+        }
+    }
+
+    Test-Case "own lock (4): a task the cycle moved while the gate ran is not written - returned by a new inspection, or merged again with another sha; the report names it, the branch's other tasks are written" {
+        $three = @(@{ Id = "task-one"; Area = "src/a" }, @{ Id = "task-two"; Area = "src/b" }, @{ Id = "task-three"; Area = "src/c" })
+        $box = New-ApiSandbox -Work $three
+        $other = "f" * 40
+        $hook = Join-Path "$($box.Root)-tools" "cycle-moves.ps1"
+        $marker = Join-Path "$($box.Root)-tools" "moved-once"
+        [System.IO.File]::WriteAllText($hook, (@(
+                    "if (Test-Path -LiteralPath '$marker') { return }",
+                    ". '$(Join-Path $repoRoot 'scripts\lib\HttpJson.ps1')'", ". '$(Join-Path $repoRoot 'scripts\lib\TeamQueue.ps1')'",
+                    "`$store = New-TeamApiStore -Url '$($box.Api.Url)' -TokenFile '$($box.Api.TokenFile)'",
+                    "`$queue = Read-TeamQueueApi -Store `$store",
+                    "foreach (`$task in @(Get-TeamTasks -Queue `$queue)) {",
+                    "    if (`$task.id -eq 'task-one') { `$task.state = 'returned'; Set-TeamProperty -InputObject `$task -Name 'reason' -Value 'a new inspection returned it'; `$task.updated_at = '2026-10-03T09:00:00Z' }",
+                    "    if (`$task.id -eq 'task-two') { `$task.sha = '$other'; `$task.updated_at = '2026-10-03T09:00:01Z' }",
+                    "    if (`$task.id -eq 'task-three') { `$task.title = 'renamed while the gate ran'; `$task.updated_at = '2026-10-03T09:00:02Z' }",
+                    "}",
+                    "Save-TeamQueueApi -Store `$store -Queue `$queue",
+                    "Set-Content -LiteralPath '$marker' -Value 'done' -Encoding ASCII") -join "`r`n"), $utf8)
+        $run = Invoke-Integrate -Root $box.Root -Gate "green" -QueueUrl $box.Api.Url -QueueTokenFile $box.Api.TokenFile -ExtraArguments "-BesideCycle" -Environment @{ PAGENTOS_FAKE_GATE_HOOK = $hook }
+        Assert-True -Condition (Test-Path -LiteralPath $marker) -Because "the cycle did move the tasks while the gate ran (else this case proves nothing): $($run.Output)"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        $returned = Get-StoredTask -Api $box.Api -Id "task-one"
+        Assert-Equal -Expected "returned" -Actual $returned.state -Because "the new inspection's word stands: not written as awaiting_release"
+        Assert-Equal -Expected "a new inspection returned it" -Actual $returned.reason -Because "and its reason is the inspection's"
+        $again = Get-StoredTask -Api $box.Api -Id "task-two"
+        Assert-Equal -Expected "merged" -Actual $again.state -Because "a task merged again with another sha was not gated as it is now"
+        Assert-Equal -Expected $other -Actual $again.sha -Because "its sha is the cycle's"
+        $written = Get-StoredTask -Api $box.Api -Id "task-three"
+        Assert-Equal -Expected "awaiting_release" -Actual $written.state -Because "the branch's other task is written"
+        Assert-Equal -Expected (Get-Sha -Root $box.Root -Revision "main") -Actual $written.sha -Because "with main's sha"
+        Assert-Equal -Expected "renamed while the gate ran" -Actual $written.title -Because "on top of what the other writer changed, which stays"
+        foreach ($id in @("task-one", "task-two")) {
+            Assert-True -Condition ($run.Report -match "(?m)^.*kapı koşarken.*\b$id\b.*$") -Because "the report names $id on a line that says why it was not written: $($run.Report)"
+        }
+        Assert-True -Condition ($run.Report -notmatch "(?m)^.*kapı koşarken.*\btask-three\b.*$") -Because "and not the task that was written: $($run.Report)"
+    }
+
+    Write-Host ""
+    Write-Host "the wiring run may grow the gate, never shrink it (integrate-own-lock)"
+
+    $sandboxGate = @'
+function Invoke-Step { param([string]$Name, [scriptblock]$Body) & $Body }
+function Assert-ExitCode { param([string]$What) if ($LASTEXITCODE -ne 0) { throw "$What exited with code $LASTEXITCODE" } }
+
+# the first step
+Invoke-Step "First" {
+    & cmd.exe /c exit 0
+    Assert-ExitCode "first"
+}
+
+Invoke-Step "Second" {
+    & cmd.exe /c exit 0
+    Assert-ExitCode "second"
+}
+
+Write-Host "QUALITY GATE: PASS"
+exit 0
+'@ -replace "`r`n", "`n"
+
+    Test-Case "own lock (6): a wiring that removes a step's Invoke-Step line, an Assert-ExitCode line or the PASS line is refused and quoted; one that adds a step or edits a comment is accepted" {
+        $shapes = @(
+            # Only the Invoke-Step line goes (with its brace): the body and its Assert-ExitCode stay, unwrapped.
+            @{ Name = "a step's Invoke-Step line removed"; Old = "Invoke-Step `"Second`" {`n    & cmd.exe /c exit 0`n    Assert-ExitCode `"second`"`n}`n"; New = "& cmd.exe /c exit 0`nAssert-ExitCode `"second`"`n"; Refused = $true; Quote = 'Invoke-Step "Second" {' },
+            @{ Name = "an Assert-ExitCode line removed"; Old = "    Assert-ExitCode `"first`"`n"; New = ""; Refused = $true; Quote = 'Assert-ExitCode "first"' },
+            @{ Name = "the PASS line removed"; Old = "Write-Host `"QUALITY GATE: PASS`"`n"; New = ""; Refused = $true; Quote = 'QUALITY GATE: PASS' },
+            @{ Name = "a step added"; Old = "Write-Host `"QUALITY GATE: PASS`""; New = "Invoke-Step `"Third`" {`n    & cmd.exe /c exit 0`n    Assert-ExitCode `"third`"`n}`n`nWrite-Host `"QUALITY GATE: PASS`""; Refused = $false; Quote = "" },
+            @{ Name = "a comment and a body edited"; Old = "# the first step`nInvoke-Step `"First`" {`n    & cmd.exe /c exit 0`n"; New = "# the first step: it proves the sandbox`nInvoke-Step `"First`" {`n    & cmd.exe /c exit 0 # quiet`n"; Refused = $false; Quote = "" })
+        foreach ($shape in $shapes) {
+            $how = $shape.Name
+            $root = New-Sandbox -Work $one
+            $tools = "$root-tools"
+            [System.IO.File]::WriteAllText((Join-Path $root "scripts\quality-gate.ps1"), $sandboxGate, $utf8)
+            [void](Invoke-SandboxGit -Root $root -Arguments @("add", "scripts/quality-gate.ps1"))
+            [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "the sandbox's gate"))
+            $mainBefore = Get-Sha -Root $root -Revision "main"
+            $tipBefore = Get-Sha -Root $root -Revision "integrate/c1"
+            [System.IO.File]::WriteAllText((Join-Path $tools "edit-old.txt"), $shape.Old, $utf8)
+            [System.IO.File]::WriteAllText((Join-Path $tools "edit-new.txt"), $shape.New, $utf8)
+            $edit = Join-Path $tools "edit-gate.ps1"
+            [System.IO.File]::WriteAllText($edit, (@(
+                        "`$utf8 = New-Object System.Text.UTF8Encoding(`$false)",
+                        "`$file = Join-Path (Get-Location).ProviderPath 'scripts\quality-gate.ps1'",
+                        "`$text = [System.IO.File]::ReadAllText(`$file, `$utf8)",
+                        "`$old = [System.IO.File]::ReadAllText('$(Join-Path $tools "edit-old.txt")', `$utf8)",
+                        "`$new = [System.IO.File]::ReadAllText('$(Join-Path $tools "edit-new.txt")', `$utf8)",
+                        "if (-not `$text.Contains(`$old)) { throw 'the edit does not apply' }",
+                        "[System.IO.File]::WriteAllText(`$file, `$text.Replace(`$old, `$new), `$utf8)") -join "`r`n"), $utf8)
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -Environment @{ PAGENTOS_FAKE_LEAD_EDIT = $edit }
+            $gateTree = Join-Path $root ".claude\worktrees\gate\integrate\c1"
+            if ($shape.Refused) {
+                Assert-Equal -Expected 7 -Actual $run.ExitCode -Because "${how}: refused - $($run.Output)"
+                Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "${how}: the gate did not run"
+                Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "${how}: nothing reached main"
+                Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root $root -Revision "integrate/c1") -Because "${how}: nor the integration branch"
+                Assert-Equal -Expected "lead_refused" -Actual (Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).result -Because "${how}: counted as a refused lead run"
+                Assert-True -Condition ($run.Report.Contains($shape.Quote) -and $run.Report -match "quality-gate\.ps1") -Because "${how}: the report quotes the line: $($run.Report)"
+                Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $gateTree -Arguments @("status", "--porcelain")) -Because "${how}: the tree was reset"
+                Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "${how}: the task waits"
+            }
+            else {
+                Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "${how}: accepted - $($run.Output)"
+                $onMain = [System.IO.File]::ReadAllText((Join-Path $root "scripts\quality-gate.ps1"), $utf8)
+                Assert-True -Condition ($onMain.Contains($shape.New)) -Because "${how}: the wiring is on main: $onMain"
+                Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "${how}: and the task with it"
+            }
+        }
+    }
+
+    Test-Case "own lock (7): a limited run that WROTE before it answered - inside the area and under docs/ - leaves nothing: the retry starts on a clean tree and its commit holds neither file" {
+        $root = New-Sandbox -Work $one
+        Set-SandboxModels -Root $root -Lead "claude-fable-5-1"
+        $status = Join-Path "$root-tools" "lead-status.log"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment @{
+            PAGENTOS_FAKE_LEAD_LIMITED_MODELS = "claude-fable-5-1"; PAGENTOS_FAKE_LEAD_LIMITED_WRITES = "src/a/limited.txt;docs/limited.md"; PAGENTOS_FAKE_LEAD_STATUS = $status
+        }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        $found = @(Get-Content -LiteralPath $status -Encoding UTF8 | Where-Object { $_.Trim() })
+        Assert-Equal -Expected "claude-fable-5-1|,claude-opus-5-5|" -Actual ($found -join ",") -Because "each run started on a clean tree - the retry too, after the limited run wrote two files"
+        $wiring = Invoke-SandboxGit -Root $root -Arguments @("log", "-1", "--format=%H", "--grep=the lead's merge wiring", "integrate/c1")
+        Assert-True -Condition ($wiring -cmatch "^[0-9a-f]{40}$") -Because "the retry's wiring was committed: $wiring"
+        Assert-Equal -Expected "docs/DECISIONS.md" -Actual ((Invoke-SandboxGit -Root $root -Arguments @("diff", "--name-only", "--no-renames", "$wiring^", $wiring)) -replace "\s+", ",") -Because "the retry's commit holds what the retry wrote and nothing the limited run wrote"
+        foreach ($file in @("src/a/limited.txt", "docs/limited.md")) {
+            Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision "main" -File $file)) -Because "$file is not on main"
+            Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision "integrate/c1" -File $file)) -Because "$file is not on the integration branch"
+        }
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the branch went through"
+    }
 }
 finally {
+    foreach ($step in $stepProcesses) { try { if (-not $step.HasExited) { Stop-TeamProcessTree -ProcessId $step.Id } } catch { } }
     foreach ($api in $fakeApis) { try { if (-not $api.HasExited) { $api.Kill() } } catch { } }
     foreach ($root in $sandboxes) {
         if (-not (Test-Path -LiteralPath $root)) { continue }

@@ -74,8 +74,32 @@ ended with "a background watcher will wake me when it finishes; I'll write the v
 and was read as no verdict). Run long suites in the FOREGROUND with a Bash `timeout` long
 enough, in slices if needed, and end with the verdict. **Never run the WHOLE api unit suite (`pytest tests/unit` with no file named) yourself.** On 2026-10-03 one such run grew to 14 GB of memory, several at once exhausted the home PC's 48 GB and crashed it (the lead's session, the owner's web shell and a gate with it). Run your own test files, the guard files your card names and the files that import what you changed; for the whole suite write "full unit suite: the lead's gate runs it" - that is accepted evidence, not a NOT_RUN. Evidence classes you may assign:
 PROVEN_AUTOMATED, PROVEN_PROXY, READY_FOR_OWNER, NOT_RUN. You never write PROVEN_REAL.
+
+**The owner's trial (ADR-0258).** For every claim whose evidence is READY_FOR_OWNER, write the
+trial the owner makes, above the verdict, as four lines alone on their own lines in this fixed
+form (`services/api/app/team/trials.py` `parse_inspector_trials` reads it into an
+`owner_trials` object): `deneme:` an id (lower case, digits, `-`), `cumle:` what the owner says
+or does (at most 300 characters), `makine:` the device, `beklenen:` what the owner must see or hear.
+A block missing a line is skipped, not guessed:
+
+```
+deneme: ses-saat
+cumle: Saat kaç?
+makine: ev PC (masaüstü uygulaması)
+beklenen: saati Türkçe söyler
+```
 You never soften a finding to help the cycle finish; a second RETURN on the same task is
 allowed and stops the task.
+
+**Find everything in the FIRST inspection; a re-inspection checks the list** (the Danışman,
+2026-10-04: of 100 runs that day, about half were return rounds - browser-redirect-guard 10 runs,
+cycle-auto-release 6 returns, each round a NEW finding - and the accounts' usage limits stopped the
+whole team twice). On the first inspection of a task, break it as far as you can and list every
+finding at once. On a re-inspection (the task has `returns` > 0), verify that each listed item is
+closed, that nothing regressed, and the card's acceptance; a NEW finding of a class you did not
+list before is a RETURN only when it is a security hole, data loss, or the card's own acceptance
+failing - anything else goes in the report as `takip kartı önerisi: <one line>` and the verdict
+can still be APPROVE.
 
 ## Ekip panosu (the team's board - the owner's idea of 2026-10-03)
 

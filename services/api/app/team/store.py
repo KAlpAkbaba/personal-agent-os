@@ -9,7 +9,8 @@ the API keeps working, and the Onay Merkezi reads whichever ``app.state.team_sto
 The rules here are the ones ``scripts/lib/TeamQueue.ps1`` states, and each is held to its
 other half by a test: a task is valid when ``team/queue.schema.json`` says so (the copy
 beside this file is compared to it byte for byte), and the lock is stale after
-``LOCK_STALE_HOURS`` (the test reads the PowerShell constant).
+``LOCK_STALE_HOURS`` (the test reads the PowerShell constant). The server counts those hours
+from the holder's last status when it writes one (:func:`lock_alive_since`).
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from app.team import models_setting
 from app.team.models import KIND_LOCK, KIND_PROPOSAL, KIND_REPORT, KIND_TASK, TeamStateRow
 
 LOCK_STALE_HOURS = 6  # TeamQueue.ps1: $script:TeamLockStaleHours
+#: A status' ``updated_at`` this far ahead of the clock is still believed (the Ofis page's bound).
+STATUS_FUTURE_SKEW_MINUTES = 2
 TEXT_MAX_CHARS = 20000
 LOCK_KEY = "lock"
 KIND_STATUS = "status"  # a team_state row of its own kind (String(16)): no new table
@@ -165,23 +168,71 @@ def _parse(text: Any) -> datetime | None:
         return None
 
 
-def lock_is_running(lock: dict[str, Any] | None, at: datetime) -> bool:
-    """A held, non-stale lock. One that does not say when it was taken cannot be shown stale."""
+def _pid(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def lock_alive_since(
+    lock: dict[str, Any], status: dict[str, Any] | None, at: datetime
+) -> datetime | None:
+    """When the lock's holder last showed life: the status' ``updated_at`` when the status is
+    the holder's own (its ``cycle_id``, ``machine`` and ``pid`` are the lock's) and newer than
+    ``acquired_at``, else ``acquired_at``. None when the lock does not say when it was taken.
+
+    The cycle writes its status every pass, so it is the lock's heartbeat (2026-10-02: a cycle
+    seven hours old was called dead by the page and offered to the other machine). A holder
+    that writes no status - the feeder, an integrate step - is aged from ``acquired_at`` as
+    before. A status dated further ahead than the Ofis page's skew bound is not believed: it
+    would keep the lock alive for ever."""
+    acquired = _parse(lock.get("acquired_at"))
+    if acquired is None or not isinstance(status, dict):
+        return acquired
+    cycle_id, machine, pid = lock.get("cycle_id"), lock.get("machine"), _pid(lock.get("pid"))
+    if not cycle_id or not machine or pid is None:
+        return acquired
+    if (
+        status.get("cycle_id") != cycle_id
+        or str(status.get("machine", "")).upper() != str(machine).upper()
+        or _pid(status.get("pid")) != pid
+    ):
+        return acquired
+    written = _parse(status.get("updated_at"))
+    if written is None or written <= acquired:
+        return acquired
+    if written - at > timedelta(minutes=STATUS_FUTURE_SKEW_MINUTES):
+        return acquired
+    return written
+
+
+def lock_is_running(
+    lock: dict[str, Any] | None, at: datetime, status: dict[str, Any] | None = None
+) -> bool:
+    """A held, non-stale lock. One that does not say when it was taken cannot be shown stale.
+
+    Stale is ``LOCK_STALE_HOURS`` after the holder last showed life (:func:`lock_alive_since`);
+    without ``status`` that is ``acquired_at``, the rule ``TeamQueue.ps1`` states."""
     if not isinstance(lock, dict) or lock.get("held") is not True:
         return False
-    acquired = _parse(lock.get("acquired_at"))
-    if acquired is None:
+    since = lock_alive_since(lock, status, at)
+    if since is None:
         return True
-    return at - acquired < timedelta(hours=LOCK_STALE_HOURS)
+    return at - since < timedelta(hours=LOCK_STALE_HOURS)
 
 
 def lock_decision(
-    lock: dict[str, Any] | None, machine: str, at: datetime, *, takeover_dead: bool
+    lock: dict[str, Any] | None,
+    machine: str,
+    at: datetime,
+    *,
+    takeover_dead: bool,
+    status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """TeamQueue.ps1 ``Get-TeamLockDecision``: free / stale / ours / held (+ ``dead``).
 
     ``takeover_dead`` is the client saying that the process that took OUR lock is gone (only
     the client can look at its own process table); it is never believed for another machine.
+    ``status`` is the cycle's live status: a holder that shows life in it is not stale
+    (:func:`lock_alive_since`), whatever the client's own six-hour reading of the lock says.
     """
     if not isinstance(lock, dict) or lock.get("held") is not True:
         return {"acquired": True, "kind": "free", "holder": "", "since": "", "pid": 0}
@@ -191,7 +242,7 @@ def lock_decision(
         "since": str(lock.get("acquired_at", "")),
         "pid": int(lock.get("pid") or 0),
     }
-    if not lock_is_running(lock, at):
+    if not lock_is_running(lock, at, status):
         return {"acquired": True, "kind": "stale", **base}
     if holder and holder.upper() == machine.upper():
         return {"acquired": takeover_dead, "kind": "dead" if takeover_dead else "ours", **base}
@@ -369,7 +420,13 @@ class FileStore:
     ) -> dict[str, Any]:
         at = now or utcnow()
         with _WRITE_LOCK:
-            result = lock_decision(self.read_lock(), machine, at, takeover_dead=takeover_dead)
+            result = lock_decision(
+                self.read_lock(),
+                machine,
+                at,
+                takeover_dead=takeover_dead,
+                status=self.read_status(),
+            )
             if result["acquired"]:
                 self._write(self.root / "lock.json", _new_lock(machine, cycle_id, pid, at))
         return result
@@ -542,7 +599,9 @@ class DbStore:
         with self._factory() as session:
             row = session.get(TeamStateRow, (KIND_LOCK, LOCK_KEY))
             current = None if row is None else _copy(row.doc)
-            result = lock_decision(current, machine, at, takeover_dead=takeover_dead)
+            beat = session.get(TeamStateRow, (KIND_STATUS, STATUS_KEY))
+            status = None if beat is None else _copy(beat.doc)
+            result = lock_decision(current, machine, at, takeover_dead=takeover_dead, status=status)
             if not result["acquired"]:
                 return result
             version = lock_version(at, machine, cycle_id, pid)

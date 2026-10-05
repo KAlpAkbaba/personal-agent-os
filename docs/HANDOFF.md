@@ -15,12 +15,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `002c6292cc0de9fd1c87423a30757b4b5ea64961` (2026-10-04 12:07 UTC = 15:07 yerel, api-green), LKG `eac453fc`,
-pin = RELEASE (Danışman pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`5711e33f`). QUALIFICATION Stage 52
-(Proje Yöneticisi nöbet koşusu ADR-0283 + Ofis'te hesap adı). Ana kopya `team/nightly/lead` üzerinde (= main). Kapıda bekleyen YOK.
-SIRADAKİ entegrasyon: integrate/d20261003'in onaylıları (office-progress dahil, Danışman elle birleştirdi 28592423) +
-`lead/roles-research-integrate` (fbfe98f1). Ekip hesap3'te (`%USERPROFILE%\.pagentos-team\team-account.txt`); hesap2'nin limit
-dosyası `team/limits.hesap2-20261004.json` olarak kenarda (limits.json hesap başına değil - account-pool kartı).**
+**ÜRETİM: main `321e43b04e1eb7f88f8d1afa4d3d1de1da305fa4` (2026-10-04 16:04 UTC = 19:04 yerel, api-blue), LKG `002c6292`,
+pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. QUALIFICATION Stage 53. Ana kopya `team/nightly/lead` (= main).
+PY nöbeti canlı (ADR-0283); 4000 karakter sınırı bir SONRAKİ döngü başlangıcında devreye girer - o zamana kadar 1200'ü aşan
+duty dosyası (team/plans/<döngü>-duty-N.json) reddedilir, Danışman elle uygular. Ekip hesap3'te. DİKKAT: işçilerin Postgres
+testleri ortak dev DB'yi kendi göçlerine taşıyabiliyor (kart dev-db-branch-migration-leak); kapı 'Can't locate revision' derse
+o dalın worktree'sinden `alembic downgrade 0065_misheard_utterances`. SIRADAKİ entegrasyon: integrate/d20261003.**
 **ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
 `team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
 yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**
