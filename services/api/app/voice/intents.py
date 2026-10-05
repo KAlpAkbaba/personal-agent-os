@@ -157,6 +157,8 @@ class Intent(StrEnum):
     ALARM_SNOOZE = "alarm_snooze"  # beş dakika ertele / on dakika ertele
     ALARM_STOP = "alarm_stop"  # alarmı kapat / alarmı durdur / alarmı sustur
     ALARM_QUERY = "alarm_query"  # sabah alarmım kaçta?
+    ALARM_SONG_SET = "alarm_song_set"  # alarmımın şarkısını X yap (the next alarm's song)
+    WAKE_SONG_SET = "wake_song_set"  # uyandırma şarkımı X yap / değiştir (the global one)
     DISPLAY_OFF = "display_off"  # ekranları kapat / ekranı kapat
     DISPLAY_WAKE = "display_wake"  # ekranları aç / ekranı aç
     DISPLAY_QUERY = "display_query"  # ekranlar açık mı?
@@ -471,6 +473,8 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.ALARM_CREATE: "alarm.create",
     Intent.ALARM_TEST_CREATE: "alarm.create",
     Intent.ALARM_CANCEL: "alarm.cancel",
+    Intent.ALARM_SONG_SET: "alarm.set_song",
+    Intent.WAKE_SONG_SET: "alarm.set_song",
     Intent.ALARM_SNOOZE: "alarm.snooze",
     Intent.ALARM_STOP: "alarm.stop",
     Intent.DISPLAY_OFF: "display.off",
@@ -2373,6 +2377,11 @@ _ONE_ALARM_GENITIVE_FORMS: Final[frozenset[str]] = frozenset(
 _WAKE_SONG_OWNER_FORMS: Final[frozenset[str]] = frozenset(
     {"alarm", "alarmım", "alarmim", "uyandırma", "uyandirma"} | _ONE_ALARM_GENITIVE_FORMS
 )
+#: "bu" / "şu" / "o" point at a song and name none: never a title to search for.
+_SONG_POINTING_FORMS: Final[frozenset[str]] = frozenset(
+    {"bu", "şu", "su", "o", "bunu", "şunu", "sunu", "onu"}
+)
+
 #: The scope :func:`alarm_song_set_match` returns.
 SONG_SCOPE_ALARM: Final = "alarm"
 SONG_SCOPE_WAKE_SONG: Final = "wake_song"
@@ -2413,6 +2422,8 @@ def alarm_song_set_match(utterance: str) -> tuple[str, str | None] | None:
         else SONG_SCOPE_WAKE_SONG
     )
     between = [w for w in words[noun + 1 : verb] if w.casefold() != "olarak"]
+    if all(w.casefold() in _SONG_POINTING_FORMS for w in between):
+        between = []  # "Alarm müziğim bu olsun": points at a song, names none
     title = " ".join(between).strip()[:200]
     return scope, (title or None)
 
@@ -9444,6 +9455,17 @@ def _resolve_intent_rules(
             routine_matched[0],
             scope=SCOPE_CONVERSATION,
             matched=routine_matched[1],
+            **base,
+        )
+    # 2026-10-05: "Alarmımın şarkısını X yap" / "Uyandırma şarkımı değiştir" changes the
+    # song, never the alarm: before the alarm family, which owns the same noun. The scope
+    # is the intent itself - the turn record a tool reads carries no sentence.
+    if song_set := alarm_song_set_match(text):
+        return ResolvedIntent(
+            Intent.ALARM_SONG_SET if song_set[0] == SONG_SCOPE_ALARM else Intent.WAKE_SONG_SET,
+            scope=SCOPE_CONVERSATION,
+            matched="alarmın şarkısı",
+            media_query=song_set[1],
             **base,
         )
     if alarm_matched := _alarm_match(

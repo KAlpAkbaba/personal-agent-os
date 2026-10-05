@@ -48,6 +48,7 @@ from app.ambient.policy import OWNER_COMMAND_HOLDOFF_S
 from app.ledger.vocabulary import SUBSYSTEM_AMBIENT, SUBSYSTEM_ROUTINE
 from app.logging import get_logger
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.realtime_sessions import tools_alarms
 
 if TYPE_CHECKING:
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
@@ -192,7 +193,10 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
             started=started,
         )
 
-    unresolved_media = bool(media) and not media.get("url")
+    # The song the sentence named ("... Şımarık'ıyla uyandır"), found now; None leaves the
+    # alarm on the global wake song or the tone.
+    song = tools_alarms.song_for_create(ctx, arguments)
+    unresolved_media = bool(media) and not media.get("url") and song is None
     if parsed.weekdays and unresolved_media:
         return _receipt(
             ctx,
@@ -212,6 +216,7 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         media=media,
         is_test=is_test,
         label=str(arguments.get("label") or "")[:200] or None,
+        song=song,
     )
     speech = alarm_speech.alarm_created_speech(
         local_time=parsed.local_time,
@@ -220,6 +225,14 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         tomorrow=parsed.matched == "tomorrow",
         is_test=is_test,
     )
+    if song is not None:
+        speech = tools_alarms.song_created_speech(
+            local_time=parsed.local_time,
+            tomorrow=parsed.matched == "tomorrow",
+            weekdays=parsed.weekdays,
+            title=song["title"],
+            relative_seconds=parsed.relative_seconds,
+        )
     if unresolved_media:
         speech = alarm_speech.ALARM_CREATE_NEEDS_MEDIA_TR
     return {
@@ -888,6 +901,7 @@ def register_ambient_tools(reg: ToolRegistry) -> ToolRegistry:
             handler=ambient_test_display,
         )
     )
+    tools_alarms.register_alarm_song_tools(reg)
     return reg
 
 

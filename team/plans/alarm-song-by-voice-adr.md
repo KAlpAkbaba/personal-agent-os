@@ -30,9 +30,20 @@ fallback. An alarm could not have its own song, and the voice could not name one
 4. The song is found the way media.play finds one: the device's own search and the first real
    watch URL. The read-back is one sentence: "Yarın 07.00'de Şımarık ile uyandıracağım".
 
+5. Wiring (2026-10-05, 3rd round): `tools_ambient.register_ambient_tools` registers
+   `alarm.set_song` (step-up tier SENSITIVE, the same tier as the other alarm tools that
+   change state); `alarm_create` calls `song_for_create` and reads the song back in the same
+   sentence. A recurring alarm with a title the search resolved is no longer refused as
+   "needs media". The router sends a song change as `ALARM_SONG_SET` (the next alarm's
+   song, "alarmımın") or `WAKE_SONG_SET` (the global song); both go to `alarm.set_song`.
+   The scope IS the intent, because the session's turn record carries no sentence ("turn"
+   is the turn number). A title that only points ("Alarm müziğim bu olsun") names no song:
+   the tool asks which one and searches nothing. `tr_time`: a bare digit hour with
+   -de/-da/-te/-ta right after a day word ("yarın 7'de", "pazartesi 6'da") is a clock;
+   the pattern is anchored on both sides.
+
 ## Consequences
 - Old alarms are unchanged: without a song they play the global song, exactly as before.
-- Wiring is still pending and needs files outside this area: registering the
-  `alarm.set_song` tool and its step-up tier (tools_ambient.py, step_up.py), the
-  `ALARM_SONG_SET` intent hook-up, `alarm_create` calling `song_for_create`, the bare
-  "yarın 7'de" clock in tr_time.py, and the alarms page in the web app.
+- The corpus rows a.wakesong.set.1-3 ("no voice path for the wake song") now go to
+  `alarm.set_song` and are refused with `no_song_named` (they name no song).
+- The alarms page (apps/web) was left for a separate card.

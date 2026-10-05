@@ -62,6 +62,11 @@ ERROR_NO_VIDEO_FOUND: Final = "no_video_found"
 
 #: The intents whose turn carries the song an alarm sentence named.
 _CREATE_INTENTS: Final[frozenset[str]] = frozenset({"alarm_create", "alarm_test_create"})
+#: The router's intent -> the song's scope (the turn record carries no sentence).
+_SCOPE_BY_INTENT: Final[dict[str, str]] = {
+    "alarm_song_set": SONG_SCOPE_ALARM,
+    "wake_song_set": SONG_SCOPE_WAKE_SONG,
+}
 
 SEARCH_MAX_RESULTS: Final = 10
 SEARCH_LOCALE: Final = "tr-TR"
@@ -272,8 +277,8 @@ def alarm_set_song(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
 
     The title is the owner's words (the router's ``media_query``; the model's ``title`` only
     when the router has none). No title -> ask which song and change nothing. The scope -
-    the next alarm, or the global wake song - is read off the sentence; the model's
-    ``scope`` only when the sentence did not say.
+    the next alarm, or the global wake song - is the router's intent (``alarm_song_set`` /
+    ``wake_song_set``); the model's ``scope`` only when the router did not decide.
     """
     if ctx.db is None:
         raise VoiceError(
@@ -288,8 +293,7 @@ def alarm_set_song(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         spoken = argued if isinstance(argued, str) else None
     if not spoken or not spoken.strip():
         return _refused(ctx, ERROR_NO_SONG_NAMED, SONG_WHICH_TR)
-    sentence = str(turn.get("turn") or "")
-    scope = song_scope(sentence) if sentence else None
+    scope = _SCOPE_BY_INTENT.get(str(turn.get("intent") or ""))
     if scope is None:
         argued_scope = arguments.get("scope")
         scope = argued_scope if argued_scope in (SONG_SCOPE_ALARM, SONG_SCOPE_WAKE_SONG) else None

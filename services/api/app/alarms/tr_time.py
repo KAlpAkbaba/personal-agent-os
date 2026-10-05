@@ -108,6 +108,14 @@ _HM_SPACED_RE: Final = re.compile(
     r"(?P<sfx>\s*'?\s*(?:d[ae]|t[ae]|y[ıie]|[ıiea])\b)?"
 )
 _BARE_HOUR_RE: Final = re.compile(r"(?<!\d)([01]?\d|2[0-3])(?!\d)\s*(?:'?[a-zçğıöşü]{1,4})?\b")
+#: "yarın 7'de" / "pazartesi 6'da": a bare digit hour with a locative suffix RIGHT after a
+#: day word is a clock (the owner's trial sentence "yarın 7'de beni X ile uyandır" parsed to
+#: nothing). Anchored on both sides, so "yarın 7 dakika" or a number elsewhere never is.
+_DAY_BARE_HOUR_RE: Final = re.compile(
+    r"(?<![\wçğıöşü])(?:yarın|yarin|bugün|bugun|"
+    + "|".join(sorted(_WEEKDAY_NAMES, key=len, reverse=True))
+    + r")\s+([01]?\d|2[0-3])\s*'?\s*(?:d[ae]|t[ae])(?![\wçğıöşü])"
+)
 _SECONDS_RE: Final = re.compile(r"(?<!\d)(\d{1,5})\s*(?:sn|saniye)")
 _MINUTES_RE: Final = re.compile(r"(?<!\d)(\d{1,4})\s*(?:dk|dakika)")
 _HOURS_RE: Final = re.compile(r"(?<!\d)(\d{1,3})\s*saat")
@@ -323,6 +331,9 @@ def _clock_from(text: str, tokens: list[str]) -> tuple[int, int] | None:
         bare = _BARE_HOUR_RE.search(text)
         if bare:
             return int(bare.group(1)), 0
+    day_bare = _DAY_BARE_HOUR_RE.search(text)
+    if day_bare:
+        return int(day_bare.group(1)), 0
     return None
 
 

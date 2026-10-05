@@ -319,6 +319,9 @@ def test_closing_an_alarm_never_sets_a_song(text):
         ("Uyandırma şarkımı Sezen Aksu Gülümse yap.", "Sezen Aksu Gülümse"),
         ("Alarm müziğimi Bella Ciao yap.", "Bella Ciao"),
         ("Uyandırma şarkımı değiştir.", None),
+        # "bu" points at a song, it does not name one: the tool asks, never searches "bu".
+        ("Alarm müziğim bu olsun.", None),
+        ("Bu şarkıyı alarm müziğim yap.", None),
     ],
 )
 def test_changing_the_wake_song_by_voice(text, song):
@@ -404,7 +407,6 @@ def test_the_created_speech_reads_the_song_back_in_one_sentence():
 def test_alarm_set_song_sets_the_next_alarm_and_reads_it_back(session, device):
     alarm = _alarm(session)
     ctx = _ctx(session, device, intent="alarm_song_set", media_query="Tarkan Şımarık")
-    ctx.context["last_utterance"]["turn"] = "Alarmımın şarkısını Tarkan Şımarık yap."
     receipt = tools_alarms.alarm_set_song(ctx, {})
     assert receipt["execution_status"] == "executed"
     assert alarms_service.require_alarm(session, alarm.id).song == {
@@ -415,8 +417,9 @@ def test_alarm_set_song_sets_the_next_alarm_and_reads_it_back(session, device):
 
 
 def test_alarm_set_song_for_the_wake_song_changes_the_global_one(session, device):
-    ctx = _ctx(session, device, intent="alarm_song_set", media_query="Sezen Aksu Gülümse")
-    ctx.context["last_utterance"]["turn"] = "Uyandırma şarkımı Sezen Aksu Gülümse yap."
+    # The session's turn record carries no sentence ("turn" is the turn's number): the scope
+    # travels as the intent the router chose.
+    ctx = _ctx(session, device, intent="wake_song_set", media_query="Sezen Aksu Gülümse")
     receipt = tools_alarms.alarm_set_song(ctx, {})
     assert receipt["execution_status"] == "executed"
     assert alarms_service.get_wake_song(session) == {
@@ -438,7 +441,6 @@ def test_alarm_set_song_with_no_title_asks_which_song_and_changes_nothing(sessio
 
 def test_alarm_set_song_with_no_alarm_says_so(session, device):
     ctx = _ctx(session, device, intent="alarm_song_set", media_query="Şımarık")
-    ctx.context["last_utterance"]["turn"] = "Alarmımın şarkısını Şımarık yap."
     receipt = tools_alarms.alarm_set_song(ctx, {})
     assert receipt["error_class"] == "no_alarm"
 
@@ -463,6 +465,12 @@ def test_wiring_the_router_sends_a_wake_song_change_to_the_tool():
     resolved = resolve_intent("Alarmımın şarkısını Tarkan Şımarık yap.")
     assert resolved.intent.value == "alarm_song_set"
     assert resolved.media_query == "Tarkan Şımarık"
+
+
+def test_the_router_sends_a_global_wake_song_change_as_its_own_intent():
+    resolved = resolve_intent("Uyandırma şarkımı Sezen Aksu Gülümse yap.")
+    assert resolved.intent.value == "wake_song_set"
+    assert resolved.media_query == "Sezen Aksu Gülümse"
 
 
 def test_wiring_alarm_create_resolves_the_song_the_sentence_named(session, device):

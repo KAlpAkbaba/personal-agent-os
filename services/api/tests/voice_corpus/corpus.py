@@ -384,6 +384,13 @@ SIDE_EFFECTS_MEDIA_PLAY: Final[frozenset[str]] = frozenset(
         "browser.media_play",
     }
 )
+#: 2026-10-05: an alarm's song is FOUND while the alarm is set (its own short session of the
+#: alarm profile, closed again) and played only when it rings - no tab, no media_play now.
+SIDE_EFFECTS_ALARM_SONG_SEARCH: Final[frozenset[str]] = frozenset(
+    {"browser.session_open", "browser.search", "browser.session_close"}
+)
+#: The first real watch URL the fake device's search returns (``tests.alarms_support``).
+CORPUS_SEARCH_HIT_URL: Final = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 #: "Şarkıyı durdur." stops the session this family opened -- nothing else.
 SIDE_EFFECTS_MEDIA_STOP: Final[frozenset[str]] = frozenset({"browser.media_stop"})
 #: B27 req 733: the level is READ from the page first (``media_status.volume``), then moved.
@@ -1001,15 +1008,16 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
     sets the time AND names the song. Its own function, like the wake-song block below.
 
     Every row sets the time the sentence says - the song's suffix ("Şımarık'ıyla"), gerund
-    ("çalarak") and "ile" must not swallow it. The song itself rides on the turn
-    (``media_query``) and is pinned by ``tests/unit/test_alarm_song_by_voice.py``; these
-    rows carry no ``resolved_media_url`` until ``alarm.create`` searches for it (the wiring
-    in ``tools_ambient.py``, outside this task's area). "7'de" is written "7:30'da" here:
-    a bare digit hour after "yarın" is not a clock to ``tr_time`` yet (same wiring).
+    ("çalarak") and "ile" must not swallow it - AND the song: ``alarm.create`` searches for
+    the words the sentence named (the router's ``media_query``) and the alarm carries the
+    first real watch URL the search returned. "Alarmımın şarkısını X yap" / "Uyandırma
+    şarkımı X yap" go to ``alarm.set_song``.
     """
     cases: list[UtteranceCase] = []
     forms = [
         ("a.song.1", "Yarın 7:30'da beni Tarkan'ın Şımarık'ıyla uyandır.", "07:30", None),
+        # The owner's own trial sentence: a bare digit hour after "yarın".
+        ("a.song.6", "Yarın 7'de beni Tarkan'ın Şımarık'ıyla uyandır.", "07:00", None),
         ("a.song.2", "Pazartesi 6.30'da Sezen Aksu çalarak uyandır.", "06:30", [0]),
         ("a.song.3", "Yarın sabah yedi buçukta beni Bella Ciao ile uyandır.", "07:30", None),
         ("a.song.4", "Yarın 07:30'da beni Hans Zimmer Time şarkısıyla uyandır.", "07:30", None),
@@ -1021,7 +1029,10 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
         ),
     ]
     for case_id, text, local_time, weekdays in forms:
-        expected: dict[str, object] = {"local_time": local_time}
+        expected: dict[str, object] = {
+            "local_time": local_time,
+            "resolved_media_url": CORPUS_SEARCH_HIT_URL,
+        }
         if weekdays is not None:
             expected["weekdays"] = weekdays
         cases.extend(
@@ -1033,6 +1044,7 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
                     expected_tool="alarm.create",
                     expected=expected,
                     forbidden_tools=("media.play", "research.start"),
+                    side_effects=SIDE_EFFECTS_ALARM_SONG_SEARCH,
                     context=CTX_NONE,
                     category="alarm",
                     source="canonical",
@@ -1040,6 +1052,44 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
                 )
             )
         )
+    # The wake song changed by voice: the global one needs no alarm, the search finds it.
+    # (A sentence that names no song - "Uyandırma şarkımı değiştir." - is in the wake-song
+    # block below: the tool asks which song and searches nothing.)
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="a.song.set.wake",
+                utterance="Uyandırma şarkımı Sezen Aksu Gülümse yap.",
+                expected_intent="wake_song_set",
+                expected_tool="alarm.set_song",
+                expected_response=RESPONSE_OK,
+                forbidden_tools=("alarm.create", "media.play", "research.start"),
+                side_effects=SIDE_EFFECTS_ALARM_SONG_SEARCH,
+                context=CTX_NONE,
+                category="alarm",
+                source="canonical",
+                regression_issue_id="owner 2026-10-05: change the wake song by voice",
+            )
+        )
+    )
+    # The next alarm's own song ("alarmımın"): needs an alarm to carry it.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="a.song.set.alarm",
+                utterance="Alarmımın şarkısını Tarkan Şımarık yap.",
+                expected_intent="alarm_song_set",
+                expected_tool="alarm.set_song",
+                expected_response=RESPONSE_OK,
+                forbidden_tools=("alarm.create", "media.play", "research.start"),
+                side_effects=SIDE_EFFECTS_ALARM_SONG_SEARCH,
+                context=CTX_ALARM_SCHEDULED,
+                category="alarm",
+                source="canonical",
+                regression_issue_id="owner 2026-10-05: change one alarm's song by voice",
+            )
+        )
+    )
     # The near misses: a title with no alarm words stays media.play (it plays NOW), and
     # closing an alarm never touches a song.
     cases.extend(
@@ -1179,12 +1229,35 @@ def _alarm_wake_song_cases() -> list[UtteranceCase]:
             )
         )
 
-    # 3. No voice path exists for the wake song itself — every one of these must resolve
-    #    to NOTHING, never a phantom alarm, a research call or a stray media action.
-    no_tool_phrases = [
+    # 3. 2026-10-05: setting the wake song by voice is ``alarm.set_song`` now. These name
+    #    no song ("bu" points at one), so the tool asks which song and searches nothing -
+    #    never a phantom alarm, a research call or a stray media action.
+    ask_which_phrases = [
         ("a.wakesong.set.1", "Bu şarkıyı alarm müziğim yap."),
         ("a.wakesong.set.2", "Alarm müziğim bu olsun."),
         ("a.wakesong.set.3", "Alarm müziğimi değiştir."),
+    ]
+    for case_id, text in ask_which_phrases:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="wake_song_set",
+                    expected_tool="alarm.set_song",
+                    expected_response=RESPONSE_REFUSED,
+                    expected={"error_class": "no_song_named"},
+                    forbidden_tools=("alarm.create", "media.play", "research.start"),
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="alarm",
+                    source="canonical",
+                    regression_issue_id="owner 2026-10-05: no song named -> ask, never guess",
+                )
+            )
+        )
+    # Asking what the wake song is still has no voice path.
+    no_tool_phrases = [
         ("a.wakesong.query.1", "Alarm müziğim ne?"),
     ]
     for case_id, text in no_tool_phrases:

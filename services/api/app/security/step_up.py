@@ -78,6 +78,7 @@ _TIERS: Final[dict[str, str]] = {
     # ---- SENSITIVE: changes state, or reads what is private
     "alarm.cancel": TIER_SENSITIVE,
     "alarm.create": TIER_SENSITIVE,
+    "alarm.set_song": TIER_SENSITIVE,
     "alarm.snooze": TIER_SENSITIVE,
     "alarm.stop": TIER_SENSITIVE,
     "ambient.set_policy": TIER_SENSITIVE,
