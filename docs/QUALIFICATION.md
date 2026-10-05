@@ -1418,3 +1418,21 @@ brought back by the Danışman (no git damage found in the main checkout or the 
 |---|---|---|---|
 | 53.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 321e43b…`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-blue is canonical (release 321e43b…)` |
 | 53.2 | A long duty reason is a decision, not a broken file | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` (`duty: a sound decision file passes` takes 1341 characters; `a reason over 4000 characters` is refused; the old bound as a mutation RED). Real cause: duty-1 (1341) and duty-2 (1442) of 2026-10-04 were refused whole; the Danışman applied both by hand. Live from the next cycle start |
+
+## Stage 54 — the integration of 2026-10-04: staging stack, watch engine, browser redirect guard, auto-release, resume after a limit, progress strip, board talk (ADR-0284..0297 and addenda)
+
+Released 2026-10-05 00:32 UTC (03:32 local) as main `b30df6c547ebc8afb826441ac56091688aba2c3f` (api-green; previous
+`321e43b0…` kept as last known good; migration `0066_watches`, expand-only: two new tables). Full gate PASS on `6c83d15a`
+(tree-equal), the seventh start. The six before were each red on ONE thing the pre-check had not run, all fixed on the branch:
+the gate's ruff (import order in two watch tests); the multi-device guard (the Cloud Core's tailnet address in a browser
+comment); the installer StrictMode lint (22 bare `.Count` reads in the board, pulse and test-slot libraries); the
+parameter-collision guard (`integrate.ps1` assigned its own `[switch]$BesideCycle` through `$besideCycle`); the misheard route
+tests on one shared in-memory SQLite connection beside the watch's new purge loop; and a leftover dev-database row from an
+earlier gate's research workflow test that broke the migration round trip (deleted; card `dev-db-branch-migration-leak`). The
+lead wired owner-trials-wiring's two area requests (trial events in the ledger vocabulary, the trial form in inspector.md).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 54.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: b30df6c…`, `api-green schema at 0066_watches (database matches the tree)`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical (release b30df6c…)` |
+| 54.2 | The integration's own suites | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 261/261, `scripts/tests/team-integrate.tests.ps1` 93/93, `scripts/tests/staging.tests.ps1` 33/33, `scripts/tests/team-release.tests.ps1` 59/59 (the last three now gate and CI steps); web 2343/2343 |
+| 54.3 | The watch runner ships switched off | `PROVEN_AUTOMATED` | `services/api/app/config.py` `watch_runner_enabled = False` until the redirect guard is proven live; `services/api/tests/unit/test_watch_service.py` |
