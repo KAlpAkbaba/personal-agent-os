@@ -18,8 +18,9 @@
     or - with "web" - one Playwright script run through node that opens the staging web shell
     and writes a screenshot (the voice steps feed a Turkish wav as the fake microphone). The
     'breaking' ladder sends `load` requests AT ONCE, then load*factor, ... up to max, and
-    stops at the first load with an error, or a p95 over max_p95_ms: that is the breaking
-    point, with its numbers. Never anything irreversible: a scenario only does what the owner
+    stops at the first load with an error, or a p95 over max_p95_ms - each request timed from
+    its own send, and a breaking load measured TWICE (a load that breaks once and holds the
+    second time is 'flaky' and the ladder goes on): that is the breaking point, with its numbers. Never anything irreversible: a scenario only does what the owner
     does on staging, and staging is a copy.
 
     The result file is <OutDir>/<card>.result.json:
@@ -32,7 +33,11 @@
 
 .PARAMETER AllowTestPort
     For scripts/tests/testteam.tests.ps1 only: one more port on 127.0.0.1 (a stand-in for
-    staging, so the test never touches the real staging stack). No other host, ever.
+    staging, so the test never touches the real staging stack), and only a port of the tests'
+    range 41000-49999 - the dev api's :8000 is refused (exit 2). No other host, ever.
+.PARAMETER OutDir
+    Default: <run_temp_root of team/cycle-settings.json, else TEMP>\testteam\manual. A folder
+    inside the checkout is refused: results and staging screenshots are run data.
 .PARAMETER NoAuth
     Send no session (the stand-in needs none).
 .PARAMETER DryRun
@@ -63,6 +68,9 @@ function Stop-Refused {
     exit 2
 }
 
+if ($AllowTestPort -ne 0 -and -not (Test-TestTeamTestPort -Port $AllowTestPort)) {
+    Stop-Refused "-AllowTestPort $AllowTestPort testlerin aralığında değil (41000-49999): dev api, web kabuğu ya da başka bir servis staging yerine geçmez"
+}
 if (-not (Test-Path -LiteralPath $Scenario)) { Stop-Refused "senaryo dosyası yok: $Scenario" }
 $document = Get-Content -Raw -Encoding UTF8 -LiteralPath $Scenario | ConvertFrom-Json
 $BaseUrl = $BaseUrl.TrimEnd("/")
@@ -94,7 +102,13 @@ if ($DryRun) { Write-Host "senaryo hedefleri staging: $Scenario"; exit 0 }
 
 $family = [string](Get-TeamProperty -InputObject $document -Name "family" -Default "")
 if (-not $Card) { $Card = "tek-" + [string](Get-TeamProperty -InputObject $document -Name "id" -Default "senaryo") }
-if (-not $OutDir) { $OutDir = Join-Path $repoRoot "team\testteam\manual" }
+if (-not $OutDir) {
+    # Run data (results, staging screenshots) lives under the cycle's run_temp_root, never in the tree.
+    $tempRoot = Read-TeamRunTempRoot -Path (Join-Path $repoRoot "team\cycle-settings.json")
+    if (-not $tempRoot) { $tempRoot = $env:TEMP }
+    $OutDir = Join-Path $tempRoot "testteam\manual"
+}
+if (-not (Test-TestTeamPathOutside -Path $OutDir -Root $repoRoot)) { Stop-Refused "sonuç klasörü depo ağacının içinde: $OutDir (run_temp_root altına yazılır)" }
 [void](New-Item -ItemType Directory -Force -Path $OutDir)
 
 $token = ""
@@ -109,6 +123,9 @@ if (-not $NoAuth) {
 }
 
 Add-Type -AssemblyName System.Net.Http
+# .NET Framework allows two connections to a host by default: a ladder of 256 would queue in
+# this process and measure the queue.
+[System.Net.ServicePointManager]::DefaultConnectionLimit = 1024
 $client = New-Object System.Net.Http.HttpClient
 $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
 
@@ -217,8 +234,70 @@ foreach ($step in $steps) {
     Write-Host ("  {0} {1} ({2})" -f $(if ($ok) { "GEÇTİ" } else { "KALDI" }), $name, $records[$records.Count - 1].actual)
 }
 
+function Measure-Load {
+    # One load of the ladder: `load` requests sent AT ONCE from compiled code, each timed from its
+    # own send to its own last byte (a PowerShell loop that builds the requests and awaits them
+    # in order times the loop, not the server: the first real rounds' p95 grew with the load).
+    param([int]$Load)
+    $method = ([string](Get-TeamProperty -InputObject $breaking -Name "method" -Default "GET")).ToUpperInvariant()
+    $body = Get-TeamProperty -InputObject $breaking -Name "body"
+    $json = if ($null -ne $body) { ConvertTo-Json -InputObject $body -Depth 8 -Compress } else { $null }
+    $answers = [TestTeamLadder]::Fire($client, $method, (Resolve-StepUrl -Step $breaking), $token, $json, $Load)
+    $okCount = 0; $errors = 0; $firstError = ""
+    $timings = New-Object System.Collections.ArrayList
+    foreach ($answer in $answers) {
+        if ($answer.Status -ge 200 -and $answer.Status -lt 300) { $okCount++ }
+        else {
+            $errors++
+            if (-not $firstError) { $firstError = if ($answer.Status -gt 0) { "HTTP $($answer.Status)" } else { [string]$answer.Error -replace '\s+', ' ' } }
+        }
+        [void]$timings.Add([int64]$answer.Ms)
+    }
+    $slowest = if ($timings.Count -gt 0) { [int64](@($timings.ToArray()) | Measure-Object -Maximum).Maximum } else { 0 }
+    return [pscustomobject]@{ load = $Load; ok = $okCount; errors = $errors; p95_ms = (Get-TestTeamP95 -Timings @($timings.ToArray())); max_ms = $slowest; first_error = $firstError }
+}
+
 $ladder = $null
 if ($null -ne $breaking) {
+    if (-not ('TestTeamLadder' -as [type])) {
+        Add-Type -ReferencedAssemblies System.Net.Http -TypeDefinition @"
+using System;
+using System.Diagnostics;
+using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
+public sealed class TestTeamAnswer { public int Status; public long Ms; public string Error; }
+public static class TestTeamLadder {
+    public static TestTeamAnswer[] Fire(HttpClient client, string method, string url, string token, string json, int load) {
+        var tasks = new Task<TestTeamAnswer>[load];
+        for (int i = 0; i < load; i++) { tasks[i] = One(client, method, url, token, json, load, i); }
+        Task.WaitAll(tasks);
+        var answers = new TestTeamAnswer[load];
+        for (int i = 0; i < load; i++) { answers[i] = tasks[i].Result; }
+        return answers;
+    }
+    static async Task<TestTeamAnswer> One(HttpClient client, string method, string url, string token, string json, int load, int seq) {
+        var request = new HttpRequestMessage(new HttpMethod(method), url);
+        if (!String.IsNullOrEmpty(token)) { request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token); }
+        request.Headers.TryAddWithoutValidation("X-Load", load.ToString());
+        request.Headers.TryAddWithoutValidation("X-Seq", seq.ToString());
+        // PowerShell passes a $null string as "": no body is an empty string too.
+        if (!String.IsNullOrEmpty(json)) { request.Content = new StringContent(json, Encoding.UTF8, "application/json"); }
+        var answer = new TestTeamAnswer();
+        var clock = Stopwatch.StartNew();
+        try {
+            using (var response = await client.SendAsync(request).ConfigureAwait(false)) {
+                await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                answer.Status = (int)response.StatusCode;
+            }
+        }
+        catch (Exception e) { answer.Status = 0; answer.Error = e.GetBaseException().Message; }
+        answer.Ms = clock.ElapsedMilliseconds;
+        return answer;
+    }
+}
+"@
+    }
     $load = [Math]::Max(1, [int](Get-TeamProperty -InputObject $breaking -Name "start" -Default 1))
     $factor = [Math]::Max(2, [int](Get-TeamProperty -InputObject $breaking -Name "factor" -Default 2))
     $max = [Math]::Min(512, [Math]::Max($load, [int](Get-TeamProperty -InputObject $breaking -Name "max" -Default 64)))
@@ -226,25 +305,18 @@ if ($null -ne $breaking) {
     $tried = New-Object System.Collections.ArrayList
     $first = $null
     while ($load -le $max) {
-        $tasks = New-Object System.Collections.ArrayList
-        $clock = [System.Diagnostics.Stopwatch]::StartNew()
-        $timings = New-Object System.Collections.ArrayList
-        for ($i = 0; $i -lt $load; $i++) { [void]$tasks.Add($client.SendAsync((New-Request -Step $breaking -Load $load))) }
-        $okCount = 0; $errors = 0
-        foreach ($t in $tasks) {
-            try {
-                $answer = $t.GetAwaiter().GetResult()
-                if ([int]$answer.StatusCode -ge 200 -and [int]$answer.StatusCode -lt 300) { $okCount++ } else { $errors++ }
-            }
-            catch { $errors++ }
-            [void]$timings.Add([int]$clock.ElapsedMilliseconds)
+        $step = Measure-Load -Load $load
+        Write-Host ("  yük {0}: {1} başarılı, {2} hata, istek başına p95 {3} ms" -f $load, $step.ok, $step.errors, $step.p95_ms)
+        if (Test-TestTeamLoadBroken -Measured $step -LimitMs $limitMs) {
+            # A breaking load is measured once more before it is the breaking point: one bad
+            # moment of the machine is not where staging breaks.
+            $again = Measure-Load -Load $load
+            Write-Host ("  yük {0} yinelendi: {1} başarılı, {2} hata, istek başına p95 {3} ms" -f $load, $again.ok, $again.errors, $again.p95_ms)
+            Add-Member -InputObject $step -NotePropertyName repeat -NotePropertyValue ([pscustomobject]@{ ok = $again.ok; errors = $again.errors; p95_ms = $again.p95_ms })
+            if (Test-TestTeamLoadBroken -Measured $again -LimitMs $limitMs) { [void]$tried.Add($step); $first = $step; break }
+            Add-Member -InputObject $step -NotePropertyName flaky -NotePropertyValue $true
         }
-        $sorted = @($timings | Sort-Object)
-        $p95 = $sorted[[Math]::Min($sorted.Count - 1, [int][Math]::Ceiling(0.95 * $sorted.Count) - 1)]
-        $step = [pscustomobject]@{ load = $load; ok = $okCount; errors = $errors; p95_ms = $p95 }
         [void]$tried.Add($step)
-        Write-Host ("  yük {0}: {1} başarılı, {2} hata, p95 {3} ms" -f $load, $okCount, $errors, $p95)
-        if ($errors -gt 0 -or ($limitMs -gt 0 -and $p95 -gt $limitMs)) { $first = $step; break }
         $load = $load * $factor
     }
     $ladder = [pscustomobject]@{

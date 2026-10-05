@@ -8,6 +8,7 @@ vi.mock("../../app/lib/session", () => ({
 }));
 
 import { apiFetch } from "../../app/lib/session";
+import OfficeView from "../../app/core/office/OfficeView";
 import type { BoardNote } from "../../app/core/office/officeBoard";
 import {
   fetchTestRoom,
@@ -16,6 +17,7 @@ import {
   testMoodOf,
   testRoomFromBoard,
 } from "../../app/core/office/officeTestRoom";
+import { twoWorkers } from "./fixtures";
 
 // The owner, 2026-10-03: "Test ekibi ve çalışan ekibi ayrı olsun; 4 test ekibi çalışanı ve 1
 // proje yöneticisi olsun." The Ofis gets a separate 'Test odası' room: five seats, amber and
@@ -92,5 +94,19 @@ describe("the test room", () => {
     const seats = await fetchTestRoom(NOW);
     expect(seats).toHaveLength(5);
     expect(seats.every((s) => s.state === "waiting")).toBe(true);
+  });
+
+  // The inspector, 2026-10-05: <TestRoom> was never mounted - the Ofis did not show the Test
+  // odası (an acceptance item). RED until OfficeView.tsx (outside this card's area) takes the
+  // test seats and draws the room beside the software team (ALAN_ISTEGI).
+  it("the Ofis page itself shows the Test odası beside the software team", () => {
+    const seats = testRoomFromBoard([note("tester-2", "iş: saglik (tj-r1-2)", "2026-10-05T12:00:00Z")], NOW);
+    const extra = { testSeats: seats } as Record<string, unknown>;
+    const html = renderToStaticMarkup(
+      <OfficeView view={twoWorkers()} selected={null} offline={false} reducedMotion={false} onSelect={() => {}} {...extra} />,
+    );
+    expect(html).toContain("Test odası");
+    expect(html.match(/data-test-seat="/g)?.length).toBe(5);
+    expect(html).toContain("saglik (tj-r1-2)");
   });
 });

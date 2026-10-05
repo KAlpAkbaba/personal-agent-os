@@ -7,12 +7,12 @@
 .DESCRIPTION
     The owner's design of 2026-10-03, binding: the test team is SEPARATE from the software
     team - its own seats (test-lead, tester-1..4), its own cap ('test_parallel' in
-    team/cycle-settings.json), its own cards (team/testteam/<round>/cards.json, states planned /
+    team/cycle-settings.json), its own cards (<OutRoot>/<round>/cards.json, states planned /
     running / passed / failed / broke). It never takes a software seat: a round runs beside a
     cycle and the cycle's max_parallel does not move.
 
       1. The plan: -PlanPath, or ONE fresh `claude -p` run of the test lead
-         (.claude/agents/test-lead.md) that writes team/testteam/<round>/plan.json - jobs, one
+         (.claude/agents/test-lead.md) that writes <OutRoot>/<round>/plan.json - jobs, one
          scenario family each, from the roadmap's HAVE rows, the owner's 'Dene' list and the
          recent releases.
       2. The cap: test_parallel, lowered to none under the memory floor and to one while the
@@ -23,12 +23,23 @@
       4. The failures are deduplicated and each becomes a normal card of the software queue
          (state 'proposed', steps/expected/actual/scenario/screenshot/staging sha); a card whose
          id is already in the queue is not opened again.
-      5. The 'kopma noktası' report: team/testteam/<round>/kopma-noktasi.md, and one board note
-         to the Danışman (never to the owner).
+      5. The 'kopma noktası' report: <OutRoot>/<round>/kopma-noktasi.md, and one board note
+         addressed to the Danışman's seat ('danisman') (never to the owner).
 
-    -Retest: for every failed card of -Round whose forwarded task is merged, released or done,
-    the scenario is run again on staging (run-scenario.ps1, no model): passed closes the card,
-    failed reopens it (reopened +1). A fix not yet released is left alone.
+    -Retest: for every failed card of -Round whose forwarded task is released, done or
+    awaiting_real_evidence (NOT merged: an integration branch is not staging) AND whose staging
+    now answers a sha other than the one the failure was found on (found_sha), the scenario is
+    run again on staging (run-scenario.ps1, no model): passed closes the card, failed reopens it
+    (reopened +1). A fix not yet released, or a staging not yet redeployed, is left alone.
+
+    The cap is measured again before every tester start (the settings file, the free memory,
+    the gate's test slot): a gate that takes the heavy slot mid-round, or memory that falls under
+    the floor, holds the next job; the reason is said once. Cards that could not start stay
+    planned.
+
+    Run data - cards.json, plan.json, results, logs, staging screenshots, the report - lives
+    under -OutRoot (default: <run_temp_root of team/cycle-settings.json, else TEMP>\testteam),
+    never in the checkout.
 
     Staging only: run-scenario.ps1 refuses any other host, and the tester's role file says so.
 #>
@@ -36,6 +47,7 @@
 param(
     [string]$Round = "",
     [string]$TeamRoot = "",
+    [string]$OutRoot = "",
     [string]$PlanPath = "",
     [string]$ClaudePath = "claude",
     [string[]]$ClaudePrefixArguments = @(),
@@ -76,7 +88,17 @@ $ClaudePrefixArguments = @($ClaudePrefixArguments | ForEach-Object { [string]$_ 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $Round) { $Round = "t" + [datetime]::UtcNow.ToString("yyyyMMddHHmm") }
 if ($Round -notmatch '^[a-z0-9][a-z0-9-]{0,40}$') { throw "-Round: a-z, 0-9 ve '-' (en çok 41)" }
-$roundDir = Join-Path $TeamRoot "testteam\$Round"
+$settingsPath = Join-Path $TeamRoot "cycle-settings.json"
+if (-not $OutRoot) {
+    $tempRoot = Read-TeamRunTempRoot -Path $settingsPath
+    if (-not $tempRoot) { $tempRoot = $env:TEMP }
+    $OutRoot = Join-Path $tempRoot "testteam"
+}
+if (-not (Test-TestTeamPathOutside -Path $OutRoot -Root $repoRoot)) {
+    Write-Host "TUR REDDEDİLDİ: çıktı klasörü depo ağacının içinde ($OutRoot); run_temp_root altına yazılır"
+    exit 2
+}
+$roundDir = Join-Path $OutRoot $Round
 [void](New-Item -ItemType Directory -Force -Path $roundDir)
 $cardsPath = Join-Path $roundDir "cards.json"
 $queuePath = Join-Path $TeamRoot "queue.json"
@@ -134,15 +156,28 @@ if ($Retest) {
     $queue = Read-Queue
     $byId = @{}
     foreach ($task in (Get-TeamTasks -Queue $queue)) { $byId[[string]$task.id] = $task }
+    # The sha staging serves NOW: a fix is judged on the staging that carries it, never on the old one.
+    $stagingNow = ""
+    if (Test-TestTeamStagingUrl -Url $BaseUrl -AllowTestPort $AllowTestPort) {
+        try {
+            $health = Invoke-RestMethod -UseBasicParsing -Uri ($BaseUrl.TrimEnd("/") + "/v1/system/health") -TimeoutSec 15
+            $release = Get-TeamProperty -InputObject $health -Name "release"
+            if ($null -ne $release) { $stagingNow = [string](Get-TeamProperty -InputObject $release -Name "version" -Default "") }
+        }
+        catch { Write-Host "  staging sürümü okunamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+    }
+    Write-Host ("staging şimdi: {0}" -f $(if ($stagingNow) { $stagingNow } else { "okunamadı" }))
     foreach ($card in @($document.cards)) {
         if (@("failed", "broke") -notcontains [string]$card.state) { continue }
         $forwarded = [string](Get-TeamProperty -InputObject $card -Name "forwarded_task" -Default "")
         if (-not $forwarded -or -not $byId.ContainsKey($forwarded)) { continue }
-        $taskState = [string]$byId[$forwarded].state
-        if (@("merged", "released", "done", "awaiting_real_evidence") -notcontains $taskState) {
-            Write-Host "  $($card.id): düzeltme ($forwarded) henüz staging'de değil ($taskState); beklemede"
+        $foundSha = [string](Get-TeamProperty -InputObject $card -Name "found_sha" -Default "")
+        $decision = Get-TestTeamRetestDecision -TaskState ([string]$byId[$forwarded].state) -FoundSha $foundSha -StagingSha $stagingNow
+        if (-not $decision.Due) {
+            Write-Host "  $($card.id): yeniden test yok ($forwarded) - $($decision.Why); beklemede"
             continue
         }
+        Set-TeamProperty -InputObject $card -Name "retested_sha" -Value $stagingNow
         Set-TestTeamCardState -Card $card -To "running"
         $arguments = @("-NoProfile", "-File", $runScenario, "-Scenario", [string]$card.scenario, "-Card", "$($card.id)-retest", "-OutDir", $roundDir, "-BaseUrl", $BaseUrl)
         if ($AllowTestPort -gt 0) { $arguments += @("-AllowTestPort", [string]$AllowTestPort) }
@@ -191,21 +226,35 @@ Write-Json -Path $cardsPath -Document $document
 
 # ------------------------------------------------------------------------------ the cap
 
-$settings = Read-TeamCycleSettings -Path (Join-Path $TeamRoot "cycle-settings.json") -Workers 4 -Inspectors 3 -Integrators 1
-foreach ($problem in @($settings.Problems)) { Write-Host "  ayar: $problem" }
-$freeBytes = if ($AssumeFreeGb -ge 0) { [int64]$AssumeFreeGb * 1GB } else { [int64]((Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory) * 1KB }
-$gate = $false
-if ($AssumeGateRunning -ge 0) { $gate = ($AssumeGateRunning -eq 1) }
-else {
-    $store = if ($SlotStore) { $SlotStore } else { Get-TestSlotDefaultStore }
-    $gate = Test-TeamGateHoldsHeavy -Entries @(Get-TestSlotEntries -Store $store)
+$script:saidReasons = ""
+function Get-RoundCap {
+    # Measured NOW: the settings file, the free memory and the gate's test slot. Called before
+    # every tester start, so a gate that takes the heavy slot mid-round holds the next job.
+    $settings = Read-TeamCycleSettings -Path $settingsPath -Workers 4 -Inspectors 3 -Integrators 1
+    $freeBytes = if ($AssumeFreeGb -ge 0) { [int64]$AssumeFreeGb * 1GB } else { [int64]((Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory) * 1KB }
+    $gate = $false
+    if ($AssumeGateRunning -ge 0) { $gate = ($AssumeGateRunning -eq 1) }
+    else {
+        $store = if ($SlotStore) { $SlotStore } else { Get-TestSlotDefaultStore }
+        $gate = Test-TeamGateHoldsHeavy -Entries @(Get-TestSlotEntries -Store $store)
+    }
+    $cap = Get-TeamTestCap -Configured $settings.Testers -FreeBytes $freeBytes -FloorGb $settings.TestFloorGb -GateRunning $gate
+    # A reason is said when it changes, not at every measurement.
+    $said = (@($settings.Problems) + @($cap.Reasons)) -join " | "
+    if ($said -ne $script:saidReasons) {
+        foreach ($problem in @($settings.Problems)) { Write-Host "  ayar: $problem" }
+        Write-Host ("test ekibi sınırı: {0} (ayar {1})" -f $cap.Cap, $cap.Configured)
+        foreach ($reason in @($cap.Reasons)) {
+            Write-Host "  $reason"
+            Send-Note -Seat "test-lead" -Text "Test PY: $reason"
+        }
+        $script:saidReasons = $said
+    }
+    return $cap
 }
-$cap = Get-TeamTestCap -Configured $settings.Testers -FreeBytes $freeBytes -FloorGb $settings.TestFloorGb -GateRunning $gate
-Write-Host ("test ekibi sınırı: {0} (ayar {1})" -f $cap.Cap, $cap.Configured)
-foreach ($reason in @($cap.Reasons)) {
-    Write-Host "  $reason"
-    Send-Note -Seat "test-lead" -Text "Test PY: $reason"
-}
+
+$cap = Get-RoundCap
+if ($script:saidReasons -eq "") { Write-Host ("test ekibi sınırı: {0} (ayar {1})" -f $cap.Cap, $cap.Configured) }
 if ($cap.Cap -eq 0) {
     Write-Host "bu turda test çalışanı başlatılmadı; kartlar planned kaldı: $cardsPath"
     exit 0
@@ -217,7 +266,19 @@ $pending = New-Object System.Collections.Queue
 foreach ($card in $cards) { $pending.Enqueue($card) }
 $inFlight = New-Object System.Collections.ArrayList
 $results = New-Object System.Collections.ArrayList
+$measuredAt = [datetime]::UtcNow
+$finishedSince = $false
 while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
+    if ($pending.Count -gt 0 -and ($finishedSince -or ([datetime]::UtcNow - $measuredAt).TotalSeconds -ge 5)) {
+        $cap = Get-RoundCap
+        $measuredAt = [datetime]::UtcNow
+        $finishedSince = $false
+    }
+    if ($pending.Count -gt 0 -and $cap.Cap -eq 0 -and $inFlight.Count -eq 0) {
+        Write-Host "  sınır 0: kalan $($pending.Count) kart planned kaldı ($(@($pending.ToArray() | ForEach-Object { $_.id }) -join ', '))"
+        $pending.Clear()
+        break
+    }
     $busy = @($inFlight | ForEach-Object { $_.Card.tester })
     $waiting = $pending.Count
     for ($i = 0; $i -lt $waiting -and $inFlight.Count -lt $cap.Cap; $i++) {
@@ -237,6 +298,7 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
     if (@($over).Count -eq 0) { Start-Sleep -Milliseconds 300; continue }
     foreach ($entry in $over) {
         $inFlight.Remove($entry)
+        $finishedSince = $true
         $done = Wait-TeamRun -Run $entry.Run -Deadline $entry.Deadline
         [System.IO.File]::WriteAllText((Join-Path $roundDir "$($entry.Card.id).log"), [string]$done.StdOut, (New-Object System.Text.UTF8Encoding($false)))
         $state = "failed"
@@ -270,7 +332,12 @@ foreach ($task in (Get-TeamTasks -Queue $queue)) { $known[[string]$task.id] = $t
 $added = New-Object System.Collections.ArrayList
 foreach ($failure in $failures) {
     $task = ConvertTo-TestTeamFailureTask -Failure $failure -StagingSha $stagingSha -Round $Round
-    foreach ($card in $cards) { if ($card.id -eq $failure.card) { $card.forwarded_task = $task.id } }
+    foreach ($card in $cards) {
+        if ($card.id -ne $failure.card) { continue }
+        $card.forwarded_task = $task.id
+        # The retest judges the fix only on a staging that no longer serves this sha.
+        $card.found_sha = [string](Get-TeamProperty -InputObject $failure -Name "staging_sha" -Default "")
+    }
     if ($known.ContainsKey($task.id)) { Write-Host "  $($task.id) kuyrukta zaten var; yeniden açılmadı"; continue }
     $known[$task.id] = $true
     [void]$added.Add($task)
@@ -301,7 +368,7 @@ Write-Json -Path $cardsPath -Document $document
 
 $report = Format-TestTeamBreakingReport -Round $Round -Results @($results.ToArray()) -StagingSha $stagingSha
 [System.IO.File]::WriteAllText((Join-Path $roundDir "kopma-noktasi.md"), $report.Markdown, (New-Object System.Text.UTF8Encoding($false)))
-Send-Note -Seat "test-lead" -Text $report.Note
+Send-Note -Seat "test-lead" -To $report.To -Text $report.Note
 $counts = @($cards | Group-Object state | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ", "
 Write-Host "tur $Round bitti: $counts; iletilen $($added.Count); kopma raporu $(Join-Path $roundDir 'kopma-noktasi.md')"
 exit 0

@@ -63,3 +63,30 @@ bildirsin, o da Danışman'a bildirsin." Staging (scripts/staging/, 127.0.0.1:28
   scenario failed as planted (DELETE /v1/watches/<zero id>: expected 200, actual 404); :8000,
   https :28001 and `x@127.0.0.1:28001` refused with exit 2 before any request. The retest closes
   the planted card only after staging carries the fix: a release to main must also redeploy staging.
+
+## Addendum (the inspector's return of 16d1fd9c, 2026-10-05)
+
+1. **Retest yardstick.** A card records `found_sha` (the staging sha its failure was found on).
+   `-Retest` re-runs it only when the forwarded task is released / done / awaiting_real_evidence
+   (no longer `merged`) AND staging now answers another sha (`Get-TestTeamRetestDecision`);
+   otherwise "staging hâlâ ..." and the card waits. Closed cards carry `retested_sha`.
+2. **Test port.** `-AllowTestPort` counts only in 41000-49999 (the tests' range); :8000, :3000,
+   :7233, :5432 are refused (exit 2).
+3. **Ladder numbers.** Each request is timed from its own send to its own last byte in compiled
+   code (`TestTeamLadder`, all `load` requests at once, connection limit 1024); a breaking load
+   is measured twice - broke twice is the breaking point (with `repeat`), broke once is `flaky`
+   and the ladder goes on. Real staging 6a21294c: p95 452 ms at 8, 2343 at 64, 5040/4578 at 128
+   (flaky), 9839/8397 at 256 (breaking point, 0 errors): /v1/system/health latency grows
+   linearly with concurrency - the staging api answers it one at a time.
+4. **Cap during the round.** Measured again (settings file, free memory, the gate's slot) before
+   each tester start, at most every 5 s or after a run ends; cap 0 with nothing in flight ends
+   the dealing and the rest stay `planned`. The measured path has its own test (slot store).
+5. **Run data out of the tree.** cards/plan/results/logs/screenshots/report under
+   `-OutRoot` (default `<run_temp_root>\testteam`, else TEMP); a folder inside the checkout is
+   refused by test-round.ps1 and run-scenario.ps1.
+6. **Failure id.** The scenario part of the key is the path from `scripts/testteam/scenarios/`
+   on, lower case, forward slashes: absolute / relative / worktree spellings are one card.
+7. **The breaking report** is addressed to the board seat `danisman` (`-To`).
+8. **Outside this card's area (red contract tests committed):** `services/api/app/team/board.py`
+   SEAT_PATTERN must accept `test-lead`, `tester-1..4` and `danisman`;
+   `apps/web/app/core/office/OfficeView.tsx` must take `testSeats` and mount `<TestRoom>`.

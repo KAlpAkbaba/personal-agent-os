@@ -24,6 +24,20 @@ $script:TestTeamStagingPorts = @(28000, 28001)
 $script:TestTeamStagingApi = "http://127.0.0.1:28001"
 $script:TestTeamTesters = 4
 $script:TestTeamNoteMax = 280
+# The tests' stand-ins listen on a random port of this range; nothing of the product does (the
+# dev api :8000, the web shell :3000, Temporal :7233, Postgres :5432 are all outside it).
+$script:TestTeamTestPortLow = 41000
+$script:TestTeamTestPortHigh = 49999
+# Where the Danışman reads the breaking-point report on the board.
+$script:TestTeamAdvisorSeat = "danisman"
+# A fix is on staging only once the queue says it left the branch for main.
+$script:TestTeamRetestStates = @("released", "done", "awaiting_real_evidence")
+
+function Test-TestTeamTestPort {
+    <# Whether -AllowTestPort names a port of the tests' range (41000-49999); 0 is "none". #>
+    param([int]$Port)
+    return ($Port -ge $script:TestTeamTestPortLow -and $Port -le $script:TestTeamTestPortHigh)
+}
 
 function Test-TestTeamStagingUrl {
     <#
@@ -32,8 +46,8 @@ function Test-TestTeamStagingUrl {
         or 28001 (api), no user part. Everything else - the dev stack, production, the tailnet
         name, another loopback address, a url with credentials in it - is not.
     .PARAMETER AllowTestPort
-        For the tests only: one more port on 127.0.0.1 (a local stand-in for staging). Never a
-        host other than 127.0.0.1.
+        For the tests only: one more port on 127.0.0.1 (a local stand-in for staging), and only
+        a port of the tests' range 41000-49999 - never the dev api's :8000 or another service's.
     #>
     param([AllowEmptyString()][string]$Url, [int]$AllowTestPort = 0)
     if (-not $Url) { return $false }
@@ -44,8 +58,65 @@ function Test-TestTeamStagingUrl {
     if ($Url -notmatch '^(?i)http://[^/@]+(/|$|\?)') { return $false }
     if ($uri.IsDefaultPort) { return $false }
     $hostName = $uri.Host.ToLowerInvariant()
-    if ($AllowTestPort -gt 0 -and $hostName -eq "127.0.0.1" -and $uri.Port -eq $AllowTestPort) { return $true }
+    if ((Test-TestTeamTestPort -Port $AllowTestPort) -and $hostName -eq "127.0.0.1" -and $uri.Port -eq $AllowTestPort) { return $true }
     return (($script:TestTeamStagingHosts -contains $hostName) -and ($script:TestTeamStagingPorts -contains $uri.Port))
+}
+
+function Test-TestTeamPathOutside {
+    <# Whether a path lies outside a folder (the checkout): a round's results, logs and staging
+       screenshots are run data, never files of the tracked tree. #>
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Root)
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/') + '\'
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/') + '\'
+    return (-not $full.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase))
+}
+
+function Get-TestTeamP95 {
+    <# The 95th percentile of request durations (ms), nearest rank; 0 for none. #>
+    param([AllowEmptyCollection()][object[]]$Timings = @())
+    $sorted = @(@($Timings) | ForEach-Object { [int64]$_ } | Sort-Object)
+    if ($sorted.Count -eq 0) { return 0 }
+    return [int64]$sorted[[Math]::Min($sorted.Count - 1, [int][Math]::Ceiling(0.95 * $sorted.Count) - 1)]
+}
+
+function Test-TestTeamLoadBroken {
+    <# Whether one load of the ladder broke: an error, or a p95 over the scenario's limit. #>
+    param([Parameter(Mandatory = $true)]$Measured, [int]$LimitMs = 0)
+    return ([int]$Measured.errors -gt 0 -or ($LimitMs -gt 0 -and [int64]$Measured.p95_ms -gt $LimitMs))
+}
+
+function Get-TestTeamRetestDecision {
+    <#
+    .SYNOPSIS
+        Whether a failed card is re-run now: its forwarded task has left for main (released /
+        done / awaiting_real_evidence - 'merged' is an integration branch, not staging), and the
+        staging stack answers a sha that is NOT the one the failure was found on (a staging that
+        was not redeployed still serves the bug; re-running it would reopen a fixed card).
+    #>
+    param([AllowEmptyString()][string]$TaskState, [AllowEmptyString()][string]$FoundSha, [AllowEmptyString()][string]$StagingSha)
+    if ($script:TestTeamRetestStates -notcontains $TaskState) {
+        return [pscustomobject]@{ Due = $false; Why = "düzeltme henüz main'e çıkmadı ($TaskState)" }
+    }
+    if (-not $StagingSha) { return [pscustomobject]@{ Due = $false; Why = "staging sürümü okunamadı" } }
+    if ($FoundSha -and $FoundSha.ToLowerInvariant() -eq $StagingSha.ToLowerInvariant()) {
+        return [pscustomobject]@{ Due = $false; Why = "staging hâlâ hatanın bulunduğu sürümde ($StagingSha): düzeltme staging'e kurulmadı" }
+    }
+    return [pscustomobject]@{ Due = $true; Why = "" }
+}
+
+function Get-TestTeamScenarioKey {
+    <#
+    .SYNOPSIS
+        One spelling of a scenario path for the failure's id: slashes forward, lower case, and
+        the part from 'scripts/testteam/scenarios/' on when it is there (an absolute path in the
+        main checkout, one in a worktree and the relative one are the same scenario).
+    #>
+    param([AllowEmptyString()][string]$Scenario)
+    $key = ([string]$Scenario).Trim().Replace('\', '/').ToLowerInvariant()
+    $at = $key.LastIndexOf("scripts/testteam/scenarios/")
+    if ($at -ge 0) { return $key.Substring($at) }
+    while ($key.StartsWith("./")) { $key = $key.Substring(2) }
+    return $key
 }
 
 function Get-TestTeamSeats {
@@ -80,6 +151,7 @@ function New-TestTeamCards {
                 improvise      = [bool](Get-TeamProperty -InputObject $job -Name "improvise" -Default $false)
                 state          = "planned"
                 forwarded_task = ""
+                found_sha      = ""
                 reopened       = 0
             })
     }
@@ -122,6 +194,7 @@ function Get-TestTeamFailures {
                 expected   = [string](Get-TeamProperty -InputObject $step -Name "expected" -Default "")
                 actual     = [string](Get-TeamProperty -InputObject $step -Name "actual" -Default "")
                 screenshot = [string](Get-TeamProperty -InputObject $Result -Name "screenshot" -Default "")
+                staging_sha = [string](Get-TeamProperty -InputObject $Result -Name "staging_sha" -Default "")
                 alike      = New-Object System.Collections.ArrayList
             }
         $byActual[$actualKey] = $failure
@@ -132,7 +205,7 @@ function Get-TestTeamFailures {
 
 function Get-TestTeamFailureKey {
     param([Parameter(Mandatory = $true)]$Failure)
-    return ("{0}|{1}|{2}" -f ([string]$Failure.scenario).ToLowerInvariant(), ([string]$Failure.step).ToLowerInvariant(), ([string]$Failure.actual).ToLowerInvariant())
+    return ("{0}|{1}|{2}" -f (Get-TestTeamScenarioKey -Scenario ([string]$Failure.scenario)),([string]$Failure.step).ToLowerInvariant(), ([string]$Failure.actual).ToLowerInvariant())
 }
 
 function Merge-TestTeamFailures {
@@ -174,7 +247,8 @@ function ConvertTo-TestTeamFailureTask {
     $steps = @($Failure.steps)
     $numbered = for ($i = 0; $i -lt $steps.Count; $i++) { "{0}. {1}" -f ($i + 1), $steps[$i] }
     $shot = if ([string]$Failure.screenshot) { [string]$Failure.screenshot } else { "(ekran görüntüsü yok: api adımı)" }
-    $sha = if ($StagingSha) { $StagingSha } else { "(staging sürümü okunamadı)" }
+    $own = [string](Get-TeamProperty -InputObject $Failure -Name "staging_sha" -Default "")
+    $sha = if ($own) { $own } elseif ($StagingSha) { $StagingSha } else { "(staging sürümü okunamadı)" }
     $goal = @(
         "Test ekibi staging'de bir hata buldu ($($Failure.tester), $($Failure.card), tur $Round)."
         "Adımlar: " + ($numbered -join " ")
@@ -235,7 +309,9 @@ function Format-TestTeamBreakingReport {
         }
         if ($null -ne $first) {
             [void]$broke.Add([pscustomobject]@{ Who = $who; What = $what; First = $first })
-            [void]$lines.Add(("- KIRILDI {0}: {1} - ilk kırılan yük {2}, {3} hata / {4} istek, p95 {5} ms (merdiven: {6})" -f $who, $what, $first.load, $first.errors, ([int]$first.ok + [int]$first.errors), $first.p95_ms, $ladder))
+            $again = Get-TeamProperty -InputObject $first -Name "repeat"
+            $confirmed = if ($null -ne $again) { "; yinelendi: {0} hata, p95 {1} ms" -f $again.errors, $again.p95_ms } else { "" }
+            [void]$lines.Add(("- KIRILDI {0}: {1} - ilk kırılan yük {2}, {3} hata / {4} istek, istek başına p95 {5} ms{6} (merdiven: {7})" -f $who, $what, $first.load, $first.errors, ([int]$first.ok + [int]$first.errors), $first.p95_ms, $confirmed, $ladder))
         }
         else {
             [void]$held.Add($what)
@@ -252,7 +328,7 @@ function Format-TestTeamBreakingReport {
         $note = "Danışman'a, test turu ${Round}: kırılma bulunmadı; denenen: " + ((@($held) | Where-Object { $_ }) -join "; ")
     }
     if ($note.Length -gt $script:TestTeamNoteMax) { $note = $note.Substring(0, $script:TestTeamNoteMax - 1) + "…" }
-    return [pscustomobject]@{ Markdown = (($lines.ToArray()) -join "`n") + "`n"; Note = $note }
+    return [pscustomobject]@{ Markdown = (($lines.ToArray()) -join "`n") + "`n"; Note = $note; To = $script:TestTeamAdvisorSeat }
 }
 
 function Format-TestTeamSeatNote {
