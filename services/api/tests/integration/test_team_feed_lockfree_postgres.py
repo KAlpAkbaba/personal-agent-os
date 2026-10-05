@@ -94,7 +94,7 @@ def _task(task_id: str, state: str, area: str, title: str, stamp: str) -> dict[s
     return {
         "id": task_id,
         "title": title,
-        "roadmap_row": "Secretary",
+        "roadmap_row": "His conversations and his people",  # a step of the order (2026-10-05)
         "state": state,
         "area": [area],
         "branch": "",
@@ -111,7 +111,7 @@ def _card(card_id: str) -> dict[str, Any]:
     return {
         "id": card_id,
         "title": f"the lock-free card {card_id}",
-        "roadmap_row": "Secretary",
+        "roadmap_row": "His conversations and his people",  # a step of the order (2026-10-05)
         "area": [f"src/{card_id}"],
         "goal": f"the goal of {card_id}",
         "acceptance": f"the acceptance of {card_id}",
