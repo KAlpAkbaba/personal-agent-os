@@ -189,7 +189,9 @@ def test_a_forged_callback_is_refused_before_any_token_request(factory) -> None:
     with factory() as db:
         service.start(db, provider="gmail", name="Kişisel", now=NOW)
         with pytest.raises(AccountError) as err:
-            service.complete(db, state="forged-state-the-attacker-made-up-xxxxxxxx", code="c", now=NOW)
+            service.complete(
+                db, state="forged-state-the-attacker-made-up-xxxxxxxx", code="c", now=NOW
+            )
         assert err.value.code == "state_unknown"
         assert db.execute(select(MailAccountRow)).scalars().all() == []
     assert rec.requests == []
@@ -281,7 +283,8 @@ def test_no_token_or_client_secret_in_any_response_or_log_line(factory, caplog, 
     first = listing.json()["accounts"][0]["id"]
     bodies.append(client.patch(f"/v1/accounts/{first}", json={"name": "Aile"}).text)
     with factory() as db:
-        service.access_token(db, name="Aile", now=NOW + timedelta(hours=2))  # a refresh
+        later = datetime.now(UTC) + timedelta(hours=2)
+        assert service.access_token(db, name="Aile", now=later) == "ya29.REFRESHED-ACCESS"
     bodies.append(client.delete(f"/v1/accounts/{first}").text)
     captured = capsys.readouterr()
     haystack = "\n".join(bodies) + caplog.text + captured.out + captured.err

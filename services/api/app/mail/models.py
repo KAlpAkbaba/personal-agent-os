@@ -49,12 +49,23 @@ class MailIndexRow(Base):
 
     __tablename__ = "mail_index"
     __table_args__ = (
-        Index("ix_mail_index_provider_message_id", "provider_message_id", unique=True),
+        # Card mail-accounts-connect: one message may sit in two of the owner's accounts
+        # (he mails himself), so identity is (account, Message-ID); "" is the env account.
+        Index(
+            "ix_mail_index_account_message_id",
+            "account_name",
+            "provider_message_id",
+            unique=True,
+        ),
         Index("ix_mail_index_thread_key", "thread_key"),
         Index("ix_mail_index_last_used_at", "last_used_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    #: The owner's name for the account ("İş"); "" for the single env (IMAP) account.
+    account_name: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="", server_default=""
+    )
     #: The provider's own Message-ID header (spec §3) — identity across folders/providers,
     #: never a folder-local IMAP UID (which is not stable across a provider swap).
     provider_message_id: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -90,6 +101,9 @@ class MailDraftRow(Base):
     subject: Mapped[str] = mapped_column(String(998), nullable=False, default="")
     body: Mapped[str] = mapped_column(String(20000), nullable=False, default="")
     in_reply_to: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    #: The account the draft goes from - named in the read-back the owner confirms; None
+    #: for the single env account.
+    account_name: Mapped[str | None] = mapped_column(String(40), nullable=True)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default=DRAFT_STATE_PREPARED)
     #: Set ONLY by the explicit read-back act (``mail.read_draft``, or the Cockpit's
     #: pending listing presenting the row) — never at prepare time (H1, ADR-0084

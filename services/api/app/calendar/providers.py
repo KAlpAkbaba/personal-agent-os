@@ -312,6 +312,330 @@ class IcsUrlCalendarProvider:
         )
 
 
+# ------------------------------------------------- Google Calendar / Microsoft Graph
+#
+# Card mail-accounts-connect: the owner's calendars on his connected Gmail and Microsoft
+# 365 accounts, read over their JSON APIs with the account's OAuth access token
+# (``token`` - ``app.accounts.service.AccountsService.access_token`` behind it). Read-only
+# here: event writes stay on the existing CalDAV writer path.
+
+
+@dataclass(frozen=True, slots=True)
+class AccountOccurrence(Occurrence):
+    """An occurrence that knows which of the owner's accounts it came from."""
+
+    account: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        out = Occurrence.as_dict(self)
+        if self.account:
+            out["account"] = self.account
+        return out
+
+
+class CalendarApiError(RuntimeError):
+    def __init__(self, status: int) -> None:
+        super().__init__(f"calendar api answered HTTP {status}")
+        self.status = status
+
+
+def _api_get(
+    url: str,
+    *,
+    token: Any,
+    params: dict[str, Any],
+    transport: httpx.BaseTransport | None,
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    with httpx.Client(transport=transport, timeout=timeout) as http:
+        response = http.get(
+            url, params=params, headers={**(headers or {}), "Authorization": f"Bearer {token()}"}
+        )
+    if response.status_code != 200:
+        raise CalendarApiError(response.status_code)
+    data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
+def _rfc3339(value: datetime) -> str:
+    from datetime import UTC
+
+    aware = value if value.tzinfo else value.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class _ApiCalendar:
+    MAX_EVENTS = 250
+
+    def __init__(
+        self, *, token: Any, transport: httpx.BaseTransport | None = None, timeout: float = 20.0
+    ) -> None:
+        self._token = token
+        self._transport = transport
+        self._timeout = timeout
+        self.last_window_clamped = False
+        self.last_truncated = False
+
+    def _window(self, start: datetime, end: datetime) -> list[Occurrence]:
+        raise NotImplementedError
+
+    def events(self, start: datetime, end: datetime) -> list[Occurrence]:
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        return self._window(clamped_start, clamped_end)
+
+    def get_event(self, uid: str) -> Occurrence | None:
+        from datetime import timedelta
+
+        now = datetime.now(start_timezone())
+        for occ in self._window(
+            now - timedelta(days=MAX_WINDOW_DAYS), now + timedelta(days=MAX_WINDOW_DAYS)
+        ):
+            if occ.uid == uid:
+                return occ
+        return None
+
+    def free_slots(
+        self, start: datetime, end: datetime, duration_minutes: int
+    ) -> list[tuple[datetime, datetime]]:
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        return compute_free_slots(
+            self._window(clamped_start, clamped_end),
+            start=clamped_start,
+            end=clamped_end,
+            duration_minutes=duration_minutes,
+        )
+
+
+class GoogleCalendarProvider(_ApiCalendar):
+    API = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+
+    def calendars(self) -> list[str]:
+        return ["primary"]
+
+    def _window(self, start: datetime, end: datetime) -> list[Occurrence]:
+        data = _api_get(
+            self.API,
+            token=self._token,
+            params={
+                "timeMin": _rfc3339(start),
+                "timeMax": _rfc3339(end),
+                "singleEvents": "true",
+                "orderBy": "startTime",
+                "maxResults": self.MAX_EVENTS,
+            },
+            transport=self._transport,
+            timeout=self._timeout,
+        )
+        self.last_truncated = bool(data.get("nextPageToken"))
+        out: list[Occurrence] = []
+        for item in data.get("items") or []:
+            occ = self._occurrence(item)
+            if occ is not None:
+                out.append(occ)
+        return out
+
+    @staticmethod
+    def _when(value: dict[str, Any]) -> tuple[datetime, bool] | None:
+        if value.get("dateTime"):
+            moment = datetime.fromisoformat(str(value["dateTime"]).replace("Z", "+00:00"))
+            return moment, False
+        if value.get("date"):
+            day = datetime.fromisoformat(str(value["date"]))
+            return day.replace(tzinfo=start_timezone()), True
+        return None
+
+    def _occurrence(self, item: dict[str, Any]) -> Occurrence | None:
+        if item.get("status") == "cancelled" or not item.get("id"):
+            return None
+        start = self._when(item.get("start") or {})
+        end = self._when(item.get("end") or {})
+        if start is None or end is None:
+            return None
+        reminders: tuple[int, ...] = ()
+        rem = item.get("reminders") or {}
+        if not rem.get("useDefault"):
+            reminders = tuple(
+                int(o["minutes"]) for o in rem.get("overrides") or [] if "minutes" in o
+            )
+        return Occurrence(
+            uid=str(item["id"]),
+            summary=str(item.get("summary") or ""),
+            start=start[0],
+            end=end[0],
+            all_day=start[1],
+            reminders=reminders,
+            recurring=bool(item.get("recurringEventId")),
+        )
+
+
+class GraphCalendarProvider(_ApiCalendar):
+    API = "https://graph.microsoft.com/v1.0/me/calendarView"
+
+    def calendars(self) -> list[str]:
+        return ["calendar"]
+
+    def _window(self, start: datetime, end: datetime) -> list[Occurrence]:
+        data = _api_get(
+            self.API,
+            token=self._token,
+            params={
+                "startDateTime": _rfc3339(start),
+                "endDateTime": _rfc3339(end),
+                "$top": self.MAX_EVENTS,
+                "$select": "id,subject,start,end,isAllDay,isCancelled,isReminderOn,"
+                "reminderMinutesBeforeStart,type",
+            },
+            headers={"Prefer": 'outlook.timezone="UTC"'},
+            transport=self._transport,
+            timeout=self._timeout,
+        )
+        self.last_truncated = bool(data.get("@odata.nextLink"))
+        out: list[Occurrence] = []
+        for item in data.get("value") or []:
+            occ = self._occurrence(item)
+            if occ is not None:
+                out.append(occ)
+        return out
+
+    @staticmethod
+    def _when(value: dict[str, Any]) -> datetime | None:
+        from datetime import UTC
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        raw = str(value.get("dateTime") or "")
+        if not raw:
+            return None
+        head, _, fraction = raw.partition(".")
+        moment = datetime.fromisoformat(f"{head}.{fraction[:6]}" if fraction else head)
+        zone_name = str(value.get("timeZone") or "UTC")
+        try:
+            zone = UTC if zone_name.upper() == "UTC" else ZoneInfo(zone_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            zone = UTC
+        return moment.replace(tzinfo=zone)
+
+    def _occurrence(self, item: dict[str, Any]) -> Occurrence | None:
+        if item.get("isCancelled") or not item.get("id"):
+            return None
+        start = self._when(item.get("start") or {})
+        end = self._when(item.get("end") or {})
+        if start is None or end is None:
+            return None
+        reminders: tuple[int, ...] = ()
+        if item.get("isReminderOn") and item.get("reminderMinutesBeforeStart") is not None:
+            reminders = (int(item["reminderMinutesBeforeStart"]),)
+        return Occurrence(
+            uid=str(item["id"]),
+            summary=str(item.get("subject") or ""),
+            start=start,
+            end=end,
+            all_day=bool(item.get("isAllDay")),
+            reminders=reminders,
+            recurring=item.get("type") in ("occurrence", "exception"),
+        )
+
+
+class MultiAccountCalendarProvider:
+    """Every connected account's calendar as ONE ``CalendarProvider``, each event tagged
+    with its account's name. A failing account is skipped, reported through ``on_synced``
+    and marks the pass ``last_truncated`` - so ``CalendarService.sync`` removes nothing on a
+    pass that could not see every account (an unreachable account is not evidence that its
+    events were deleted). Only when every account fails does the call raise."""
+
+    def __init__(self, loader: Any, *, on_synced: Any = None) -> None:
+        self._loader = loader
+        self._on_synced = on_synced
+        self.last_window_clamped = False
+        self.last_truncated = False
+        #: account name -> "ok" or the exception class of its last read.
+        self.last_status: dict[str, str] = {}
+
+    def accounts(self) -> list[tuple[str, Any]]:
+        return list(self._loader())
+
+    def _report(self, name: str, error_class: str | None) -> None:
+        self.last_status[name] = error_class or "ok"
+        if self._on_synced is not None:
+            try:
+                self._on_synced(name, error_class)
+            except Exception:  # noqa: BLE001 - bookkeeping never breaks a read
+                pass
+
+    def _each(self, call: Any) -> list[tuple[str, Any, Any]]:
+        results: list[tuple[str, Any, Any]] = []
+        errors: list[BaseException] = []
+        accounts = self.accounts()
+        self.last_status = {}
+        self.last_window_clamped = False
+        self.last_truncated = False
+        for name, provider in accounts:
+            try:
+                value = call(provider)
+            except Exception as exc:  # noqa: BLE001 - one account never silences another
+                errors.append(exc)
+                self._report(name, type(exc).__name__)
+                continue
+            self._report(name, None)
+            results.append((name, provider, value))
+            self.last_window_clamped |= bool(getattr(provider, "last_window_clamped", False))
+            self.last_truncated |= bool(getattr(provider, "last_truncated", False))
+        if errors:
+            self.last_truncated = True
+            if not results:
+                raise errors[0]
+        return results
+
+    @staticmethod
+    def _tag(name: str, occ: Occurrence) -> AccountOccurrence:
+        return AccountOccurrence(
+            uid=occ.uid,
+            summary=occ.summary,
+            start=occ.start,
+            end=occ.end,
+            all_day=occ.all_day,
+            reminders=occ.reminders,
+            recurring=occ.recurring,
+            account=name,
+        )
+
+    def calendars(self) -> list[str]:
+        return [
+            f"{name}:{cal}"
+            for name, _p, cals in self._each(lambda p: p.calendars())
+            for cal in cals
+        ]
+
+    def events(self, start: datetime, end: datetime) -> list[Occurrence]:
+        merged = [
+            self._tag(name, occ)
+            for name, _p, occs in self._each(lambda p: p.events(start, end))
+            for occ in occs
+        ]
+        return sorted(merged, key=lambda o: o.start)
+
+    def get_event(self, uid: str) -> Occurrence | None:
+        for name, provider in self.accounts():
+            try:
+                occ = provider.get_event(uid)
+            except Exception:  # noqa: BLE001
+                continue
+            if occ is not None:
+                return self._tag(name, occ)
+        return None
+
+    def free_slots(
+        self, start: datetime, end: datetime, duration_minutes: int
+    ) -> list[tuple[datetime, datetime]]:
+        clamped_start, clamped_end, _clamped = clamp_window(start, end)
+        busy = self.events(clamped_start, clamped_end)
+        return compute_free_slots(
+            busy, start=clamped_start, end=clamped_end, duration_minutes=duration_minutes
+        )
+
+
 # --------------------------------------------------------------------------- fakes
 
 
@@ -418,7 +742,12 @@ def build_calendar_writer(settings: Any) -> CalendarWriter | None:
 
 __all__ = [
     "MAX_WINDOW_DAYS",
+    "AccountOccurrence",
     "CalDavCalendarProvider",
+    "CalendarApiError",
+    "GoogleCalendarProvider",
+    "GraphCalendarProvider",
+    "MultiAccountCalendarProvider",
     "CalendarProvider",
     "CalendarWriter",
     "FakeCalendarProvider",

@@ -131,10 +131,10 @@ def _accounts(tokens: Tokens) -> AccountsService:
     )
 
 
-def _connect(service: AccountsService, db, provider: str, name: str) -> dict[str, Any]:
-    url = service.start(db, provider=provider, name=name, now=NOW)["authorize_url"]
+def _connect(service: AccountsService, db, provider: str, name: str, *, now=NOW) -> dict[str, Any]:
+    url = service.start(db, provider=provider, name=name, now=now)["authorize_url"]
     state = parse_qs(urlparse(url).query)["state"][0]
-    return service.complete(db, state=state, code="c", now=NOW)
+    return service.complete(db, state=state, code="c", now=now)
 
 
 # ------------------------------------------------------------------ accounts
@@ -144,8 +144,8 @@ def test_three_named_accounts_round_trip(factory) -> None:
     service = _accounts(Tokens())
     with factory() as db:
         _connect(service, db, "gmail", "Kişisel")
-        _connect(service, db, "microsoft", "İş")
-        _connect(service, db, "gmail", "Aktivra")
+        _connect(service, db, "microsoft", "İş", now=NOW + timedelta(minutes=1))
+        _connect(service, db, "gmail", "Aktivra", now=NOW + timedelta(minutes=2))
         listed = service.list(db)
     assert [(a["name"], a["provider"], a["address"], a["state"]) for a in listed] == [
         ("Kişisel", "gmail", "kisisel@gmail.com", "connected"),
@@ -167,7 +167,7 @@ def test_a_name_is_unique_under_turkish_casefold_and_rename_keeps_it_so(factory)
         assert err.value.code == "name_taken"
         second = _connect(service, db, "gmail", "Kişisel")
         with pytest.raises(AccountError):
-            service.rename(db, second["id"], "IŞ")
+            service.rename(db, second["id"], "İŞ")  # Turkish: "İŞ" is "iş"; "IŞ" would be "ış"
         renamed = service.rename(db, second["id"], "Aile")
         assert renamed["name"] == "Aile"
         with pytest.raises(AccountError) as empty:
@@ -204,7 +204,10 @@ def test_disconnect_at_microsoft_deletes_and_says_where_to_remove_the_consent(fa
 def test_the_poller_reads_two_accounts_and_tags_every_message(factory, tmp_path) -> None:
     synced: list[tuple[str, str | None]] = []
     provider = MultiAccountMailProvider(
-        lambda: [("İş", _mailbox(tmp_path, "is", unread=2)), ("Kişisel", _mailbox(tmp_path, "ev", unread=1))],
+        lambda: [
+            ("İş", _mailbox(tmp_path, "is", unread=2)),
+            ("Kişisel", _mailbox(tmp_path, "ev", unread=1)),
+        ],
         on_synced=lambda name, error: synced.append((name, error)),
     )
     poller = MailPoller(MailService(provider, None), enabled=True, interval_s=60)
@@ -262,7 +265,10 @@ def test_no_accounts_is_account_missing(factory) -> None:
 
 def test_the_inbox_answer_names_each_account(factory, tmp_path) -> None:
     provider = MultiAccountMailProvider(
-        lambda: [("İş", _mailbox(tmp_path, "is", unread=3)), ("Kişisel", _mailbox(tmp_path, "ev", unread=0))]
+        lambda: [
+            ("İş", _mailbox(tmp_path, "is", unread=3)),
+            ("Kişisel", _mailbox(tmp_path, "ev", unread=0)),
+        ]
     )
     with factory() as db:
         result = MailService(provider, None).inbox_summary(db)
@@ -278,7 +284,10 @@ def test_voice_is_hesabimda_yeni_posta_var_mi_answers_by_name(tmp_path) -> None:
     assert resolve_intent("İş hesabımda yeni posta var mı?").intent == Intent.MAIL_INBOX
     with build_harness(temp_root=tmp_path) as h:
         h.mail._provider = MultiAccountMailProvider(  # type: ignore[attr-defined]
-            lambda: [("İş", _mailbox(tmp_path, "is", unread=2)), ("Kişisel", _mailbox(tmp_path, "ev", unread=1))]
+            lambda: [
+                ("İş", _mailbox(tmp_path, "is", unread=2)),
+                ("Kişisel", _mailbox(tmp_path, "ev", unread=1)),
+            ]
         )
         sid = h.new_session()
         h.say(sid, "İş hesabımda yeni posta var mı?")
@@ -292,8 +301,11 @@ def test_voice_is_hesabimda_yeni_posta_var_mi_answers_by_name(tmp_path) -> None:
 
 def _two_account_service(tmp_path: Path) -> tuple[MailService, FakeMailSender, FakeMailSender]:
     is_sender, ev_sender = FakeMailSender(), FakeMailSender()
-    accounts = lambda: [("İş", _mailbox(tmp_path, "is", unread=1)), ("Kişisel", _mailbox(tmp_path, "ev", unread=1))]  # noqa: E731
-    provider = MultiAccountMailProvider(accounts)
+    mailboxes = [
+        ("İş", _mailbox(tmp_path, "is", unread=1)),
+        ("Kişisel", _mailbox(tmp_path, "ev", unread=1)),
+    ]
+    provider = MultiAccountMailProvider(lambda: mailboxes)
     sender = MultiAccountMailSender(lambda: [("İş", is_sender), ("Kişisel", ev_sender)])
     return MailService(provider, sender), is_sender, ev_sender
 
@@ -366,10 +378,18 @@ def test_the_gmail_reader_parses_raw_messages_and_unread_labels() -> None:
             return httpx.Response(200, json={"messages": [{"id": "g1"}, {"id": "g2"}]})
         if path.endswith("/messages/g1"):
             return httpx.Response(
-                200, json={"id": "g1", "labelIds": ["INBOX", "UNREAD"], "raw": _b64url(_raw("Fatura", "<g1@x>"))}
+                200,
+                json={
+                    "id": "g1",
+                    "labelIds": ["INBOX", "UNREAD"],
+                    "raw": _b64url(_raw("Fatura", "<g1@x>")),
+                },
             )
         if path.endswith("/messages/g2"):
-            return httpx.Response(200, json={"id": "g2", "labelIds": ["INBOX"], "raw": _b64url(_raw("Selam", "<g2@x>"))})
+            return httpx.Response(
+                200,
+                json={"id": "g2", "labelIds": ["INBOX"], "raw": _b64url(_raw("Selam", "<g2@x>"))},
+            )
         return httpx.Response(404)
 
     reader = GmailApiMailProvider(token=lambda: "tok", transport=httpx.MockTransport(handler))
@@ -409,7 +429,9 @@ def test_the_gmail_sender_posts_base64url_mime() -> None:
     sender = GmailApiMailSender(
         token=lambda: "tok", mail_from="owner@gmail.com", transport=httpx.MockTransport(handler)
     )
-    message_id = sender.send(DraftInput(kind="new", to=("ali@example.com",), cc=(), subject="Konu", body="Gövde"))
+    message_id = sender.send(
+        DraftInput(kind="new", to=("ali@example.com",), cc=(), subject="Konu", body="Gövde")
+    )
     raw = base64.urlsafe_b64decode(posted[0]["raw"] + "==").decode()
     assert "To: ali@example.com" in raw and "From: owner@gmail.com" in raw
     assert message_id.startswith("<") and message_id in raw
@@ -431,7 +453,12 @@ def test_calendar_events_from_two_accounts_carry_their_names() -> None:
                         "end": {"dateTime": "2026-10-06T11:00:00+03:00"},
                         "reminders": {"useDefault": False, "overrides": [{"minutes": 30}]},
                     },
-                    {"id": "e2", "summary": "Bayram", "start": {"date": "2026-10-07"}, "end": {"date": "2026-10-08"}},
+                    {
+                        "id": "e2",
+                        "summary": "Bayram",
+                        "start": {"date": "2026-10-07"},
+                        "end": {"date": "2026-10-08"},
+                    },
                 ]
             },
         )
@@ -457,7 +484,10 @@ def test_calendar_events_from_two_accounts_carry_their_names() -> None:
 
     multi = MultiAccountCalendarProvider(
         lambda: [
-            ("Kişisel", GoogleCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(google))),
+            (
+                "Kişisel",
+                GoogleCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(google)),
+            ),
             ("İş", GraphCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(graph))),
         ]
     )
@@ -477,7 +507,8 @@ def test_a_failing_calendar_account_marks_the_pass_truncated_so_nothing_is_remov
             raise ConnectionError("down")
 
     ok = GoogleCalendarProvider(
-        token=lambda: "t", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"items": []}))
+        token=lambda: "t",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"items": []})),
     )
     multi = MultiAccountCalendarProvider(lambda: [("İş", Broken()), ("Kişisel", ok)])
     assert multi.events(NOW, NOW + timedelta(days=1)) == []
@@ -514,12 +545,17 @@ def test_the_calendar_syncer_mirrors_every_account_and_reports_each_by_name() ->
     synced: list[tuple[str, str | None]] = []
     multi = MultiAccountCalendarProvider(
         lambda: [
-            ("Kişisel", GoogleCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(google))),
+            (
+                "Kişisel",
+                GoogleCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(google)),
+            ),
             ("İş", Broken()),
         ],
         on_synced=lambda name, error: synced.append((name, error)),
     )
-    engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
     for table in (
         CalendarIndexRow.__table__,
         CalendarProposalRow.__table__,
@@ -528,7 +564,9 @@ def test_the_calendar_syncer_mirrors_every_account_and_reports_each_by_name() ->
         NotificationRow.__table__,
     ):
         table.create(engine)
-    syncer = CalendarSyncer(CalendarService(multi, None), enabled=True, interval_s=60, accounts=multi)
+    syncer = CalendarSyncer(
+        CalendarService(multi, None), enabled=True, interval_s=60, accounts=multi
+    )
     with sessionmaker(bind=engine, expire_on_commit=False)() as db:
         result = syncer.tick(db, now=NOW)
         uids = [r.uid for r in db.execute(select(CalendarIndexRow)).scalars()]

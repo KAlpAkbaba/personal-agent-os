@@ -55,6 +55,8 @@ def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
         "subject": row.subject,
         "body": row.body,
         "in_reply_to": row.in_reply_to,
+        # Card mail-accounts-connect: the account the Cockpit's confirm sends from.
+        "account": row.account_name,
         "state": row.state,
         "read_back_at": row.read_back_at.isoformat() if row.read_back_at else None,
         "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
