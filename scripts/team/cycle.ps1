@@ -498,12 +498,15 @@ function New-CycleStatus {
                 if (-not $Legacy) {
                     $entry["model"] = $_.model
                     # The owner, 2026-10-05: how far the run has got, measured from its worktree.
-                    if ($_.dir -and @($_.area).Count -gt 0) {
+                    # StrictMode: a live entry built elsewhere (a test, an older path) may carry no dir/area.
+                    $runDir = [string](Get-TeamProperty -InputObject $_ -Name "dir" -Default "")
+                    $runArea = @(Get-TeamProperty -InputObject $_ -Name "area" -Default @())
+                    if ($runDir -and @($runArea).Count -gt 0) {
                         # At most once a minute per run: three git calls must never slow the refill.
                         $key = [string]$_.task + "/" + [string]$_.role
                         $cached = $script:runProgress[$key]
                         if ($null -eq $cached -or ([datetime]::UtcNow - $cached.At).TotalSeconds -ge 60) {
-                            $cached = @{ At = [datetime]::UtcNow; Value = (Get-TeamRunProgress -Worktree $_.dir -Base $Base -Area @($_.area) -TaskId ([string]$_.task)) }
+                            $cached = @{ At = [datetime]::UtcNow; Value = (Get-TeamRunProgress -Worktree $runDir -Base $Base -Area $runArea -TaskId ([string]$_.task)) }
                             $script:runProgress[$key] = $cached
                         }
                         if ($null -ne $cached.Value) { $entry["progress"] = $cached.Value }
