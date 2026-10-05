@@ -124,7 +124,8 @@ function Get-GateDatabaseName {
     #>
     param([string]$RunId = "", [Parameter(Mandatory = $true)][datetime]$Now)
     Set-StrictMode -Version Latest
-    $run = ([string]$RunId).ToLowerInvariant() -replace '[^a-z0-9_]+', '_'
+    # -creplace: a case-insensitive class lets the Turkish dotted capital I (U+0130) through as an 'i' under tr-TR
+    $run = ([string]$RunId).ToLowerInvariant() -creplace '[^a-z0-9_]+', '_'
     $run = $run.Trim('_')
     if (-not $run) { $run = [guid]::NewGuid().ToString("N").Substring(0, 8) }
     $name = "pagentos_gate_" + $Now.ToUniversalTime().ToString("yyyyMMddHHmmss", [System.Globalization.CultureInfo]::InvariantCulture) + "_" + $run
