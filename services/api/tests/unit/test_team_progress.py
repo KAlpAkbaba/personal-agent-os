@@ -65,14 +65,16 @@ def _matrix(rows: list[tuple[str, str]]) -> str:
 # ------------------------------------------------------------------ the real documents
 
 
-def test_the_real_roadmap_jarvis_table_is_12_rows_5_have_5_partial_2_missing_62_percent():
+def test_the_real_roadmap_jarvis_table_is_17_rows_5_have_6_partial_6_missing_47_percent():
+    # 2026-10-05: the owner's five JARVIS rows (calls him, home stock, follows him outside,
+    # verifies what he hears, voice anywhere) - 12 rows at 62% became 17 at 47% (8 of 17).
     jarvis = progress.parse_jarvis((REPO / progress.ROADMAP).read_text(encoding="utf-8"))
     assert jarvis is not None
-    assert (jarvis["have"], jarvis["partial"], jarvis["missing"], jarvis["never"]) == (5, 5, 2, 1)
-    assert jarvis["counted"] == 12
+    assert (jarvis["have"], jarvis["partial"], jarvis["missing"], jarvis["never"]) == (5, 6, 6, 1)
+    assert jarvis["counted"] == 17
     assert jarvis["unknown"] == []
-    assert jarvis["percent"] == 62
-    assert len(jarvis["rows"]) == 13
+    assert jarvis["percent"] == 47
+    assert len(jarvis["rows"]) == 18
     assert jarvis["rows"][0]["state"] == "have"
     assert jarvis["rows"][-1]["state"] == "never"
 
@@ -104,7 +106,7 @@ def test_the_real_matrix_is_750_rows_711_done_95_percent_and_20_percent_proven_r
 def test_the_whole_answer_reads_the_tree_and_names_the_release():
     answer = progress.progress(REPO, as_of="a" * 40)
     assert answer["as_of"] == "a" * 40
-    assert answer["jarvis"]["percent"] == 62
+    assert answer["jarvis"]["percent"] == 47
     assert answer["v1"]["done"] == 711
     assert "0,5" in answer["rule"]
 
@@ -207,7 +209,7 @@ def owner(tmp_path):
 
 def test_the_office_answer_carries_progress_from_the_tree(owner):
     body = owner.get("/v1/team/office").json()
-    assert body["progress"]["jarvis"]["percent"] == 62
+    assert body["progress"]["jarvis"]["percent"] == 47
     assert body["progress"]["v1"]["total"] == 750
     assert "agents" in body
 

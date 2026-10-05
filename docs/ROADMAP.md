@@ -448,6 +448,11 @@ not rediscovered.
 | The same JARVIS in the house, the car, the suit, the phone | Multi-device (M29): a second device, GMKADIRAKBABA, is enrolled (ADR-0203, aliases `ofis` / `iş`); browser worker and owner-Chrome research proven in the office 2026-09-29; session→device affinity, launch without the Operator and the spoken device name are on main (ADR-0208/0209/0212), not yet released | **PARTIAL** (2026-09-29) — two PCs; no phone, no handoff of a running task |
 | Runs the house: lights, doors, climate | Home Assistant behind a `smart_home` provider (research 2026-09-26) | **MISSING** — adopt |
 | Secretary: mail, calendar, answers calls on his behalf | Mail/calendar built (M21) but no account; calendar → Radicale (own CalDAV); calls → a telephony bridge (Twilio/Telnyx) into the realtime voice path, with the KVKK announcement | **MISSING** — accounts and the bridge |
+| **Calls him when something important happens** — his own news, and the company's: Aktivra's assistant tells JARVIS, JARVIS calls him (the owner, 2026-10-05) | Notifications and web push, alarms, morning briefing; no outbound call, no channel from Aktivra | **MISSING** — an outbound call to the owner on the telephony bridge above, and an authenticated inbound channel for Aktivra's "önemli" events (Aktivra is a separate project) |
+| **Keeps the house's stock, down to the toilet paper** (the owner, 2026-10-05) | Memory, routines, alarms | **MISSING** — a home inventory and shopping list: spoken updates ("tuvalet kağıdı azaldı"), receipts and orders, a reminder before it runs out; Home Assistant sensors later (order 4) |
+| **Follows him outside: calendar, people, promises - and tells him at once** (the owner, 2026-10-05) | Mail and calendar (M21), notifications, the web shell on the phone over the tailnet | **PARTIAL** — a phone app that is always with him (the platform is the owner's to say), and follow-ups taken from conversations: people, promises, dates into contacts and the calendar |
+| **Verifies what he hears and keeps it to argue later** (the owner, 2026-10-05) | Research with sources (ADR-0183), Latest News Mode | **MISSING** — a "doğrula" mode: the claim, a verdict, sources and the counter-argument, recallable later ("geçen hafta X'i doğrulamıştık"). Only on the owner's trigger: recording other people without consent is a crime in Türkiye (TCK 133) and a KVKK matter - never covert always-on capture |
+| **Voice anywhere, like Wispr Flow** (the owner, 2026-10-05) | Voice in the web shell and the desktop | **MISSING** — system-wide push-to-talk on the PC: hold a key, speak, the text lands in whatever app has focus or runs as a command; the phone after its app |
 | **Records everything and tells him, whenever he asks** — "her şeyi kaydeden ve istediğim zaman bana anlatan" | Activity ledger (M16), memory (M5/ADR-0200–0206), activity briefing, research reports, audit trails. Missing: ONE narrative over all of it — "bu hafta ne oldu", "ofiste ne yaptın", "ne başarısız oldu" — spoken on demand, with failures included | **PARTIAL** — its own line under order item 2c |
 | Proactive: warns, briefs, watches over him | Alarms, routines, morning briefing, presence, notifications; briefings still pull-only for a web session (queue item 1) | **PARTIAL** |
 | Holograms and hands in the air | Holographic/Living Core (M18), hand gestures stage 1+2 (ADR-0198/0199, branch), God's Eye | **PARTIAL** — on a screen; volumetric holograms do not exist, AR glasses are the nearest real thing |
@@ -466,6 +471,11 @@ not rediscovered.
 - **No physical agency without hardware.** Doors, lights and cars are Home Assistant and
   whatever the owner wires to it; a robot arm is a hardware project of its own. The
   software side (device selection, receipts, step-up) is already the shape it needs.
+- **Aktivra is not JARVIS.** The owner's company (Aktivra Teknoloji Ltd. Şti.: agent
+  departments, customers, the Meta Quest office) is a separate project in its own repository.
+  Its assistant calls him only about the company, or tells JARVIS something important and
+  JARVIS calls him. No customer work and no company data live in this system (one owner, no
+  tenant model).
 - **An always-on frontier model is not affordable.** The JARVIS feeling is a cheap
   always-on layer (local mode, local embedder, a fast classifier for routing/injection —
   the Jev-shaped seam) with the expensive model called only when the task needs it.
