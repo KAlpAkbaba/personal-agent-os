@@ -225,6 +225,39 @@ def _build_push_rung(
     )
 
 
+def _build_watch_announcer(speaker: Any) -> Any:
+    """watch-voice: the runner's announcer over the owner's presence, greeting policy and
+    quiet hours (the owner's ambient window; 23:00-07:00 Istanbul when none is set)."""
+    from app.alarms.models import AMBIENT_POLICY_ID, AmbientPolicyRow
+    from app.ambient import policy as ambient_policy
+    from app.routines.presence_link import resolve_greeting_allowed, resolve_owner_present
+    from app.watch.announce import WatchAnnouncer, default_quiet_hours
+
+    def quiet_hours(db: Any, now: Any) -> bool:
+        # Read only (``get_policy_row`` would create and COMMIT the row mid-reading), in a
+        # savepoint so a failed read cannot abort the runner's own transaction.
+        try:
+            with db.begin_nested():
+                row = db.get(AmbientPolicyRow, AMBIENT_POLICY_ID)
+            if row is None:
+                return default_quiet_hours(db, now)
+            state = ambient_policy.quiet_hours_state(
+                ambient_policy.AmbientPolicy.from_row(row), now
+            )
+        except Exception:  # noqa: BLE001 - an unreadable policy is quiet (fail closed)
+            return True
+        if state == ambient_policy.QUIET_HOURS_UNSET:
+            return default_quiet_hours(db, now)
+        return state == ambient_policy.QUIET_HOURS_INSIDE
+
+    return WatchAnnouncer(
+        speaker,
+        owner_present=lambda: resolve_owner_present()[0],
+        greeting_allowed=lambda db: resolve_greeting_allowed(db)[0],
+        quiet_hours=quiet_hours,
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     broker = BrokerRuntime(settings)
@@ -509,14 +542,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # for five days and nothing read it -- fourteen rows, all undelivered, all expired.
     # Speaks through the SAME port the alarm's own briefing uses, so there is one way to
     # talk to the owner, not two. Runs off the request path; failures are logged.
-    briefing_announcer = PendingBriefingAnnouncer(
-        artifacts.session,
-        RealtimeSayBriefingSpeaker(
-            RealtimeSayBriefing(
-                session_factory=dispatch_session_factory, sideband=voice_realtime.sideband
-            )
-        ),
+    owner_speaker = RealtimeSayBriefingSpeaker(
+        RealtimeSayBriefing(
+            session_factory=dispatch_session_factory, sideband=voice_realtime.sideband
+        )
     )
+    briefing_announcer = PendingBriefingAnnouncer(artifacts.session, owner_speaker)
 
     def _build_routine_clock() -> RoutineClock:
         """M18.3 spec §3.3. The three ticks, in order, each in the same worker thread and
@@ -697,6 +728,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lambda: app.state.artifacts.session(),
         watch_reader,
         provider_factory=lambda: build_chat_provider(settings),
+        # watch-voice: a met condition is spoken into the live session through the SAME
+        # speaker the pending briefings use - only with the owner present, a greeting
+        # allowed and outside quiet hours; otherwise the morning briefing carries it.
+        announcer=_build_watch_announcer(owner_speaker),
         enabled=settings.watch_runner_enabled,
         interval_s=settings.watch_runner_interval_s,
     )

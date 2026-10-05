@@ -8008,11 +8008,99 @@ def _b51_paraphrase_cases(existing: list[UtteranceCase]) -> list[UtteranceCase]:
     return out
 
 
+def _watch_cases() -> list[UtteranceCase]:
+    """watch-voice: the owner's watch over a public page ("nöbet"). A create with no page in
+    the sentence is the free local mode's ONE missing-slot question ("Hangi sayfayı
+    izleyeyim?"), never a confirmation; the realtime model fills ``url`` live."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("w.create.1", "Home Assistant'ın yeni kararlı sürümü çıkınca bana söyle.", "canonical"),
+        ("w.create.2", "Şu ürünün fiyatı 20 bin liranın altına inerse haber ver.", "canonical"),
+        ("w.create.3", "Şu ürünün fiyatı 20.000 liranın altına inerse haber ver.", "paraphrase"),
+        ("w.create.4", "Bu sayfa değişince bana söyle.", "canonical"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="watch_create",
+                expected_tool="watch.create",
+                expected_response=RESPONSE_CLARIFY,
+                category="watch",
+                source=source,
+            )
+        )
+    for case_id, text, intent, tool, source in (
+        ("w.list.1", "Nöbetlerimi say.", "watch_list", "watch.list", "canonical"),
+        ("w.list.2", "Hangi nöbetlerim var?", "watch_list", "watch.list", "paraphrase"),
+        ("w.remove.1", "Fiyat nöbetini kaldır.", "watch_remove", "watch.remove", "canonical"),
+        ("w.remove.2", "Nöbeti kaldır.", "watch_remove", "watch.remove", "paraphrase"),
+        ("w.forget.1", "Nöbetleri unut.", "watch_forget_all", "watch.forget_all", "canonical"),
+        (
+            "w.forget.2",
+            "Bütün nöbetleri sil.",
+            "watch_forget_all",
+            "watch.forget_all",
+            "paraphrase",
+        ),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent=intent,
+                expected_tool=tool,
+                category="watch",
+                source=source,
+            )
+        )
+    # The near misses: a pharmacy on duty, a reminder's tell verb, the negative imperative.
+    cases.append(
+        UtteranceCase(
+            case_id="w.negation.unutma_is_remember",
+            utterance="Nöbetleri unutma.",
+            expected_intent="memory_remember",
+            expected_tool="memory.remember",
+            forbidden_tools=("watch.forget_all", "memory.forget"),
+            category="watch",
+            source="canonical",
+            notes="'unutma' is 'do not forget': it must never reach the forget-all.",
+        )
+    )
+    for case_id, text in (
+        ("w.near.nobetci", "nöbetçi eczane nerede"),
+        ("w.near.alarm", "saat yedide haber ver"),
+        ("w.near.leaving", "Evden çıkınca bana söyle."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=WATCH_TOOLS_ALL,
+                category="watch",
+                source="canonical",
+            )
+        )
+    return cases
+
+
+WATCH_TOOLS_ALL: Final[tuple[str, ...]] = (
+    "watch.create",
+    "watch.list",
+    "watch.remove",
+    "watch.forget_all",
+)
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_clock_cases(),
         *_routine_cases(),
         *_macro_cases(),
+        *_watch_cases(),
         *_memory_cases(),
         *_daily_cases(),
         *_research_cases(),
