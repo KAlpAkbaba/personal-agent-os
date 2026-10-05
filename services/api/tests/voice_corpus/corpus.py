@@ -7310,6 +7310,186 @@ def _macro_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _household_cases() -> list[UtteranceCase]:
+    """home-stock-list: the house's stock and the shopping list, in the owner's words.
+
+    Each level form ("azaldı", "bitmek üzere", "az kaldı", "bitti", "kalmadı", "bitmiş",
+    "aldım", "aldık"), the list's add/remove/read forms, and the neighbours the anchored words
+    must leave alone: "bitti" and "aldım" are everyday verbs ("Toplantı bitti", "Mesajını
+    aldım"), so a level needs a household item or a place. ``tool_arguments`` are what a model
+    sends; the router's own ``household_*`` words win over them inside the tool.
+    """
+    cases: list[UtteranceCase] = []
+    for case_id, text, item, level, source in (
+        ("household.low.1", "Tuvalet kağıdı azaldı.", "tuvalet kağıdı", "azaldı", "canonical"),
+        (
+            "household.low.2",
+            "Bulaşık deterjanı bitmek üzere.",
+            "bulaşık deterjanı",
+            "azaldı",
+            "paraphrase",
+        ),
+        ("household.low.3", "Evde çay az kaldı.", "çay", "azaldı", "paraphrase"),
+        ("household.out.1", "Deterjan bitti.", "deterjan", "bitti", "canonical"),
+        ("household.out.2", "Evde yumurta kalmadı.", "yumurta", "bitti", "paraphrase"),
+        ("household.out.3", "Süt bitmiş.", "süt", "bitti", "paraphrase"),
+        ("household.bought.1", "Süt aldım.", "süt", "var", "canonical"),
+        ("household.bought.2", "Tuvalet kağıdı aldık.", "tuvalet kağıdı", "var", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="household_level",
+                    expected_tool="household.level",
+                    expected={"level": level},
+                    tool_arguments={"item": item, "level": level},
+                    category="household",
+                    source=source,
+                )
+            )
+        )
+    for case_id, text, intent, tool, arguments, source in (
+        (
+            "household.add.1",
+            "Listeye süt ekle.",
+            "household_list_add",
+            "household.list_add",
+            {"item": "süt"},
+            "canonical",
+        ),
+        (
+            "household.add.2",
+            "Listeye iki paket makarna yaz.",
+            "household_list_add",
+            "household.list_add",
+            {"item": "makarna", "quantity": "iki paket"},
+            "paraphrase",
+        ),
+        (
+            "household.add.3",
+            "Kedi mamasını alışveriş listesine ekler misin?",
+            "household_list_add",
+            "household.list_add",
+            {"item": "kedi maması"},
+            "paraphrase",
+        ),
+        (
+            "household.remove.1",
+            "Listeden sütü çıkar.",
+            "household_list_remove",
+            "household.list_remove",
+            {"item": "süt"},
+            "canonical",
+        ),
+        (
+            "household.remove.2",
+            "Çayı listeden sil.",
+            "household_list_remove",
+            "household.list_remove",
+            {"item": "çay"},
+            "paraphrase",
+        ),
+        (
+            "household.read.1",
+            "Ne almam lazım?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "canonical",
+        ),
+        (
+            "household.read.2",
+            "Neler almam gerekiyor?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+        (
+            "household.read.3",
+            "Listeyi oku.",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "canonical",
+        ),
+        (
+            "household.read.4",
+            "Alışveriş listesini oku.",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+        (
+            "household.read.5",
+            "Listede ne var?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+        (
+            "household.read.6",
+            "Markete gidiyorum.",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "canonical",
+        ),
+        (
+            "household.read.7",
+            "Evde ne eksik?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent=intent,
+                    expected_tool=tool,
+                    tool_arguments=dict(arguments),
+                    category="household",
+                    source=source,
+                )
+            )
+        )
+    household_tools = (
+        "household.level",
+        "household.list_add",
+        "household.list_remove",
+        "household.list_read",
+    )
+    for case_id, text in (
+        ("household.neighbour.meeting", "Toplantı bitti."),
+        ("household.neighbour.message", "Mesajını aldım."),
+        ("household.neighbour.battery", "Telefonun şarjı azaldı."),
+        ("household.neighbour.question", "Süt bitti mi?"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=household_tools,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="household",
+                source="regression",
+            )
+        )
+    return cases
+
+
 def _routine_cases() -> list[UtteranceCase]:
     """B14 req 296-299: the owner's own routines, in their own words.
 
@@ -8013,6 +8193,7 @@ def all_cases() -> list[UtteranceCase]:
         *_clock_cases(),
         *_routine_cases(),
         *_macro_cases(),
+        *_household_cases(),
         *_memory_cases(),
         *_daily_cases(),
         *_research_cases(),

@@ -32,6 +32,7 @@ from typing import Any, Final
 
 from app.calendar import tr_time as calendar_tr_time
 from app.devices.aliases import strip_device_phrases
+from app.household import parse as household_parse
 from app.macros.naming import match_stored_name
 from app.macros.naming import spoken_name as macro_spoken_name
 from app.narration import commands
@@ -354,6 +355,11 @@ class Intent(StrEnum):
     SYSTEM_STATUS_QUERY = "system_status_query"  # Sistem durumu nasıl?
     OVERNIGHT_WORK_QUERY = "overnight_work_query"  # Gece neler yaptın?
     TEAM_STATUS = "team_status"  # Ekip ne yapıyor? / Ofiste kim çalışıyor? (the Ofis page, aloud)
+    # home-stock-list: the house's stock and the shopping list (app.household.parse).
+    HOUSEHOLD_LEVEL = "household_level"  # Tuvalet kağıdı azaldı. / Deterjan bitti. / Süt aldım.
+    HOUSEHOLD_LIST_ADD = "household_list_add"  # Listeye süt ekle.
+    HOUSEHOLD_LIST_REMOVE = "household_list_remove"  # Listeden sütü çıkar.
+    HOUSEHOLD_LIST_READ = "household_list_read"  # Ne almam lazım? / Markete gidiyorum.
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode. Two distinct
     # operations, deterministic — NEWS_OPEN plays the latest eligible video (a real
     # mutation: a browser opens, a video plays), NEWS_SUMMARIZE routes a current-events
@@ -639,6 +645,10 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.MACRO_DELETE: "macro.delete",
     # ADR-0197: a tab opens in the owner's browser.
     Intent.GODS_EYE_OPEN: "godseye.open",
+    # home-stock-list: a level and the shopping list are durable rows the owner changed.
+    Intent.HOUSEHOLD_LEVEL: "household.level",
+    Intent.HOUSEHOLD_LIST_ADD: "household.list_add",
+    Intent.HOUSEHOLD_LIST_REMOVE: "household.list_remove",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -756,6 +766,8 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # B30 req 119/121: reading what runs changes nothing.
     Intent.PROCESS_QUERY: "operator.process",
     Intent.SERVICE_QUERY: "operator.service",
+    # home-stock-list: the shopping list read out changes nothing.
+    Intent.HOUSEHOLD_LIST_READ: "household.list_read",
 }
 
 
@@ -1073,6 +1085,12 @@ class ResolvedIntent:
     #: when the words named none at all — the tool then asks which, never guesses a
     #: default (task brief §1: "Do NOT invent one").
     location_default_city: str | None = None
+    #: home-stock-list: for the HOUSEHOLD_* intents, the item the owner's WORDS named (in its
+    #: kept form: "sütü" -> "süt"), the level they said (var / azaldı / bitti) and a quantity
+    #: ("iki paket") - or None. The tools prefer these over the model's arguments.
+    household_item: str | None = None
+    household_level: str | None = None
+    household_quantity: str | None = None
     #: M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): for NEWS_OPEN/NEWS_SUMMARIZE/
     #: NEWS_QUERY_LATEST, a channel-name HINT the owner's WORDS carried ("Show'un son
     #: haberini aç" -> "show'un"), matched by the tool against configured sources'
@@ -4495,6 +4513,15 @@ def _overnight_work_query_match(tokens: tuple[str, ...]) -> str | None:
     if _has_exact(tokens, "ne", "neler") and _has(tokens, "yap"):
         return "gece neler yaptın"
     return None
+
+
+#: home-stock-list: app.household.parse's four actions -> the router's four intents.
+_HOUSEHOLD_INTENTS: Final[dict[str, Intent]] = {
+    household_parse.ACTION_LEVEL: Intent.HOUSEHOLD_LEVEL,
+    household_parse.ACTION_ADD: Intent.HOUSEHOLD_LIST_ADD,
+    household_parse.ACTION_REMOVE: Intent.HOUSEHOLD_LIST_REMOVE,
+    household_parse.ACTION_READ: Intent.HOUSEHOLD_LIST_READ,
+}
 
 
 def _team_status_match(tokens: tuple[str, ...]) -> str | None:
@@ -9330,6 +9357,22 @@ def _resolve_intent_rules(
             scope=SCOPE_CONVERSATION,
             matched=calendar_cancel_matched,
             calendar_ref="current",
+            **base,
+        )
+
+    # 0c''''. home-stock-list: the house's stock and the shopping list. HERE - before the
+    #         operator's typing ("listeye süt YAZ" is not text for a window) and the artifact
+    #         factory's "liste" (a dataset). Every shape is anchored on exact words
+    #         (app.household.parse): a level needs a household item or a place ("evde"), so
+    #         "Toplantı bitti" and "Mesajını aldım" stay where they were.
+    if household := household_parse.parse_tokens(tokens):
+        return ResolvedIntent(
+            _HOUSEHOLD_INTENTS[household.action],
+            scope=SCOPE_CONVERSATION,
+            matched=household.matched,
+            household_item=household.item,
+            household_level=household.level,
+            household_quantity=household.quantity,
             **base,
         )
 

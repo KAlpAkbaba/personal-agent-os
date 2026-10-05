@@ -73,6 +73,8 @@ from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
 from app.goals.routes import router as goals_router
 from app.health import failing_checks, run_health_checks
+from app.household.reminders import ReminderLoop as HouseholdReminderLoop
+from app.household.routes import router as household_router
 from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -701,6 +703,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         interval_s=settings.watch_runner_interval_s,
     )
     watch_purge = watch_runner_module.PurgeLoop(lambda: app.state.artifacts.session())
+    # home-stock-list: the "bitmeden" reminder - once an hour, an item whose learnt rhythm says
+    # it runs out in a few days is one short notification per cycle.
+    household_reminders = HouseholdReminderLoop(lambda: app.state.artifacts.session())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -748,6 +753,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await watch_purge.start()
         # Does nothing while ``watch_runner_enabled`` is off (the health check says skipped).
         await watch_runner.start()
+        await household_reminders.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -779,6 +785,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
+            await household_reminders.stop()
             await watch_runner.stop()
             await watch_purge.stop()
             await misheard_purge.stop()
@@ -840,6 +847,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.misheard_purge = misheard_purge
     app.state.watch_runner = watch_runner
     app.state.watch_purge = watch_purge
+    app.state.household_reminders = household_reminders
     app.state.experience_scheduler = experience_scheduler
     app.state.mail_poller = mail_poller
     app.state.calendar_syncer = calendar_syncer
@@ -1005,6 +1013,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(voice_misheard_router)
     # watch-engine: the owner's watches (GET/POST/DELETE /v1/watches).
     app.include_router(watch_router)
+    # home-stock-list: the house's stock and the shopping list (/v1/household).
+    app.include_router(household_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -1079,6 +1089,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # watch-engine: the runner ("skipped" while off) and the readings' 30-day purge.
         checks["watch_runner"] = watch_runner.health_check()
         checks["watch_purge"] = watch_purge.health_check()
+        # home-stock-list: the hourly reminder pass; advisory like the loops above.
+        checks["household_reminders"] = household_reminders.health_check()
         # B08 req 646/648/649/650: the safety net answers for itself. Both records have
         # been written for weeks and nothing read either of them; a backup nobody checks is
         # one you find out about on the day you need it.
