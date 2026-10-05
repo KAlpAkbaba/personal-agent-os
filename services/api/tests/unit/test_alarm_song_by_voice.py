@@ -493,3 +493,143 @@ def test_wiring_a_bare_digit_hour_after_yarin_is_a_clock():
         "Yarın 7'de beni Tarkan'ın Şımarık'ıyla uyandır.", now=NOW, timezone="Europe/Istanbul"
     )
     assert parsed.local_time == "07:00"
+
+
+# ---------------------------------------- the inspector's return of 2026-10-05 (RED first)
+
+
+def test_clearing_the_song_of_an_alarm_created_with_one_clears_it(session):
+    """Finding 1: a song set AT CREATION is cleared too - the column is the truth, the
+    creation-time media never stands in for a song the owner took away."""
+    alarm = _alarm(session, song={"url": ALARM_SONG, "title": "Şımarık"})
+    alarms_service.set_alarm_song(session, alarm.id, url=None)
+    alarm = alarms_service.require_alarm(session, alarm.id)
+    assert alarms_service.alarm_dict(alarm)["song"] is None
+    assert ALARM_SONG not in str(alarm.resolved_media_identity)
+
+
+def test_a_cleared_song_is_never_played(session, device):
+    alarms_service.set_wake_song(session, url=WAKE_SONG, title="Genel")
+    alarm = _alarm(session, song={"url": ALARM_SONG, "title": "Şımarık"})
+    alarms_service.set_alarm_song(session, alarm.id, url=None)
+    device.results["browser.media_play"] = _play_only()
+    _fire(session, device, alarm)
+    assert _played_urls(device) == [WAKE_SONG]
+
+
+def test_a_changed_song_leaves_no_trace_of_the_old_one(session, device):
+    new_song = "https://www.youtube.com/watch?v=GulpembeBM1"
+    alarms_service.set_wake_song(session, url=WAKE_SONG, title="Genel")
+    alarm = _alarm(session, song={"url": ALARM_SONG, "title": "Şımarık"})
+    alarms_service.set_alarm_song(session, alarm.id, url=new_song, title="Gülpembe")
+    assert alarms_service.alarm_dict(alarm)["song"]["url"] == new_song
+    device.results["browser.media_play"] = _play_only()
+    _fire(session, device, alarm)
+    assert _played_urls(device) == [new_song, WAKE_SONG]
+
+
+class _DedupingDevice(FakeDeviceAction):
+    """The real ``DeviceCommandClient``: a repeated idempotency key returns the OLD command's
+    result and nothing new reaches the device."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.seen: dict[str, object] = {}
+
+    def run(self, *, capability, payload, idempotency_key, timeout_s):
+        if idempotency_key in self.seen:
+            return self.seen[idempotency_key]
+        result = super().run(
+            capability=capability,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            timeout_s=timeout_s,
+        )
+        self.seen[idempotency_key] = result
+        return result
+
+
+def test_every_fallback_song_is_its_own_command(session):
+    """Finding 2: own song C, the live global B, the stored copy A - three keys, three plays."""
+    device = _DedupingDevice(results=happy_device_results())
+    stored_copy = "https://www.youtube.com/watch?v=OldWakeSong"
+    alarms_service.set_wake_song(session, url=stored_copy, title="Eski")
+    alarm = _alarm(session)
+    alarms_service.set_wake_song(session, url=WAKE_SONG, title="Yeni")
+    alarm.song = {"url": ALARM_SONG, "title": "Şımarık"}
+    session.commit()
+    device.results["browser.media_play"] = _play_only(stored_copy)
+    result = _fire(session, device, alarm)
+    assert _played_urls(device) == [ALARM_SONG, WAKE_SONG, stored_copy]
+    assert result.media_kind == PLAYED_KIND_YOUTUBE
+    assert alarm.detail_json["media_played"]["url"] == stored_copy
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Yarın 7:30'da beni seçtiğim müzikle uyandır.",
+        "Yarın 7:30'da beni bu şarkıyla uyandır.",
+        "Yarın 7:30'da beni o şarkıyla uyandır.",
+        "Yarın 7:30'da beni şu şarkıyla uyandır.",
+        "Yarın 7:30'da beni bir şarkıyla uyandır.",
+        "Yarın 7:30'da beni aynı şarkıyla uyandır.",
+        "Yarın 7:30'da beni her zamanki şarkıyla uyandır.",
+    ],
+)
+def test_a_pointing_or_generic_word_is_never_a_title(text):
+    """Finding 3: these name no song; nothing is searched, the approved wake song plays."""
+    resolved = resolve_intent(text)
+    assert resolved.intent is Intent.ALARM_CREATE
+    assert resolved.media_query is None
+
+
+def test_the_models_pointing_title_is_not_searched_either(session, device):
+    ctx = _ctx(session, device, intent="alarm_create", media_query=None)
+    assert tools_alarms.song_for_create(ctx, {"media": {"title": "seçtiğim müzik"}}) is None
+    assert device.count("browser.search") == 0
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Uyandırma şarkım ne olsun?", "Alarmımın şarkısını Şımarık mı yap dedim?"],
+)
+def test_a_question_about_the_wake_song_never_changes_it(text):
+    assert alarm_song_set_match(text) is None
+
+
+def _create_from(session, device, text):
+    from app.voice.realtime_sessions.tools_ambient import alarm_create
+
+    resolved = resolve_intent(text)
+    ctx = _ctx(session, device, intent=resolved.intent.value, media_query=resolved.media_query)
+    ctx.live["wake_sequence"] = None
+    return resolved, alarm_create(ctx, {"when_spoken": text})
+
+
+@pytest.mark.parametrize(
+    ("text", "clock", "song"),
+    [
+        ("Yarın sabah yediyi çeyrek geçe Bella Ciao ile uyandır.", "07:15", "Bella Ciao"),
+        ("Yarın 7'de beni Duman'ın Bu Akşam'ıyla uyandır.", "07:00", "Duman'ın Bu Akşam"),
+        ("Yarın 6'da beni On Dakika ile uyandır.", "06:00", "On Dakika"),
+    ],
+)
+def test_the_time_is_read_from_what_the_song_leaves(session, device, text, clock, song):
+    """Finding 4: the title comes out first, the clock is read from the rest."""
+    resolved, out = _create_from(session, device, text)
+    assert resolved.media_query == song
+    assert out["alarm"]["local_time"] == clock, out["speech"]
+    assert out["alarm"]["recurrence"] in (None, {}) or not out["alarm"]["recurrence"].get(
+        "weekdays"
+    )
+
+
+def test_a_song_that_is_not_found_is_said_at_once(session, device):
+    """Finding 5: the alarm is still set, and the sentence says the song was not found."""
+    device.results["browser.search"] = ok(results=[{"url": "https://example.com/x"}])
+    _, out = _create_from(session, device, "Yarın 7'de beni Tarkan'ın Şımarık'ıyla uyandır.")
+    assert out["execution_status"] == "executed"
+    assert out["alarm"]["local_time"] == "07:00"
+    assert "bulamadım" in out["speech"]
+    assert out["alarm"]["song"] is None
