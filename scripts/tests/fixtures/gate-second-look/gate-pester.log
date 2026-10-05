@@ -1,0 +1,37 @@
+
+=== Required files ===
+
+=== Agent team cycle (PS5.1 + git, no model) ===
+TEST SIRASI: ONAY ts-4d5e6f708192 (heavy) after 0 s
+
+the decisions
+  PASS  an approved task is picked first
+  FAIL  a worker run that ends with no commit is returned
+        expected: <returned>
+          actual  : <running>
+  PASS  the lock is released when the cycle ends
+FAILED: team-cycle.tests.ps1 exited with code 1
+
+=== Agent team board client (PS5.1, fake board, no model) ===
+Describing the board client
+  [+] reads the board 31ms
+  [-] posts a note with a reply id 12ms
+    Expected 'n-1', but got $null.
+  [+] refuses a token-shaped note 8ms
+FAILED: team-board.tests.ps1 exited with code 1
+
+=== Agent team test queue (PS5.1, real wrapper processes, temp stores) ===
+  PASS  ONAY for a free kind
+
+=== Quality gate summary ===
+
+Step                                                                  Result Seconds WaitSeconds
+----                                                                  ------ ------- -----------
+Required files                                                        PASS       0.1           0
+Agent team cycle (PS5.1 + git, no model)                              FAIL     312.0           0
+Agent team board client (PS5.1, fake board, no model)                 FAIL      22.4           0
+Agent team test queue (PS5.1, real wrapper processes, temp stores)    PASS      61.0           0
+
+
+Test queue wait, total: 0 s
+QUALITY GATE: FAIL
