@@ -29,7 +29,8 @@ APP_TOKEN = "aAppTokenSecretValue000000000x"
 USER_KEY = "uUserKeySecretValue0000000000y"
 RECEIPT = "rReceiptId00000000000000000001"
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
-LINK = "https://home-pc.tail1234.ts.net/inbox"
+LINK = "https://home-pc.tail1234.ts.net/notifications"
+NOTE_ID = "3f2b8c1e-4d5a-4b6c-8e9f-0a1b2c3d4e5f"
 
 
 class FakeServer:
@@ -418,3 +419,42 @@ def test_a_category_and_a_tailnet_link_pass(category: str) -> None:
 def test_only_a_tailnet_https_link_passes(link: str) -> None:
     with pytest.raises(text.TextRefused):
         text.compose("ev", link)
+
+
+@pytest.mark.parametrize(
+    "link",
+    [LINK, f"https://home-pc.tail1234.ts.net/notifications/{NOTE_ID}"],
+)
+def test_the_inbox_and_one_opaque_notification_id_pass(link: str) -> None:
+    assert text.link_refusal(link) is None
+
+
+# The link leaves the country with the body (Pushover, US): a name, an amount, an e-mail or a
+# phone number must not ride out in its path, query or fragment either (inspector, 2026-10-05).
+@pytest.mark.parametrize(
+    ("link", "reason"),
+    [
+        (
+            "https://pc.tail1.ts.net/notifications?name=Ahmet%20Yilmaz&tutar=1.250%20TL",
+            "link_has_query",
+        ),
+        ("https://pc.tail1.ts.net/inbox?name=Ahmet%20Yilmaz&mail=a@b.com", "link_has_query"),
+        ("https://pc.tail1.ts.net/notifications?", "link_has_query"),
+        ("https://pc.tail1.ts.net#a@b.com", "link_has_fragment"),
+        ("https://pc.tail1.ts.net/notifications#", "link_has_fragment"),
+        ("https://pc.tail1.ts.net/Ahmet-Yilmaz/+905321234567", "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/notifications/1.250-TL", "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/notifications/a@b.com", "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/notifications/%41hmet", "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/notifications/" + NOTE_ID.upper(), "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/notifications/" + NOTE_ID + "/x", "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/inbox", "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/", "link_path_not_allowed"),
+        ("https://pc.tail1.ts.net/notifi\tcations", "link_not_plain"),
+        ("https://pc.tail1.ts.net/notifications;Ahmet", "link_path_not_allowed"),
+    ],
+)
+def test_a_link_carrying_anything_personal_is_refused(link: str, reason: str) -> None:
+    with pytest.raises(text.TextRefused) as refused:
+        text.compose("ev", link)
+    assert refused.value.reason == reason

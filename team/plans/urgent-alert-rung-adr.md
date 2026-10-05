@@ -32,7 +32,10 @@ etti). Twilio araması (jarvis-calls-owner) ayrı ve daha pahalı yol: deneme he
 5. **Metin kuralı** (`app.urgent_alert.text`): başlık sabit `JARVIS: önemli`; gövde kapalı listeden TEK sözcük
    (`Aktivra`, `ev`, `haber`, `sistem`); `url` = sahibin tailnet'teki Cloud Core'unda o bildirimin bağlantısı (https,
    `*.ts.net` ya da yapılandırılmış kök). Ad, tutar (`1.250 TL`, `₺300`), e-posta, telefon, rakam, ikinci sözcük → ret,
-   gönderim yok. Neden: Pushover ABD'de işler (KVKK yurt dışı aktarım); içerik zaten Cloud Core gelen kutusunda.
+   gönderim yok. Bağlantı da yurt dışına gider, kendi sözcüğü olmaz: yol yalnız `/notifications` ya da
+   `/notifications/<küçük harf uuid>`; sorgu (`?`, boş olsa da), parça (`#`), yüzde kaçışı, `;`, boşluk/denetim
+   karakteri → ret (`link_has_query`, `link_has_fragment`, `link_path_not_allowed`, `link_not_plain`; denetleyici
+   bulgusu 2026-10-05). Neden: Pushover ABD'de işler (KVKK yurt dışı aktarım); içerik zaten Cloud Core gelen kutusunda.
 6. **Makbuz** (`poll_open_receipts`, saf): `acknowledged` → `alert.seen` (acknowledged_at); `expired` → `alert.unseen`;
    okunamayan makbuz açık kalır, 7 gün sonra `unseen` olarak kapanır (Pushover makbuzu 1 hafta tutar). Sorgu en sık
    60 sn (API sınırı 5 sn); açık makbuz yoksa sıfır istek.
@@ -73,7 +76,7 @@ etti). Twilio araması (jarvis-calls-owner) ayrı ve daha pahalı yol: deneme he
   - `services/api/app/config.py`: `urgent_alert_pushover_app_token: SecretStr = SecretStr("")`, `urgent_alert_pushover_user_key: SecretStr = SecretStr("")`, `urgent_alert_poll_interval_s: float = 60.0`, `urgent_alert_link_base: str = ""` (tailnet https kökü).
   - `services/api/app/main.py`: `_build_alarm_rung(settings)` (iki anahtar doluysa), `default_rungs`'a geçir; lifespan'de makbuz döngüsü (`app/urgent_alert/loop.py`, 60 sn, açık makbuz yoksa istek yok); kapanışta durdur.
   - `services/api/app/urgent_alert/store_sql.py` + `models.py`: `SqlReceiptStore` (`ReceiptStore` Protocol'ü).
-  - `services/api/migrations/versions/<sıradaki>_urgent_alert_receipts.py`: `urgent_alert_receipts(id uuid pk, notification_id uuid fk notifications.id, receipt_id varchar(64) unique, sent_at, expires_at, closed_at null, outcome varchar(16) null [seen|unseen|cancelled], seen_at null, source varchar(16) [pushover|inbox])`, index `closed_at IS NULL`.
+  - `services/api/alembic/versions/<sıradaki>_urgent_alert_receipts.py` (alembic.ini `script_location=alembic`; `migrations/versions/` depoda YOK; son dosya bugün `20261003_0066_watches.py`): `urgent_alert_receipts(id uuid pk, notification_id uuid fk notifications.id, receipt_id varchar(64) unique, sent_at, expires_at, closed_at null, outcome varchar(16) null [seen|unseen|cancelled], seen_at null, source varchar(16) [pushover|inbox])`, index `closed_at IS NULL`.
   - `services/api/app/ledger/vocabulary.py`: `SUBSYSTEM_URGENT_ALERT = "urgent_alert"`, `EVENT_TYPE_ALERT_SENT = "alert.sent"`, `EVENT_TYPE_ALERT_SEEN = "alert.seen"`, `EVENT_TYPE_ALERT_UNSEEN = "alert.unseen"`, `EVENT_TYPE_ALERT_REFUSED = "alert.refused"` (metin bekçisi reddi); `source_ref = notification:<id>`.
   - `services/api/app/urgent_alert/routes.py`: `POST /v1/urgent-alert/test` (oturum + step-up değil, sahibin oturumu yeter; saatte en çok 3) → `urgent_alert.test` türünde önemli bildirim; `GET /v1/urgent-alert/status` → `{configured, open_receipts, last_seen_at}` (anahtar YOK).
   - `apps/web/app/settings/` (Onay Merkezi/ayarlar): "Önemli deneme bildirimi gönder" düğmesi + "bağlı / bağlı değil" + son "görüldü HH:MM"; Kokpit'te önemli bildirimin yanında "görüldü HH:MM" / "görülmedi".
@@ -100,8 +103,12 @@ etti). Twilio araması (jarvis-calls-owner) ayrı ve daha pahalı yol: deneme he
   (`CHANNEL_ALARM`). Varsayılan yüklem tek saf fonksiyon `marked_important(row)` = `data_json["important"] is True`;
   kategori `data_json["alert_category"]`. Bağlama kartı ya bu iki anahtarı politika kaynağından doldurur ya da kendi
   yüklemini kurucuya verir - iki yol birden değil.
-- Bağlantı kuralı yalnız `https` + `*.ts.net` + kullanıcı bilgisi yok + ≤512; "yapılandırılmış kök" (madde 5) bu kartta
-  YOK. Gerekirse bağlama kartı `text.link_refusal`'a bir izinli kök parametresi ekler.
+- Bağlantı kuralı: yazdırılabilir ASCII, ≤512, `https`, kullanıcı bilgisi yok, `*.ts.net`, sorgu ve parça yok, yol tam
+  olarak `/notifications` ya da `/notifications/<küçük harf uuid>`. Bağlama kartının `link_for`'u
+  `f"{urgent_alert_link_base}/notifications/{row.id}"` üretir (uuid `str()` küçük harf verir); web'de bugün yalnız
+  `apps/web/app/notifications/page.tsx` var - bağlama kartı `notifications/[id]` sayfasını ekler ya da `/notifications` verir. "Yapılandırılmış kök"
+  (madde 5) bu kartta YOK; `*.ts.net` her tailnet'i kabul eder - bağlama kartı `text.link_refusal`'a izinli kök
+  parametresi ekler ve `urgent_alert_link_base` ile tam kök eşlemesi yapar (kabul: `https://evil.ts.net/notifications` ret).
 - `text.refusal` sırası: uzunluk, tutar, e-posta, telefon, rakam, ikinci sözcük, kapalı liste - ret nedeni adıyla döner;
   log yalnız nedeni yazar, metni değil.
 - Makbuz kimliği `^[A-Za-z0-9]{1,64}$` değilse istek hiç yapılmaz (yol enjeksiyonu yok).

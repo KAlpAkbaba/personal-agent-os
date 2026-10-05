@@ -28,6 +28,14 @@ _EMAIL = re.compile(r"@")
 _PHONE = re.compile(r"\+?\d[\d\s().-]{6,}\d")
 _DIGIT = re.compile(r"\d")
 
+#: The link rides to the US with the body, so it carries no words of its own: the web inbox, or
+#: the inbox opened on ONE notification by its opaque lowercase uuid. No query, no fragment, no
+#: percent-escape, nothing a name, an amount, an e-mail or a phone number could hide in.
+_PLAIN = re.compile(r"[\x21-\x7e]+")
+_PATH = re.compile(
+    r"/notifications(?:/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?"
+)
+
 
 class TextRefused(ValueError):
     def __init__(self, reason: str) -> None:
@@ -57,6 +65,13 @@ def refusal(category: str) -> str | None:
 def link_refusal(link: str) -> str | None:
     if len(link) > MAX_URL:
         return "link_too_long"
+    # urlsplit silently drops tabs and newlines; the raw string is what Pushover receives.
+    if not _PLAIN.fullmatch(link):
+        return "link_not_plain"
+    if "?" in link:
+        return "link_has_query"
+    if "#" in link:
+        return "link_has_fragment"
     parts = urlsplit(link)
     if parts.scheme != "https":
         return "link_not_https"
@@ -64,6 +79,8 @@ def link_refusal(link: str) -> str | None:
         return "link_has_userinfo"
     if not (parts.hostname or "").endswith(TAILNET_SUFFIX):
         return "link_not_tailnet"
+    if not _PATH.fullmatch(parts.path):
+        return "link_path_not_allowed"
     return None
 
 
