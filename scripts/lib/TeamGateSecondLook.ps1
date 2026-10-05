@@ -40,28 +40,28 @@ $script:GateStepPackages = @{
 # order, 'sira' = the suite's collection order (pytest only), 'bolme' = earlier files + the test.
 $script:GateRerunTable = @{
     "api-unit"        = @{ exe = "uv"; cwd = "services\api"; db = $false; kinds = @("heavy"); pytest = $true
-        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{id}")
-        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{dosya}")
+        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{id}")
+        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{dosya}")
         sira = @("run", "pytest", "--collect-only", "-q", "tests/unit")
-        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{dosyalar}", "{id}") }
+        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{dosyalar}", "{id}") }
     "api-integration" = @{ exe = "uv"; cwd = "services\api"; db = $true; kinds = @("database", "heavy"); pytest = $true
-        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-m", "integration", "{id}")
-        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-m", "integration", "{dosya}")
+        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "-m", "integration", "{id}")
+        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "-m", "integration", "{dosya}")
         sira = @("run", "pytest", "--collect-only", "-q", "-m", "integration", "tests/integration")
-        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-m", "integration", "{dosyalar}", "{id}") }
+        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "-m", "integration", "{dosyalar}", "{id}") }
     "supervisor"      = @{ exe = "uv"; cwd = "services\recovery-supervisor"; db = $false; kinds = @("heavy"); pytest = $true
-        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{id}")
-        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{dosya}")
+        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{id}")
+        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{dosya}")
         sira = @("run", "pytest", "--collect-only", "-q")
-        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{dosyalar}", "{id}") }
+        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{dosyalar}", "{id}") }
     "browser"         = @{ exe = "uv"; cwd = "services\browser"; db = $false; kinds = @("heavy"); pytest = $true
-        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{id}")
-        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{dosya}")
+        tek = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{id}")
+        dosya = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{dosya}")
         sira = @("run", "pytest", "--collect-only", "-q")
-        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "{dosyalar}", "{id}") }
+        bolme = @("run", "pytest", "-q", "-p", "no:cacheprovider", "-rfEp", "{dosyalar}", "{id}") }
     "web"             = @{ exe = "pnpm"; cwd = "apps\web"; db = $false; kinds = @("heavy"); pytest = $false
-        tek = @("exec", "vitest", "run", "{dosya}", "-t", "{ad}")
-        dosya = @("exec", "vitest", "run", "{dosya}")
+        tek = @("exec", "vitest", "run", "{dosya}", "-t", "{ad}", "--reporter=verbose")
+        dosya = @("exec", "vitest", "run", "{dosya}", "--reporter=verbose")
         sira = $null; bolme = $null }
     "ps-suite"        = @{ exe = "powershell"; cwd = ""; db = $false; kinds = @("heavy"); pytest = $false
         tek = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "{dosya}", "-Filter", "{ad}")
@@ -266,26 +266,23 @@ function Get-GateRerunCommand {
 function Get-GateRunOutcome {
     <# One run's word on one test: 'gecti', 'dustu' or 'hata' (no word: did not run, timed out,
        could not be read). Passing needs positive evidence - a test that was never selected is
-       not a pass. #>
+       not a pass, and neither is "4 passed, 1 skipped" with the target the skipped one: the
+       target's OWN pass line is required (pytest -rfEp "PASSED <id>[param]", vitest's verbose
+       tick line, the suites' PASS / [+] line). #>
     param([Parameter(Mandatory = $true)]$Test, [Parameter(Mandatory = $true)]$Run)
     if ([bool]$Run.TimedOut) { return "hata" }
-    $lines = @(([string]$Run.Output) -split "`r?`n")
+    $lines = @(([string]$Run.Output -replace ([string][char]0x1b + '\[[0-9;]*m'), '') -split "`r?`n")
     $failed = @(Get-GateTestIdsFromOutput -Lines $lines -Paket ([string]$Test.paket) | ForEach-Object { $_.id })
     $id = [string]$Test.id
     if ($failed -contains $id) { return "dustu" }
     $code = [int]$Run.ExitCode
-    switch ([string]$Test.paket) {
-        "ps-suite" {
-            $pat = '^\s*(?:PASS\s{2,}|\[\+\]\s+)' + [regex]::Escape($id) + '(?:\s+\d+(?:\.\d+)?m?s)?\s*$'
-            if (@($lines | Where-Object { $_ -match $pat }).Count -gt 0) { return "gecti" }
-        }
-        "web" {
-            if ($code -in @(0, 1) -and [string]$Run.Output -match '\b\d+ passed\b') { return "gecti" }
-        }
-        default {
-            if ($code -in @(0, 1) -and [string]$Run.Output -match '\b\d+ passed\b') { return "gecti" }
-        }
+    if ($code -notin @(0, 1)) { return "hata" }
+    $pat = switch ([string]$Test.paket) {
+        "ps-suite" { '^\s*(?:PASS\s{2,}|\[\+\]\s+)' + [regex]::Escape($id) + '(?:\s+\d+(?:\.\d+)?m?s)?\s*$' }
+        "web" { '^\s*[' + [char]0x2713 + [char]0x221A + ']\s+(?:\|[^|]+\|\s+)?' + [regex]::Escape($id) + '(?:\s+\d+(?:\.\d+)?m?s)?\s*$' }
+        default { '^\s*PASSED\s+' + [regex]::Escape($id) + '(?:\[.*\])?(?:\s|$)' }
     }
+    if (@($lines | Where-Object { $_ -match $pat }).Count -gt 0) { return "gecti" }
     return "hata"
 }
 

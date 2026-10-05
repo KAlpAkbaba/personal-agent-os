@@ -148,7 +148,7 @@ Test-Case "a log with a byte-order mark and CRLF lines reads the same" {
 Test-Case "the re-run table: one place per package, the id and file in the command, the database marked" {
     $t = [pscustomobject]@{ id = "tests/unit/test_a.py::test_b"; paket = "api-unit"; adim = "API unit tests"; dosya = "tests/unit/test_a.py"; ad = "" }
     $c = Get-GateRerunCommand -Test $t -Kind tek -Root "C:\gate"
-    Assert-True ((@($c.args) -join " ") -match [regex]::Escape("pytest -q -p no:cacheprovider tests/unit/test_a.py::test_b")) "the alone run names the test: $(@($c.args) -join ' ')"
+    Assert-True ((@($c.args) -join " ") -match [regex]::Escape("pytest -q -p no:cacheprovider -rfEp tests/unit/test_a.py::test_b")) "the alone run names the test and asks for the PASSED lines: $(@($c.args) -join ' ')"
     Assert-Equal "C:\gate\services\api" $c.cwd "pytest runs in services/api"
     Assert-True ($c.env.ContainsKey("PAGENTOS_TEST_SHARD") -and $null -eq $c.env["PAGENTOS_TEST_SHARD"]) "the shard variable is cleared, or the test may not be selected and look green"
     $f = Get-GateRerunCommand -Test $t -Kind dosya -Root "C:\gate"
@@ -169,6 +169,24 @@ Test-Case "the re-run table: a PowerShell suite with -Filter runs one case; one 
     $p = [pscustomobject]@{ id = "a case"; paket = "ps-suite"; adim = "x"; dosya = "scripts/tests/plain.tests.ps1"; ad = "" }
     Assert-True ($null -eq (Get-GateRerunCommand -Test $p -Kind tek -Root $d)) "no -Filter, no alone run"
     Assert-True ($null -ne (Get-GateRerunCommand -Test $p -Kind dosya -Root $d)) "the file run is still there"
+}
+
+Test-Case "a run's word: a pass needs the target's own PASSED line; a skipped target is no pass" {
+    $t = [pscustomobject]@{ id = "tests/unit/test_a.py::test_b"; paket = "api-unit"; adim = "x"; dosya = "tests/unit/test_a.py"; ad = "" }
+    $run = { param([int]$Code, [string]$Out) [pscustomobject]@{ ExitCode = $Code; Output = $Out; TimedOut = $false } }
+    Assert-Equal "hata" (Get-GateRunOutcome -Test $t -Run (& $run 0 "....s`n4 passed, 1 skipped in 0.4s")) "4 others passed, the target skipped: no word"
+    Assert-Equal "hata" (Get-GateRunOutcome -Test $t -Run (& $run 0 "PASSED tests/unit/test_a.py::test_c`nSKIPPED [1] tests/unit/test_a.py:9: no db`n1 passed, 1 skipped")) "a neighbour's PASSED line is not the target's"
+    Assert-Equal "gecti" (Get-GateRunOutcome -Test $t -Run (& $run 0 "PASSED tests/unit/test_a.py::test_b`n1 passed in 0.1s")) "the target's PASSED line"
+    Assert-Equal "gecti" (Get-GateRunOutcome -Test $t -Run (& $run 0 "PASSED tests/unit/test_a.py::test_b[x-1]`nPASSED tests/unit/test_a.py::test_b[x-2]`n2 passed")) "a parametrised target's PASSED lines"
+    Assert-Equal "hata" (Get-GateRunOutcome -Test $t -Run (& $run 0 "PASSED tests/unit/test_a.py::test_bb`n1 passed")) "a longer name is not the target"
+    Assert-Equal "dustu" (Get-GateRunOutcome -Test $t -Run (& $run 1 "PASSED tests/unit/test_a.py::test_b[x-1]`nFAILED tests/unit/test_a.py::test_b[x-2] - assert`n1 failed, 1 passed")) "one parameter failed: failed"
+    $w = [pscustomobject]@{ id = "tests/v.test.ts > s > n"; paket = "web"; adim = "x"; dosya = "tests/v.test.ts"; ad = "n" }
+    $tick = [string][char]0x2713
+    Assert-Equal "hata" (Get-GateRunOutcome -Test $w -Run (& $run 0 " $([char]0x2193) tests/v.test.ts > s > n [skipped]`n Tests  4 passed | 1 skipped (5)")) "vitest: the target skipped"
+    Assert-Equal "gecti" (Get-GateRunOutcome -Test $w -Run (& $run 0 " $tick tests/v.test.ts > s > n 12ms`n Tests  1 passed (1)")) "vitest: the target's tick line"
+    Assert-Equal "gecti" (Get-GateRunOutcome -Test $w -Run (& $run 0 " $([char]0x1b)[32m$tick$([char]0x1b)[39m tests/v.test.ts > s > n$([char]0x1b)[2m 12ms$([char]0x1b)[22m`n Tests  1 passed (1)")) "vitest: colours stripped"
+    $wv = Get-GateRerunCommand -Test $w -Kind dosya -Root "C:\gate"
+    Assert-True ((@($wv.args) -join " ") -match '--reporter=verbose') "vitest prints each test's line: $(@($wv.args) -join ' ')"
 }
 
 # ============================================================================ the classifier
@@ -301,32 +319,41 @@ Write-Host ""
 Write-Host "the script: end to end with a fake runner"
 
 function New-FakeRunner {
-    <# The runner the script calls instead of starting a process. Records every command. #>
+    <# The runner the script calls instead of starting a process. Records every command.
+       -Collect: the suite's collection order - 'normal' (16 files before the red ones), 'first'
+       (the logging test's file first: no earlier file) or 'none' (the collection said nothing).
+       -SkipTarget: the logging test is skipped in every run while its neighbours pass. #>
+    param([string]$Collect = "normal", [switch]$SkipTarget)
     $state = @{ Calls = (New-Object System.Collections.ArrayList); Seen = @{} }
     $script:FakeCalls = $state.Calls
+    $logId = "tests/unit/test_logging_context.py::test_task_id_defaults_to_none_in_logs"
     return {
         param($Command)
         [void]$state.Calls.Add($Command)
         $joined = @($Command.args) -join " "
         $onMain = ([string]$Command.cwd) -like "*main-tree*"
         if ($joined -match '--collect-only') {
+            if ($Collect -eq "none") { return [pscustomobject]@{ ExitCode = 2; Output = "ERROR: usage error`n"; TimedOut = $false } }
             $lines = @(1..16 | ForEach-Object { "tests/unit/test_c{0:D2}.py::test_one" -f $_ })
-            $lines += "tests/unit/test_logging_context.py::test_task_id_defaults_to_none_in_logs"
+            if ($Collect -eq "first") { $lines = @($logId) + $lines } else { $lines += $logId }
             $lines += "tests/unit/test_ledger_explain.py::test_ledger_explain_over_real_runs"
             $lines += "tests/unit/test_voice_routes.py::test_route_matches"
             return [pscustomobject]@{ ExitCode = 0; Output = (($lines + "", "19 tests collected in 1.20s") -join "`n"); TimedOut = $false }
         }
         if ($joined -match 'test_logging_context') {
-            if ($joined -match 'test_c07') {
-                return [pscustomobject]@{ ExitCode = 1; Output = "FAILED tests/unit/test_logging_context.py::test_task_id_defaults_to_none_in_logs - AssertionError`n1 failed, 8 passed in 1.0s"; TimedOut = $false }
+            if ($SkipTarget) {
+                return [pscustomobject]@{ ExitCode = 0; Output = "PASSED tests/unit/test_logging_context.py::test_other`nSKIPPED [1] tests/unit/test_logging_context.py:12: no clock`n4 passed, 1 skipped in 0.4s"; TimedOut = $false }
             }
-            return [pscustomobject]@{ ExitCode = 0; Output = "1 passed in 0.3s"; TimedOut = $false }
+            if ($joined -match 'test_c07') {
+                return [pscustomobject]@{ ExitCode = 1; Output = "FAILED $logId - AssertionError`n1 failed, 8 passed in 1.0s"; TimedOut = $false }
+            }
+            return [pscustomobject]@{ ExitCode = 0; Output = "PASSED $logId`n1 passed in 0.3s"; TimedOut = $false }
         }
         if ($joined -match 'test_voice_routes') {
             $key = "$onMain|" + ($joined -match '::')
             if (-not $state.Seen.ContainsKey($key)) { $state.Seen[$key] = 0 }
             $state.Seen[$key]++
-            if ($state.Seen[$key] -le 2) { return [pscustomobject]@{ ExitCode = 0; Output = "3 passed in 0.3s"; TimedOut = $false } }
+            if ($state.Seen[$key] -le 2) { return [pscustomobject]@{ ExitCode = 0; Output = "PASSED tests/unit/test_voice_routes.py::test_route_matches[misheard-1]`nPASSED tests/unit/test_voice_routes.py::test_route_matches[misheard-2]`n3 passed in 0.3s"; TimedOut = $false } }
             return [pscustomobject]@{ ExitCode = 1; Output = "FAILED tests/unit/test_voice_routes.py::test_route_matches[misheard-2] - assert`n1 failed, 2 passed"; TimedOut = $false }
         }
         if ($joined -match 'test_ledger_explain') {
@@ -398,6 +425,46 @@ Test-Case "test-slot BEKLE: no run, 'yarim'" {
     Assert-True ([string]$j.ozet -match "BEKLE") "the summary names the queue's answer: $($j.ozet)"
     foreach ($t in @($j.testler)) { Assert-Equal "yarim" $t.sinif "no class for $($t.id)" }
     Assert-Equal 0 @($script:FakeCalls).Count "never run outside the queue"
+    . (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")
+    $left = @(Get-TestSlotEntries -Store $store | Where-Object { $_.task -eq "gate-second-look" })
+    Assert-Equal 0 @($left).Count "the place in line is given back: $(@($left | ForEach-Object { $_.ticket + ' ' + $_.state }) -join ', ')"
+}
+
+function New-LoggingLog {
+    <# A gate log with one red api-unit test: the logging one. #>
+    param([string]$Dir)
+    $log = Join-Path $Dir "gate-5.log"
+    $text = "=== API unit tests ===`nFAILED tests/unit/test_logging_context.py::test_task_id_defaults_to_none_in_logs - AssertionError`n1 failed, 99 passed`nFAILED: pytest exited with code 1`n`n=== Quality gate summary ===`nQUALITY GATE: FAIL`n"
+    [System.IO.File]::WriteAllText($log, $text)
+    return $log
+}
+
+Test-Case "siraya_bagli with its file first in the suite: no earlier file, the JSON still written, 'bulunamadı'" {
+    $d = New-CaseDir; $out = Join-Path $d "o.json"
+    & $secondLook -LogPath (New-LoggingLog $d) -Worktree $repoRoot -OutFile $out -Invoke (New-FakeRunner -Collect first) -TestSlotStore (New-FreeStore) | Out-Null
+    Assert-Equal 0 $LASTEXITCODE "exit 0: the JSON was written"
+    Assert-True (Test-Path -LiteralPath $out) "the JSON is there"
+    $j = Get-Content -LiteralPath $out -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-Equal "siraya_bagli" $j.testler[0].sinif "green alone and in its file"
+    Assert-True ([string]$j.testler[0].kirleten -match "^bulunamad$([char]0x0131)") "no earlier file, no polluter: $($j.testler[0].kirleten)"
+}
+
+Test-Case "siraya_bagli whose file the collection does not name: the JSON still written, no bisection" {
+    $d = New-CaseDir; $out = Join-Path $d "o.json"
+    & $secondLook -LogPath (New-LoggingLog $d) -Worktree $repoRoot -OutFile $out -Invoke (New-FakeRunner -Collect none) -TestSlotStore (New-FreeStore) | Out-Null
+    Assert-Equal 0 $LASTEXITCODE "exit 0: the JSON was written"
+    $j = Get-Content -LiteralPath $out -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-Equal "siraya_bagli" $j.testler[0].sinif "the class stands"
+    Assert-True ([string]$j.testler[0].kirleten -match "^bulunamad$([char]0x0131)") "named as not found: $($j.testler[0].kirleten)"
+    Assert-Equal 0 @($script:FakeCalls | Where-Object { (@($_.args) -join " ") -match 'test_c\d\d' }).Count "no bisection run without the order"
+}
+
+Test-Case "a target skipped in every re-run (neighbours pass) is not kararsiz: no counts, yarim" {
+    $d = New-CaseDir; $out = Join-Path $d "o.json"
+    $j = Invoke-SecondLook @{ LogPath = (New-LoggingLog $d); Worktree = $repoRoot; OutFile = $out; Invoke = (New-FakeRunner -SkipTarget); TestSlotStore = (New-FreeStore) }
+    Assert-Equal "yarim" $j.testler[0].sinif "a skip says nothing: $($j.testler[0].sebep)"
+    Assert-Equal 0 $j.testler[0].sayilar.dosya.gecti "no pass counted in the file runs"
+    Assert-Equal 5 $j.testler[0].sayilar.dosya.hata "five runs without a word"
 }
 
 Test-Case "a database test without the gate's own database: never run, 'yarim'" {

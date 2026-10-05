@@ -18,8 +18,10 @@ BAĞLANMADI (bağlama ayrı kart, metni aşağıda):
   - `Get-GateRerunCommand`: TEK tablo (`$script:GateRerunTable`), paket -> `tek` / `dosya` / `sira` / `bolme` komutları,
     `cwd`, `db`, test-slot türleri. Her alt süreçten `PAGENTOS_TEST_SHARD` SİLİNİR (`services/api/tests/conftest.py`
     bu değişkenle takımı böler; seçilmeyen test "geçti" sanılırdı).
-  - `Get-GateRunOutcome`: bir koşunun sözü `gecti | dustu | hata`. Geçmek OLUMLU kanıt ister (`N passed`, PS'de
-    `PASS  <vaka>`); seçilmeyen/zaman aşan/okunamayan koşu `hata`dır, asla `gecti` değil.
+  - `Get-GateRunOutcome`: bir koşunun sözü `gecti | dustu | hata`. Geçmek OLUMLU kanıt ister: hedefin KENDİ satırı
+    (pytest `-rfEp` ile `PASSED <id>[param]`, vitest `--reporter=verbose` tik satırı, PS'de `PASS  <vaka>` / `[+]`).
+    "4 passed, 1 skipped" ve atlanan hedef -> `hata` (kararsız sayılmaz). Seçilmeyen/zaman aşan/okunamayan koşu
+    `hata`dır, asla `gecti` değil.
   - `Get-GateRedClass` (SAF): sayılar -> `gercek | kararsiz | siraya_bagli | yarim`. Başka değer yok, `yesil` yok.
   - `Find-GatePolluter -Candidates -Target -Invoke [-Deadline]`: ikiye bölme. 16 dosya: 1 doğrulama + 4 bölme = 5 koşu.
 - `scripts/team/gate-second-look.ps1 -LogPath -Worktree [-MainWorktree] [-BudgetMinutes 20] -OutFile [-DatabaseUrl]
@@ -43,7 +45,9 @@ Girdi: `tek`, `dosya`, `main` = geçen/5; bir sayı yalnız 5 koşunun hepsi sö
   `siraya_bagli` verilmez; o paket yalnız dosya sırasıyla `gercek`/`kararsiz` alır.
 - Kirleten alanı: `bulundu` -> dosya yolu; `bulunamadı` (bütün önceki dosyalarla düşmedi); bütçe bölmenin ortasında
   biterse `yarım: aday aralığı N dosya` (daraltılmış aralık da işe yarar). Bölme, kirletenin TEK dosya olduğunu varsayar;
-  iki dosyanın birlikte kirlettiği durumda yanlış yarıyı seçebilir — sonuç yine "aday", karar değil.
+  iki dosyanın birlikte kirlettiği durumda yanlış yarıyı seçebilir — sonuç yine "aday", karar değil. Testin dosyası
+  toplamada ilkse (önceki dosya yok) ya da toplama onu hiç adlandırmadıysa bölme yapılmaz, kirleten `bulunamadı (…)`;
+  bir testteki beklenmedik hata yalnız o testi `yarim` yapar, JSON her durumda yazılır.
 
 ## Neden yeniden koşup yeşil saymıyoruz
 
@@ -65,7 +69,8 @@ veritabanı kuralını bilmez. Algoritması (önceki dosyaları yarıya bölmek)
 - Bütçe 20 dk (varsayılan); bitince kalan testler `yarim`, özet "ikinci bakış yarım kaldı (…)". Koşu süreç ağacıyla
   (`taskkill /T /F`) kalan bütçede kesilir.
 - Test sırası: koşudan önce `test-slot.ps1 ask -Kind heavy[,database] -Task gate-second-look -Role gate`; ONAY ->
-  `Start-TestSlotRun -HolderPid $PID`, sonda `Complete-TestSlotRun`. BEKLE (çıkış 3) -> `yarim`. Kuyruk bozuk
+  `Start-TestSlotRun -HolderPid $PID`, sonda `Complete-TestSlotRun`. BEKLE (çıkış 3) -> `yarim` ve `ask`'ın bıraktığı
+  bekleyen kayıt `Remove-TestSlotTicket` ile geri verilir (ikinci bakış beklemez; sırayı tutmaz). Kuyruk bozuk
   (çıkış 5 ya da başka) -> `yarim`: bu, kapının "kuyruk nezakettir, bozuk kuyruk adımı durdurmaz" kuralından BİLEREK
   ayrılır — kart "asla sırasız koşmaz" diyor ve ikinci bakış kapı değil, ertelenebilir bir teşhis.
 - Veritabanı: `db=true` paket (API integration) yalnız `-DatabaseUrl` ile koşar (alt sürece `PAGENTOS_DATABASE_URL`).

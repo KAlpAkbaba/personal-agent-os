@@ -170,6 +170,7 @@ $toRun = @($runnable | Where-Object { $null -eq $_.Rec.sinif })
 
 # ---------------------------------------------------------------------- the queue and the runs
 $ticket = $null
+$looked = $false
 $store = if ($TestSlotStore) { $TestSlotStore } else { Get-TestSlotDefaultStore }
 try {
     if (@($toRun).Count -gt 0 -and $BudgetMinutes -eq 0) { $halfReason = "bütçe 0 dakika" }
@@ -188,7 +189,15 @@ try {
             $ticket = $Matches[1]
             [void](Start-TestSlotRun -Store $store -Ticket $ticket -HolderPid $PID)
         }
-        elseif ($ask.ExitCode -eq 3) { $halfReason = "test sırası BEKLE ($answer)" }
+        elseif ($ask.ExitCode -eq 3) {
+            $halfReason = "test sırası BEKLE ($answer)"
+            # The ask left a place in line; this look does not wait, so it gives the place back
+            # (the BEKLE line carries no ticket: the entry is found by the ask's own task, role, kinds).
+            $key = (@(Resolve-TestSlotKinds -Kind @($kinds.ToArray())) -join ",")
+            foreach ($e in @(Get-TestSlotEntries -Store $store | Where-Object { $_.task -eq "gate-second-look" -and $_.role -eq "gate" -and $_.state -eq "waiting" -and (@($_.kinds) -join ",") -eq $key })) {
+                try { [void](Remove-TestSlotTicket -Store $store -Ticket ([string]$e.ticket)) } catch { }
+            }
+        }
         else { $halfReason = "test sırası çalışmadı (çıkış $($ask.ExitCode)); sırasız koşulmaz" }
     }
 
@@ -200,40 +209,54 @@ try {
             $rec.sinif = "yarim"; $rec.sebep = $halfReason
             continue
         }
-        $rec.sayilar.tek = Get-RunCounts -Test $t -Kind tek -Root $Worktree
-        if (-not $script:OutOfTime) { $rec.sayilar.dosya = Get-RunCounts -Test $t -Kind dosya -Root $Worktree }
-        if (-not $script:OutOfTime -and $MainWorktree) { $rec.sayilar.main = Get-RunCounts -Test $t -Kind tek -Root $MainWorktree }
-        $class = Get-GateRedClass -Alone (Get-Passes $rec.sayilar.tek) -InFile (Get-Passes $rec.sayilar.dosya) -OnMain (Get-Passes $rec.sayilar.main) -OverBudget $script:OutOfTime
-        $rec.sinif = $class.sinif; $rec.sebep = $class.sebep; $rec.main_de_de = [bool]$class.main_de_de
-        if ($class.sinif -eq "yarim" -and $script:OutOfTime) { $halfReason = "$BudgetMinutes dakikalık bütçe aşıldı" }
-        if ($class.sinif -eq "siraya_bagli" -and $class.yer -eq "ayni_dosya") { $rec.kirleten = "aynı dosyada" }
-        elseif ($class.sinif -eq "siraya_bagli") {
-            $probe = Get-GateRerunCommand -Test $t -Kind bolme -Root $Worktree
-            if ($null -eq $probe) { $rec.kirleten = "ikiye bölme bu pakette yok" }
-            else {
-                $all = @(Get-CollectedFiles -Test $t)
-                $at = [array]::IndexOf([string[]]$all, [string]$t.dosya)
-                $before = if ($at -gt 0) { @($all[0..($at - 1)]) } else { @() }
-                $bisect = {
-                    param($Files, $Target)
-                    $cmd = Get-GateRerunCommand -Test $t -Kind bolme -Root $Worktree -Files @($Files)
-                    $word = Invoke-OneRun -Test $t -Command $cmd
-                    if ($word -eq "dustu") { return $true }
-                    if ($word -eq "gecti") { return $false }
-                    return $null
-                }
-                $p = Find-GatePolluter -Candidates $before -Target ([string]$t.id) -Invoke $bisect -Deadline $deadline
-                $rec.kirleten = switch ($p.durum) {
-                    "bulundu" { [string]$p.kirleten }
-                    "yarim" { "yarım: aday aralığı $($p.aralik) dosya" }
-                    default { "bulunamadı" }
+        try {
+            $rec.sayilar.tek = Get-RunCounts -Test $t -Kind tek -Root $Worktree
+            if (-not $script:OutOfTime) { $rec.sayilar.dosya = Get-RunCounts -Test $t -Kind dosya -Root $Worktree }
+            if (-not $script:OutOfTime -and $MainWorktree) { $rec.sayilar.main = Get-RunCounts -Test $t -Kind tek -Root $MainWorktree }
+            $class = Get-GateRedClass -Alone (Get-Passes $rec.sayilar.tek) -InFile (Get-Passes $rec.sayilar.dosya) -OnMain (Get-Passes $rec.sayilar.main) -OverBudget $script:OutOfTime
+            $rec.sinif = $class.sinif; $rec.sebep = $class.sebep; $rec.main_de_de = [bool]$class.main_de_de
+            if ($class.sinif -eq "yarim" -and $script:OutOfTime) { $halfReason = "$BudgetMinutes dakikalık bütçe aşıldı" }
+            if ($class.sinif -eq "siraya_bagli" -and $class.yer -eq "ayni_dosya") { $rec.kirleten = "aynı dosyada" }
+            elseif ($class.sinif -eq "siraya_bagli") {
+                $probe = Get-GateRerunCommand -Test $t -Kind bolme -Root $Worktree
+                if ($null -eq $probe) { $rec.kirleten = "ikiye bölme bu pakette yok" }
+                else {
+                    $all = @(Get-CollectedFiles -Test $t)
+                    $at = [array]::IndexOf([string[]]$all, [string]$t.dosya)
+                    # Not `$before = if (...) {...} else { @() }`: an empty array out of an if is $null.
+                    $before = [string[]]@()
+                    if ($at -gt 0) { $before = [string[]]@($all[0..($at - 1)]) }
+                    $bisect = {
+                        param($Files, $Target)
+                        $cmd = Get-GateRerunCommand -Test $t -Kind bolme -Root $Worktree -Files @($Files)
+                        $word = Invoke-OneRun -Test $t -Command $cmd
+                        if ($word -eq "dustu") { return $true }
+                        if ($word -eq "gecti") { return $false }
+                        return $null
+                    }
+                    if ($at -lt 0) { $rec.kirleten = "bulunamadı (dosyası toplama sırasında yok; ikiye bölme yapılmadı)" }
+                    else {
+                        $p = Find-GatePolluter -Candidates $before -Target ([string]$t.id) -Invoke $bisect -Deadline $deadline
+                        $rec.kirleten = switch ($p.durum) {
+                            "bulundu" { [string]$p.kirleten }
+                            "yarim" { "yarım: aday aralığı $($p.aralik) dosya" }
+                            default { "bulunamadı" }
+                        }
+                    }
                 }
             }
         }
+        catch {
+            # One test's trouble never costs the record: the JSON is written for every test.
+            $why = "ikinci bakış hatası: " + $_.Exception.Message
+            if (-not $rec.sinif) { $rec.sinif = "yarim"; $rec.sebep = $why }
+            else { $rec.kirleten = "yarım: " + $why }
+        }
     }
+    $looked = $true
 }
 finally {
-    if ($ticket) { try { Complete-TestSlotRun -Store $store -Ticket $ticket -ExitCode "0" } catch { } }
+    if ($ticket) { try { Complete-TestSlotRun -Store $store -Ticket $ticket -ExitCode $(if ($looked) { "0" } else { "1" }) } catch { } }
 }
 
 # ---------------------------------------------------------------------- the record
