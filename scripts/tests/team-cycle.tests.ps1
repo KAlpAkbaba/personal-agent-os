@@ -2821,9 +2821,11 @@ try {
             Assert-Equal -Expected "" -Actual ([string]$call.team_url) -Because "no queue URL, no board address"
             Assert-True -Condition ([bool][string]$call.team_seat) -Because "the seat is set: $($call.role)"
         }
-        # the status the cycle writes carries no seat field (the status route refuses unknown run fields)
-        $state = Get-FakeApiState -Api $api
-        Assert-True -Condition ((ConvertTo-Json -InputObject $state.status -Depth 8 -Compress) -notmatch '"seat"') -Because "no seat in the status document"
+        # the status carries the board's seat only as a worker run's number (office-stable-seats):
+        # `seat: 1` for worker-1, nothing for the inspector - never the board's "worker-1" / "inspector"
+        $statuses = @((Get-FakeApiState -Api $api).statuses)
+        $line = (@($statuses | ForEach-Object { @($_.runs) | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.role)@$(if ($null -ne $_.PSObject.Properties['seat']) { $_.seat } else { '-' })" } }) -join ",")
+        Assert-True -Condition ($line -match "worker@1" -and $line -match "inspector@-" -and $line -notmatch "worker@worker|@inspector") -Because "a worker's number, no seat for the inspector: $line"
     }
 
     Test-Case "duty in API mode: the Proje Yöneticisi's decision is written to the store, through the cycle's own writes" {
@@ -3550,6 +3552,8 @@ try {
         $history = @($state.statuses)
         Assert-True -Condition (@($history | Where-Object { @($_.runs).Count -ge 1 }).Count -ge 2) -Because "the Ofis page still sees the runs in flight: $(@(Get-FakeApiRequests -Api $api) -join '; ')"
         Assert-Equal -Expected 0 -Actual @($history | Where-Object { $null -ne $_.PSObject.Properties["limits"] }).Count -Because "in the form that Cloud Core accepts"
+        # office-stable-seats: the legacy form is the one a Cloud Core without `seat` accepts too.
+        Assert-Equal -Expected 0 -Actual @($history | ForEach-Object { @($_.runs) } | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["seat"] }).Count -Because "and no run of it carries a seat: $($history | ConvertTo-Json -Depth 6 -Compress)"
         Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/status 422" }).Count -Because "the new form is tried once, not at every write"
         Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "model ve limit alanlarını henüz tanımıyor")).Count -Because "one line under the risks: $($run.Report)"
     }
@@ -3940,6 +3944,78 @@ try {
         Assert-Equal -Expected 1 -Actual @($ideas).Count -Because "the researcher's proposal is queued for the owner: $($run.Report)"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt")) -Because "and its finished run is recorded"
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    # ------------------------------------------------------------------ stable seats (office-stable-seats)
+    function Get-RunSeat {
+        <# A run entry's `seat`, or $null when it carries none. #>
+        param($Run)
+        $property = $Run.PSObject.Properties["seat"]
+        if ($null -eq $property) { return $null }
+        return $property.Value
+    }
+    function Get-SeatLine {
+        <# "task:role@seat" for every run of a status, sorted - what an assertion prints. #>
+        param($Status)
+        return ((@(@($Status.runs) | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.task):$($_.role)@$(Get-RunSeat -Run $_)" } | Sort-Object)) -join ",")
+    }
+
+    Test-Case "stable seats: four worker runs sit on seats 1-4; when the run on seat 1 ends the next status keeps the others on 2, 3 and 4; the next worker takes seat 1 (the lowest free); no seat is ever held twice" {
+        # 2026-10-02 15:50, the owner at the Ofis page: the run on Çalışan 1 ended and the
+        # page drew Çalışan 2's task on Çalışan 1 - the seats were the list's positions.
+        $tasks = @("task-one", "task-two", "task-three", "task-four", "task-five" | ForEach-Object { New-Task -Id $_ -Area @("src/$_") })
+        $api = Start-FakeApi -Tasks $tasks
+        $root = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=10,worker:task-two=25,worker:task-three=25,worker:task-four=25" } -Body {
+            $script:seatsRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 4 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        Assert-Equal -Expected 0 -Actual $script:seatsRun.ExitCode -Because ($script:seatsRun.StdOut + $script:seatsRun.StdErr)
+        $history = @((Get-FakeApiState -Api $api).statuses)
+        $all = (@($history | ForEach-Object { Get-SeatLine -Status $_ }) -join " | ")
+        $seatOf = @{}
+        foreach ($document in $history) {
+            $held = @()
+            foreach ($live in @(@($document.runs) | Where-Object { $null -ne $_ -and $_.role -eq "worker" })) {
+                $seat = Get-RunSeat -Run $live
+                Assert-True -Condition ($seat -is [int] -and $seat -ge 1) -Because "every worker run carries a seat, an integer from 1: $(Get-SeatLine -Status $document)"
+                $held += $seat
+                $task = [string]$live.task
+                if ($seatOf.ContainsKey($task)) { Assert-Equal -Expected $seatOf[$task] -Actual $seat -Because "a run keeps its seat for its whole life ($task): $all" }
+                else { $seatOf[$task] = $seat }
+            }
+            Assert-Equal -Expected @($held).Count -Actual @($held | Sort-Object -Unique).Count -Because "no two live worker runs on one seat: $(Get-SeatLine -Status $document)"
+        }
+        Assert-Equal -Expected "1/2/3/4/1" -Actual (@("task-one", "task-two", "task-three", "task-four", "task-five" | ForEach-Object { $seatOf[$_] }) -join "/") -Because "four starts take 1-4 (the fourth gets 4), the fifth the seat task-one left: $all"
+        $wasLive = $false; $next = $null
+        foreach ($document in $history) {
+            $line = Get-SeatLine -Status $document
+            if ($line -match "task-one:worker@") { $wasLive = $true; continue }
+            if ($wasLive) { $next = $line; break }
+        }
+        Assert-True -Condition ($null -ne $next -and $next -match "task-two:worker@2" -and $next -match "task-three:worker@3" -and $next -match "task-four:worker@4") -Because "the NEXT status after seat 1's run ended keeps the others where they sat: <$next> in $all"
+        $fifth = @($history | ForEach-Object { Get-SeatLine -Status $_ } | Where-Object { $_ -match "task-five:worker@" })[0]
+        Assert-True -Condition ($fifth -match "task-five:worker@1" -and $fifth -match "task-two:worker@2" -and $fifth -match "task-three:worker@3") -Because "a run started while 2 and 3 are held and 1 is free gets 1: $fifth"
+        Assert-Equal -Expected "merged,merged,merged,merged,merged" -Actual (@((Get-FakeApiState -Api $api).tasks | ForEach-Object { $_.state }) -join ",") -Because "and the work was done: $($script:seatsRun.Report)"
+    }
+
+    Test-Case "stable seats: a run of the lead, the researcher, the integrator or the inspector carries no seat; every worker run does" {
+        $study = New-Task -Id "task-study" -Area @("src/study")
+        $study | Add-Member -NotePropertyName "needs_integration" -NotePropertyValue $true
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"), $study)
+        $hooks = Get-PoolHooks -Root $root -Seconds "researcher:*=3"
+        Use-FakeHooks -Environment $hooks -Body { $script:rolesRun = Invoke-Cycle -Root $root -Scenario "split" -NoCaps -Research -MaxParallel 3 }
+        Assert-Equal -Expected 0 -Actual $script:rolesRun.ExitCode -Because ($script:rolesRun.StdOut + $script:rolesRun.StdErr)
+        $seen = @{}
+        foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $root "snapshots") -Filter *.json)) {
+            $document = Read-TeamJson -Path $file.FullName
+            foreach ($live in @(@($document.runs) | Where-Object { $null -ne $_ })) {
+                $seen[[string]$live.role] = $true
+                $seat = Get-RunSeat -Run $live
+                if ($live.role -eq "worker") { Assert-True -Condition ($seat -is [int] -and $seat -ge 1) -Because "a worker run has its seat ($($file.Name)): $(Get-SeatLine -Status $document)" }
+                else { Assert-True -Condition ($null -eq $live.PSObject.Properties["seat"]) -Because "a $($live.role) run carries no seat ($($file.Name)): $(Get-SeatLine -Status $document)" }
+            }
+        }
+        Assert-Equal -Expected "inspector,integrator,lead,researcher,worker" -Actual (@($seen.Keys | Sort-Object) -join ",") -Because "every role was seen in flight: $($script:rolesRun.Report)"
     }
 
     Test-Case "research is on by default: a cycle started with no research flag runs the researcher, even with an empty queue, and its idea waits for the owner" {

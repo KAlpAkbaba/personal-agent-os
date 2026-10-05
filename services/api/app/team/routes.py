@@ -360,6 +360,9 @@ class _Run(_Strict):
     started_at: _Stamp
     #: The model the run was started on. An older cycle sends none.
     model: _ModelId | None = None
+    #: A worker run's seat number, kept for the run's life (office-stable-seats). An older
+    #: cycle sends none; office_view seats a bad or duplicate one by the unseated rule.
+    seat: int | None = None
 
 
 class _UsageLimit(_Strict):

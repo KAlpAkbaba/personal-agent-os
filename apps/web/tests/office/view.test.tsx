@@ -10,7 +10,7 @@ vi.mock("../../app/lib/session", () => ({
 
 import { OFFICE_PATH, fetchOffice } from "../../app/core/office/officeApi";
 import OfficeView from "../../app/core/office/OfficeView";
-import { busyCycle, twoWorkers } from "./fixtures";
+import { busyCycle, queuedTask, twoWorkers } from "./fixtures";
 
 function render(over: Partial<Parameters<typeof OfficeView>[0]> = {}) {
   return renderToStaticMarkup(
@@ -178,5 +178,29 @@ describe("the office with every run on the page", () => {
     expect(seat).not.toContain("var(--office-shirt)");
     expect(html).toContain('data-panel-seat="auditor-2"');
     expect(html).toContain("<h2>auditor-2</h2>");
+  });
+});
+
+describe("a task that waits for its next run (office-stable-seats)", () => {
+  it("draws the queued seat seated, its title muted and sırada, with NO warning; the returned one keeps it", () => {
+    const html = render({ view: queuedTask() });
+    const queued = seatHtml(html, "worker-3");
+    const returned = seatHtml(html, "worker-4");
+    expect(queued).toContain('data-warning="false"');
+    expect(queued).not.toContain("office-warning");
+    expect(queued).toContain('aria-label="Çalışan 3, sırada"');
+    expect(queued).toMatch(/<span class="office-label"[^>]*color:var\(--muted\)[^>]*>Sıradaki iş<\/span>/);
+    expect(queued).toContain('<span class="office-badge-static" aria-hidden="true">sırada</span>');
+    expect(queued).not.toContain("office-typing");
+    expect(returned).toContain('data-warning="true"');
+    expect(returned).toContain("office-warning");
+    expect(returned).not.toContain("sırada");
+  });
+
+  it("renders an older server's answer (no queued field) as today: no sırada anywhere", () => {
+    const html = render();
+    expect(html).not.toContain("sırada");
+    expect(seatHtml(html, "worker-3")).toContain('aria-label="Çalışan 3, bekliyor"');
+    expect(html.match(/data-warning="true"/g)).toHaveLength(1);
   });
 });

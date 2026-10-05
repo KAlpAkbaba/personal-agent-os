@@ -139,6 +139,32 @@ export function twoWorkers(): OfficeView {
   };
 }
 
+/**
+ * office-stable-seats: worker-3 holds a task that waits for its next run (`queued`), beside
+ * worker-4's returned one - two states the page must draw differently.
+ */
+export function queuedTask(): OfficeView {
+  const view = twoWorkers();
+  view.agents = view.agents.map((agent) =>
+    agent.seat === "worker-3"
+      ? {
+          ...agent,
+          task_id: "t-next",
+          task_title: "Sıradaki iş",
+          since: "2026-10-01T09:00:00Z",
+          queued: true,
+        }
+      : agent,
+  );
+  view.tasks["t-next"] = {
+    ...view.tasks["t-two"],
+    title: "Sıradaki iş",
+    state: "returned",
+    goal: "sıradaki hedef",
+  };
+  return view;
+}
+
 const stamp = (minute: number) => `2026-10-01T10:${String(minute).padStart(2, "0")}:00Z`;
 
 function working(agent: OfficeAgent, titles: string[], firstMinute: number): OfficeAgent {

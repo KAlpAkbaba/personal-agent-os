@@ -45,6 +45,8 @@ export const STATE_TR: Record<SeatState, string> = {
   waiting: "bekliyor",
   returned: "döndü",
 };
+/** What a queued seat says where a working one says `çalışıyor`. */
+export const QUEUED_TR = "sırada";
 
 /**
  * The queue's task states (the state enum of team/queue.schema.json, read by the test from
@@ -139,7 +141,9 @@ export type DrawnSeat = {
   /** A seat id the page does not know: a desk with its id, nobody at it. */
   plain: boolean;
   warning: boolean;
-  /** The task title above the head; only a working seat has one. */
+  /** A waiting seat whose task waits for its next run: seated, no warning, `sırada`. */
+  queued: boolean;
+  /** The task title above the head: a working seat's, or (muted) a queued seat's. */
   label: string | null;
   /** The owner's approval count. */
   badge: string | null;
@@ -270,6 +274,7 @@ function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now
   const sentBack = agent.state === "returned" && !WORKER_SEAT.test(agent.seat);
   const state: SeatState = owner || sentBack ? "waiting" : agent.state;
   const runs = state === "working" ? severalRuns(agent).length : 0;
+  const queued = state === "waiting" && agent.queued === true;
   const lowered = owner ? null : loweredText(agent);
   return {
     seat: agent.seat,
@@ -277,14 +282,20 @@ function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now
     state,
     pose: POSE[state],
     plain: known === null,
+    // for what came back to a person only: a queued task needs nobody
     warning: state === "returned",
-    label: state === "working" ? (agent.task_title ?? agent.task_id) : null,
+    queued,
+    label: state === "working" || queued ? (agent.task_title ?? agent.task_id) : null,
     badge: owner ? String(ownerCount) : null,
     runCount: runs > 0 ? `×${runs}` : null,
     mood: moodOf({ ...agent, state }, task, now),
     lowered,
-    ariaLabel: `${name}, ${STATE_TR[state]}${runs > 0 ? `, ${runs} koşu` : ""}${lowered ? `, ${lowered}` : ""}`,
+    ariaLabel: `${name}, ${stateText(state, queued)}${runs > 0 ? `, ${runs} koşu` : ""}${lowered ? `, ${lowered}` : ""}`,
   };
+}
+
+function stateText(state: SeatState, queued: boolean): string {
+  return queued ? QUEUED_TR : STATE_TR[state];
 }
 
 /** The account folder as the owner says it: ".claude-hesap3" -> "Hesap 3", "varsayilan" -> "Ana hesap". */
@@ -342,7 +353,7 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
   return {
     seat: agent.seat,
     role: drawn.name,
-    stateText: STATE_TR[drawn.state],
+    stateText: stateText(drawn.state, drawn.queued),
     runs: (drawn.runCount === null ? [] : severalRuns(agent)).map((run) => ({
       title: run.task_title ?? run.task_id ?? "-",
       since: clock(run.since),
