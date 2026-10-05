@@ -266,9 +266,12 @@ function New-TeamDutyCard {
         No line starts with "- id:" - the run is about several tasks, not one.
     #>
     param(
-        [Parameter(Mandatory = $true)][object[]]$Tasks,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Tasks,
         [Parameter(Mandatory = $true)][string]$CycleId,
-        [Parameter(Mandatory = $true)][string]$DutyFile
+        [Parameter(Mandatory = $true)][string]$DutyFile,
+        # Runs in flight with no sign of life (TeamLiveness.ps1): run ("<task>/<role>"),
+        # idle_minutes, last_activity_at, restarts, child (a stuck tool process, or empty).
+        [object[]]$StuckRuns = @()
     )
     $flat = { param($Value) return ((([string]$Value) -replace '\s+', ' ').Trim()) }
     $lines = New-Object System.Collections.ArrayList
@@ -315,6 +318,29 @@ function New-TeamDutyCard {
                 $cycle = [string](Get-TeamProperty -InputObject $entry -Name "cycle" -Default "?")
                 [void]$lines.Add("    - $(if ($file) { $file } else { '(no file)' }) ($role, cycle $cycle)")
             }
+        }
+    }
+    $stuck = @($StuckRuns | Where-Object { $null -ne $_ })
+    if (@($stuck).Count -gt 0) {
+        [void]$lines.Add("")
+        [void]$lines.Add("## Takılmış olabilecek koşular")
+        [void]$lines.Add("")
+        [void]$lines.Add("These runs (or a tool process of theirs) showed no sign of life - no write in their temp folder or")
+        [void]$lines.Add("worktree, no output, no CPU - for the minutes named. Decide each in the same file, under `"stuck`": [ { `"run`":")
+        [void]$lines.Add("`"<task>/<role>`", `"action`": `"wait`" | `"restart`" | `"escalate`", `"reason`": `"<Türkçe, en çok 1200 karakter>`" } ].")
+        [void]$lines.Add("wait: it is working (say what you saw); restart: the cycle stops that run's process tree and starts it again")
+        [void]$lines.Add("from its worktree (its commits stay); escalate: the Danışman's. A run idle 90 minutes is restarted once")
+        [void]$lines.Add("without you, the second time escalated.")
+        foreach ($entry in $stuck) {
+            $run = [string](Get-TeamProperty -InputObject $entry -Name "run" -Default "?")
+            $idle = [int](Get-TeamProperty -InputObject $entry -Name "idle_minutes" -Default 0)
+            $line = "- ${run}: $idle dk iz yok"
+            $last = [string](Get-TeamProperty -InputObject $entry -Name "last_activity_at" -Default "")
+            if ($last) { $line += " (son iz $last)" }
+            $line += "; yeniden başlatma: $([int](Get-TeamProperty -InputObject $entry -Name 'restarts' -Default 0))"
+            $child = [string](Get-TeamProperty -InputObject $entry -Name "child" -Default "")
+            if ($child) { $line += "; takılı çocuk süreç: " + (& $flat $child) }
+            [void]$lines.Add($line)
         }
     }
     [void]$lines.Add("")
@@ -428,7 +454,32 @@ function Start-TeamRun {
         StdOut  = $stdout
         StdErr  = $stderr
         Started = [datetime]::UtcNow
+        # What it was started with: Restart-TeamRun starts the same run again from it.
+        Launch  = @{
+            FilePath = $FilePath; Arguments = $Arguments; Prompt = $Prompt; WorkingDirectory = $WorkingDirectory
+            TempDirectory = $TempDirectory; Environment = $Environment
+        }
     }
+}
+
+function Restart-TeamRun {
+    <#
+    .SYNOPSIS
+        Stop one run's process tree - that run's and no other's - and start it again, the same
+        card in the same worktree (pm-stuck-run-check: a run the Proje Yöneticisi, or the 90-
+        minute rule, judged stuck). Nothing in git is touched: what the run committed stays,
+        and the run starts again from it. Returns the new run, in Start-TeamRun's shape.
+    #>
+    param([Parameter(Mandatory = $true)]$Run)
+    $launchProperty = $Run.PSObject.Properties["Launch"]
+    if ($null -eq $launchProperty -or $null -eq $launchProperty.Value) { throw "the run carries no launch record: it cannot be started again" }
+    $launch = $launchProperty.Value
+    if (-not $Run.Process.HasExited) {
+        Stop-TeamProcessTree -ProcessId $Run.Process.Id
+        [void]$Run.Process.WaitForExit(15000)
+    }
+    try { $Run.Process.Dispose() } catch { }
+    return (Start-TeamRun @launch)
 }
 
 function Remove-TeamRunTemp {
