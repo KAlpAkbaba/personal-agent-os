@@ -49,9 +49,9 @@ bildirsin, o da Danışman'a bildirsin." Staging (scripts/staging/, 127.0.0.1:28
 
 ## Consequences / open
 
-- `.claude/agents/` could not be written by the worker run: the lead copies
-  `scripts/testteam/roles/*.md` there (test-round falls back to the roles folder until then; a
-  test asserts the copies are byte-identical when present).
+- `.claude/agents/test-lead.md` and `tester.md` are byte copies of `scripts/testteam/roles/*.md`
+  (installed by the second worker run; a test asserts the copies are byte-identical, and
+  test-round still falls back to the roles folder when the copy is missing).
 - The board refuses the seats `test-lead` / `tester-N` (`services/api/app/team/board.py`
   SEAT_PATTERN) and has no Danışman seat: until widened the notes are refused (UYARI, the round
   goes on) and the Test odası shows five waiting seats. `OfficeView.tsx` must mount `<TestRoom>`.
