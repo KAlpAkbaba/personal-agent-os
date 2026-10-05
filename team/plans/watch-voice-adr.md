@@ -139,3 +139,13 @@ index e5144ce9..bf79ad77 100644
      PronunciationEntry.__table__,
      Artifact.__table__,
 ```
+
+**Return 4 (cycle d20261005).** (a) The two deleting intents match the WHOLE sentence or
+nothing (`_watch_delete_shape`): `[lütfen] [bütün|tüm] nöbetleri|nöbetlerimi <verb> [lütfen]`,
+`nöbetlerin hepsini <verb>`, `[≤5 name words] nöbeti|nöbetini|nöbetimi <verb>`, verb a positive
+imperative (sil, kaldır, unut, iptal et). A verbal-noun object ("Nöbetleri silmeyi unut" =
+forget ABOUT deleting), a negation or an extra word is NONE. (b) A sentence with digits is
+read as written, strictly: a dot groups thousands in threes, a comma is the decimal mark
+("1.250,75" -> 1250.75); "1.25", "1.2.3" are not read, so the spoken condition is None and the
+model's argument stands (tools_watch: the said condition wins only when present). Spelled
+numbers keep the normaliser path.

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -2023,7 +2023,9 @@ def _routine_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
 # "nöbeti", "fiyat nöbetini" -> one) AND the last word a positive imperative ("sil",
 # "kaldır", "unut", "iptal et"). The negative imperative ("silme", "unutma"), the ablative
 # ("nöbetlerden fiyatı kaldır" - one of them) and every form not listed delete nothing: the
-# words go on to the other families and the model, which can ask.
+# words go on to the other families and the model, which can ask. Return 4: the WHOLE
+# sentence is the shape (:func:`_watch_delete_shape`) - "Nöbetleri silmeyi unut" ends in
+# "unut" and means "forget about deleting them".
 
 _WATCH_NOUN_STEMS: Final[tuple[str, ...]] = ("nöbet", "nobet")
 _WATCH_NOT_THE_NOUN: Final[tuple[str, ...]] = ("nöbetçi", "nobetci", "nöbetci", "nobetçi")
@@ -2213,16 +2215,58 @@ def _watch_tell(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
-def _watch_delete_verb(tokens: tuple[str, ...]) -> str | None:
-    """The positive imperative that ends the sentence ("sil", "kaldır", "unut", "iptal et"),
-    a trailing "lütfen" dropped; None for anything else ("silme", "sildin mi")."""
+_WATCH_LEADING_POLITE: Final[tuple[str, ...]] = ("lütfen", "lutfen")
+_WATCH_ALL_WORDS: Final[tuple[str, ...]] = ("bütün", "butun", "tüm", "tum")
+#: A watch's name is at most this many words before the noun ("Home Assistant nöbetini").
+_WATCH_LABEL_MAX_WORDS: Final = 5
+#: Words that never name a watch: a negation or a conjunction turns the sentence into
+#: something other than "remove the X watch".
+_WATCH_NOT_A_LABEL: Final[frozenset[str]] = frozenset(
+    {"değil", "degil", "sakın", "sakin", "asla", "hiç", "hic", "ama", "ve", "da", "de", "mi"}
+)
+
+
+def _watch_delete_shape(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """The deleting intent when the WHOLE sentence is one allowed shape (return 4 of cycle
+    d20261005), a leading/trailing "lütfen" aside:
+
+    - ``[bütün|tüm] nöbetleri|nöbetlerimi <verb>`` and ``nöbetlerin hepsini <verb>`` -> all;
+    - ``[name words] nöbeti|nöbetini|nöbetimi <verb>`` -> one;
+
+    with ``<verb>`` a positive imperative (sil, kaldır, unut, iptal et). Anything else - a
+    verbal-noun object ("silmeyi unut": forget ABOUT deleting), a negation, a time word, a
+    second clause - is None: it deletes nothing."""
     words = list(tokens)
+    while words and words[0] in _WATCH_LEADING_POLITE:
+        words.pop(0)
     while words and words[-1] in _WATCH_TRAILING_POLITE:
         words.pop()
-    if words and words[-1] in _WATCH_DELETE_LAST_FORMS:
-        return words[-1]
     if len(words) >= 2 and words[-2] == "iptal" and words[-1] in ("et", "edin"):
-        return "iptal et"
+        verb, words = "iptal et", words[:-2]
+    elif words and words[-1] in _WATCH_DELETE_LAST_FORMS:
+        verb, words = words[-1], words[:-1]
+    else:
+        return None
+    if not words:
+        return None
+    *before, noun = words
+    if noun == "hepsini" and before and before[-1] in _WATCH_PLURAL_GENITIVES:
+        *before, noun = before
+        if before == [] or (len(before) == 1 and before[0] in _WATCH_ALL_WORDS):
+            return Intent.WATCH_FORGET_ALL, f"{noun} {verb}"
+        return None
+    if noun in _WATCH_PLURAL_OBJECTS:
+        if before == [] or (len(before) == 1 and before[0] in _WATCH_ALL_WORDS):
+            return Intent.WATCH_FORGET_ALL, f"{noun} {verb}"
+        return None
+    if noun in _WATCH_SINGULAR_OBJECTS and len(before) <= _WATCH_LABEL_MAX_WORDS:
+        if all(
+            not word.startswith((*_WATCH_DELETE_STEMS, *_WATCH_NOUN_STEMS))
+            and word not in _WATCH_NOT_A_LABEL
+            and word not in _WATCH_ALL_WORDS
+            for word in before
+        ):
+            return Intent.WATCH_REMOVE, f"{noun} {verb}"
     return None
 
 
@@ -2242,14 +2286,8 @@ def _watch_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
         if _has(tokens, *_WATCH_DELETE_STEMS):
             # Off the allowlist the family still CLAIMS the sentence as NONE: falling
             # through, "Nöbeti kaldırma" read "kaldır" as the alarm's wake verb.
-            verb = _watch_delete_verb(tokens)
-            if verb is not None and (
-                noun in _WATCH_PLURAL_OBJECTS
-                or (noun in _WATCH_PLURAL_GENITIVES and "hepsini" in tokens)
-            ):
-                return Intent.WATCH_FORGET_ALL, f"{noun} {verb}"
-            if verb is not None and noun in _WATCH_SINGULAR_OBJECTS:
-                return Intent.WATCH_REMOVE, f"{noun} {verb}"
+            if shape := _watch_delete_shape(tokens):
+                return shape
             if _has(tokens, "unut") and not _has_exact(tokens, "unut", "unutun"):
                 return None  # "Nöbetleri unutma" is the memory family's REMEMBER
             return Intent.NONE, noun
@@ -2337,19 +2375,77 @@ def _watch_number_at(tokens: tuple[str, ...], end: int) -> int | float | None:
     return _watch_whole(words)
 
 
-def _watch_condition(tokens: tuple[str, ...]) -> str | None:
+#: The Turkish numeral as written: a dot groups thousands in threes, a comma is the decimal
+#: mark ("1.250,75", "20.000", "40,5", "1250"). "1.25" and "1.2.3" are no such numeral.
+_WATCH_NUMERAL_RE = re.compile(r"(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d+))?")
+_WATCH_NUMERAL_TOKEN_RE = re.compile(r"[\d.,]*\d[\d.,]*")
+
+
+def _watch_numeral(word: str) -> int | float | None:
+    """The written numeral strictly, None for any other shape."""
+    match = _WATCH_NUMERAL_RE.fullmatch(word)
+    if match is None:
+        return None
+    whole = int(match.group(1).replace(".", ""))
+    return float(f"{whole}.{match.group(2)}") if match.group(2) else whole
+
+
+def _watch_written_words(text: str) -> tuple[str, ...]:
+    """The sentence's words as WRITTEN (digits kept, casefolded, a suffix after an
+    apostrophe dropped: "20.000'in" -> "20.000"), fillers out."""
+    words = []
+    for raw in turkish_casefold(text or "").split():
+        word = raw.split("'")[0].split("’")[0].strip('.,!?;:"()')
+        if word and not is_filler(word):
+            words.append(word)
+    return tuple(words)
+
+
+def _watch_written_number_at(words: tuple[str, ...], end: int) -> int | float | None:
+    """The written numeral just before ``end`` (units skipped), with its multiplier words
+    ("20 bin", "1,5 milyon"); None unless it reads whole and strictly."""
+    n = end - 1
+    while n >= 0 and words[n].startswith(_WATCH_UNIT_STEMS):
+        n -= 1
+    multiplier = 1
+    while n >= 0 and words[n] in _WATCH_MULTIPLIERS:
+        multiplier *= _WATCH_MULTIPLIERS[words[n]]
+        n -= 1
+    if n < 0 or not _WATCH_NUMERAL_TOKEN_RE.fullmatch(words[n]):
+        return None
+    if n >= 1 and (words[n - 1] in _WATCH_DIGITS or words[n - 1] in _WATCH_MULTIPLIERS):
+        return None  # "yüz 20": words and digits mixed - not read for certain
+    number = _watch_numeral(words[n])
+    if number is None:
+        return None
+    number = number * multiplier
+    return int(number) if float(number).is_integer() else number
+
+
+def _watch_condition(tokens: tuple[str, ...], text: str | None = None) -> str | None:
     """``number_below:<n>`` / ``number_above:<n>`` when a number AND a direction were said;
     else None - "changed" is the tool's default and must never override the model's
-    ``contains:`` (return 3 of cycle d20261005)."""
+    ``contains:`` (return 3 of cycle d20261005). A sentence with digits in it is read as
+    WRITTEN, strictly (return 4): the normaliser's words for "1.250,75" summed to 1325, and
+    a numeral not read for certain leaves the model's argument standing."""
+    if text and any(ch.isdigit() for ch in text):
+        return _watch_condition_in(_watch_written_words(text), _watch_written_number_at)
+    return _watch_condition_in(tokens, _watch_number_at)
+
+
+def _watch_condition_in(
+    tokens: tuple[str, ...],
+    number_at: Callable[[tuple[str, ...], int], int | float | None],
+) -> str | None:
     for n, tok in enumerate(tokens):
         if tok in _WATCH_BELOW_WORDS or tok in _WATCH_ABOVE_WORDS:
-            number = _watch_number_at(tokens, n)
+            number = number_at(tokens, n)
             if number is not None:
                 kind = "number_below" if tok in _WATCH_BELOW_WORDS else "number_above"
                 return f"{kind}:{number}"
     event = _watch_event(tokens)
     if event is not None:
-        number = _watch_number_at(tokens, tokens.index(event))
+        number = number_at(tokens, tokens.index(event))
         if number is not None and event.startswith(_WATCH_BELOW_VERBS):
             return f"number_below:{number}"
         if number is not None and event.startswith(_WATCH_ABOVE_VERBS):
@@ -2421,7 +2517,7 @@ def watch_slots(intent: Intent, text: str, tokens: tuple[str, ...]) -> dict[str,
     if intent is Intent.WATCH_CREATE:
         return {
             "watch_url": watch_url_of(text),
-            "watch_condition": _watch_condition(tokens),
+            "watch_condition": _watch_condition(tokens, text),
             "watch_every_hours": _watch_every_hours(tokens),
             "watch_label": _watch_create_label(text, tokens),
         }
