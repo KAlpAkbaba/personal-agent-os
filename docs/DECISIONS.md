@@ -25606,3 +25606,23 @@ Status: accepted (cycle d20261003). Roadmap row: Proactive - warns, briefs, watc
 - After release: real cloud reading (Home Assistant release page; tailnet targets refused;
   10 watches for one hour on CPX32 with `infra/docker/cloud-browser/measure-memory.sh`) only
   once watch-engine and browser-redirect-guard are both released.
+
+### ADR-0272 addendum 1 (2026-10-05): the usage limit dozes, a real problem is angry, a wait is calm
+
+The owner, 2026-10-05, after three angry faces in one morning that were only waiting: "limitten
+dolayı işler yarıda kaldıysa ajanlar masalarında uyuklasın, ekstra bir sorundan dolayı işler yarım
+kaldıysa sadece kızgın olsunlar; limitten dolayı yeni iş gelmiyorsa onlar da uyuklasın - böylece
+ayırt edebilelim."
+
+- **sleepy** (Zz over the head, closed eyes): the seat's run was cut by the usage limit (its last
+  report reads "başarısız: Max kullanım limiti"), or the team's limit holds now
+  (`usage_limit.state = waiting` or `limits.all.state = limited`) and the seat cannot start work -
+  waiting, or sent back for a rewrite.
+- **angry** stays only for a stop nobody has decided, limit or not.
+- **waiting** (calm, flat mouth): a stopped task whose duty return waits for another task's files
+  (reason ends `(alan çakışması: X; o iş bitince)`) or that sits with the Danışman
+  (`Danışman'a iletildi: `).
+- The '!' bubble is drawn only over angry and sad seats.
+
+`apps/web/tests/office/mood.test.tsx` (five new cases; mutations RED: the limit rule removed, the
+wait rule removed). Web only: no API or cycle change.
