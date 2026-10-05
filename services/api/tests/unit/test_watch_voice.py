@@ -131,13 +131,20 @@ def test_a_comma_decimal_is_read_whole() -> None:
         "Nöbetlerimden fiyatı sil.",
         # Not on the allowlist at all.
         "Nöbetleri silmek istemiyorum.",
-        "Nöbetleri sildin mi?",
         "Nöbetleri silersen kızarım.",
     ],
 )
 def test_only_the_allowlisted_forms_delete(text: str) -> None:
     resolved = resolve_intent(text)
     assert resolved.intent not in (Intent.WATCH_FORGET_ALL, Intent.WATCH_REMOVE), resolved
+    # Nor any other family's act: "Nöbeti kaldırma" fell through to the alarm's wake verb.
+    # "unutma" is the memory family's REMEMBER (the card's near miss).
+    expected = Intent.MEMORY_REMEMBER if "unutma" in text else Intent.NONE
+    assert resolved.intent is expected, resolved
+
+
+def test_a_question_about_deleting_is_a_query_never_a_delete() -> None:
+    assert resolve_intent("Nöbetleri sildin mi?").intent is Intent.WATCH_LIST
 
 
 @pytest.mark.parametrize(
@@ -376,9 +383,7 @@ def test_the_models_contains_condition_stands_when_the_words_said_none(wired) ->
     client, factory = wired
     sid = _session(client)
     _say(client, sid, HA_SENTENCE)
-    answer = _tool(
-        client, sid, "watch.create", {"url": HA_URL, "condition": "contains:2026.11"}
-    )
+    answer = _tool(client, sid, "watch.create", {"url": HA_URL, "condition": "contains:2026.11"})
     assert answer["status"] == "succeeded", answer
     assert [w.condition for w in _watches(factory)] == ["contains:2026.11"]
 
@@ -396,9 +401,7 @@ def test_a_spoken_comma_decimal_wins_whole(wired) -> None:
     client, factory = wired
     sid = _session(client)
     _say(client, sid, "Dolar 40,5 lirayı geçerse haber ver.")
-    answer = _tool(
-        client, sid, "watch.create", {"url": SHOP_URL, "condition": "number_above:40.5"}
-    )
+    answer = _tool(client, sid, "watch.create", {"url": SHOP_URL, "condition": "number_above:40.5"})
     assert answer["status"] == "succeeded", answer
     assert [w.condition for w in _watches(factory)] == ["number_above:40.5"]
 

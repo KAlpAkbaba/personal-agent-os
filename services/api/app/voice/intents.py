@@ -2018,29 +2018,70 @@ def _routine_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
 #   "inerse") AND a TELL verb ("bana söyle", "haber ver"). "Toplantı bitince bana söyle" and
 #   "saat yedide haber ver" carry a tell verb and no event verb: a reminder's, not a watch.
 #
-# Forget all is reached only by the exact forget forms or a delete verb over many: "unutma"
-# (the Turkish negative imperative, "do not forget") is REMEMBER and never a forget-all.
+# The two deleting intents are an ALLOWLIST, not a list of what to refuse (return 3 of
+# cycle d20261005): the object form of the noun EXACTLY ("nöbetleri", "nöbetlerimi" -> all;
+# "nöbeti", "fiyat nöbetini" -> one) AND the last word a positive imperative ("sil",
+# "kaldır", "unut", "iptal et"). The negative imperative ("silme", "unutma"), the ablative
+# ("nöbetlerden fiyatı kaldır" - one of them) and every form not listed delete nothing: the
+# words go on to the other families and the model, which can ask.
 
 _WATCH_NOUN_STEMS: Final[tuple[str, ...]] = ("nöbet", "nobet")
 _WATCH_NOT_THE_NOUN: Final[tuple[str, ...]] = ("nöbetçi", "nobetci", "nöbetci", "nobetçi")
-#: The memory family's own forget forms (``_MEMORY_FORGET_FORMS``): never "unutma".
-_WATCH_FORGET_FORMS: Final[tuple[str, ...]] = (
+_WATCH_PLURAL_OBJECTS: Final[tuple[str, ...]] = (
+    "nöbetleri",
+    "nobetleri",
+    "nöbetlerimi",
+    "nobetlerimi",
+)
+#: "Nöbetlerin hepsini sil": the genitive is all of them only with "hepsini".
+_WATCH_PLURAL_GENITIVES: Final[tuple[str, ...]] = (
+    "nöbetlerin",
+    "nobetlerin",
+    "nöbetlerimin",
+    "nobetlerimin",
+)
+_WATCH_SINGULAR_OBJECTS: Final[tuple[str, ...]] = (
+    "nöbeti",
+    "nobeti",
+    "nöbetini",
+    "nobetini",
+    "nöbetimi",
+    "nobetimi",
+)
+#: The positive imperatives that delete, said LAST (a trailing "lütfen" dropped).
+_WATCH_DELETE_LAST_FORMS: Final[tuple[str, ...]] = (
+    "sil",
+    "silin",
+    "kaldır",
+    "kaldir",
+    "kaldırın",
+    "kaldirin",
     "unut",
-    "unutabilirsin",
-    "unutalım",
-    "unutalim",
     "unutun",
 )
-_WATCH_ALL_WORDS: Final[tuple[str, ...]] = ("bütün", "butun", "tüm", "tum", "hepsini", "hepsi")
-_WATCH_CREATE_VERB_STEMS: Final[tuple[str, ...]] = (
+_WATCH_TRAILING_POLITE: Final[tuple[str, ...]] = ("lütfen", "lutfen", "hemen", "artık", "artik")
+#: Every stem a delete is said with, allowed or not: a sentence carrying one and not on the
+#: allowlist is not a create either ("Nöbetleri silme" is not "start a watch").
+_WATCH_DELETE_STEMS: Final[tuple[str, ...]] = (*_CANCEL_VERB_STEMS, "unut")
+#: The create verbs, exact imperative forms: "nöbet tutacağım" is the owner's night shift.
+_WATCH_CREATE_VERB_FORMS: Final[tuple[str, ...]] = (
     "kur",
+    "kurun",
     "tut",
+    "tutun",
     "oluştur",
     "olustur",
+    "oluşturun",
+    "olusturun",
     "başlat",
     "baslat",
+    "başlatın",
+    "baslatin",
     "koy",
+    "koyun",
 )
+#: A reminder's verb: "nöbet tutacağım, bana hatırlat" is the memory/reminder family's.
+_WATCH_REMIND_STEMS: Final[tuple[str, ...]] = ("hatırlat", "hatirlat")
 _WATCH_LIST_VERB_FORMS: Final[tuple[str, ...]] = ("say", "sayar", "saysana", "sayın", "sayin")
 _WATCH_LIST_VERB_STEMS: Final[tuple[str, ...]] = ("listele", "göster", "goster", "söyle", "soyle")
 #: The words before the noun that name no watch ("Bu nöbeti kaldır").
@@ -2172,9 +2213,23 @@ def _watch_tell(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
+def _watch_delete_verb(tokens: tuple[str, ...]) -> str | None:
+    """The positive imperative that ends the sentence ("sil", "kaldır", "unut", "iptal et"),
+    a trailing "lütfen" dropped; None for anything else ("silme", "sildin mi")."""
+    words = list(tokens)
+    while words and words[-1] in _WATCH_TRAILING_POLITE:
+        words.pop()
+    if words and words[-1] in _WATCH_DELETE_LAST_FORMS:
+        return words[-1]
+    if len(words) >= 2 and words[-2] == "iptal" and words[-1] in ("et", "edin"):
+        return "iptal et"
+    return None
+
+
 def _watch_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
-    """The watch family: with the noun, QUERY first (a question never mutates), then
-    forget all, remove, create; with no noun, an event verb and a tell verb create."""
+    """The watch family: with the noun, QUERY first (a question never mutates), then the
+    two deleting intents by their allowlist only, then create; with no noun, an event verb
+    and a tell verb create."""
     noun = _watch_noun(tokens)
     if noun is not None:
         if (
@@ -2184,22 +2239,41 @@ def _watch_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
             or _has(tokens, *_WATCH_LIST_VERB_STEMS)
         ):
             return Intent.WATCH_LIST, noun
-        if forget := _has_exact(tokens, *_WATCH_FORGET_FORMS):
-            return Intent.WATCH_FORGET_ALL, forget
-        if _has(tokens, *_CANCEL_VERB_STEMS):
-            many = noun.startswith(("nöbetler", "nobetler")) or _has_exact(
-                tokens, *_WATCH_ALL_WORDS
-            )
-            return (Intent.WATCH_FORGET_ALL if many else Intent.WATCH_REMOVE), noun
-        if _has(tokens, *_WATCH_CREATE_VERB_STEMS):
+        if _has(tokens, *_WATCH_DELETE_STEMS):
+            # Off the allowlist the family still CLAIMS the sentence as NONE: falling
+            # through, "Nöbeti kaldırma" read "kaldır" as the alarm's wake verb.
+            verb = _watch_delete_verb(tokens)
+            if verb is not None and (
+                noun in _WATCH_PLURAL_OBJECTS
+                or (noun in _WATCH_PLURAL_GENITIVES and "hepsini" in tokens)
+            ):
+                return Intent.WATCH_FORGET_ALL, f"{noun} {verb}"
+            if verb is not None and noun in _WATCH_SINGULAR_OBJECTS:
+                return Intent.WATCH_REMOVE, f"{noun} {verb}"
+            if _has(tokens, "unut") and not _has_exact(tokens, "unut", "unutun"):
+                return None  # "Nöbetleri unutma" is the memory family's REMEMBER
+            return Intent.NONE, noun
+        if _has_exact(tokens, *_WATCH_CREATE_VERB_FORMS) and not _has(tokens, *_WATCH_REMIND_STEMS):
             return Intent.WATCH_CREATE, noun
         return None
     event = _watch_event(tokens)
-    if event is not None and _watch_leaving_a_place(tokens, event):
+    if event is not None and (
+        _watch_leaving_a_place(tokens, event) or _watch_clock_time(tokens, event)
+    ):
         return None
     if event is not None and (tell := _watch_tell(tokens)):
         return Intent.WATCH_CREATE, f"{event} {tell}"
     return None
+
+
+def _watch_clock_time(tokens: tuple[str, ...], event: str) -> bool:
+    """ "Saat beşi geçince bana söyle": the clock passing an hour is a reminder's, not a page
+    that changed ("her saat" is an interval and does not count)."""
+    n = tokens.index(event)
+    return any(
+        tok in ("saat", "saati") and (i == 0 or tokens[i - 1] != "her")
+        for i, tok in enumerate(tokens[:n])
+    )
 
 
 def _watch_leaving_a_place(tokens: tuple[str, ...], event: str) -> bool:
@@ -2213,18 +2287,11 @@ def _watch_leaving_a_place(tokens: tuple[str, ...], event: str) -> bool:
     )
 
 
-def _watch_number_at(tokens: tuple[str, ...], end: int) -> int | None:
-    """The number spoken in the words just before ``end`` (units skipped): the router's
-    normaliser has already said every digit as words ("20.000" -> "yirmi bin")."""
-    n = end - 1
-    while n >= 0 and tokens[n].startswith(_WATCH_UNIT_STEMS):
-        n -= 1
-    start = n
-    while start >= 0 and (tokens[start] in _WATCH_DIGITS or tokens[start] in _WATCH_MULTIPLIERS):
-        start -= 1
-    words = tokens[start + 1 : n + 1]
-    if not words:
-        return None
+#: The decimal mark as the normaliser says it ("40,5" -> "kırk virgül beş").
+_WATCH_DECIMAL_WORDS: Final[tuple[str, ...]] = ("virgül", "virgul", "nokta")
+
+
+def _watch_whole(words: tuple[str, ...]) -> int:
     total, current = 0, 0
     for word in words:
         if word in _WATCH_DIGITS:
@@ -2237,9 +2304,43 @@ def _watch_number_at(tokens: tuple[str, ...], end: int) -> int | None:
     return total + current
 
 
-def _watch_condition(tokens: tuple[str, ...]) -> str:
-    """``number_below:<n>`` / ``number_above:<n>`` when a number and a direction were said,
-    else ``changed`` (a new release, a page that changes)."""
+def _watch_number_at(tokens: tuple[str, ...], end: int) -> int | float | None:
+    """The number spoken in the words just before ``end`` (units skipped): the router's
+    normaliser has already said every digit as words ("20.000" -> "yirmi bin", "40,5" ->
+    "kırk virgül beş" -> 40.5). None when no whole number was said."""
+    n = end - 1
+    while n >= 0 and tokens[n].startswith(_WATCH_UNIT_STEMS):
+        n -= 1
+
+    def number_word(tok: str) -> bool:
+        return tok in _WATCH_DIGITS or tok in _WATCH_MULTIPLIERS
+
+    start = n
+    while start >= 0 and number_word(tokens[start]):
+        start -= 1
+    words = tokens[start + 1 : n + 1]
+    if start >= 1 and words and tokens[start] in _WATCH_DECIMAL_WORDS:
+        whole_end = start
+        whole_start = whole_end - 1
+        while whole_start >= 0 and number_word(tokens[whole_start]):
+            whole_start -= 1
+        whole = tokens[whole_start + 1 : whole_end]
+        if not whole:
+            return None
+        zeros = 0
+        while zeros < len(words) and words[zeros] == "sıfır":
+            zeros += 1
+        digits = "0" * zeros + (str(_watch_whole(words[zeros:])) if words[zeros:] else "")
+        return float(f"{_watch_whole(whole)}.{digits}")
+    if not words:
+        return None
+    return _watch_whole(words)
+
+
+def _watch_condition(tokens: tuple[str, ...]) -> str | None:
+    """``number_below:<n>`` / ``number_above:<n>`` when a number AND a direction were said;
+    else None - "changed" is the tool's default and must never override the model's
+    ``contains:`` (return 3 of cycle d20261005)."""
     for n, tok in enumerate(tokens):
         if tok in _WATCH_BELOW_WORDS or tok in _WATCH_ABOVE_WORDS:
             number = _watch_number_at(tokens, n)
@@ -2253,7 +2354,7 @@ def _watch_condition(tokens: tuple[str, ...]) -> str:
             return f"number_below:{number}"
         if number is not None and event.startswith(_WATCH_ABOVE_VERBS):
             return f"number_above:{number}"
-    return "changed"
+    return None
 
 
 def _watch_every_hours(tokens: tuple[str, ...]) -> int | None:
@@ -2265,7 +2366,7 @@ def _watch_every_hours(tokens: tuple[str, ...]) -> int | None:
             return 168
         if tok == "saatte" or (tok == "her" and tokens[n + 1 : n + 2] == ("saat",)):
             hours = _watch_number_at(tokens, n) if tok == "saatte" else None
-            return min(max(hours or 1, 1), 168)
+            return min(max(int(hours or 1), 1), 168)
     return None
 
 
@@ -9551,6 +9652,8 @@ def _resolve_intent_rules(
     #      "Fiyat nöbetini kaldır" carries the alarm's cancel verb and "değişince haber
     #      ver" the reminder's tell verb; the noun and the event verb decide.
     if watch_matched := _watch_match(tokens):
+        if watch_matched[0] is Intent.NONE:
+            return ResolvedIntent(Intent.NONE, **{**base, "confidence": 0.0})
         return ResolvedIntent(
             watch_matched[0],
             scope=SCOPE_CONVERSATION,

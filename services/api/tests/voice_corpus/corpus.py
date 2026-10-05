@@ -8067,10 +8067,29 @@ def _watch_cases() -> list[UtteranceCase]:
             notes="'unutma' is 'do not forget': it must never reach the forget-all.",
         )
     )
+    cases.append(
+        UtteranceCase(
+            case_id="w.near.shift_is_remember",
+            utterance="Bu gece nöbet tutacağım, bana hatırlat.",
+            expected_intent="memory_remember",
+            expected_tool="memory.remember",
+            forbidden_tools=WATCH_TOOLS_ALL,
+            category="watch",
+            source="canonical",
+            notes="The owner's night shift is a thing to remember, not a watch to create.",
+        )
+    )
     for case_id, text in (
         ("w.near.nobetci", "nöbetçi eczane nerede"),
         ("w.near.alarm", "saat yedide haber ver"),
         ("w.near.leaving", "Evden çıkınca bana söyle."),
+        ("w.near.clock_five", "Saat beşi geçince bana söyle."),
+        ("w.near.clock_twelve", "Saat on ikiyi geçince uyar."),
+        # The allowlist (return 3 of cycle d20261005): these delete nothing.
+        ("w.negation.silme", "Nöbetleri silme."),
+        ("w.negation.kaldirma", "Nöbeti kaldırma."),
+        ("w.ablative.one_of_them", "Nöbetlerden fiyatı kaldır."),
+        ("w.ablative.mine", "Nöbetlerimden birini sil."),
     ):
         cases.append(
             UtteranceCase(

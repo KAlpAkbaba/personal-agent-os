@@ -35,8 +35,29 @@ Status: proposed by worker (cycle d20261004); the lead numbers it.
    Risk: `greeting_allowed` is the arrival-greeting cooldown, so in practice it may rarely be
    True outside an arrival; the briefing still carries every change. Card-literal on purpose.
 7. **Narrative.** `SUBSYSTEM_WATCH` -> "nöbet" in `facts._SUBSYSTEM_TR`.
+8. **The deleting intents are an ALLOWLIST (return 3, cycle d20261005; replaces the stem
+   rule of point 2).** `watch_forget_all` only when the noun is exactly `nöbetleri` /
+   `nöbetlerimi` (or `nöbetlerin(im) hepsini`) and the LAST word (a trailing `lütfen/hemen/
+   artık` dropped) is `sil/silin/kaldır/kaldırın/unut/unutun` or `iptal et/edin`;
+   `watch_remove` the same with the singular object (`nöbeti`, `fiyat nöbetini`, `nöbetimi`)
+   - "Fiyat nöbetini unut" removes ONE. Any other sentence with the noun and a delete stem
+   (`silme`, `kaldırma`, `nöbetlerden/nöbetlerimden ...`, `silmek istemiyorum`) is CLAIMED
+   as `none` - falling through, "Nöbeti kaldırma" became `alarm_create` (the wake verb) -
+   except an `unut*` that is not the imperative, which stays the memory family's REMEMBER.
+   A question ("Nöbetleri sildin mi?") is the list, never a delete.
+9. **The words win the condition only when whole.** `_watch_condition` returns None unless a
+   number AND a direction were said; `changed` is the tool's last default, after the model's
+   argument, so the model's `contains:` stands. Comma/point decimals are read whole
+   ("kırk virgül beş" -> 40.5, "kırk virgül sıfır beş" -> 40.05).
+10. **Shift and clock are not watches.** With the noun, create needs an exact imperative
+    (`kur/tut/oluştur/başlat/koy` and their `-in` forms) and no `hatırlat`: "Bu gece nöbet
+    tutacağım, bana hatırlat" stays `memory_remember`. Without the noun, an event verb after
+    `saat`/`saati` (not `her saat`) is the clock: "Saat beşi geçince bana söyle" is no watch.
+11. **Tiers.** `watch.create/remove/forget_all` TIER_SENSITIVE (like alarm/memory/macro),
+    `watch.list` TIER_OPEN (like `macro.list`) - the lead's decision; the patch below is now
+    applied on this branch.
 
-## ALAN_ISTEGI - the four files outside the area (apply at merge)
+## The four files once outside the area (now in it; APPLIED on this branch, cycle d20261005)
 
 A new tool family trips three guards and the corpus harness needs the two tables. With this
 exact patch applied locally: guards 123/123 green, Owner Utterance Suite 2770/2770 (heavy slot

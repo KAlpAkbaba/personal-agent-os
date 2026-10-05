@@ -7,9 +7,12 @@ words; these tools carry the owner's sentence to it and read the answer back.
 **The owner's words win.** The router reads the condition, the interval, the page and the
 name off the sentence (``ResolvedIntent.watch_*``, kept on the turn record) and they are
 preferred over the model's arguments: "20 bin liranın altına inerse" is ``number_below:20000``
-whatever number the model wrote. The page is the one thing a sentence rarely says ("Şu ürünün
-fiyatı..."): the realtime model fills ``url``; with none anywhere - the free local mode - ONE
-missing-slot question is asked, "Hangi sayfayı izleyeyim?", never a confirmation.
+whatever number the model wrote. The words win the condition only when they said a whole one
+(a number and a direction); otherwise the router carries None and the model's ``contains:``
+stands - ``changed`` is the last default, never a spoken condition. The page is the one
+thing a sentence rarely says ("Şu ürünün fiyatı..."): the realtime model fills ``url``; with
+none anywhere - the free local mode - ONE missing-slot question is asked, "Hangi sayfayı
+izleyeyim?", never a confirmation.
 
 **No second confirmation** (owner rule 2026-09-18/19). A create reads back the domain, the
 condition and the interval in one sentence and the watch exists; "Nöbeti kaldır" is the undo
