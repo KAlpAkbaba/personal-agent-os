@@ -1542,7 +1542,11 @@ try {
             $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = "approve"
             $plain = Start-FakeAlone -Work $work -Role "inspector" -TaskId "task-plain"
             Assert-True -Condition ($plain.Process.WaitForExit(60000)) -Because "with no barrier it ends by itself (hang guard 60 s)"
-            Assert-Equal -Expected $expected -Actual $plain.Output.Result -Because "with no barrier configured the answer is byte for byte the one it always was"
+            # team-engine: the answer carries the run's session id, as the tool's does (sess-<task>-<role>-<8 hex>);
+            # apart from it the answer is byte for byte the one it always was.
+            $noSession = { param([string]$Text) $Text -replace ',"session_id":"sess-[a-z0-9-]+-[0-9a-f]{8}"', '' }
+            Assert-True -Condition ($plain.Output.Result -match ',"session_id":"sess-task-plain-inspector-[0-9a-f]{8}"\}$') -Because "the answer names the run's session: $($plain.Output.Result)"
+            Assert-Equal -Expected $expected -Actual (& $noSession $plain.Output.Result) -Because "with no barrier configured the answer is byte for byte the one it always was"
             Assert-Equal -Expected 0 -Actual @(Get-ChildItem -LiteralPath $markers).Count -Because "and no marker is written without PAGENTOS_FAKE_CLAUDE_MARKERS"
 
             $env:PAGENTOS_FAKE_CLAUDE_MARKERS = $markers
@@ -1565,7 +1569,7 @@ try {
             # read 1.07 s under load, 2026-10-03). How soon is bounded by the hang guard above only.
             $released = [datetime]::Parse([string]$ended.released_at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)
             Assert-True -Condition ($released -ge $opened) -Because "it let go after the file appeared, not before: released $($released.ToString('o')), file written from $($opened.ToString('o'))"
-            Assert-Equal -Expected $expected -Actual $held.Output.Result -Because "and it answers as the scenario says"
+            Assert-Equal -Expected $expected -Actual (& $noSession $held.Output.Result) -Because "and it answers as the scenario says"
         }
         finally { foreach ($name in $names) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue } }
     }
