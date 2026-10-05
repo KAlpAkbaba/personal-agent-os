@@ -29,7 +29,7 @@ Set-StrictMode -Version Latest
 
 $script:TeamBoardPath = "/v1/team/board/notes"
 $script:TeamBoardKinds = @("bilgi", "soru", "fikir", "cevap", "danisma")
-$script:TeamBoardSeatPattern = '^(?:lead|researcher|integrator|inspector(?:-[1-9])?|worker-[1-9])$'
+$script:TeamBoardSeatPattern = '^(?:lead|researcher|integrator|inspector(?:-[1-9])?|worker-[1-9]|test-lead|tester-[1-4]|danisman)$'
 $script:TeamBoardEveryone = "herkes"
 $script:TeamBoardTextMax = 280
 $script:TeamBoardReadMax = 30

@@ -1,0 +1,11 @@
+{
+  "id": "health",
+  "family": "saglik",
+  "why": "every release: the api answers, the owner session opens, the web shell leaves the session check",
+  "steps": [
+    { "name": "sağlık", "method": "GET", "path": "/v1/system/health", "expect_status": 200, "expect_contains": "\"environment\":\"staging\"" },
+    { "name": "oturum", "method": "GET", "path": "/v1/identity/sessions/current", "expect_status": 200 },
+    { "name": "web kabuğu", "web": "apps/web/tests/e2e/owner-scenarios/open_shell.py", "url": "http://127.0.0.1:28000/", "expect": "kabuk açılır, 'Oturum kontrol ediliyor' kalkar" }
+  ],
+  "breaking": { "method": "GET", "path": "/v1/system/health", "start": 8, "factor": 2, "max": 256, "max_p95_ms": 5000, "what": "GET /v1/system/health eşzamanlı" }
+}

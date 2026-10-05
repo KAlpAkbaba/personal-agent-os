@@ -49,9 +49,10 @@ KIND_NOTE = "note"  # a team_state row of its own kind (String(16))
 KINDS: tuple[str, ...] = ("bilgi", "soru", "fikir", "cevap", "danisma")
 EVERYONE = "herkes"
 AUTO = "auto"
-#: The seats of a cycle: the lead, the researcher, the integrator, the inspectors, worker-1..9.
+#: The seats of a cycle: the lead, the researcher, the integrator, the inspectors, worker-1..9;
+#: the test team (test-lead, tester-1..4) and the Danışman (danisman).
 #: scripts/lib/TeamBoard.ps1 holds the same pattern (a unit test compares the two).
-SEAT_PATTERN = r"^(?:lead|researcher|integrator|inspector(?:-[1-9])?|worker-[1-9])$"
+SEAT_PATTERN = r"^(?:lead|researcher|integrator|inspector(?:-[1-9])?|worker-[1-9]|test-lead|tester-[1-4]|danisman)$"  # noqa: E501 - one line: testteam.tests.ps1 reads it
 #: A task id as ``team/queue.schema.json`` states it.
 TASK_PATTERN = r"^[a-z0-9][a-z0-9-]{2,63}$"
 TEXT_MAX_CHARS = 280

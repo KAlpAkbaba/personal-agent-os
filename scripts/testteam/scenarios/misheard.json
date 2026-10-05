@@ -1,0 +1,9 @@
+{
+  "id": "misheard",
+  "family": "yanlis-duyulan",
+  "why": "the voice misheard list the owner reads after a wrong sentence and a correction",
+  "steps": [
+    { "name": "yanlış duyulanlar", "method": "GET", "path": "/v1/voice/misheard", "expect_status": 200 }
+  ],
+  "breaking": { "method": "GET", "path": "/v1/voice/misheard", "start": 4, "factor": 2, "max": 128, "max_p95_ms": 5000, "what": "GET /v1/voice/misheard eşzamanlı" }
+}
