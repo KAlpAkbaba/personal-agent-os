@@ -294,7 +294,8 @@ describe("the seven family pages", () => {
     // These pages read. Setting an alarm, changing a policy, forgetting a memory and
     // enrolling an asset all go through the one gated path (ADR-0053 §5); a button here
     // would be a second authority surface. The exceptions each use one existing client, never
-    // a request of their own: routines (B14's pause/resume), notifications (mark read), and
+    // a request of their own: routines (B14's pause/resume, and the owner's own watches through
+    // `lib/watch/watches.ts` in `WatchList`), notifications (mark read), and
     // the settings page's four ambient switches (B48, ADR-0155 decision 5), which PUT the same
     // owner-gated policy the voice tool writes.
     for (const { file } of PAGES) {
@@ -303,6 +304,7 @@ describe("the seven family pages", () => {
       expect(posts, file).toHaveLength(0);
     }
     expect(source("routines/page.tsx")).toContain("useRoutineControl");
+    expect(source("routines/page.tsx")).toContain("<WatchList");
     expect(source("notifications/page.tsx")).toContain("useNotificationRead");
     expect(source("settings/page.tsx")).toContain("updateAmbientPolicy");
   });
