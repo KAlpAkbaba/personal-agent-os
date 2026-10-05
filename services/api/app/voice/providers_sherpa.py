@@ -180,7 +180,7 @@ class SherpaOnnxSTTProvider:
                 details={"reason": status.reason},
             )
         try:
-            import sherpa_onnx  # type: ignore[import-not-found]
+            import sherpa_onnx  # type: ignore[import-not-found, import-untyped]
         except ImportError as exc:  # found by find_spec, broken on import
             raise VoiceError(
                 VoiceErrorClass.OPTIONAL_DEPENDENCY_MISSING,

@@ -189,15 +189,17 @@ def test_b_a_missing_model_file_is_not_loaded_and_the_reason_says_model_missing(
 # ------------------------------------------------------ (c) a hash that differs
 
 
+@pytest.mark.parametrize("which", ["encoder", "decoder", "joiner", "tokens"])
 def test_c_a_file_whose_sha256_differs_is_never_loaded(
-    fake_sherpa: type[_FakeOnlineRecognizer], model_dir: Path
+    fake_sherpa: type[_FakeOnlineRecognizer], model_dir: Path, which: str
 ) -> None:
-    encoder = next(name for name in ps.MODEL_FILES if name.startswith("encoder"))
-    (model_dir / encoder).write_bytes(b"a different, perhaps hostile, onnx graph")
+    """Each of the four files is checked, not only the first (inspector, round 2: M1 lived)."""
+    [name] = [name for name in ps.MODEL_FILES if name.startswith(which)]
+    (model_dir / name).write_bytes(b"a different, perhaps hostile, onnx graph")
     provider = ps.SherpaOnnxSTTProvider()
     status = provider.status()
     assert (status.ok, status.reason) == (False, ps.REASON_MODEL_HASH)
-    assert "hash" in status.detail_tr and encoder in status.detail_tr
+    assert "hash" in status.detail_tr and name in status.detail_tr
     assert provider.available() is False
     with pytest.raises(VoiceError) as caught:
         provider.transcribe(_wav())

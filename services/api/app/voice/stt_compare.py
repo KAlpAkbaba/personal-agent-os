@@ -78,8 +78,9 @@ from app.voice.spoken_device import resolve_without_device_phrase
 
 #: 1.1: the ``recorded_live`` rows - ``source`` on every row, ``heard_live_by``,
 #: ``from_browser`` and the items' ``browser_engine``.
-#: 1.2 (local-tr-stt-measure): every row's ``real_time_factor``, ``peak_memory_bytes`` (local
-#: rows only), ``commands_ran`` and ``intent_changes_commands``; the report's two notes.
+#: 1.2 (local-tr-stt-measure): every row's ``real_time_factor``, ``cold_start_ms`` and
+#: ``peak_memory_bytes`` (local rows only), ``commands_ran`` and ``intent_changes_commands``;
+#: the report's two notes.
 REPORT_SCHEMA_VERSION = "1.2"
 MANIFEST_NAME = "manifest.json"
 TEMPLATE_NAME = "manifest.template.json"
@@ -605,6 +606,21 @@ class _Tally:
         row["intent_changes_commands"] = self.command_intent_changes if self.commands else None
 
 
+def _warm_up(
+    provider: STTProvider, audio: bytes, language: str, clock: Callable[[], float]
+) -> float | None:
+    """One unscored call before a local engine is measured: the model load and first-run
+    warm-up (6.6 s against 0.18 s a file on the home PC) would otherwise sit in the first
+    file's time. Its time is the cold start; a failure has none, and the measured calls that
+    follow decide the row. Cloud engines get no warm-up - it would send the audio out again."""
+    started = clock()
+    try:
+        provider.transcribe(audio, language=language)
+    except Exception:
+        return None
+    return round((clock() - started) * 1000, 2)
+
+
 def run_comparison(
     folder: Path,
     engines: Sequence[Engine],
@@ -681,6 +697,7 @@ def run_comparison(
             "latency_p50_ms": None,
             "latency_p95_ms": None,
             "real_time_factor": None,
+            "cold_start_ms": None,
             "peak_memory_bytes": None,
             "commands_ran": 0,
             "intent_changes_commands": None,
@@ -709,6 +726,8 @@ def run_comparison(
         if engine not in runnable:
             row["reason"] = REASON_NO_RECORDING
             continue
+        if engine.local:
+            row["cold_start_ms"] = _warm_up(engine.provider, usable[0][1], language, clock)
         tally = _Tally()
         for (recording, audio), item in zip(usable, item_rows, strict=True):
             started = clock()
@@ -745,7 +764,9 @@ def run_comparison(
         ),
         "latency": "wall time per file sent in one go: processing time, not first-token latency",
         "real_time_factor": (
-            "sum of processing time / sum of audio time of the files that came back"
+            "sum of processing time / sum of audio time of the files that came back; a local "
+            "row first makes one unscored warm-up call on the first file (model load), whose "
+            "time is cold_start_ms and is in neither the factor nor the latencies"
         ),
         "memory": (
             "peak_memory_bytes: the measuring PROCESS's peak so far when a local row closed "
@@ -869,6 +890,10 @@ def summary_tr(report: dict[str, Any]) -> list[str]:
         extra = []
         if row.get("real_time_factor") is not None:
             extra.append(f"gerçek zaman çarpanı {_tr_number(row['real_time_factor'], 3)}")
+        if row.get("cold_start_ms") is not None:
+            extra.append(
+                f"soğuk başlangıç {_tr_number(row['cold_start_ms'], 0)} ms (çarpana girmez)"
+            )
         if row.get("peak_memory_bytes") is not None:
             megabytes = row["peak_memory_bytes"] / 1_048_576
             extra.append(f"süreç tepe belleği {_tr_number(megabytes, 0)} MB")

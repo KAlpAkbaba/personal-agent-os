@@ -669,6 +669,69 @@ def test_the_real_time_factor_is_null_without_audio_time_never_zero(
     assert _row(absent, "b")["real_time_factor"] is None
 
 
+def test_a_local_row_warms_up_first_and_its_cold_start_stays_out_of_the_factor(
+    tmp_path: Path,
+) -> None:
+    """Inspector, round 2: the first file carried the model load (6.6 s against 0.18 s) and
+    about doubled a local engine's factor. One unscored warm-up call comes first; its time is
+    ``cold_start_ms``, and the factor and percentiles are the measured calls' only."""
+    refs = ["bir", "iki"]
+    folder = _folder(tmp_path, refs)
+    engine = ScriptedSTT({ref: ref for ref in refs})
+    # warm-up 6.6 s, then 100 ms and 300 ms of processing
+    ticks: Iterator[float] = iter([0.0, 6.6, 10.0, 10.1, 11.0, 11.3])
+    report = sc.run_comparison(
+        folder, [sc.Engine("local", engine, local=True)], clock=lambda: next(ticks)
+    )
+    row = _row(report, "local")
+    audio_ms = sum(item["audio_ms"] for item in report["items"])
+    assert row["cold_start_ms"] == pytest.approx(6600.0)
+    assert row["real_time_factor"] == pytest.approx(400.0 / audio_ms, abs=1e-4)
+    assert row["latency_p95_ms"] == pytest.approx(300.0)
+    # the warm-up is the first file once more and is not scored
+    assert engine.calls == [synthesize_wav("bir"), synthesize_wav("bir"), synthesize_wav("iki")]
+    assert (row["files_ran"], row["ref_words"]) == (2, 2)
+    assert any(
+        "soğuk başlangıç 6" in line and "çarpana girmez" in line for line in report["summary_tr"]
+    )
+
+
+def test_a_cloud_row_gets_no_warm_up_call_and_no_cold_start(tmp_path: Path) -> None:
+    """A warm-up would send the owner's audio out once more and bill it: cloud rows have none."""
+    folder = _folder(tmp_path, ["bir"])
+    engine = ScriptedSTT({"bir": "bir"})
+    ticks: Iterator[float] = iter([0.0, 0.2])
+    row = _row(
+        sc.run_comparison(folder, [sc.Engine("cloud", engine)], clock=lambda: next(ticks)), "cloud"
+    )
+    assert row["cold_start_ms"] is None
+    assert len(engine.calls) == 1
+
+
+def test_a_failing_warm_up_is_not_the_run_s_end(tmp_path: Path) -> None:
+    """The warm-up's failure has no cold start; the measured calls still decide the row."""
+    folder = _folder(tmp_path, ["bir"])
+
+    class FailsOnce(ScriptedSTT):
+        def transcribe(self, audio: bytes, *, language: str = "tr-TR") -> STTResult:
+            if not self.calls:
+                self.calls.append(audio)
+                raise RuntimeError("model not ready")
+            return super().transcribe(audio, language=language)
+
+    engine = FailsOnce({"bir": "bir"})
+    row = _row(sc.run_comparison(folder, [sc.Engine("local", engine, local=True)]), "local")
+    assert row["cold_start_ms"] is None
+    assert (row["status"], row["files_ran"], row["errors"]) == (sc.STATUS_RAN, 1, [])
+
+
+def test_the_report_notes_say_the_cold_start_is_out_of_the_factor(tmp_path: Path) -> None:
+    folder = _folder(tmp_path, ["bir"])
+    report = sc.run_comparison(folder, [])
+    assert "cold_start_ms" in report["real_time_factor"]
+    assert "warm-up" in report["real_time_factor"]
+
+
 def test_peak_memory_is_written_on_the_local_row_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

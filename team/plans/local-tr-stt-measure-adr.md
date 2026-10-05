@@ -20,6 +20,9 @@ dokunulmadı; companion'a geçiş **ayrı karar**dır ve ölçüm sonucuyla sahi
 - `stt_compare.py`: `sherpa-onnx:tr-zipformer-int8` satırı faster-whisper'dan hemen sonra; kurulu değil /
   model eksik / hash tutmuyor üç ayrı neden ve Türkçe karşılığı. Rapor şeması **1.2**: her satırda
   `real_time_factor` (Σ işlem süresi / Σ ses süresi, yalnız dönen dosyalar; ölçülemezse `null`, asla 0),
+  `cold_start_ms` (yalnız `local=True` satırlarda: ölçümden önce ilk dosyayla bir puanlanmayan ısınma çağrısı -
+  model yükleme + ilk koşu; süresi bu alana yazılır, çarpana ve gecikme yüzdeliklerine GİRMEZ; ısınma hata verirse
+  `null` ve satırı ölçülen çağrılar belirler; bulut satırlarına ısınma yok - ses ikinci kez dışarı çıkar ve ücretlenirdi),
   `peak_memory_bytes` (yalnız `local=True` satırlarda, SÜREÇ tepe değeri - tüm motorlar tek süreçte; Windows
   `K32GetProcessMemoryInfo` argtypes/restype ile, Linux `ru_maxrss`; okunamazsa `null`), `commands_ran` ve
   `intent_changes_commands`. Özete satır başına bir ek satır.
@@ -86,9 +89,15 @@ uv run --no-sync python -m app.voice.stt_compare --folder <kayıtlar> --out docs
 (model `%TEMP%` altında, depo dışı). 30 cümle Windows "Microsoft Tolga" (tr-TR OneCore) sesiyle üretildi, 16 kHz mono.
 `python -m app.voice.stt_compare --engines sherpa-onnx:tr-zipformer-int8`: satır RAN, 30/30, 71,5 sn ses,
 WER 0,1724, CER 0,0393, niyeti değişen 8/30, komut cümlelerinde 3/10 ("ertele"->"erteli" iki kez, "sustur"->
-"susur"), gecikme p50/p95 137/184 ms, gerçek zaman çarpanı 0,098, süreç tepe belleği 171 MB.
-Dikkat: ilk dosyanın gecikmesi (3,1 s) model yüklemesini içerir ve çarpana girer (faster-whisper satırı da
-aynı biçimde tembel yükler); yüklemesiz çarpan ~0,055. Sentetik ses, sahibin sesindeki sonucu söylemez.
+"susur"), gecikme p50/p95 137/184 ms, süreç tepe belleği 171 MB. O koşudaki çarpan 0,098 ısınmasızdı: ilk
+dosyanın süresi model yüklemesini içeriyordu (Denetleyici, 2. tur) - geçersiz, aşağıdaki değer geçerli.
+
+Isınmalı yeniden ölçüm (2026-10-05, aynı ev PC'si, model yeniden `download_model()` ile `%TEMP%` altına, dört hash
+tuttu; 30 cümle aynı sesle yeniden üretildi, 71,5 sn): satır RAN 30/30, WER 0,1724, CER 0,0393, niyeti değişen 8/30,
+komutlarda 3/10, gecikme p50/p95 128/184 ms, **gerçek zaman çarpanı 0,057** (ikinci koşu 0,058), tepe bellek 171 MB.
+`cold_start_ms`: 44 186 ms (indirmeden hemen sonraki ilk yükleme - disk önbelleği soğuk, virüs taraması olası) ve
+2 491 ms (ikinci koşu). Soğuk başlangıç, companion'a geçiş kararında ayrıca tartılmalı. Sentetik ses, sahibin
+sesindeki sonucu söylemez.
 
 ## Geri alma
 
