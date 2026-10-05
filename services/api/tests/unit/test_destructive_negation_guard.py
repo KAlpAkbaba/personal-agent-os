@@ -149,9 +149,119 @@ ABLATIVE_CASES: Final[tuple[tuple[str, str, str], ...]] = (
     ("watch_forget_all", "Nöbetlerden fiyatı kaldır.", "pano 2026-10-05 06:33 denetleyici"),
 )
 
-#: Red on main today: (intent, sentence) -> (why, the fixing card's name). Each is an
-#: ``xfail(strict=True)``; the ADR carries the fixing card's full text.
-KNOWN_OPEN: Final[dict[tuple[str, str], tuple[str, str]]] = {}
+
+def _open(
+    intent: str, sentences: tuple[str, ...], why: str, card: str
+) -> dict[tuple[str, str], tuple[str, str]]:
+    return {(intent, sentence): (why, card) for sentence in sentences}
+
+
+_CANCEL_STEMS_WHY: Final = "_CANCEL_VERB_STEMS ('iptal','sil','kaldır') _has ile önek eşleşiyor"
+
+#: Red on main 2026-10-05 (45 cases): (intent, sentence) -> (why, the fixing card's name).
+#: Each is an ``xfail(strict=True)``; the ADR carries every fixing card's full text.
+KNOWN_OPEN: Final[dict[tuple[str, str], tuple[str, str]]] = {
+    **_open(
+        "memory_forget",
+        ("Bunu hafızandan silme.", "Bunu hafızandan silmeyin.", "Bunu hafızandan silmeyiniz."),
+        f"intents.py:2087 {_CANCEL_STEMS_WHY}",
+        "negation-fix-cancel-verb-stems",
+    ),
+    **_open(
+        "routine_cancel",
+        (
+            "Sabah rutinini iptal etme.",
+            "Sabah rutinini iptal etmeyin.",
+            "Sabah rutinini iptal etmeyiniz.",
+        ),
+        f"intents.py:1974 {_CANCEL_STEMS_WHY}",
+        "negation-fix-cancel-verb-stems",
+    ),
+    **_open(
+        "alarm_cancel",
+        (
+            "Sabah alarmımı iptal etme.",
+            "Sabah alarmımı iptal etmeyin.",
+            "Sabah alarmımı iptal etmeyiniz.",
+            "Alarmı iptal etme.",
+            "Alarmı iptal etmeyin.",
+            "Alarmı iptal etmeyiniz.",
+            "Sabah alarmını iptal etme.",
+            "Sabah alarmını iptal etmeyin.",
+            "Sabah alarmını iptal etmeyiniz.",
+            "Alarmı kaldırma.",
+            "Alarmı kaldırmayın.",
+            "Alarmı kaldırmayınız.",
+        ),
+        f"intents.py:2151 {_CANCEL_STEMS_WHY}",
+        "negation-fix-cancel-verb-stems",
+    ),
+    **_open(
+        "research_cancel",
+        (
+            "Araştırmayı iptal etmeyiniz.",
+            "Araştırmadan vazgeçme.",
+            "Araştırmadan vazgeçmeyin.",
+            "Araştırmadan vazgeçmeyiniz.",
+        ),
+        "intents.py:4851 olumsuz listede 'etmeyiniz' yok; 4878 _DISCARD_STEMS _has ile önek",
+        "negation-fix-research-cancel",
+    ),
+    **_open(
+        "calendar_cancel",
+        ("Perşembeki toplantıyı iptal etmeyiniz.", "Yarınki randevuyu iptal etmeyiniz."),
+        "intents.py:4714 olumsuz listede 'etmeyiniz' yok",
+        "negation-fix-calendar-cancel",
+    ),
+    **_open(
+        "evolution_cancel",
+        (
+            "Bu geliştirmeyi iptal etme.",
+            "Bu geliştirmeyi iptal etmeyin.",
+            "Bu geliştirmeyi iptal etmeyiniz.",
+            "Geliştirmeden vazgeçme.",
+            "Geliştirmeden vazgeçmeyin.",
+            "Geliştirmeden vazgeçmeyiniz.",
+        ),
+        "intents.py:1629 _EVOLUTION_CANCEL_STEMS _has ile önek, olumsuz denetimi yok",
+        "negation-fix-evolution-cancel",
+    ),
+    **_open(
+        "macro_record_cancel",
+        ("Hareketi iptal etme.", "Hareketi iptal etmeyin.", "Hareketi iptal etmeyiniz."),
+        "intents.py:2853 'iptal' tam eşleşiyor, 'etme' denetimi yok",
+        "negation-fix-macro",
+    ),
+    **_open(
+        "macro_delete",
+        (
+            "Yeni mail sekmesi hareketini silme.",
+            "Yeni mail sekmesi hareketini silmeyin.",
+            "Yeni mail sekmesi hareketini silmeyiniz.",
+        ),
+        "intents.py:2850 _MACRO_DELETE_VERB_STEMS _has ile önek",
+        "negation-fix-macro",
+    ),
+    **_open(
+        "operator_cancel",
+        ("İptal etme.", "İptal etmeyin.", "İptal etmeyiniz."),
+        "intents.py:2438 _has(tokens, 'iptal'), olumsuz denetimi yok",
+        "negation-fix-operator-exec-cancel",
+    ),
+    **_open(
+        "exec_cancel",
+        (
+            "Bunu iptal etme.",
+            "Bunu iptal etmeyin.",
+            "Bunu iptal etmeyiniz.",
+            "Bu işi iptal etme.",
+            "Bu işi iptal etmeyin.",
+            "Bu işi iptal etmeyiniz.",
+        ),
+        "intents.py:7140 'iptal' tam eşleşiyor, olumsuz denetimi yok",
+        "negation-fix-operator-exec-cancel",
+    ),
+}
 
 #: The watcher's pattern over intent values and their tool names.
 _DESTRUCTIVE_NAME: Final = re.compile(r"forget|remove|delete|cancel|clear|unut|sil|kaldir")
@@ -160,8 +270,21 @@ _DESTRUCTIVE_NAME: Final = re.compile(r"forget|remove|delete|cancel|clear|unut|s
 
 #: The imperatives the generator negates (a closed list: anything else is left alone).
 IMPERATIVES: Final[frozenset[str]] = frozenset(
-    {"sil", "unut", "kaldır", "kaldir", "temizle", "durdur", "bırak", "birak", "vazgeç",
-     "vazgec", "dur", "et", "yap"}
+    {
+        "sil",
+        "unut",
+        "kaldır",
+        "kaldir",
+        "temizle",
+        "durdur",
+        "bırak",
+        "birak",
+        "vazgeç",
+        "vazgec",
+        "dur",
+        "et",
+        "yap",
+    }
 )
 _BACK_VOWELS: Final = frozenset("aıou")
 _FRONT_VOWELS: Final = frozenset("eiöü")
@@ -290,7 +413,8 @@ def test_the_generator_negates_by_vowel_harmony(positive: str, expected: tuple[s
 
 
 @pytest.mark.parametrize(
-    "sentence", ["Bunu unutma.", "Sabah rutinini iptal eder misin?", "Vazgeç, yapma.", "Silmesem mi?"]
+    "sentence",
+    ["Bunu unutma.", "Sabah rutinini iptal eder misin?", "Vazgeç, yapma.", "Silmesem mi?"],
 )
 def test_the_generator_leaves_what_does_not_end_in_an_imperative(sentence: str) -> None:
     assert negate(sentence) == ()
