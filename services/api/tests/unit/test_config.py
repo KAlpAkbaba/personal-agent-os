@@ -6,7 +6,10 @@ from pydantic import ValidationError
 from app.config import Settings
 
 
-def test_defaults_match_dev_compose_ports() -> None:
+def test_defaults_match_dev_compose_ports(monkeypatch) -> None:
+    # The defaults, not the environment: the gate runs on its own database through
+    # PAGENTOS_DATABASE_URL (2026-10-05), and a default is what no variable overrides.
+    monkeypatch.delenv("PAGENTOS_DATABASE_URL", raising=False)
     s = Settings(_env_file=None)
     assert s.database_url.endswith("@127.0.0.1:15432/pagentos")
     assert s.redis_url == "redis://127.0.0.1:16379/0"
