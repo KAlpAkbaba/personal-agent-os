@@ -143,6 +143,9 @@ SUBSYSTEM_SELFDEV = "selfdev"
 #: separating it from routine rows; only a notified change or failure is written here -
 #: every reading lives in ``watch_readings``.
 SUBSYSTEM_WATCH = "watch"
+#: jarvis-calls-owner: JARVIS phones the owner (Twilio). Every call, refusal and decision not
+#: to call is a row here - "beni neden aradın / neden aramadın?" is answered from this subsystem.
+SUBSYSTEM_TELEPHONY = "telephony"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -178,6 +181,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_NATIVEFACTORY,
     SUBSYSTEM_SELFDEV,
     SUBSYSTEM_WATCH,
+    SUBSYSTEM_TELEPHONY,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -587,6 +591,14 @@ EVENT_TYPE_SELFDEV_DECIDED = "selfdev.decided"
 EVENT_TYPE_WATCH_CHANGED = "watch.changed"
 EVENT_TYPE_WATCH_CONDITION_MET = "watch.condition_met"
 EVENT_TYPE_WATCH_READ_FAILED = "watch.read_failed"
+#: jarvis-calls-owner: a call placed (reason, Twilio's call SID), how it ended (answered, busy,
+#: no-answer), a call the policy did not make (quiet hours, the hourly cap), a call to another
+#: number refused, and a call the provider would not accept.
+EVENT_TYPE_TELEPHONY_CALL_PLACED = "telephony.call_placed"
+EVENT_TYPE_TELEPHONY_CALL_ENDED = "telephony.call_ended"
+EVENT_TYPE_TELEPHONY_CALL_SKIPPED = "telephony.call_skipped"
+EVENT_TYPE_TELEPHONY_CALL_REFUSED = "telephony.call_refused"
+EVENT_TYPE_TELEPHONY_CALL_FAILED = "telephony.call_failed"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -775,6 +787,11 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_WATCH_CHANGED,
     EVENT_TYPE_WATCH_CONDITION_MET,
     EVENT_TYPE_WATCH_READ_FAILED,
+    EVENT_TYPE_TELEPHONY_CALL_PLACED,
+    EVENT_TYPE_TELEPHONY_CALL_ENDED,
+    EVENT_TYPE_TELEPHONY_CALL_SKIPPED,
+    EVENT_TYPE_TELEPHONY_CALL_REFUSED,
+    EVENT_TYPE_TELEPHONY_CALL_FAILED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the

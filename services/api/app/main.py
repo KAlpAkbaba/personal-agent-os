@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.alarms.audio_store import get_audio_store
+from app.alarms.audio_store import AudioStore, get_audio_store
 from app.alarms.greeting_audio import build_greeting_tts
 from app.alarms.routes import audio_router as alarms_audio_router
 from app.alarms.routes import router as alarms_router
@@ -145,6 +145,12 @@ from app.state.routes import router as state_router
 from app.team.allowlist_routes import router as team_allowlist_router
 from app.team.routes import router as team_router
 from app.team.routes_board import router as team_board_router
+from app.telephony.loop import HEALTH_NAME as TELEPHONY_HEALTH_NAME
+from app.telephony.loop import TelephonyLoop
+from app.telephony.routes import audio_router as telephony_audio_router
+from app.telephony.routes import router as telephony_router
+from app.telephony.service import AUDIO_TTL as TELEPHONY_AUDIO_TTL
+from app.telephony.service import build_owner_caller
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
@@ -341,6 +347,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # same reason - the push rung runs off the routine clock's event loop, not a
     # request, and must not need the whole ArtifactRuntime just to open a session.
     push_rung = _build_push_rung(settings, dispatch_session_factory)
+    # jarvis-calls-owner: JARVIS phones the owner (Twilio). Its own one-time audio store
+    # (ten minutes, one fetch - Twilio fetches the url), the same dedicated session factory
+    # as the push rung, and the loop that drives the five-minute retry and the event calls.
+    telephony_audio_store = AudioStore(ttl_s=int(TELEPHONY_AUDIO_TTL.total_seconds()))
+    telephony = build_owner_caller(
+        settings, session_scope=dispatch_session_factory, audio_store=telephony_audio_store
+    )
+    telephony_loop = TelephonyLoop(telephony, interval_s=settings.telephony_loop_interval_s)
     # docs/DECISIONS.md ADR-0078: the alarm/display voice tools read the wake sequence
     # and the device-status registry from ToolContext.live (tools_ambient._sequence,
     # display_status). They are registered HERE, where they are built, on the same
@@ -783,6 +797,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await watch_purge.start()
         # Does nothing while ``watch_runner_enabled`` is off (the health check says skipped).
         await watch_runner.start()
+        # jarvis-calls-owner: the no-answer retry and the important-event calls. Without
+        # Twilio credentials a pass does nothing, so health still tells "idle" from "dead".
+        await telephony_loop.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -814,6 +831,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
+            await telephony_loop.stop()
             await watch_runner.stop()
             await watch_purge.stop()
             await misheard_purge.stop()
@@ -911,6 +929,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # B11 req 372: exposed for tests/diagnostics only - routes never read this directly
     # (app.webpush.routes reads settings and builds its own key/session per request).
     app.state.webpush_push_rung = push_rung
+    app.state.telephony = telephony
+    app.state.telephony_audio_store = telephony_audio_store
+    app.state.telephony_loop = telephony_loop
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -1040,6 +1061,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(voice_misheard_router)
     # watch-engine: the owner's watches (GET/POST/DELETE /v1/watches).
     app.include_router(watch_router)
+    # jarvis-calls-owner: the settings page's status and test call (owner-gated), and the
+    # one-time call audio Twilio fetches (the token is the authority).
+    app.include_router(telephony_router)
+    app.include_router(telephony_audio_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -1114,6 +1139,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # watch-engine: the runner ("skipped" while off) and the readings' 30-day purge.
         checks["watch_runner"] = watch_runner.health_check()
         checks["watch_purge"] = watch_purge.health_check()
+        # jarvis-calls-owner: the call loop (retry + event calls). Advisory like the above.
+        checks[TELEPHONY_HEALTH_NAME] = telephony_loop.health_check()
         # B08 req 646/648/649/650: the safety net answers for itself. Both records have
         # been written for weeks and nothing read either of them; a backup nobody checks is
         # one you find out about on the day you need it.

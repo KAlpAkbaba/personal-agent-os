@@ -36,6 +36,7 @@ import { useLoaded, useNow } from "../lib/pages/useLoaded";
 import { QUALITY_TIERS, TIER_LABEL } from "../lib/uistate/quality";
 import { AmbientPanel, VoiceQualificationPanel } from "../core/panels/CockpitPanels";
 import { useCorePreferences } from "../core/usePreferences";
+import { TelephonySettings } from "./TelephonySettings";
 import { WebPushSettings } from "./WebPushSettings";
 
 /** Each policy route, and the surface that actually sets what it reports. */
@@ -162,6 +163,7 @@ export default function SettingsPage() {
       </section>
 
       <WebPushSettings />
+      <TelephonySettings />
 
       <AmbientPanel
         policy={ambient.state}

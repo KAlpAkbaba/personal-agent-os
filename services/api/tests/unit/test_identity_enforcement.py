@@ -167,6 +167,9 @@ EXPECTED_OPEN = {
     # (app.mail.attachment_fetch); unknown, expired, redeemed and hash-mismatched tokens
     # are all the same bare 404. Deliberately open, mirroring that route.
     ("GET", "/v1/mail/attachments/fetch/{token}"),
+    # jarvis-calls-owner: the short-lived audio TWILIO fetches while it rings the owner - it
+    # holds no owner session; single-use, ten-minute, unguessable token, bare 404 otherwise.
+    ("GET", "/v1/telephony/audio/{token}"),
     # M18.4 gap 1 (ADR-0081 addendum 3): the device handoff between the two colours. The
     # release script calls these from INSIDE the draining container, which holds no owner
     # session and must not need one to finish a release; the routes are loopback-only
