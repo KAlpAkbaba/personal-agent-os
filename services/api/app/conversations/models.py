@@ -42,9 +42,7 @@ MODES = ("manual", "home")
 
 class ConversationRow(Base):
     __tablename__ = "conversations"
-    __table_args__ = (
-        CheckConstraint("mode IN ('manual', 'home')", name="ck_conversations_mode"),
-    )
+    __table_args__ = (CheckConstraint("mode IN ('manual', 'home')", name="ck_conversations_mode"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     mode: Mapped[str] = mapped_column(String(16), nullable=False)

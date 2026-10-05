@@ -77,10 +77,17 @@ def _person(view: PersonView) -> dict[str, Any]:
 
 
 def _refused(refused: service.ConversationRefused) -> HTTPException:
-    status = 404 if refused.code == "not_found" else 409 if refused.code in (
-        "already_open",
-        "closed",
-    ) else 422
+    status = (
+        404
+        if refused.code == "not_found"
+        else 409
+        if refused.code
+        in (
+            "already_open",
+            "closed",
+        )
+        else 422
+    )
     return HTTPException(status, {"code": refused.code, "message": refused.message})
 
 
@@ -173,7 +180,9 @@ async def delete_person(person_id: str, request: Request) -> dict[str, int]:
     key = _key(person_id, "Bu kişi")
     removed = await _run(request, lambda db, live, cipher: service.delete_person(db, live, key))
     if not removed:
-        raise HTTPException(404, {"code": "not_found", "message": "Bu kişi yok; silinmiş olabilir."})
+        raise HTTPException(
+            404, {"code": "not_found", "message": "Bu kişi yok; silinmiş olabilir."}
+        )
     return {"deleted": 1}
 
 
@@ -193,7 +202,9 @@ async def put_settings(request: Request) -> dict[str, bool]:
         )
     return await _run(
         request,
-        lambda db, live, cipher: {"home_listen": service.set_home_listen(db, payload["home_listen"])},
+        lambda db, live, cipher: {
+            "home_listen": service.set_home_listen(db, payload["home_listen"])
+        },
     )
 
 
@@ -224,7 +235,10 @@ async def add_segment(conversation_id: str, request: Request) -> dict[str, Any]:
     if any(name in payload for name in AUDIO_KEYS):
         raise HTTPException(
             422,
-            {"code": "audio_refused", "message": "Ses kaydı alınmaz; yalnızca yazıya dökülmüş metin."},
+            {
+                "code": "audio_refused",
+                "message": "Ses kaydı alınmaz; yalnızca yazıya dökülmüş metin.",
+            },
         )
     embedding = payload.get("embedding")
     if embedding is not None and (
@@ -262,7 +276,11 @@ async def name_speaker(conversation_id: str, speaker_no: int, request: Request) 
         result = service.name_speaker(
             db, live, cipher, key, speaker_no, str(payload.get("name") or "")
         )
-        return {"person": _person(result.person), "applied": result.applied, "message": result.message}
+        return {
+            "person": _person(result.person),
+            "applied": result.applied,
+            "message": result.message,
+        }
 
     return await _run(request, work)
 
@@ -282,6 +300,4 @@ async def delete_conversation(conversation_id: str, request: Request) -> dict[st
 
 @router.delete("/v1/conversations")
 async def forget_conversations(request: Request) -> dict[str, int]:
-    return {
-        "deleted": await _run(request, lambda db, live, cipher: service.forget_all(db, live))
-    }
+    return {"deleted": await _run(request, lambda db, live, cipher: service.forget_all(db, live))}

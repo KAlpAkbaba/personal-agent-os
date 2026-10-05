@@ -257,9 +257,7 @@ def start_conversation(
         select(ConversationRow.id).where(ConversationRow.ended_at.is_(None)).limit(1)
     ).scalar_one_or_none()
     if open_one is not None:
-        raise ConversationRefused(
-            "already_open", "Zaten yazdığım bir konuşma var; önce onu bitir."
-        )
+        raise ConversationRefused("already_open", "Zaten yazdığım bir konuşma var; önce onu bitir.")
     row = ConversationRow(
         mode=mode,
         title=(title or "").strip()[:TITLE_WIDTH] or None,
@@ -366,9 +364,7 @@ def add_segment(
             ask_who = True
 
     seq = db.execute(
-        select(func.coalesce(func.max(SegmentRow.seq), 0)).where(
-            SegmentRow.conversation_id == cid
-        )
+        select(func.coalesce(func.max(SegmentRow.seq), 0)).where(SegmentRow.conversation_id == cid)
     ).scalar_one()
     segment = SegmentRow(
         conversation_id=cid,
@@ -513,9 +509,7 @@ def delete_person(db: Session, live: LiveConversations, person_id: uuid.UUID) ->
     row = db.get(PersonRow, person_id)
     if row is None:
         return False
-    db.execute(
-        update(SegmentRow).where(SegmentRow.person_id == person_id).values(person_id=None)
-    )
+    db.execute(update(SegmentRow).where(SegmentRow.person_id == person_id).values(person_id=None))
     db.delete(row)
     db.flush()
     live.forget_person(person_id)
@@ -530,9 +524,7 @@ def _view(db: Session, row: ConversationRow, *, with_segments: bool) -> Conversa
     if with_segments:
         names = _names(db)
         rows = db.execute(
-            select(SegmentRow)
-            .where(SegmentRow.conversation_id == row.id)
-            .order_by(SegmentRow.seq)
+            select(SegmentRow).where(SegmentRow.conversation_id == row.id).order_by(SegmentRow.seq)
         ).scalars()
         segments = [_segment_view(s, names) for s in rows]
     count, first = db.execute(

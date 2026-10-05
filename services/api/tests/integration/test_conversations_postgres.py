@@ -146,7 +146,9 @@ def test_named_recognised_deleted_and_relabelled_on_postgres(factory) -> None:
     with factory() as db:
         service.record_consent(db, live, CIPHER, name="Ahmet", now=NOON)
         first = service.start_conversation(db, live, now=NOON).id
-        service.add_segment(db, live, CIPHER, first, text="Selam, tapuya gidelim", embedding=VOICE_A)
+        service.add_segment(
+            db, live, CIPHER, first, text="Selam, tapuya gidelim", embedding=VOICE_A
+        )
         assert service.name_speaker(db, live, CIPHER, first, 1, "AHMET").applied is True
         service.stop_conversation(db, live, first)
         later = service.start_conversation(db, live).id

@@ -155,7 +155,11 @@ def test_every_write_of_a_whole_conversation_carries_no_audio(engine, factory, l
     assert written, "the capture saw no writes"
     blobs = [v for v in written if isinstance(v, (bytes, bytearray, memoryview))]
     for value in written:
-        raw = bytes(value) if isinstance(value, (bytes, bytearray, memoryview)) else str(value).encode()
+        raw = (
+            bytes(value)
+            if isinstance(value, (bytes, bytearray, memoryview))
+            else str(value).encode()
+        )
         assert b"AUDIO-MARK" not in raw
     # The only bytes ever written: the one sealed profile, which opens to numbers.
     assert len(blobs) == 1
@@ -235,8 +239,15 @@ def test_the_database_refuses_a_profile_without_consent(factory) -> None:
             db.commit()
         db.rollback()
         # The same row with consent recorded is accepted: the CHECK is what refused it.
-        db.add(PersonRow(name="Gizli", name_key="gizli", created_at=NOON, profile_sealed=b"x",
-                         consent_at=NOON))
+        db.add(
+            PersonRow(
+                name="Gizli",
+                name_key="gizli",
+                created_at=NOON,
+                profile_sealed=b"x",
+                consent_at=NOON,
+            )
+        )
         db.commit()
 
 
@@ -261,9 +272,7 @@ def test_a_named_consenting_voice_is_recognised_in_a_later_conversation(factory,
         assert near.ask_who is True and near.segment.speaker == "Konuşmacı 3"
 
 
-def test_deleting_a_person_removes_the_profile_and_relabels_every_transcript(
-    factory, live
-) -> None:
+def test_deleting_a_person_removes_the_profile_and_relabels_every_transcript(factory, live) -> None:
     with factory() as db:
         service.record_consent(db, live, CIPHER, name="Ahmet", now=NOON)
         cid = _start(db, live).id
@@ -305,7 +314,9 @@ def test_search_delete_and_forget(factory, live) -> None:
         assert {c.id for c in service.list_conversations(db)} == {one, two}
         assert service.delete_conversation(db, live, one) is True
         db.commit()
-        assert db.execute(select(SegmentRow).where(SegmentRow.conversation_id == one)).first() is None
+        assert (
+            db.execute(select(SegmentRow).where(SegmentRow.conversation_id == one)).first() is None
+        )
         assert service.delete_conversation(db, live, one) is False
         assert service.forget_all(db, live) == 1
         db.commit()
