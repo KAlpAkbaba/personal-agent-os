@@ -1413,6 +1413,65 @@ def _narrative_match(text: str) -> str | None:
     return None if ask is None else ask.period
 
 
+#: ADR-0244 A: the words that make a failure question one about a SPAN of the record - a
+#: period or the plural - rather than "what failed just now?". Whole words, compared folded
+#: (Turkish letters and the ASCII an STT writes resolve alike): "dün" must not be read in
+#: "dünyada", "neler" not in "nelerden". A named machine counts too (the recogniser's device).
+_FAILURE_SPAN_WORDS: Final[frozenset[str]] = frozenset({"neler", "bugün", "dün"})
+_FAILURE_SPAN_PAIRS: Final[tuple[tuple[str, str], ...]] = (("bu", "hafta"),)
+#: "en son ne başarısız oldu" / "son hata": the latest one - the explain ``failures`` family's
+#: own answer, whatever period is named with it. A whole word: "sonuçta" is not "son".
+_FAILURE_LATEST_WORDS: Final[frozenset[str]] = frozenset({"son"})
+#: The words that make "başarısız" a QUESTION about failures. Without one of them (and
+#: without a "hata" word) the sentence merely contains it: "başarısız olduğunda haber ver"
+#: is a request for later, and "olduğunda" only starts like "oldu" (the classifier's stems).
+_FAILURE_QUESTION_WORDS: Final[frozenset[str]] = frozenset(
+    {"ne", "neler", "neydi", "nelerdi", "hangi", "hangileri", "hangisi", "oldu", "kaldı"}
+)
+
+
+def _folded_words(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(asr_fold(tok) for tok in tokens)
+
+
+def _has_folded_word(folded: tuple[str, ...], words: frozenset[str]) -> bool:
+    wanted = {asr_fold(word) for word in words}
+    return any(tok in wanted for tok in folded)
+
+
+def _failures_narrative_match(tokens: tuple[str, ...], text: str) -> str | None:
+    """The period of a failure question over a span ("bu hafta ne başarısız oldu", "neler
+    başarısız oldu", "ofiste ne başarısız oldu"), or None.
+
+    The narrative recogniser decides that it IS a failure question (``failures_only``) and
+    reads its period and device; this only decides that the owner asked about a span, not
+    about the latest failure. The bare singular "ne başarısız oldu" stays with the explain
+    ``failures`` family (ADR-0230's owned list)."""
+    from app.narrative.intent import recognise
+
+    ask = recognise(text)
+    if ask is None or not ask.failures_only:
+        return None
+    folded = _folded_words(tokens)
+    if _has_folded_word(folded, _FAILURE_LATEST_WORDS):
+        return None
+    pairs = {(asr_fold(a), asr_fold(b)) for a, b in _FAILURE_SPAN_PAIRS}
+    spanned = (
+        ask.device is not None
+        or _has_folded_word(folded, _FAILURE_SPAN_WORDS)
+        or any(pair in pairs for pair in zip(folded, folded[1:], strict=False))
+    )
+    return ask.period if spanned else None
+
+
+def _failures_asked(tokens: tuple[str, ...]) -> bool:
+    """A ``failures`` reading is a question: a "hata" word, or "başarısız" with a question
+    word beside it (``_FAILURE_QUESTION_WORDS``), each a whole word."""
+    if _has(tokens, "hata"):
+        return True
+    return _has_folded_word(_folded_words(tokens), _FAILURE_QUESTION_WORDS)
+
+
 def _explain_kind(tokens: tuple[str, ...], text: str = "") -> str | None:
     """The kind of question about the system's own activity, or None.
 
@@ -1436,6 +1495,8 @@ def _explain_kind(tokens: tuple[str, ...], text: str = "") -> str | None:
         return None
     required = _INTENT_CORROBORATION.get(query.kind)
     if required is not None and not any(_has(tokens, stem) for stem in required):
+        return None
+    if query.kind == "failures" and not _failures_asked(tokens):
         return None
     return query.kind
 
@@ -10310,6 +10371,16 @@ def _resolve_intent_rules(
         and not (narration is not None and explain_kind in ("research_detail", "technical"))
         and not _full_read(tokens)
     ):
+        # ADR-0244 A: "bu hafta / neler / ofiste ne başarısız oldu" asks for the failures of a
+        # span - the narrative told failures only - not the latest one this family speaks.
+        if explain_kind == "failures" and (span := _failures_narrative_match(tokens, text)):
+            return ResolvedIntent(
+                Intent.EXPLAIN,
+                scope=SCOPE_CONVERSATION,
+                matched=span,
+                query_kind=QUERY_KIND_NARRATIVE,
+                **base,
+            )
         return ResolvedIntent(
             Intent.EXPLAIN,
             scope=SCOPE_CONVERSATION,
