@@ -578,6 +578,17 @@ class WakeSequence:
         steps.extend(media_steps)
         if media_ok:
             media_kind = PLAYED_KIND_YOUTUBE
+            # A song played, but maybe not the alarm's own: the global wake song stood in
+            # for it. "Neden Şımarık değil?" is answered from the row, like the tone's why.
+            pieces = [
+                piece
+                for s in media_steps
+                if s.capability == CAPABILITY_BROWSER_MEDIA_PLAY
+                and not _media_step_fully_succeeded(s)
+                for piece in (s.error_class or s.reason or str(s.result.get("reason") or ""),)
+                if piece
+            ]
+            media_failure_reason = "; ".join(pieces) or None
         else:
             if media_steps:
                 # The owner's media was genuinely attempted (``media_steps`` is empty when
@@ -642,10 +653,14 @@ class WakeSequence:
         Returns ``([], False)`` with NO receipt when the alarm never asked for media — an
         alarm the owner set with the tone has no media step to fail, and inventing a failed
         receipt for a thing nobody asked for would be its own kind of lie.
+
+        The songs are tried in order (:func:`_song_candidates`): this alarm's own song, then
+        the owner's global wake song; each failed play is its own receipt, and the caller
+        rings the tone when none played. A session that will not open fails them all at
+        once - the second song would need the same browser.
         """
-        media = alarm.resolved_media_identity or {}
-        url = media.get("url") if isinstance(media, dict) else None
-        if media.get("kind") != PLAYED_KIND_YOUTUBE or not isinstance(url, str) or not url:
+        candidates = _song_candidates(db, alarm)
+        if not candidates:
             return [], False
 
         steps: list[StepOutcome] = []
@@ -672,28 +687,40 @@ class WakeSequence:
             return steps, False
         alarm.media_session_id = session_id
 
-        play_step = self._run_step(
-            db,
-            alarm,
-            capability=CAPABILITY_BROWSER_MEDIA_PLAY,
-            payload={
-                "session_id": session_id,
-                "url": url,
-                "volume": float(volume["start"]),
-                "verify_seconds": MEDIA_VERIFY_SECONDS,
-            },
-            requested_state="playing",
-            idempotency_key=f"alarm-media-play:{alarm.id}:{firing_id or 'once'}",
-            timeout_s=TIMEOUT_MEDIA,
-            observed_key="verified",
-            now=now,
-        )
-        steps.append(play_step)
-        # `verified` is the browser's own read-back that currentTime actually advanced —
-        # NOT that play() was called. An unverified play is a failed play here, and the
-        # tone takes over: a silent tab is indistinguishable from a broken alarm to a
-        # sleeping owner.
-        if not play_step.ok or play_step.result.get("verified") is not True:
+        played: dict[str, Any] | None = None
+        for attempt, (source, song) in enumerate(candidates):
+            # The first attempt keeps the key it always had; a fallback song is a different
+            # command and must not be swallowed as a retry of the first.
+            suffix = "" if attempt == 0 else f":{source}"
+            play_step = self._run_step(
+                db,
+                alarm,
+                capability=CAPABILITY_BROWSER_MEDIA_PLAY,
+                payload={
+                    "session_id": session_id,
+                    "url": song["url"],
+                    "volume": float(volume["start"]),
+                    "verify_seconds": MEDIA_VERIFY_SECONDS,
+                },
+                requested_state="playing",
+                idempotency_key=f"alarm-media-play:{alarm.id}:{firing_id or 'once'}{suffix}",
+                timeout_s=TIMEOUT_MEDIA,
+                observed_key="verified",
+                now=now,
+            )
+            steps.append(play_step)
+            # `verified` is the browser's own read-back that currentTime actually advanced —
+            # NOT that play() was called. An unverified play is a failed play here, and the
+            # next song (or the tone) takes over: a silent tab is indistinguishable from a
+            # broken alarm to a sleeping owner.
+            if play_step.ok and play_step.result.get("verified") is True:
+                played = {"source": source, "url": song["url"], "title": song.get("title", "")}
+                break
+        detail = {k: v for k, v in (alarm.detail_json or {}).items() if k != "media_played"}
+        if played is not None:
+            detail["media_played"] = played
+        alarm.detail_json = detail
+        if played is None:
             return steps, False
 
         steps.append(
@@ -1268,6 +1295,48 @@ def _volume_policy(alarm: WakeAlarm) -> dict[str, Any]:
     policy = dict(DEFAULT_VOLUME_POLICY)
     policy.update({k: v for k, v in (alarm.volume_policy or {}).items() if v is not None})
     return policy
+
+
+#: Which song an attempt was: the alarm's own, or the owner's global wake song.
+SONG_SOURCE_ALARM: Final = "alarm_song"
+SONG_SOURCE_WAKE: Final = "wake_song"
+
+
+def _song_candidates(db: Session, alarm: WakeAlarm) -> list[tuple[str, dict[str, Any]]]:
+    """The songs to try, in order, each url once (the 2026-10-05 per-alarm song).
+
+    1. THIS alarm's own song (``alarm_song``: the column, or the url it was created with);
+    2. the owner's global wake song as it stands NOW - changed tonight, played tomorrow;
+    3. the copy of the global song the alarm took when it was created
+       (``resolved_media_identity``) - what this module played before there was a chain.
+    """
+    from app.alarms.service import alarm_song, get_wake_song
+
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    own = alarm_song(alarm)
+    if own is not None:
+        candidates.append((SONG_SOURCE_ALARM, own))
+    live = get_wake_song(db)
+    if live is not None:
+        candidates.append((SONG_SOURCE_WAKE, live))
+    stored = alarm.resolved_media_identity
+    if (
+        isinstance(stored, dict)
+        and stored.get("kind") == PLAYED_KIND_YOUTUBE
+        and isinstance(stored.get("url"), str)
+        and stored["url"]
+    ):
+        candidates.append(
+            (SONG_SOURCE_WAKE, {"url": stored["url"], "title": str(stored.get("title") or "")})
+        )
+    seen: set[str] = set()
+    ordered: list[tuple[str, dict[str, Any]]] = []
+    for source, song in candidates:
+        if song["url"] in seen:
+            continue
+        seen.add(song["url"])
+        ordered.append((source, song))
+    return ordered
 
 
 def _greeting_policy(alarm: WakeAlarm) -> dict[str, Any]:

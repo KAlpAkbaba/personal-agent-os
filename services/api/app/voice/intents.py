@@ -2169,6 +2169,254 @@ def _alarm_match(
     return None
 
 
+# ------------------------------------- 2026-10-05: the song an alarm sentence names
+#
+# "Yarın 7'de beni Tarkan'ın Şımarık'ıyla uyandır." sets the time AND the song. The song is
+# read off the RAW words (capitals and apostrophes are the owner's own and go to a search
+# engine), and only by anchored shapes right before the wake verb - never a stem hunt, the
+# rule the Turkish suffix traps taught this file: "Şımarık'ıyla" ends in a suffix, "çalarak"
+# is a verb, "ile" is a word, and each must cut the title without swallowing the time.
+
+_SONG_EDGE_PUNCT: Final = ".,!?;:\"“”«»"
+#: "X çalarak uyandır" - the title is everything before the gerund.
+_SONG_PLAYING_FORMS: Final[frozenset[str]] = frozenset({"çalarak", "calarak"})
+#: "X ile uyandır" - the comitative as its own word.
+_SONG_WITH_FORMS: Final[frozenset[str]] = frozenset({"ile"})
+#: "X şarkısıyla uyandır" - the noun carries the comitative, the title stands before it.
+_SONG_NOUN_WITH_FORMS: Final[frozenset[str]] = frozenset(
+    {
+        "şarkısıyla",
+        "sarkisiyla",
+        "şarkıyla",
+        "sarkiyla",
+        "müziğiyle",
+        "muzigiyle",
+        "müzikle",
+        "muzikle",
+        "parçasıyla",
+        "parcasiyla",
+    }
+)
+#: "X şarkısını çalarak" - the accusative noun between the title and the gerund.
+_SONG_NOUN_OBJECT_FORMS: Final[frozenset[str]] = frozenset(
+    {
+        "şarkısını",
+        "sarkisini",
+        "şarkıyı",
+        "sarkiyi",
+        "müziğini",
+        "muzigini",
+        "parçasını",
+        "parcasini",
+    }
+)
+#: "Şımarık'ıyla", "Tarkan'la", "Time'la": an apostrophe, then the comitative.
+_SONG_APOSTROPHE_WITH_RE: Final = re.compile(
+    r"^(?P<base>.+?)['’](?:ıyla|iyle|uyla|üyle|yla|yle|la|le)$", re.IGNORECASE
+)
+#: "Şımarıkıyla" - the recogniser dropped the apostrophe. Only for a CAPITALISED word (a
+#: name), and only the vowel-led forms: "sevgiyle" (lower case) is a manner, not a title.
+_SONG_BARE_WITH_RE: Final = re.compile(r"^(?P<base>\w{3,}?)(?:ıyla|iyle|uyla|üyle)$")
+#: Where the title starts (walking back from its last word): the owner, a day, a time.
+_SONG_START_STOPS: Final[frozenset[str]] = frozenset(
+    {
+        "beni",
+        "bana",
+        "bizi",
+        "ve",
+        "yarın",
+        "yarin",
+        "bugün",
+        "bugun",
+        "sabah",
+        "sabahleyin",
+        "akşam",
+        "aksam",
+        "gece",
+        "öğlen",
+        "oglen",
+        "her",
+        "hafta",
+        "içi",
+        "ici",
+        "sonu",
+        "saat",
+        "pazartesi",
+        "salı",
+        "sali",
+        "çarşamba",
+        "carsamba",
+        "perşembe",
+        "persembe",
+        "cuma",
+        "cumartesi",
+        "pazar",
+        "lütfen",
+        "lutfen",
+    }
+)
+#: "yedide", "buçukta", "otuzda": a spoken number with the time suffix is a clock, a stop.
+_SONG_CLOCK_WORD_RE: Final = re.compile(
+    r"^(?:bir|iki|üç|uc|dört|dort|beş|bes|altı|alti|yedi|sekiz|dokuz|on|yirmi|otuz|kırk|"
+    r"kirk|elli|buçuk|bucuk|çeyrek|ceyrek)['’]?(?:de|da|te|ta|e|a|ye|ya)$"
+)
+_SONG_MAX_WORDS: Final = 10
+
+
+def _song_words(utterance: str) -> list[str]:
+    return [w for w in (raw.strip(_SONG_EDGE_PUNCT) for raw in utterance.split()) if w]
+
+
+def _song_start_stop(word: str) -> bool:
+    lowered = word.casefold().replace("i̇", "i")
+    return (
+        lowered in _SONG_START_STOPS
+        or any(ch.isdigit() for ch in word)
+        or bool(_SONG_CLOCK_WORD_RE.match(lowered))
+        or lowered.startswith(("pazartesi", "salı", "çarşamba", "perşembe", "cumartesi"))
+    )
+
+
+def _title_before(words: list[str], end: int, last: str | None = None) -> str | None:
+    """The title ending at ``words[end - 1]`` (replaced by ``last`` when its suffix was cut),
+    walking back to the first stop word. None when nothing is left."""
+    picked: list[str] = [last] if last is not None else []
+    index = end - (1 if last is not None else 0)
+    while index > 0 and len(picked) <= _SONG_MAX_WORDS:
+        word = words[index - 1]
+        if _song_start_stop(word):
+            break
+        picked.insert(0, word)
+        index -= 1
+    if not picked or len(picked) > _SONG_MAX_WORDS:
+        return None
+    title = " ".join(picked).strip()
+    return title[:200] or None
+
+
+def alarm_song_query(utterance: str) -> str | None:
+    """The song an alarm sentence names, in the owner's own words, or None.
+
+    "Yarın 7'de beni Tarkan'ın Şımarık'ıyla uyandır." -> "Tarkan'ın Şımarık";
+    "Pazartesi 6.30'da Sezen Aksu çalarak uyandır." -> "Sezen Aksu";
+    "... beni Bella Ciao ile uyandır." -> "Bella Ciao";
+    "... Hans Zimmer Time şarkısıyla uyandır." -> "Hans Zimmer Time";
+    "... Barış Manço'nun Gülpembe şarkısını çalarak beni uyandır." -> "Barış Manço'nun
+    Gülpembe". "Beni sevgiyle uyandır." names no song (None).
+    """
+    words = _song_words(utterance or "")
+    verb = next(
+        (
+            n
+            for n, w in enumerate(words)
+            if w.casefold().startswith(("uyandır", "uyandir"))
+        ),
+        None,
+    )
+    if verb is None or verb == 0:
+        return None
+    end = verb
+    if words[end - 1].casefold() == "beni":
+        end -= 1
+    if end == 0:
+        return None
+    marker = words[end - 1]
+    lowered = marker.casefold()
+    if lowered in _SONG_PLAYING_FORMS:
+        end -= 1
+        if end > 0 and words[end - 1].casefold() in _SONG_NOUN_OBJECT_FORMS:
+            end -= 1
+        return _title_before(words, end)
+    if lowered in _SONG_WITH_FORMS or lowered in _SONG_NOUN_WITH_FORMS:
+        return _title_before(words, end - 1)
+    if match := _SONG_APOSTROPHE_WITH_RE.match(marker):
+        return _title_before(words, end, last=match.group("base"))
+    if marker[:1].isupper() and (match := _SONG_BARE_WITH_RE.match(marker)):
+        return _title_before(words, end, last=match.group("base"))
+    return None
+
+
+#: "Alarmımın şarkısını X yap" / "Uyandırma şarkımı değiştir": the song noun the owner
+#: means as "the alarm's song", exact forms.
+_WAKE_SONG_NOUN_FORMS: Final[frozenset[str]] = frozenset(
+    {
+        "şarkısını",
+        "sarkisini",
+        "şarkısı",
+        "sarkisi",
+        "şarkımı",
+        "sarkimi",
+        "şarkım",
+        "sarkim",
+        "müziğini",
+        "muzigini",
+        "müziği",
+        "muzigi",
+        "müziğimi",
+        "muzigimi",
+        "müziğim",
+        "muzigim",
+        "parçasını",
+        "parcasini",
+        "parçamı",
+        "parcami",
+    }
+)
+_WAKE_SONG_SET_VERBS: Final[frozenset[str]] = frozenset(
+    {"yap", "yapsana", "değiştir", "degistir", "olsun", "ayarla", "seç", "sec"}
+)
+#: "alarmımın şarkısı" is ONE alarm's (the next one); "alarm müziğim" / "uyandırma şarkım"
+#: is the owner's wake song in general.
+_ONE_ALARM_GENITIVE_FORMS: Final[frozenset[str]] = frozenset(
+    {"alarmımın", "alarmimin", "alarmın", "alarmin", "alarmının", "alarminin"}
+)
+_WAKE_SONG_OWNER_FORMS: Final[frozenset[str]] = frozenset(
+    {"alarm", "alarmım", "alarmim", "uyandırma", "uyandirma"} | _ONE_ALARM_GENITIVE_FORMS
+)
+#: The scope :func:`alarm_song_set_match` returns.
+SONG_SCOPE_ALARM: Final = "alarm"
+SONG_SCOPE_WAKE_SONG: Final = "wake_song"
+
+
+def alarm_song_set_match(utterance: str) -> tuple[str, str | None] | None:
+    """``(scope, title)`` for "change the wake song", or None.
+
+    "Alarmımın şarkısını Tarkan Şımarık yap." -> ("alarm", "Tarkan Şımarık");
+    "Uyandırma şarkımı Sezen Aksu Gülümse yap." -> ("wake_song", "Sezen Aksu Gülümse");
+    "Uyandırma şarkımı değiştir." -> ("wake_song", None) - the tool asks which song.
+    "Alarm müziğim ne?" is a question and never matches. The title is what stands between
+    the song noun and the verb; one named anywhere else is not read (the tool asks).
+    """
+    words = _song_words(utterance or "")
+    lowered = [w.casefold() for w in words]
+    if not lowered or any(w in ("mı", "mi", "mu", "mü", "ne", "hangi") for w in lowered):
+        return None
+    noun = next(
+        (
+            n
+            for n, w in enumerate(lowered)
+            if w in _WAKE_SONG_NOUN_FORMS and n > 0 and lowered[n - 1] in _WAKE_SONG_OWNER_FORMS
+        ),
+        None,
+    )
+    if noun is None:
+        return None
+    verb = next(
+        (n for n in range(len(lowered) - 1, noun, -1) if lowered[n] in _WAKE_SONG_SET_VERBS),
+        None,
+    )
+    if verb is None:
+        return None
+    scope = (
+        SONG_SCOPE_ALARM
+        if lowered[noun - 1] in _ONE_ALARM_GENITIVE_FORMS
+        else SONG_SCOPE_WAKE_SONG
+    )
+    between = [w for w in words[noun + 1 : verb] if w.casefold() != "olarak"]
+    title = " ".join(between).strip()[:200]
+    return scope, (title or None)
+
+
 #: ADR-0079 §7: the negations that turn a standing preference OFF ("... kapatma").
 _POLICY_NEGATION_FORMS: Final[tuple[str, ...]] = (
     "kapatma",
@@ -9207,6 +9455,13 @@ def _resolve_intent_rules(
             matched=alarm_matched[1],
             alarm_minutes=(
                 spoken_minutes(tokens) if alarm_matched[0] is Intent.ALARM_SNOOZE else None
+            ),
+            # 2026-10-05: the song the same sentence names ("... Şımarık'ıyla uyandır"),
+            # the owner's words - what the alarm's song search looks for.
+            media_query=(
+                alarm_song_query(text)
+                if alarm_matched[0] in (Intent.ALARM_CREATE, Intent.ALARM_TEST_CREATE)
+                else None
             ),
             **base,
         )

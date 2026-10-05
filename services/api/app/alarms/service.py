@@ -293,6 +293,41 @@ def set_wake_song(session: Session, *, url: str, title: str | None = None) -> di
     return dict(row.wake_song)
 
 
+def _song_value(url: Any, title: Any = None) -> dict[str, Any]:
+    """``{"url", "title"}`` for a song the owner named (or a search found for him) - only an
+    http(s) URL, the same rule :func:`set_wake_song` keeps."""
+    url = str(url or "").strip()
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise InvalidAlarmRequest("an alarm song must be an http(s) URL")
+    return {"url": url[:2000], "title": str(title or "")[:200]}
+
+
+def set_alarm_song(
+    session: Session, alarm_id: uuid.UUID, *, url: str | None, title: str | None = None
+) -> WakeAlarm:
+    """Set (``url``) or clear (``url=None``) ONE alarm's own song. A finished alarm takes
+    none: there is no morning left for it to play on."""
+    alarm = require_alarm(session, alarm_id)
+    if alarm.is_terminal:
+        raise InvalidAlarmRequest(f"alarm {alarm_id} is {alarm.state}")
+    alarm.song = None if url is None else _song_value(url, title)
+    alarm.updated_at = utcnow()
+    session.commit()
+    return alarm
+
+
+def alarm_song(alarm: WakeAlarm) -> dict[str, Any] | None:
+    """THIS alarm's own song, or None - the column, or the url the alarm was created with
+    (``media.url``, which has always been a per-alarm choice)."""
+    song = alarm.song if isinstance(alarm.song, dict) else None
+    if song and isinstance(song.get("url"), str) and song["url"]:
+        return {"url": song["url"], "title": str(song.get("title") or "")}
+    source = alarm.media_source if isinstance(alarm.media_source, dict) else {}
+    if source.get("kind") == MEDIA_KIND_YOUTUBE and isinstance(source.get("url"), str):
+        return {"url": source["url"], "title": str(source.get("title") or "")}
+    return None
+
+
 def _resolved_from_wake_song(wake_song: dict[str, Any] | None) -> dict[str, Any] | None:
     """The approved wake song, shaped as a ``resolved_media_identity`` — or ``None`` when
     the owner has never approved one (:func:`set_wake_song`)."""
@@ -352,13 +387,20 @@ def create_alarm(
     display_wake_policy: dict[str, Any] | None = None,
     snooze_minutes: int = DEFAULT_SNOOZE_MINUTES,
     source_ref: str | None = None,
+    song: dict[str, Any] | None = None,
 ) -> WakeAlarm:
     """Create the alarm AND the routine that will fire it (spec §3.1).
 
     The routine is created first-class through ``app.routines.service.create_routine``, so
     a wake alarm is visible in ``/v1/routines`` exactly like every other routine and the
     engine's own idempotency and ledger rows apply to it unchanged.
+
+    ``song`` is this alarm's own song (``{"url", "title"}``): it is what the owner asked
+    for, so it is also the media source and the resolved identity.
     """
+    own_song = _song_value(song.get("url"), song.get("title")) if song else None
+    if own_song is not None:
+        media = {"url": own_song["url"], "title": own_song["title"] or None}
     source, resolved = _media_source(media, wake_song=get_wake_song(session))
     alarm = WakeAlarm(
         id=uuid.uuid4(),
@@ -369,6 +411,7 @@ def create_alarm(
         state=STATE_SCHEDULED,
         media_source=source,
         resolved_media_identity=resolved,
+        song=own_song,
         volume_policy={**DEFAULT_VOLUME_POLICY, **(volume_policy or {})},
         greeting_policy={**DEFAULT_GREETING_POLICY, **(greeting_policy or {})},
         display_wake_policy={**DEFAULT_DISPLAY_WAKE_POLICY, **(display_wake_policy or {})},
@@ -1110,6 +1153,10 @@ def alarm_dict(alarm: WakeAlarm) -> dict[str, Any]:
         "recurrence": alarm.recurrence,
         "media_source": alarm.media_source,
         "resolved_media_identity": alarm.resolved_media_identity,
+        # The song THIS alarm wakes the owner with (the alarms page shows and changes it),
+        # and which song actually played on the last ring - its own, or the global one.
+        "song": alarm_song(alarm),
+        "media_played": (alarm.detail_json or {}).get("media_played"),
         "media_kind": alarm.media_kind,
         # Directive 2026-09-08 item C ("never silently fall back"): WHY the tone played
         # instead of the owner's media, readable from this row alone — set by
@@ -1159,6 +1206,7 @@ __all__ = [
     "InvalidAlarmRequest",
     "TickResult",
     "alarm_dict",
+    "alarm_song",
     "alarms_ringing",
     "cancel_alarm",
     "complete_alarm",
@@ -1170,6 +1218,7 @@ __all__ = [
     "reconcile_local_fired",
     "reconcile_local_snoozed",
     "require_alarm",
+    "set_alarm_song",
     "snooze_alarm",
     "status_speech",
     "stop_alarm",

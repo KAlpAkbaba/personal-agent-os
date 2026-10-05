@@ -278,6 +278,37 @@ async def get_alarm(request: Request, alarm_id: uuid.UUID) -> dict[str, Any]:
     return payload
 
 
+class AlarmSongRequest(BaseModel):
+    """``url: null`` clears the alarm's own song (the global wake song plays again)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str | None = Field(default=None, min_length=8, max_length=2000)
+    title: str | None = Field(default=None, max_length=200)
+
+
+@router.put("/{alarm_id}/song")
+async def put_alarm_song(
+    request: Request, alarm_id: uuid.UUID, body: AlarmSongRequest
+) -> dict[str, Any]:
+    """Set or clear ONE alarm's own song (the alarms page: "bu alarm şununla çalsın")."""
+    artifacts = _artifacts(request)
+
+    def write() -> dict[str, Any]:
+        with artifacts.session() as session:
+            alarm = alarms_service.set_alarm_song(
+                session, alarm_id, url=body.url, title=body.title
+            )
+            return alarms_service.alarm_dict(alarm)
+
+    try:
+        return await asyncio.to_thread(write)
+    except alarms_service.AlarmNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
+    except alarms_service.InvalidAlarmRequest as exc:
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
+
+
 @router.post("/{alarm_id}/cancel")
 async def cancel_alarm(
     request: Request, alarm_id: uuid.UUID, body: CancelRequest | None = None

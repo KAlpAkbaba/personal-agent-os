@@ -187,6 +187,11 @@ class WakeAlarm(Base):
     resolved_media_identity: Mapped[dict[str, Any] | None] = mapped_column(
         JSONColumn, nullable=True
     )
+    #: THIS alarm's own song, {"url", "title"}, or NULL (the owner, 2026-10-05: "alarmda
+    #: istediğim müzikle beni uyandıracak"). Set at creation ("Yarın 7'de beni Şımarık'la
+    #: uyandır") or later; the sequence plays it first, the global wake song
+    #: (``AmbientPolicyRow.wake_song``) second, the device's tone last. Migration 0067.
+    song: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
     volume_policy: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
     greeting_policy: Mapped[dict[str, Any]] = mapped_column(
         JSONColumn, nullable=False, default=dict

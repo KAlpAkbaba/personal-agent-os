@@ -996,6 +996,86 @@ def _alarm_control_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
+    """2026-10-05 (the owner: "alarmda istediğim müzikle beni uyandıracak"): ONE sentence
+    sets the time AND names the song. Its own function, like the wake-song block below.
+
+    Every row sets the time the sentence says - the song's suffix ("Şımarık'ıyla"), gerund
+    ("çalarak") and "ile" must not swallow it. The song itself rides on the turn
+    (``media_query``) and is pinned by ``tests/unit/test_alarm_song_by_voice.py``; these
+    rows carry no ``resolved_media_url`` until ``alarm.create`` searches for it (the wiring
+    in ``tools_ambient.py``, outside this task's area). "7'de" is written "7:30'da" here:
+    a bare digit hour after "yarın" is not a clock to ``tr_time`` yet (same wiring).
+    """
+    cases: list[UtteranceCase] = []
+    forms = [
+        ("a.song.1", "Yarın 7:30'da beni Tarkan'ın Şımarık'ıyla uyandır.", "07:30", None),
+        ("a.song.2", "Pazartesi 6.30'da Sezen Aksu çalarak uyandır.", "06:30", [0]),
+        ("a.song.3", "Yarın sabah yedi buçukta beni Bella Ciao ile uyandır.", "07:30", None),
+        ("a.song.4", "Yarın 07:30'da beni Hans Zimmer Time şarkısıyla uyandır.", "07:30", None),
+        (
+            "a.song.5",
+            "Yarın sabah 8'de Barış Manço'nun Gülpembe şarkısını çalarak beni uyandır.",
+            "08:00",
+            None,
+        ),
+    ]
+    for case_id, text, local_time, weekdays in forms:
+        expected: dict[str, object] = {"local_time": local_time}
+        if weekdays is not None:
+            expected["weekdays"] = weekdays
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="alarm_create",
+                    expected_tool="alarm.create",
+                    expected=expected,
+                    forbidden_tools=("media.play", "research.start"),
+                    context=CTX_NONE,
+                    category="alarm",
+                    source="canonical",
+                    regression_issue_id="owner 2026-10-05: alarm with the song he names",
+                )
+            )
+        )
+    # The near misses: a title with no alarm words stays media.play (it plays NOW), and
+    # closing an alarm never touches a song.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="a.song.nearmiss.play",
+                utterance="Tarkan'ın Şımarık şarkısını çal.",
+                expected_intent="media_play",
+                expected_tool="media.play",
+                expected_response=RESPONSE_OK,
+                forbidden_tools=("alarm.create", "research.start"),
+                side_effects=SIDE_EFFECTS_MEDIA_PLAY,
+                category="media",
+                source="canonical",
+                regression_issue_id="owner 2026-10-05: a plain 'X çal' is not an alarm",
+            )
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="a.song.nearmiss.stop",
+            utterance="Alarmı kapat, şarkı yeter.",
+            expected_intent="alarm_stop",
+            expected_tool="alarm.stop",
+            expected={"alarm_state": "STOPPED"},
+            forbidden_tools=("alarm.create", "media.play"),
+            side_effects=SIDE_EFFECTS_ALARM_STOP,
+            context=CTX_ALARM_RINGING,
+            category="alarm",
+            source="canonical",
+            regression_issue_id="owner 2026-10-05: closing an alarm never sets a song",
+        )
+    )
+    return cases
+
+
 def _alarm_wake_song_cases() -> list[UtteranceCase]:
     """The 2026-09-08 wake-song defect fix, as corpus cases — its own function (directive
     item G) so a parallel track's alarm work does not collide with this one in the same
@@ -8019,6 +8099,7 @@ def all_cases() -> list[UtteranceCase]:
         *_alarm_create_cases(),
         *_alarm_control_cases(),
         *_alarm_wake_song_cases(),
+        *_alarm_song_by_voice_cases(),
         *_display_cases(),
         *_eye_cases(),
         *_control_cases(),

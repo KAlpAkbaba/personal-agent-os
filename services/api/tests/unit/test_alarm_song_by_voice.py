@@ -33,7 +33,7 @@ from app.alarms.models import (
 from app.alarms.sequence import WakeSequence
 from app.alarms.tr_time import parse_when_struct
 from app.ledger.models import ActivityEventRow
-from app.voice.intents import Intent, resolve_intent
+from app.voice.intents import Intent, alarm_song_set_match, resolve_intent
 from app.voice.realtime_sessions import tools_alarms
 from app.voice.realtime_sessions.tools import ToolContext
 from tests.alarms_support import (
@@ -42,6 +42,13 @@ from tests.alarms_support import (
     failed,
     happy_device_results,
     ok,
+)
+from tests.unit.test_alarms_routes import (  # noqa: F401 - pytest fixtures, reused as-is
+    _fresh_uistate_publisher,
+    app_and_client,
+    artifacts_runtime,
+    client,
+    engine,
 )
 
 NOW = datetime(2026, 10, 5, 10, 0, tzinfo=UTC)
@@ -148,6 +155,28 @@ def test_a_finished_alarm_takes_no_song(session):
         alarms_service.set_alarm_song(session, alarm.id, url=ALARM_SONG)
 
 
+def test_the_alarms_page_sets_and_clears_one_alarms_song(client):  # noqa: F811 - the fixture
+    created = client.post("/v1/alarms", json={"when_text": "Yarın sabah 07:30'da beni uyandır."})
+    assert created.status_code == 201, created.text
+    alarm_id = created.json()["alarm_id"]
+    assert created.json()["song"] is None
+
+    put = client.put(f"/v1/alarms/{alarm_id}/song", json={"url": ALARM_SONG, "title": "Şımarık"})
+    assert put.status_code == 200, put.text
+    assert put.json()["song"] == {"url": ALARM_SONG, "title": "Şımarık"}
+    assert client.get(f"/v1/alarms/{alarm_id}").json()["song"]["url"] == ALARM_SONG
+
+    assert (
+        client.put(f"/v1/alarms/{alarm_id}/song", json={"url": "javascript:x()"}).status_code == 422
+    )
+    assert (
+        client.put(f"/v1/alarms/{uuid.uuid4()}/song", json={"url": ALARM_SONG}).status_code == 404
+    )
+
+    cleared = client.put(f"/v1/alarms/{alarm_id}/song", json={"url": None})
+    assert cleared.status_code == 200 and cleared.json()["song"] is None
+
+
 # --------------------------------------------------------------- the fallback chain
 
 
@@ -203,7 +232,9 @@ def test_an_alarm_without_its_own_song_plays_the_global_one_as_before(session, d
 def test_the_global_song_is_read_when_the_alarm_rings_not_when_it_was_set(session, device):
     """The owner changes the wake song tonight; tomorrow's alarm, set yesterday, plays the
     new one - the stored snapshot is only the last resort."""
-    alarms_service.set_wake_song(session, url="https://www.youtube.com/watch?v=OldWakeSong", title="")
+    alarms_service.set_wake_song(
+        session, url="https://www.youtube.com/watch?v=OldWakeSong", title=""
+    )
     alarm = _alarm(session)
     alarms_service.set_wake_song(session, url=WAKE_SONG, title="Yeni")
     device.results["browser.media_play"] = _play_only()
@@ -291,9 +322,23 @@ def test_closing_an_alarm_never_sets_a_song(text):
     ],
 )
 def test_changing_the_wake_song_by_voice(text, song):
-    resolved = resolve_intent(text)
-    assert resolved.intent is Intent.ALARM_SONG_SET
-    assert resolved.media_query == song
+    matched = alarm_song_set_match(text)
+    assert matched is not None and matched[1] == song
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Alarm müziğim ne?",
+        "Alarmımın şarkısı hangisi?",
+        "Alarmı kapat.",
+        "Tarkan Şımarık çal.",
+        "Yarın 7:30'da beni Tarkan'ın Şımarık'ıyla uyandır.",
+        "Şarkımı değiştir.",
+    ],
+)
+def test_what_is_not_a_wake_song_change(text):
+    assert alarm_song_set_match(text) is None
 
 
 def test_the_song_set_reads_its_scope_from_the_sentence():
@@ -409,6 +454,15 @@ def test_wiring_the_set_song_tool_is_registered_and_tiered():
 
     assert "alarm.set_song" in set(default_registry().names())
     assert "alarm.set_song" in _TIERS
+
+
+def test_wiring_the_router_sends_a_wake_song_change_to_the_tool():
+    """The intent exists only once ``alarm.set_song`` is registered (the intent-tool guard
+    and the corpus both execute it), so the enum, the capability row and the hook-up land
+    with the wiring."""
+    resolved = resolve_intent("Alarmımın şarkısını Tarkan Şımarık yap.")
+    assert resolved.intent.value == "alarm_song_set"
+    assert resolved.media_query == "Tarkan Şımarık"
 
 
 def test_wiring_alarm_create_resolves_the_song_the_sentence_named(session, device):
