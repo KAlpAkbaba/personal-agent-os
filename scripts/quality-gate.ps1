@@ -615,6 +615,15 @@ if (-not $Fast) {
     Assert-ExitCode "team-board tests"
   }
 
+  Invoke-Step "Agent team run temp folder kept for Git Bash /tmp (PS5.1, fake mount)" {
+    # A run's temp folder is emptied, not deleted: Git Bash may hold it as the machine's /tmp
+    # (2026-10-06 01:50); the sweep removes only empty, old folders that are not the /tmp mount.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-run-temp.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-run-temp tests"
+  }
+
   Invoke-Step "Agent team automatic release, resume after a limit, staging scripts (PS5.1, fakes)" {
     # ADR-0287 (cycle-auto-release), ADR-0290 (limit-resume-session), ADR-0294 (staging-stack):
     # fakes only - no release, no model and no container is started here.

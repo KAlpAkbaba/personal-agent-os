@@ -33,7 +33,10 @@ deleted the folder when the run ended, and from then on every bash on the PC pri
   msys process exits and a new session picks another TEMP, it is swept a day later.
 - Each run end asks bash once (`bash -c mount`, 30 s cap).
 - `team-cycle.tests.ps1`'s case "each run gets its own temp folder ... removed when the run
-  ends" must now assert "exists and is empty" instead of "is gone".
+  ends" now asserts "exists and is empty" instead of "is gone".
 
 Proof: `scripts/tests/team-run-temp.tests.ps1` (9 cases; the five acceptance cases each RED under
-a mutation restored from a backup).
+a mutation restored from a backup). It runs in the gate as the step "Agent team run temp folder
+kept for Git Bash /tmp (PS5.1, fake mount)" (`scripts/quality-gate.ps1`, after the team-board
+step, exit code checked as "team-run-temp tests") and in `.github/workflows/ci.yml` after
+`team-integrate.tests.ps1`.
