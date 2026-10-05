@@ -11,18 +11,25 @@
 
     Every case runs against a SCRATCH database on the dev stack's Postgres (container
     pagentos-postgres, 127.0.0.1:15432) - never the 'pagentos' database - and its own queue
-    store under %TEMP%. The scratch database starts at 0064 and the fake run migrates it to
-    this tree's head (0065): the "newer head" a branch brings.
+    store under %TEMP%. The scratch database starts at the parent of this tree's alembic head
+    (Base) and the fake run migrates it to the head (Head): the "newer head" a branch brings.
+    Both are read from the tree (`alembic heads`, `alembic show <head>`), never written here.
 
       1  a run that migrates and succeeds leaves the database at the recorded revision;
       2  a run that migrates and FAILS is restored too, and its exit code still passes through;
       3  a run that changes nothing triggers no downgrade;
       4  a downgrade that fails holds the database: the next database ask and run are refused
          with a DURDU line naming what happened, a heavy ask is not, `unblock` lifts the hold;
-      5  a run without the database kind records nothing.
+      5  a run without the database kind records nothing;
+      6  a wrapper killed (with its command) after migrating: no `finally` ran, but its guard
+         record stays, and the next database run restores the database from the dead run's
+         tree before its own command starts;
+      7  a wrapper killed while its command still runs: the next database ask and run are
+         refused (DURDU, the command's pid named, nothing touched) until that command is gone;
+      8  a dead run's guard whose restore fails holds the database: the next run never starts.
 
     Run: powershell -NoProfile -File scripts\tests\test-slots.tests.ps1 [-Filter <regex>]
-    Needs the dev stack (scripts\dev-up.ps1); about two minutes.
+    Needs the dev stack (scripts\dev-up.ps1); about four minutes.
 #>
 
 [CmdletBinding()]
@@ -42,8 +49,6 @@ $script:Passes = 0
 $script:TempRoot = Join-Path $env:TEMP ("pagentos-slot-schema-tests-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 [void](New-Item -ItemType Directory -Path $script:TempRoot -Force)
 
-$script:Base = "0064_memory_vocabulary_class"
-$script:Head = "0065_misheard_utterances"
 $script:Container = "pagentos-postgres"
 $script:Db = "pagentos_slotguard_" + [guid]::NewGuid().ToString("N").Substring(0, 8)
 
@@ -59,6 +64,26 @@ function Resolve-Exe {
 }
 $docker = Resolve-Exe "docker" @("C:\Program Files\Docker\Docker\resources\bin\docker.exe")
 $uv = Resolve-Exe "uv" @("%USERPROFILE%\.local\bin\uv.exe")
+
+# Head and Base come from this tree's own migrations (`alembic heads`, the head's Parent), so the
+# next migration that lands moves both and the cases still test "a branch brings one newer head".
+$script:Head = ""
+$script:Base = ""
+try {
+    $hr = Invoke-NativeProcess -FilePath $uv -Arguments @("run", "alembic", "heads") -WorkingDirectory $apiDir -TimeoutSeconds 900
+    $heads = @([regex]::Matches([string]$hr.StdOut, '(?m)^(\S+) \(head\)') | ForEach-Object { $_.Groups[1].Value })
+    if (@($heads).Count -ne 1) { throw "this tree has $(@($heads).Count) alembic heads: $($hr.StdOut) $($hr.StdErr)" }
+    $script:Head = $heads[0]
+    $sr = Invoke-NativeProcess -FilePath $uv -Arguments @("run", "alembic", "show", $script:Head) -WorkingDirectory $apiDir -TimeoutSeconds 300
+    $parent = [regex]::Match([string]$sr.StdOut, '(?m)^Parent: (\S+)\s*$')
+    if (-not $parent.Success -or $parent.Groups[1].Value -match '^<' -or $parent.Groups[1].Value -like "*,*") { throw "the head $($script:Head) has no single parent: $($sr.StdOut)" }
+    $script:Base = $parent.Groups[1].Value
+}
+catch {
+    Write-Host "  FAIL  setup: this tree's alembic head and its parent ($($_.Exception.Message))" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  (Base $($script:Base) -> Head $($script:Head), from this tree's migrations)"
 
 function Test-Case {
     param([string]$Name, [scriptblock]$Body)
@@ -132,6 +157,51 @@ function Invoke-SlotRun {
 }
 
 $migrateHead = "& '$uv' run alembic upgrade head; if (`$LASTEXITCODE -ne 0) { exit 9 }"
+
+function Start-SlotRunDetached {
+    <# test-slot.ps1 run started and NOT waited for (so it can be killed); output to files. #>
+    param([string]$Store, [string]$Ticket, [string]$Script)
+    $argLine = ConvertTo-NativeArgumentLine -Arguments (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $slotScript, "run", "-Ticket", $Ticket, "-Store", $Store, "--", $ps5, "-NoProfile", "-Command", $Script))
+    $log = Join-Path $script:TempRoot ("detached-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+    return (Start-Process -FilePath $ps5 -ArgumentList $argLine -WorkingDirectory $apiDir -PassThru -WindowStyle Hidden -RedirectStandardOutput "$log.out" -RedirectStandardError "$log.err")
+}
+
+function Wait-ScratchAt {
+    param([string]$Revision, [int]$Seconds = 300)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if ((Get-ScratchRevision) -eq $Revision) { return }
+        Start-Sleep -Seconds 2
+    }
+    throw "the scratch database did not reach $Revision in $Seconds s (at $(Get-ScratchRevision))"
+}
+
+function Stop-Tree {
+    param([int]$ProcessId)
+    $tk = Join-Path $env:SystemRoot "System32\taskkill.exe"
+    [void](Invoke-NativeProcess -FilePath $tk -Arguments @("/PID", [string]$ProcessId, "/T", "/F") -SuccessExitCodes @(0, 1, 128, 255) -TimeoutSeconds 60)
+}
+
+function Get-GuardRecord {
+    param([string]$Store)
+    $p = Join-Path $Store "database-guard.json"
+    Assert-True (Test-Path -LiteralPath $p) "a database run writes its guard record before its command: $p"
+    return ([System.IO.File]::ReadAllText($p) | ConvertFrom-Json)
+}
+
+function Wait-GuardChild {
+    <# The guard names the command's pid once it started. #>
+    param([string]$Store, [int]$Seconds = 120)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $p = Join-Path $Store "database-guard.json"
+        if (Test-Path -LiteralPath $p) {
+            try { $g = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json; if ([int]$g.child_pid -gt 0) { return $g } } catch { }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "no guard record with the command's pid in $Seconds s ($Store)"
+}
 
 # ------------------------------------------------------------------------------- the scratch DB
 $env:PAGENTOS_DATABASE_URL = "postgresql+psycopg://pagentos:pagentos-dev@127.0.0.1:15432/$($script:Db)"
@@ -229,6 +299,82 @@ Test-Case "5 a run without the database kind records nothing" {
     Assert-Equal 0 $r.ExitCode "exit code"
     Assert-True ($r.StdErr -notmatch "SEMA_KORUMA") "no guard on a heavy-only run: $($r.StdErr)"
     Assert-Equal $script:Head (Get-ScratchRevision) "left as the heavy run made it (it holds no database slot)"
+}
+
+Test-Case "6 a wrapper killed with its command after migrating: the next database run restores first" {
+    Set-ScratchAt $script:Base
+    $store = New-Store
+    $t = Get-Ticket -Store $store
+    $w = Start-SlotRunDetached -Store $store -Ticket $t -Script ($migrateHead + "; Start-Sleep 600")
+    try { Wait-ScratchAt $script:Head } finally { Stop-Tree -ProcessId $w.Id }
+    Start-Sleep -Seconds 1
+    Assert-Equal $script:Head (Get-ScratchRevision) "the killed run left the newer head (no finally ran)"
+    $g = Get-GuardRecord -Store $store
+    Assert-Equal $script:Base ([string]$g.expected) "the guard record names the revision to restore"
+    $t2 = Get-Ticket -Store $store
+    $marker = Join-Path $script:TempRoot ("rev-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+    # The next run's command sees the database already restored.
+    $r = Invoke-SlotRun -Store $store -Ticket $t2 -Script "& '$docker' exec $($script:Container) psql -U pagentos -d $($script:Db) -tAc 'select version_num from alembic_version' | Set-Content -LiteralPath '$marker'; exit 0"
+    Assert-Equal 0 $r.ExitCode "the next run goes ($($r.StdErr))"
+    Assert-True ($r.StdErr -match "SEMA_KORUMA olu_kosu geri_alindi $($script:Head) -> $($script:Base)") "the dead run's restore is said: $($r.StdErr)"
+    Assert-Equal $script:Base (([string](Get-Content -LiteralPath $marker -Raw)).Trim()) "the next command started on the restored schema"
+    Assert-Equal $script:Base (Get-ScratchRevision) "and left it there"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $store "database-guard.json"))) "no guard record is left after a finished run"
+}
+
+Test-Case "7 a wrapper killed while its command still runs: the next database ticket waits for that command" {
+    Set-ScratchAt $script:Base
+    $store = New-Store
+    $t = Get-Ticket -Store $store
+    $w = Start-SlotRunDetached -Store $store -Ticket $t -Script ($migrateHead + "; Start-Sleep 600")
+    $g = $null
+    try {
+        Wait-ScratchAt $script:Head
+        $g = Wait-GuardChild -Store $store
+    }
+    finally { Stop-Process -Id $w.Id -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+    try {
+        $a = Invoke-Slot @("ask", "-Kind", "database", "-Task", "next-task", "-Role", "worker", "-What", "next", "-Store", $store)
+        Assert-Equal 6 $a.ExitCode "the next database ask is refused while the dead run's command runs ($($a.StdOut))"
+        Assert-True ($a.StdOut -match "^DURDU" -and $a.StdOut -match [string]$g.child_pid) "a DURDU line naming the command's pid: $($a.StdOut)"
+        $h = Invoke-Slot @("ask", "-Kind", "heavy", "-Task", "other", "-Role", "worker", "-What", "unit", "-Store", $store)
+        Assert-Equal 0 $h.ExitCode "a heavy ask is not held ($($h.StdOut))"
+        [void](Invoke-Slot @("release", "-Ticket", ([regex]::Match($h.StdOut, 'ts-[0-9a-f]+').Value), "-Store", $store))
+        Assert-Equal $script:Head (Get-ScratchRevision) "nothing is touched under a running command"
+    }
+    finally { Stop-Tree -ProcessId ([int]$g.child_pid) }
+    Start-Sleep -Seconds 1
+    $t2 = Get-Ticket -Store $store
+    $r = Invoke-SlotRun -Store $store -Ticket $t2 -Script "exit 0"
+    Assert-Equal 0 $r.ExitCode "once the command is gone the next run goes ($($r.StdErr))"
+    Assert-True ($r.StdErr -match "SEMA_KORUMA olu_kosu geri_alindi") "and restores first: $($r.StdErr)"
+    Assert-Equal $script:Base (Get-ScratchRevision) "restored"
+}
+
+Test-Case "8 a dead run's guard whose restore fails holds the database; the next command never starts" {
+    Set-ScratchAt $script:Base
+    $store = New-Store
+    [void](New-Item -ItemType Directory -Path $store -Force)
+    [void](Invoke-Psql -Database $script:Db -Sql "update alembic_version set version_num='zz_unknown_head'")
+    # A guard left by a wrapper that died (this pid with another start time is not it).
+    $guard = [ordered]@{ at = "2026-10-04T17:00:00Z"; task = "dead-task"; role = "worker"; ticket = "ts-000000000000"; database = $script:Db
+        tree = $apiDir; expected = $script:Base; holder_pid = $PID; holder_start = "1"; child_pid = 0; child_start = "" }
+    [System.IO.File]::WriteAllText((Join-Path $store "database-guard.json"), ($guard | ConvertTo-Json))
+    $t = Get-Ticket -Store $store
+    $marker = Join-Path $script:TempRoot ("ran-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+    $r = Invoke-SlotRun -Store $store -Ticket $t -Script "Set-Content -LiteralPath '$marker' -Value x; exit 0"
+    Assert-Equal 6 $r.ExitCode "the run is refused ($($r.StdErr))"
+    Assert-True (-not (Test-Path -LiteralPath $marker)) "the command never started"
+    Assert-True ($r.StdErr -match "DURDU" -and $r.StdErr -match "zz_unknown_head" -and $r.StdErr -match "dead-task") "a DURDU line naming the found revision and the dead run: $($r.StdErr)"
+    $a = Invoke-Slot @("ask", "-Kind", "database", "-Task", "next-task", "-Role", "worker", "-What", "next", "-Store", $store)
+    Assert-Equal 6 $a.ExitCode "the hold stands for the next ask ($($a.StdOut))"
+    [void](Invoke-Psql -Database $script:Db -Sql "update alembic_version set version_num='$($script:Base)'")
+    $u = Invoke-Slot @("unblock", "-Store", $store)
+    Assert-Equal 0 $u.ExitCode "unblock ($($u.StdErr))"
+    $t2 = Get-Ticket -Store $store
+    $r2 = Invoke-SlotRun -Store $store -Ticket $t2 -Script "exit 0"
+    Assert-Equal 0 $r2.ExitCode "after unblock a database run goes ($($r2.StdErr))"
 }
 
 try { [void](Invoke-Psql -Database "postgres" -Sql "DROP DATABASE IF EXISTS $($script:Db) WITH (FORCE)") }
