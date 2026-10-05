@@ -72,7 +72,9 @@ def factory():
     engine.dispose()
 
 
-def _mailbox(tmp_path: Path, tag: str, *, unread: int, read: int = 1) -> FakeMailProvider:
+def _mailbox(
+    tmp_path: Path, tag: str, *, unread: int, read: int = 1, age_h: int = 0
+) -> FakeMailProvider:
     messages = []
     for i in range(unread + read):
         messages.append(
@@ -83,7 +85,7 @@ def _mailbox(tmp_path: Path, tag: str, *, unread: int, read: int = 1) -> FakeMai
                 "from": {"name": f"Gönderen {tag}", "email": f"{tag}{i}@example.com"},
                 "to": [{"email": "owner@example.com"}],
                 "subject": f"{tag} konu {i}",
-                "date": (NOW - timedelta(hours=i + 1)).isoformat(),
+                "date": (NOW - timedelta(hours=i + 1 + age_h)).isoformat(),
                 "flags": [] if i < unread else ["\\Seen"],
                 "body_text": f"{tag} gövde {i}",
             }
@@ -217,7 +219,7 @@ def test_the_poller_reads_two_accounts_and_tags_every_message(factory, tmp_path)
     assert result["accounts"]["İş"]["new_unread"] == 2
     assert result["accounts"]["Kişisel"]["new_unread"] == 1
     assert result["new"] == 5
-    by_account = {r.provider_message_id: r.account_name for r in rows}
+    by_account = {r.provider_message_id: r.account_key for r in rows}
     assert by_account["<is-0@example.com>"] == "İş"
     assert by_account["<ev-0@example.com>"] == "Kişisel"
     assert synced == [("İş", None), ("Kişisel", None)]
@@ -249,7 +251,7 @@ def test_the_same_message_in_two_accounts_is_indexed_once_per_account(factory, t
     with factory() as db:
         MailService(provider, None).poll(db, now=NOW)
         rows = db.execute(select(MailIndexRow)).scalars().all()
-    assert sorted(r.account_name for r in rows) == ["Kişisel", "İş"]
+    assert sorted(r.account_key for r in rows) == ["Kişisel", "İş"]
 
 
 def test_no_accounts_is_account_missing(factory) -> None:
@@ -367,7 +369,42 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
 
-def test_the_gmail_reader_parses_raw_messages_and_unread_labels() -> None:
+def _count_clients(monkeypatch) -> list[int]:
+    created: list[int] = []
+    real = httpx.Client
+
+    def counting(*args: Any, **kwargs: Any) -> httpx.Client:
+        created.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("app.mail.cloud.httpx.Client", counting)
+    return created
+
+
+def _gmail_meta(gmail_id: str, subject: str, labels: list[str], *, mixed: bool = False) -> dict:
+    return {
+        "id": gmail_id,
+        "threadId": f"t-{gmail_id}",
+        "labelIds": labels,
+        "snippet": f"{subject} özeti",
+        "payload": {
+            "mimeType": "multipart/mixed" if mixed else "text/plain",
+            "headers": [
+                {"name": "From", "value": "Ali Yılmaz <ali@example.com>"},
+                {"name": "To", "value": "owner@example.com, Ayşe <ayse@example.com>"},
+                {"name": "Subject", "value": subject},
+                {"name": "Message-ID", "value": f"<{gmail_id}@x>"},
+                {"name": "Date", "value": "Mon, 05 Oct 2026 09:00:00 +0000"},
+                {"name": "References", "value": "<a@x> <b@x>"},
+            ],
+        },
+    }
+
+
+def test_a_gmail_listing_reads_metadata_never_the_raw_message_on_one_client(monkeypatch) -> None:
+    """Inspector finding 9 (3rd return): a listing fetched every message RAW - attachments
+    and all - each on a fresh httpx.Client. Now: headers + snippet only, one client."""
+    created = _count_clients(monkeypatch)
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -376,44 +413,67 @@ def test_the_gmail_reader_parses_raw_messages_and_unread_labels() -> None:
         path = request.url.path
         if path.endswith("/messages"):
             return httpx.Response(200, json={"messages": [{"id": "g1"}, {"id": "g2"}]})
+        if request.url.params.get("format") != "metadata":
+            return httpx.Response(500)  # a raw (or full) fetch in a listing is the bug
         if path.endswith("/messages/g1"):
-            return httpx.Response(
-                200,
-                json={
-                    "id": "g1",
-                    "labelIds": ["INBOX", "UNREAD"],
-                    "raw": _b64url(_raw("Fatura", "<g1@x>")),
-                },
-            )
+            return httpx.Response(200, json=_gmail_meta("g1", "Fatura", ["INBOX", "UNREAD"]))
         if path.endswith("/messages/g2"):
-            return httpx.Response(
-                200,
-                json={"id": "g2", "labelIds": ["INBOX"], "raw": _b64url(_raw("Selam", "<g2@x>"))},
-            )
+            return httpx.Response(200, json=_gmail_meta("g2", "Selam", ["INBOX"], mixed=True))
         return httpx.Response(404)
 
     reader = GmailApiMailProvider(token=lambda: "tok", transport=httpx.MockTransport(handler))
     messages = reader.list_messages("INBOX", limit=10, since=NOW - timedelta(days=1))
+    reader.list_messages("INBOX", limit=10)
     assert [(m.subject, m.message_id, m.unread) for m in messages] == [
         ("Fatura", "<g1@x>", True),
         ("Selam", "<g2@x>", False),
     ]
+    first = messages[0]
+    assert (first.from_name, first.from_email) == ("Ali Yılmaz", "ali@example.com")
+    assert first.to == ("owner@example.com", "ayse@example.com")
+    assert first.references == ("<a@x>", "<b@x>")
+    assert first.snippet == "Fatura özeti" and first.date == datetime(2026, 10, 5, 9, tzinfo=UTC)
+    assert [m.has_attachments for m in messages] == [False, True]
     q = parse_qs(urlparse(str(seen[0].url)).query)
     assert q["labelIds"] == ["INBOX"] and "after:" in q["q"][0]
+    assert len(created) == 1, "one client per account, reused across requests"
 
 
-def test_the_graph_reader_reads_mime_and_is_read_flag() -> None:
+def test_a_graph_listing_selects_the_fields_and_never_downloads_the_mime(monkeypatch) -> None:
+    created = _count_clients(monkeypatch)
+    seen: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
         path = request.url.path
+        if path.endswith("/$value"):
+            return httpx.Response(500)
         if path.endswith("/mailFolders/inbox/messages"):
-            return httpx.Response(200, json={"value": [{"id": "m1", "isRead": False}]})
-        if path.endswith("/messages/m1/$value"):
-            return httpx.Response(200, content=_raw("Toplantı", "<m1@x>"))
+            item = {
+                "id": "m1",
+                "isRead": False,
+                "subject": "Toplantı",
+                "from": {"emailAddress": {"name": "Ayşe", "address": "ayse@example.com"}},
+                "toRecipients": [{"emailAddress": {"address": "owner@example.com"}}],
+                "receivedDateTime": "2026-10-05T09:00:00Z",
+                "internetMessageId": "<m1@x>",
+                "bodyPreview": "Yarın saat 10",
+                "hasAttachments": True,
+                "conversationId": "c1",
+            }
+            return httpx.Response(200, json={"value": [item]})
         return httpx.Response(404)
 
     reader = GraphMailProvider(token=lambda: "tok", transport=httpx.MockTransport(handler))
     [message] = reader.list_messages("INBOX", limit=5)
+    reader.list_messages("INBOX", limit=5)
     assert (message.subject, message.message_id, message.unread) == ("Toplantı", "<m1@x>", True)
+    assert (message.from_name, message.from_email) == ("Ayşe", "ayse@example.com")
+    assert message.snippet == "Yarın saat 10" and message.has_attachments is True
+    assert message.date == datetime(2026, 10, 5, 9, tzinfo=UTC)
+    select_ = parse_qs(urlparse(str(seen[0].url)).query)["$select"][0]
+    assert "bodyPreview" in select_ and "internetMessageId" in select_
+    assert len(created) == 1
 
 
 def test_the_gmail_sender_posts_base64url_mime() -> None:
@@ -575,3 +635,194 @@ def test_the_calendar_syncer_mirrors_every_account_and_reports_each_by_name() ->
     assert result["accounts"] == {"Kişisel": "ok", "İş": "ConnectionError"}
     assert ("Kişisel", None) in synced and ("İş", "ConnectionError") in synced
     assert syncer.health_check()["accounts"] == {"Kişisel": "ok", "İş": "ConnectionError"}
+
+
+# ------------------------------------------------- inspector's 3rd return
+
+
+def test_per_account_unread_is_counted_before_the_merged_cut(factory, tmp_path) -> None:
+    """Finding 3: İş has two old unread, Kişisel sixty newer read ones; the merged listing
+    keeps the newest 50, and the answer used to count İş from what was left: none."""
+    provider = MultiAccountMailProvider(
+        lambda: [
+            ("İş", _mailbox(tmp_path, "is", unread=2, read=0, age_h=100)),
+            ("Kişisel", _mailbox(tmp_path, "ev", unread=0, read=60)),
+        ]
+    )
+    with factory() as db:
+        result = MailService(provider, None).inbox_summary(db)
+    assert "İş hesabında 2 okunmamış posta var" in result["speech"], result["speech"]
+    assert "Kişisel hesabında okunmamış posta yok" in result["speech"]
+    assert result["unread"] == 2
+    assert result["unread_by_account"] == {"İş": 2, "Kişisel": 0}
+
+
+def test_a_rename_does_not_announce_old_mail_again(factory, tmp_path) -> None:
+    """Finding 4: the index and the watermark were keyed by the account's NAME."""
+    names = {"acc-1": "İş"}
+    box = _mailbox(tmp_path, "is", unread=3, read=0)
+    provider = MultiAccountMailProvider(lambda: [("acc-1", names["acc-1"], box)])
+    service = MailService(provider, None)
+    with factory() as db:
+        assert service.poll(db, now=NOW)["new"] == 3
+        assert service.poll(db, now=NOW)["new"] == 0
+        names["acc-1"] = "Ofis"
+        again = service.poll(db, now=NOW)
+        rows = db.execute(select(MailIndexRow)).scalars().all()
+    assert again["new"] == 0, again
+    assert "Ofis" in again["accounts"]
+    assert len(rows) == 3 and {r.account_key for r in rows} == {"acc-1"}
+
+
+def test_switching_oauth_on_does_not_announce_the_env_accounts_old_mail(factory, tmp_path) -> None:
+    """Finding 4: the env account was '' alone and 'IMAP' beside the OAuth accounts."""
+    from app.accounts.wiring import build_account_mail
+
+    class NoAccounts:
+        def rows(self) -> list:
+            return []
+
+        def mark_synced(self, key: str, error_class: str | None) -> None:
+            return None
+
+    box = _mailbox(tmp_path, "env", unread=2)
+    with factory() as db:
+        assert MailService(box, None).poll(db, now=NOW)["new"] == 3
+        provider, _sender = build_account_mail(
+            Settings(_env_file=None, accounts_google_client_id="g"), NoAccounts(), box, None
+        )
+        result = MailService(provider, None).poll(db, now=NOW)
+        rows = db.execute(select(MailIndexRow)).scalars().all()
+    assert result["new"] == 0, result
+    assert "IMAP" in result["accounts"]
+    assert len(rows) == 3
+
+
+def _renamable(tmp_path: Path):
+    names = {"id-is": "İş", "id-ev": "Kişisel"}
+    senders = {"id-is": FakeMailSender(), "id-ev": FakeMailSender()}
+    boxes = {
+        "id-is": _mailbox(tmp_path, "is", unread=1),
+        "id-ev": _mailbox(tmp_path, "ev", unread=1),
+    }
+    provider = MultiAccountMailProvider(lambda: [(k, names[k], boxes[k]) for k in names])
+    sender = MultiAccountMailSender(lambda: [(k, names[k], senders[k]) for k in names])
+    return MailService(provider, sender), names, senders
+
+
+def _send(service: MailService, db, draft_id: str) -> dict[str, Any]:
+    return service.send(
+        db,
+        draft_id=draft_id,
+        host_flag_enabled=True,
+        confirmation=Confirmation(source=CONFIRM_SOURCE_REST, session_id="rest:s1"),
+    )
+
+
+def test_a_draft_made_before_a_rename_leaves_from_the_same_account(factory, tmp_path) -> None:
+    """Finding 5: the draft stored the NAME; after a rename send found no such account."""
+    service, names, senders = _renamable(tmp_path)
+    with factory() as db:
+        draft = service.draft_new(
+            db, to="ali@example.com", subject="Teklif", body="Merhaba", account="İş"
+        )
+        assert draft["draft"]["account"] == "İş"
+        names["id-is"] = "Ofis"
+        read_back = service.read_draft(db, session_id="rest:s1")
+        assert "Ofis hesabından" in read_back["speech"]
+        assert read_back["draft"]["account"] == "Ofis"
+        sent = _send(service, db, draft["draft"]["id"])
+    assert sent["execution_status"] == "executed", sent
+    assert len(senders["id-is"].sent) == 1 and senders["id-ev"].sent == []
+
+
+def test_a_draft_whose_account_was_disconnected_says_so_and_stays(factory, tmp_path) -> None:
+    import uuid
+
+    service, names, senders = _renamable(tmp_path)
+    with factory() as db:
+        draft = service.draft_new(
+            db, to="ali@example.com", subject="Teklif", body="Merhaba", account="İş"
+        )
+        del names["id-is"]
+        read_back = service.read_draft(db, session_id="rest:s1")
+        assert "bağlı olmayan" in read_back["speech"]
+        sent = _send(service, db, draft["draft"]["id"])
+        row = db.get(MailDraftRow, uuid.UUID(draft["draft"]["id"]))
+        assert row is not None and row.state == "read_back"
+    assert sent["error_class"] == "account_unknown", sent
+    assert "bağlı değil" in sent["speech"]
+    assert senders["id-ev"].sent == []
+
+
+def test_voice_new_draft_goes_from_the_spoken_account(tmp_path) -> None:
+    """Finding 10: the voice tool never passed the account to draft_new."""
+    from tests.voice_corpus.harness import build_harness
+
+    with build_harness(temp_root=tmp_path) as h:
+        h.mail._provider = MultiAccountMailProvider(  # type: ignore[attr-defined]
+            lambda: [
+                ("İş", _mailbox(tmp_path, "is", unread=1)),
+                ("Kişisel", _mailbox(tmp_path, "ev", unread=1)),
+            ]
+        )
+        sid = h.new_session()
+        h.say(sid, "Kişisel hesabımdan Ali'ye yeni mail yaz")
+        answer = h.tool(
+            sid,
+            "c-1",
+            "mail.draft",
+            {"to": "ali@example.com", "subject": "Teklif", "body": "Merhaba", "account": "Kişisel"},
+        )
+    assert answer["status"] == "succeeded", answer
+    assert answer["result"]["draft"]["account"] == "Kişisel"
+    assert "Kişisel hesabından" in answer["result"]["speech"]
+
+
+def test_the_agenda_names_the_account_of_every_event() -> None:
+    """Finding 10: calendar/service.py dropped the account in the spoken agenda."""
+    from app.calendar.models import CalendarIndexRow, CalendarProposalRow
+    from app.calendar.service import CalendarService
+    from app.notifications.models import NotificationRow
+
+    def google(request: httpx.Request) -> httpx.Response:
+        item = {
+            "id": "e1",
+            "summary": "Diş hekimi",
+            "start": {"dateTime": "2026-10-06T10:00:00+03:00"},
+            "end": {"dateTime": "2026-10-06T11:00:00+03:00"},
+        }
+        return httpx.Response(200, json={"items": [item]})
+
+    def graph(request: httpx.Request) -> httpx.Response:
+        item = {
+            "id": "o1",
+            "subject": "Proje toplantısı",
+            "start": {"dateTime": "2026-10-06T12:00:00.0000000", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-10-06T13:00:00.0000000", "timeZone": "UTC"},
+        }
+        return httpx.Response(200, json={"value": [item]})
+
+    multi = MultiAccountCalendarProvider(
+        lambda: [
+            ("Kişisel", GoogleCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(google))),
+            ("İş", GraphCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(graph))),
+        ]
+    )  # fmt: skip
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    for table in (
+        CalendarIndexRow.__table__,
+        CalendarProposalRow.__table__,
+        ObjectFocusRow.__table__,
+        ActivityEventRow.__table__,
+        NotificationRow.__table__,
+    ):
+        table.create(engine)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as db:
+        result = CalendarService(multi, None).agenda(db, start=NOW, end=NOW + timedelta(days=2))
+    engine.dispose()
+    assert "Diş hekimi (10:00, Kişisel)" in result["speech"], result["speech"]
+    assert "Proje toplantısı (12:00, İş)" in result["speech"]
+    assert {e["account"] for e in result["events"]} == {"Kişisel", "İş"}

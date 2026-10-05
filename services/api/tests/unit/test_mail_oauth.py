@@ -346,6 +346,60 @@ def test_setup_names_the_exact_redirect_url_and_never_a_secret() -> None:
     assert any("PAGENTOS_ACCOUNTS_GOOGLE_CLIENT_SECRET" in s for s in setup["google"]["steps"])
 
 
+def test_a_plain_http_public_base_is_refused_before_anything_is_stored(factory) -> None:
+    """Inspector finding 8 (3rd return): the HTTPS check had no test. A tailnet host over
+    plain http would carry the authorization code in clear; loopback stays allowed."""
+    rec = Recorder()
+    service = _service(rec, accounts_public_base_url="http://pagentos-core.tail1234.ts.net")
+    with factory() as db:
+        with pytest.raises(AccountError) as err:
+            service.start(db, provider="gmail", name="Kişisel", now=NOW)
+        assert err.value.code == "public_base_not_https"
+        assert db.execute(select(MailAccountPendingRow)).scalars().all() == []
+        loopback = _service(rec, accounts_public_base_url="http://127.0.0.1:8001")
+        assert loopback.start(db, provider="gmail", name="Kişisel", now=NOW)["authorize_url"]
+    assert rec.requests == []
+
+
+@pytest.mark.parametrize("name", ["IMAP", "imap", "Takvim", "TAKVİM", " takvim "])
+def test_the_env_account_names_are_reserved(factory, name: str) -> None:
+    """Inspector finding 6: 'IMAP' / 'Takvim' name the env account beside the connected
+    ones; an owner account under the same name would make 'IMAP hesabından gönder' pick
+    whichever came first."""
+    service = _service(Recorder())
+    with factory() as db:
+        with pytest.raises(AccountError) as err:
+            service.start(db, provider="gmail", name=name, now=NOW)
+        assert err.value.code == "name_reserved"
+        account = _connect(service, db, "gmail", "Kişisel")
+        with pytest.raises(AccountError) as renamed:
+            service.rename(db, account["id"], name)
+        assert renamed.value.code == "name_reserved"
+
+
+def test_a_non_json_token_answer_is_a_turkish_page_not_a_500(factory) -> None:
+    """Inspector finding 7: a 200 whose body is not JSON (a captive portal, a proxy's HTML)
+    raised JSONDecodeError out of the callback."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "token" in request.url.path:
+            return httpx.Response(200, content=b"<html>proxy login</html>")
+        return httpx.Response(404)
+
+    service = AccountsService(_settings(), transport=httpx.MockTransport(handler))
+    client = _client(factory, service)
+    url = client.post("/v1/accounts/connect", json={"provider": "gmail", "name": "Kişisel"}).json()[
+        "authorize_url"
+    ]
+    response = client.get(
+        "/v1/accounts/oauth/callback", params={"state": _query(url)["state"], "code": "c"}
+    )
+    assert response.status_code == 400, response.text
+    assert "Bağlantı kurulamadı" in response.text
+    with factory() as db:
+        assert db.execute(select(MailAccountRow)).scalars().all() == []
+
+
 # ------------------------------------------------------------------- helpers
 
 
