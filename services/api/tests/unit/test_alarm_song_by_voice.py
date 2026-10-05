@@ -726,3 +726,12 @@ def test_an_alarm_created_with_a_media_url_carries_it_as_its_song(session, devic
     device.results["browser.media_play"] = _play_only()
     _fire(session, device, alarm)
     assert _played_urls(device)[:2] == [ALARM_SONG, WAKE_SONG]
+
+
+def test_a_lowercased_dotted_capital_i_is_still_a_number():
+    """Corpus a.song.12.v2: Python lowercases "İki" to "i" + U+0307 (combining dot); the
+    clock must still read "iki saat sonra" as two hours, never "when_unparsed"."""
+    from app.alarms.tr_time import parse_when_text
+
+    parsed = parse_when_text("İki saat sonra uyandır".lower(), now=NOW, timezone="Europe/Istanbul")
+    assert parsed.relative_seconds == 7200
