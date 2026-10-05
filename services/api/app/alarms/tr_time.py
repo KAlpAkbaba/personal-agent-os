@@ -42,7 +42,8 @@ def turkish_casefold(text: str) -> str:
     that edge, and the two cannot drift in a way that matters — Turkish orthography is not
     going to change.
     """
-    return text.replace("İ", "i").replace("I", "ı").lower()
+    # "i̇" (i + U+0307) is what Python's .lower() makes of "İ" upstream: the same letter.
+    return text.replace("İ", "i").replace("I", "ı").lower().replace("i̇", "i")
 
 #: Weekday names as an owner says them -> Python's Monday=0 index.
 _WEEKDAY_NAMES: Final[dict[str, int]] = {
