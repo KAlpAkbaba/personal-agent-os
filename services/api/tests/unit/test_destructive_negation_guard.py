@@ -264,7 +264,9 @@ KNOWN_OPEN: Final[dict[tuple[str, str], tuple[str, str]]] = {
 }
 
 #: The watcher's pattern over intent values and their tool names.
-_DESTRUCTIVE_NAME: Final = re.compile(r"forget|remove|delete|cancel|clear|unut|sil|kaldir")
+_DESTRUCTIVE_NAME: Final = re.compile(
+    r"forget|remove|delete|cancel|clear|unut|sil|kaldir|uninstall|discard"
+)
 
 # --- the generator ----------------------------------------------------------------------
 
