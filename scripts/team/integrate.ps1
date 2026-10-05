@@ -54,12 +54,19 @@
          to 'returned' (a PASS line, and a gate that died, name nobody), the others stay
          'merged'. The verdict is kept in the attempt's record: when the queue could not be
          written, the next run writes it - without a second gate. Two failed attempts on one
-         branch stop it until the lead looks (-ClearGateStop).
+         branch stop it until the lead looks (-ClearGateStop);
+      7. A RED CARD APART (the owner, 2026-10-06): when the red gate blamed some tasks, other
+         tasks are on the branch and the branch is not stopped, the branch is rebuilt from main
+         WITHOUT the blamed tasks' merges (same order; a merge that carries their code or does
+         not apply without it is dropped and named), kept as integrate/<cycle>-kalan-<n>, and
+         gated ONCE more in the same run. Green: its tasks reach main and the green record that
+         scripts/team/release.ps1 reads; red: no third gate, everything waits, the Danışman is
+         told. The integration branch itself is not moved backwards: the blamed tasks hold it.
 
     The lead's run and the gate are ALWAYS capped (-LeadMinutes, -GateMinutes; 0 is refused):
     the lock is held while they go, and it is taken over after six hours.
 
-    A branch goes onto main WHOLE or not at all: while a task whose code is on it is not
+    The integration branch goes onto main WHOLE or not at all (7 is a branch of its own): while a task whose code is on it is not
     'merged' (a red gate returned it; its code is still on the branch) nothing of the branch is
     gated - the cycle merges the fix into the same branch, and one gate judges everything. And
     a commit the gate was red on is not gated a second time: the step waits for a new tip (a
@@ -783,8 +790,15 @@ function Invoke-BranchIntegration {
                 }
             }
             $blamed = @(Get-TeamGateBlamedTasks -FailureText $gate.FailureText -TaskFiles $files)
+            # A red card does not hold the green ones (the owner, 2026-10-06): when the gate blames some
+            # tasks and others are on the branch, it is rebuilt without the blamed and gated once more,
+            # in this run - unless this red stops the branch (TEAM_PROTOCOL 10: the lead looks first).
+            $rest = @($tasks | Where-Object { @($blamed) -notcontains [string]$_.id })
+            $rebuild = (@($blamed).Count -gt 0) -and (@($rest).Count -gt 0) -and ($strikes -lt $script:TeamGateMaxStrikes)
+            $rebuiltName = if ($rebuild) { Get-TeamRebuiltBranchName -Branch $integration -Number ($number + 1) } else { "" }
             # What the branch waits for now, in the words every task carries.
-            $waitsFor = if (@($blamed).Count -gt 0) { "dal $Base'e bütün olarak girer: " + ($blamed -join ", ") + " düzeltilip yeniden birleşene kadar hiçbiri kapıya girmez" }
+            $waitsFor = if ($rebuild) { "kırmızı iş ayrıldı: " + ($blamed -join ", ") + "; kalanlar yeniden kapıda ($rebuiltName)" }
+            elseif (@($blamed).Count -gt 0) { "dal $Base'e bütün olarak girer: " + ($blamed -join ", ") + " düzeltilip yeniden birleşene kadar hiçbiri kapıya girmez" }
             else { "aynı commit yeniden kapıya girmez: yeni bir commit ya da lead'in -ClearGateStop'u beklenir" }
             # The record carries the verdict, marked NOT applied: it is written before the queue is, and
             # if the queue's write fails (a task changed in the store during the gate's hour) the next
@@ -802,6 +816,9 @@ function Invoke-BranchIntegration {
             [void]$Outcome.Lines.Add("geri verilen: " + $(if (@($blamed).Count -gt 0) { $blamed -join ", " } else { "yok (kapı hiçbir işin dosyasını adlandırmadı)" }) + "; $Base değişmedi")
             [void]$Outcome.Lines.Add($waitsFor)
             if ($stopped) { [void]$script:stops.Add("${integration}: $stopSentence. Baktıktan sonra: scripts\team\integrate.ps1 -ClearGateStop"); return 8 }
+            if ($rebuild) {
+                return (Invoke-RebuiltGate -Item $Item -Outcome $Outcome -Tree $tree -Candidate $candidate -BaseSha $baseSha -Tasks $rest -Blamed $blamed -Name $rebuiltName -FirstReason $reason)
+            }
             return 6
         }
         # Green is recorded BEFORE main is touched: a run that dies here is finished by the next one.
@@ -811,11 +828,101 @@ function Invoke-BranchIntegration {
         $number = [int](Get-TeamProperty -InputObject $Item.Green -Name "n" -Default $number)
         [void]$Outcome.Lines.Add("kapı $candidate üzerinde daha önce yeşildi ($logFile); yeniden koşulmadı")
     }
+    return (Complete-GreenGate -Item $Item -Outcome $Outcome -Tree $tree -Tasks $tasks -Candidate $candidate -Number $number -LogFile $logFile -Gated $integration)
+}
 
-    # ---- 5 (green). main goes forward by a --no-ff merge of exactly what was gated.
+function Invoke-RebuiltGate {
+    <#
+        The gate was red on the whole branch and blamed some of its tasks: the branch is rebuilt from
+        main without their merges (New-TeamRebuiltBranch), kept as -Name, and gated ONCE more. Green:
+        the remaining tasks go onto main as any green branch does (Complete-GreenGate), and release.ps1
+        finds the green record. Red: nothing more is gated in this run - everything waits and the
+        Danışman is told. The blamed tasks were already returned by the caller.
+    #>
+    param($Item, $Outcome, [string]$Tree, [string]$Candidate, [string]$BaseSha, [object[]]$Tasks, [string[]]$Blamed, [string]$Name, [string]$FirstReason)
+    $integration = [string]$Item.Branch
+    $relative = "team/reports/$($Item.CycleId)"
+    $apart = "kırmızı iş ayrıldı: " + ($Blamed -join ", ") + "; kalanlar yeniden kapıda ($Name)"
+    [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $Candidate)
+    $built = New-TeamRebuiltBranch -Worktree $Tree -Base $BaseSha -Tip $Candidate -Tasks @($Item.Tasks) -Blamed $Blamed -Label "$Name, without $($Blamed -join ', ')"
+    $appliedIds = @(@($built.Applied) | ForEach-Object { [string]$_.TaskId } | Where-Object { $_ })
+    $passing = @($Tasks | Where-Object { $appliedIds -contains [string]$_.id })
+    $left = @($Tasks | Where-Object { $appliedIds -notcontains [string]$_.id })
+    foreach ($drop in @($built.Dropped)) {
+        $whose = if ($drop.TaskId) { "$($drop.TaskId): " } else { "" }
+        [void]$Outcome.Lines.Add("yeniden kurulan dalın dışında kaldı - $whose$($drop.Subject) ($($drop.Why))")
+    }
+    # What was left out with the blamed ones waits for them, on the integration branch.
+    $waitsWith = "kırmızı iş ayrıldı: " + ($Blamed -join ", ") + "; bu iş onlarsız uygulanmadı ya da onların kodunu taşıyor, onlarla birlikte bekler"
+    foreach ($task in $left) { Set-TaskNote -Task $task -Reason ($FirstReason + " | " + $waitsWith) }
+    if (@($passing).Count -eq 0) {
+        [void]$Outcome.Lines.Add("$apart - ama kalan işlerin hiçbiri onlarsız uygulanmadı; ikinci kapı koşmadı")
+        return 6
+    }
+    $made = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("update-ref", "-m", "team integrate: $integration rebuilt without $($Blamed -join ', ')", "refs/heads/$Name", $built.Tip, ("0" * 40))
+    if (-not $made.Success) { throw "the rebuilt branch $Name could not be written: $($made.StdErr.Trim())" }
+    [void]$Outcome.Lines.Add("$apart; $Name @ $($built.Tip): " + ((@($passing) | ForEach-Object { [string]$_.id }) -join ", "))
+
+    # The environment was built for the whole branch: it is built again only when what was left out changed one of its files.
+    $inputs = @(@(Get-TeamCommittedFiles -Worktree $Tree -From $Candidate -To $built.Tip) | Where-Object { Test-TeamEnvironmentInput -Path ([string]$_) })
+    if (@($inputs).Count -gt 0) {
+        $failure = Invoke-EnvironmentBuild -Tree $Tree -Outcome $Outcome -When " (yeniden kurulan dal)"
+        if ($failure) {
+            $reason = "$FirstReason | ${apart}: ortam kurulamadı ($failure); ikinci kapı koşmadı, hepsi bekliyor"
+            foreach ($task in $passing) { Set-TaskNote -Task $task -Reason $reason }
+            [void]$Outcome.Lines.Add($reason)
+            return 6
+        }
+    }
+    [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $built.Tip)
+
+    $number = Get-TeamGateNextNumber -Directory $Item.Directory
+    $logFile = "$relative/gate-$number.log"
+    $logPath = Join-Path $Item.Directory "gate-$number.log"
+    $gateScript = if ($GatePath) { $GatePath } else { Join-Path $Tree "scripts\quality-gate.ps1" }
+    $ran = Invoke-TeamGate -GatePath $gateScript -WorkingDirectory $Tree -LogPath $logPath -TimeoutMinutes $GateMinutes
+    $logText = if (Test-Path -LiteralPath $logPath) { [System.IO.File]::ReadAllText($logPath, [System.Text.Encoding]::UTF8) } else { "" }
+    $gate = Read-TeamGateLog -Text $logText -ExitCode $ran.ExitCode -TimedOut $ran.TimedOut
+    [void]$Outcome.Lines.Add("ikinci kapı: $($built.Tip) ($Name) üzerinde, $($ran.Seconds) sn, çıkış kodu $($ran.ExitCode); kayıt: $logFile")
+    $more = @{ rebuilt_from = $integration; left_out = @($Blamed) }
+    if (-not $gate.Green) {
+        # One extra gate at most: never a third. The integration branch keeps its own red record.
+        $why = Get-TeamGateReason -Gate $gate -LogFile $logFile
+        Write-TeamGateRecord -Directory $Item.Directory -Number $number -Record ([pscustomobject]@{
+                n = $number; branch = $Name; at = (Get-TeamTimestamp); result = "red"; sha = $built.Tip; steps = @($gate.FailedSteps)
+                first = [string]$gate.FirstFailure; log = $logFile; applied = $true; rebuilt_from = $integration; left_out = @($Blamed)
+            })
+        $told = "Danışman'a: $apart, ama kalanlar da kırmızı; üçüncü kapı koşmadı, hepsi bekliyor"
+        foreach ($task in $passing) { Set-TaskNote -Task $task -Reason ("$FirstReason | $why | $told") }
+        $Outcome.Result = "kapı kırmızı (kırmızı iş ayrıldıktan sonra da)"
+        [void]$Outcome.Lines.Add($why)
+        [void]$Outcome.Lines.Add($told)
+        return 6
+    }
+    Write-TeamGateRecord -Directory $Item.Directory -Number $number -Record ([pscustomobject]@{
+            n = $number; branch = $Name; at = (Get-TeamTimestamp); result = "green"; sha = $built.Tip; main = ""; log = $logFile
+            rebuilt_from = $integration; left_out = @($Blamed)
+        })
+    $code = Complete-GreenGate -Item $Item -Outcome $Outcome -Tree $Tree -Tasks $passing -Candidate $built.Tip -Number $number -LogFile $logFile -Gated $Name -Note $apart -More $more
+    if ($Outcome.Result -eq "yayın bekliyor") { $Outcome.Result = "kırmızı iş ayrıldı, kalanlar yayın bekliyor" }
+    return $code
+}
+
+function Complete-GreenGate {
+    <#
+        5 (green): main goes forward by a --no-ff merge of exactly what was gated, it is pushed, and
+        -Tasks become 'awaiting_release'. -Gated is the branch the gate ran on: the integration
+        branch, or the branch rebuilt without a red card (Invoke-RebuiltGate). -Note goes into
+        every task's reason (the Onay Merkezi shows it).
+    #>
+    param($Item, $Outcome, [string]$Tree, [object[]]$Tasks, [string]$Candidate, [int]$Number, [string]$LogFile, [string]$Gated, [string]$Note = "", [hashtable]$More = @{})
+    # PowerShell's names are case-blind: $tree, $tasks, $candidate, $number and $logFile below ARE the parameters.
+    $integration = [string]$Item.Branch
+    $ids =(@($tasks) | ForEach-Object { [string]$_.id }) -join ", "
+    $noted = if ($Note) { " | $Note" } else { "" }
     $baseNow = Get-TeamRevision -RepoRoot $repoRoot -Revision "refs/heads/$Base"
     if (-not (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $baseNow -Of $candidate)) {
-        $reason = "kapı koşarken $Base ilerledi; kapıdan geçen $candidate onu içermiyor, bir sonraki adım yeniden dener"
+        $reason = "kapı koşarken $Base ilerledi; kapıdan geçen $candidate onu içermiyor, bir sonraki adım yeniden dener$noted"
         foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
         $Outcome.Result = "$Base ilerledi"
         [void]$Outcome.Lines.Add($reason)
@@ -826,7 +933,7 @@ function Invoke-BranchIntegration {
     [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $candidate)
     [void](Invoke-TreeGit -Tree $tree -Arguments @("checkout", "--detach", "--quiet", $baseNow))
     try {
-        [void](Invoke-TreeGit -Tree $tree -Arguments @("merge", "--no-ff", "-m", "merge: $integration (gated $candidate) into $Base", $candidate))
+        [void](Invoke-TreeGit -Tree $tree -Arguments @("merge", "--no-ff", "-m", "merge: $Gated (gated $candidate) into $Base", $candidate))
         $merged = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
     }
     finally { [void](Invoke-TeamGit -WorkingDirectory $tree -Arguments @("checkout", "--detach", "--quiet", $candidate)) }
@@ -835,13 +942,15 @@ function Invoke-BranchIntegration {
     }
     $forward = Move-TeamBranchForward -RepoRoot $repoRoot -Branch $Base -To $merged -Expected $baseNow
     if (-not $forward.Moved) {
-        $reason = "kapı yeşil ($candidate) ama $Base ilerletilemedi: $($forward.Detail); hiçbir şey zorlanmadı, bir sonraki adım kapıyı yeniden koşmadan dener"
+        $reason = "kapı yeşil ($candidate) ama $Base ilerletilemedi: $($forward.Detail); hiçbir şey zorlanmadı, bir sonraki adım kapıyı yeniden koşmadan dener$noted"
         foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
         $Outcome.Result = "$Base ilerletilemedi"
         [void]$Outcome.Lines.Add($reason)
         return 11
     }
-    Write-TeamGateRecord -Directory $Item.Directory -Number $number -Record ([pscustomobject]@{ n = $number; branch = $integration; at = (Get-TeamTimestamp); result = "green"; sha = $candidate; main = $merged; log = $logFile })
+    $record = [ordered]@{ n = $number; branch = $Gated; at = (Get-TeamTimestamp); result = "green"; sha = $candidate; main = $merged; log = $logFile }
+    foreach ($name in @($More.Keys)) { $record[$name] = $More[$name] }
+    Write-TeamGateRecord -Directory $Item.Directory -Number $number -Record ([pscustomobject]$record)
 
     $code = 0
     $hasRemote = (Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("remote", "get-url", $Remote)).Success
@@ -863,7 +972,7 @@ function Invoke-BranchIntegration {
             [void]$Outcome.Lines.Add("$Remote'e İTİLEMEDİ: $said")
         }
     }
-    foreach ($task in $tasks) { Set-TaskNote -Task $task -State "awaiting_release" -Sha $merged -Reason "kapı yeşil: $candidate; $Base $merged; kayıt: $logFile" }
+    foreach ($task in $tasks) { Set-TaskNote -Task $task -State "awaiting_release" -Sha $merged -Reason "kapı yeşil: $candidate; $Base $merged; kayıt: $logFile$noted" }
     $Outcome.Result = "yayın bekliyor"
     [void]$Outcome.Lines.Add("kapı yeşil; ${Base}: $merged (kapıdan geçen: $candidate)")
     [void]$Outcome.Lines.Add("işler 'yayın bekliyor' (yayın bu adımda YAPILMAZ): $ids")

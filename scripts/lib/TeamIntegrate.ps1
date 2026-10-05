@@ -1305,6 +1305,104 @@ function Get-TeamCommittedFiles {
     return @($result.StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
+# ---------------------------------------------------------------------------- acting: a red card apart
+
+function Get-TeamRebuiltBranchName {
+    <# The branch the green tasks are gated on again without the blamed ones: integrate/<cycle>-kalan-<attempt>. #>
+    param([Parameter(Mandatory = $true)][string]$Branch, [Parameter(Mandatory = $true)][int]$Number)
+    return ("integrate/" + (Get-TeamIntegrationCycleId -Branch $Branch) + "-kalan-$Number")
+}
+
+function New-TeamRebuiltBranch {
+    <#
+    .SYNOPSIS
+        In the gate worktree: -Base, then the commits of -Tip's first-parent line in their order,
+        WITHOUT the blamed tasks' merges (a red card must not hold the green ones, the owner,
+        2026-10-06). The tree is left on the result, detached; no branch is written here.
+
+    .DESCRIPTION
+        A merge whose second parent is already in the rebuilt line (main merged in before the
+        gate) is skipped. A merge that holds a blamed task's code - its own merge, or a branch
+        built on top of it - is dropped. A merge or a commit (the lead's wiring) that does not
+        apply without what was dropped is aborted and dropped. Every drop is named, with the
+        task it belongs to when one is known. -Tasks are the branch's tasks (id, branch, sha);
+        -Blamed their ids the gate named.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Worktree,
+        [Parameter(Mandatory = $true)][string]$Base,
+        [Parameter(Mandatory = $true)][string]$Tip,
+        [object[]]$Tasks = @(),
+        [string[]]$Blamed = @(),
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $git = {
+        param([string[]]$Arguments)
+        $result = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments $Arguments
+        if (-not $result.Success) { throw "git $($Arguments -join ' ') failed while rebuilding: $((($result.StdOut + ' ' + $result.StdErr) -replace '\s+', ' ').Trim())" }
+        return $result.StdOut.Trim()
+    }
+    $isAncestor = { param([string]$Ancestor, [string]$Of) (Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("merge-base", "--is-ancestor", $Ancestor, $Of)).ExitCode -eq 0 }
+    $subjectOf = { param([string]$Commit) & $git @("log", "-1", "--format=%s", $Commit) }
+    $taskOf = {
+        param([string]$Second, [string]$Subject)
+        foreach ($task in @($Tasks)) {
+            if ([string](Get-TeamProperty -InputObject $task -Name "sha" -Default "") -eq $Second) { return [string]$task.id }
+            $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
+            if ($branch -and $Subject.StartsWith("merge: $branch into ")) { return [string]$task.id }
+        }
+        return ""
+    }
+    $line = @((& $git @("rev-list", "--first-parent", "--reverse", "$Base..$Tip")) -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    # The code the blamed tasks brought: their merged commits, by the task's sha and by the merges that name their branch.
+    $blamedCode = New-Object System.Collections.ArrayList
+    foreach ($task in @($Tasks | Where-Object { @($Blamed) -contains [string]$_.id })) {
+        $sha = [string](Get-TeamProperty -InputObject $task -Name "sha" -Default "")
+        if ($sha -cmatch '^[0-9a-f]{40}$') { [void]$blamedCode.Add($sha) }
+    }
+    foreach ($commit in $line) {
+        $parents = @((& $git @("rev-list", "--parents", "-n", "1", $commit)) -split " ")
+        if (@($parents).Count -lt 3) { continue }
+        if (@($Blamed) -contains (& $taskOf $parents[2] (& $subjectOf $commit))) { [void]$blamedCode.Add($parents[2]) }
+    }
+
+    [void](& $git @("checkout", "--detach", "--quiet", $Base))
+    $applied = New-Object System.Collections.ArrayList
+    $dropped = New-Object System.Collections.ArrayList
+    foreach ($commit in $line) {
+        $subject = & $subjectOf $commit
+        $parents = @((& $git @("rev-list", "--parents", "-n", "1", $commit)) -split " ")
+        if (@($parents).Count -ge 3) {
+            $second = $parents[2]
+            $id = & $taskOf $second $subject
+            if (& $isAncestor $second "HEAD") { continue }
+            $carries = @($blamedCode | Where-Object { & $isAncestor $_ $second })
+            if (@($carries).Count -gt 0) {
+                $why = if (@($Blamed) -contains $id) { "kırmızı iş" } else { "ayrılan işin kodunu taşıyor" }
+                [void]$dropped.Add([pscustomobject]@{ Commit = $commit; Subject = $subject; TaskId = $id; Why = $why })
+                continue
+            }
+            $merge = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("merge", "--no-ff", "-m", "$subject ($Label)", $second)
+            if (-not $merge.Success) {
+                [void](Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("merge", "--abort"))
+                [void]$dropped.Add([pscustomobject]@{ Commit = $commit; Subject = $subject; TaskId = $id; Why = "ayrılan iş olmadan uygulanmadı" })
+                continue
+            }
+            [void]$applied.Add([pscustomobject]@{ Commit = $commit; Subject = $subject; TaskId = $id })
+            continue
+        }
+        # A commit of the integration branch itself (the lead's wiring): picked again, or dropped when it does not apply.
+        $pick = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("cherry-pick", "--allow-empty", "--keep-redundant-commits", $commit)
+        if (-not $pick.Success) {
+            [void](Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("cherry-pick", "--abort"))
+            [void]$dropped.Add([pscustomobject]@{ Commit = $commit; Subject = $subject; TaskId = ""; Why = "ayrılan iş olmadan uygulanmadı" })
+            continue
+        }
+        [void]$applied.Add([pscustomobject]@{ Commit = $commit; Subject = $subject; TaskId = "" })
+    }
+    return [pscustomobject]@{ Tip = (& $git @("rev-parse", "HEAD")); Applied = @($applied.ToArray()); Dropped = @($dropped.ToArray()) }
+}
+
 # ---------------------------------------------------------------------------- acting: the gate
 
 function Invoke-TeamGate {
