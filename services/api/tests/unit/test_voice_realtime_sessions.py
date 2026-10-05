@@ -482,6 +482,11 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "macro.run",
         "macro.list",
         "macro.delete",
+        # watch-voice: the owner's watches over public pages.
+        "watch.create",
+        "watch.list",
+        "watch.remove",
+        "watch.forget_all",
         # ADR-0197: God's Eye View in the owner's browser.
         "godseye.open",
         "routine.cancel",

@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.actions.receipt import (
@@ -233,6 +234,39 @@ def _research_sentence(session: Session, *, now: datetime) -> str | None:
     return f"{len(events)} araştırma tamamlandı efendim; hazır olduğunuzda okuyabilirim."
 
 
+#: watch-voice: how far back the watches' lines reach when no briefing was ever given.
+_WATCH_FIRST_WINDOW = timedelta(hours=24)
+#: watch-voice: at most this many watch lines in one briefing (the newest).
+WATCH_LINES_MAX = 3
+
+
+def _watch_sentence(session: Session, *, now: datetime) -> str | None:
+    """watch-voice: one line per watch change since the last briefing, at most three, and
+    None - not even "değişiklik yok" - when nothing changed (a quiet watch is not news)."""
+    from app.watch import service as watch_service
+
+    try:
+        with session.begin_nested():
+            previous = ledger_service.query(
+                session,
+                until=now,
+                event_types=(EVENT_TYPE_MORNING_BRIEFING_DELIVERED,),
+                limit=1,
+            )
+            since = now - _WATCH_FIRST_WINDOW
+            if previous:
+                at = previous[0].occurred_at
+                since = at if at.tzinfo is not None else at.replace(tzinfo=UTC)
+            changes = [c for c in watch_service.changes_since(session, since) if c.at <= now]
+    except SQLAlchemyError:  # the watch store is evidence, never a dependency of the answer
+        logger.warning("briefing_watch_failed")
+        return None
+    lines = [change.line_tr for change in changes[-WATCH_LINES_MAX:]]
+    if not lines:
+        return None
+    return " ".join(line if line.endswith((".", "!", "?")) else f"{line}." for line in lines)
+
+
 def _news_sentence(session: Session, *, live: dict[str, Any]) -> str:
     """B15 req 279: what the news actually says, asked rather than assumed.
 
@@ -394,6 +428,13 @@ class BriefingService:
             if research:
                 sections["research_completed"] = research
                 sentences.append(research)
+
+        # watch-voice: the watches that changed since the last briefing - no preference of
+        # their own (the owner set each watch up to be told), and no line at all when none.
+        watches = _watch_sentence(session, now=now)
+        if watches:
+            sections["watches"] = watches
+            sentences.append(watches)
 
         if prefs.include_news_summary:
             # B15 req 279. This used to be one hardcoded sentence saying the news was not
