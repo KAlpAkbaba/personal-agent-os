@@ -158,6 +158,12 @@ param(
     # The Proje Yöneticisi's duty for stopped tasks (pm-duty-stopped) is on in every cycle;
     # -NoDuty turns it off.
     [switch]$NoDuty,
+    # The TEST team (test-team, the owner of 2026-10-03): one round of
+    # scripts/testteam/test-round.ps1 runs BESIDE the cycle, in its own process and its own
+    # seats ('test_parallel' in team/cycle-settings.json). The software seats do not move.
+    [switch]$TestTeam,
+    # For the tests: the script started as the round (default scripts/testteam/test-round.ps1).
+    [string]$TestRoundScript = "",
     [switch]$DryRun,
     # The Cloud Core's queue (pilot-02): with -QueueUrl the queue, the lock and the report go
     # through /v1/team/queue there, so an approval can be given with this PC off and the other
@@ -446,6 +452,29 @@ $limitWaitUntil = $null
 function Add-CycleNote {
     param([string]$List, [string]$Text)
     $script:cycle.$List = @(@($script:cycle.$List) + $Text)
+}
+
+function Start-CycleTestRound {
+    <# The test team's round beside this cycle (-TestTeam): its own process, its own seats - the
+       round measures its cap itself (Get-TeamTestCap: none under the memory floor, one while
+       the gate holds a heavy slot) and says why on the board. The cycle neither waits for it
+       nor gives it a software seat; a round that cannot start is a line under the risks. #>
+    $round = ("t-" + $CycleId).ToLowerInvariant() -replace '[^a-z0-9-]', '-'
+    if ($round.Length -gt 41) { $round = $round.Substring(0, 41).TrimEnd('-') }
+    $script = if ($TestRoundScript) { $TestRoundScript } else { Join-Path $repoRoot "scripts\testteam\test-round.ps1" }
+    $arguments = @("-NoProfile", "-File", "`"$script`"", "-Round", $round, "-TeamRoot", "`"$TeamRoot`"", "-ClaudePath", "`"$ClaudePath`"")
+    if ($useApi) { $arguments += @("-QueueUrl", $QueueUrl, "-QueueToken", "`"$QueueToken`"") }
+    $log = Join-Path $cycleDir "test-round.log"
+    try {
+        $process = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $log -RedirectStandardError (Join-Path $cycleDir "test-round.err.log")
+        Write-Host "test ekibi turu $round yazılım ekibinin yanında başladı (pid $($process.Id)); yazılım koltukları değişmedi"
+        return $process
+    }
+    catch {
+        Add-CycleNote -List "risks" -Text "test ekibi turu başlamadı: $($_.Exception.Message -replace '\s+', ' ')"
+        return $null
+    }
 }
 
 function Get-LimitsDocument {
@@ -740,6 +769,7 @@ else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine 
 try {
     Write-CycleStatus
     if (-not (Test-Path -LiteralPath $cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $cycleDir) }
+    if ($TestTeam -and -not $ResearchOnly) { [void](Start-CycleTestRound) }
     $runCount = @{}
 
     function Test-CapReached {

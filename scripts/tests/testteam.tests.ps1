@@ -1,0 +1,529 @@
+﻿<#
+.SYNOPSIS
+    The test team (team/plans/test-team-adr.md): its seats, its cap, its cards, its staging-only
+    rule, the round that hands jobs to four testers and forwards their failures.
+
+.DESCRIPTION
+    The decisions (scripts/testteam/TestTeam.ps1 and the test-team part of
+    scripts/lib/TeamQueue.ps1) are driven as functions. The scenario runner is run for real
+    against a local HTTP listener that stands in for staging (only for the refusals it is
+    pointed at other hosts, and it must refuse them BEFORE it sends anything). The round
+    (scripts/testteam/test-round.ps1) is run for real with a fake tester in place of the
+    model; what is asserted is what is on disk afterwards: the cards, the queue, the report.
+
+    No model is started; the real staging stack, the board and this repository's team/ files
+    are not touched.
+
+    Run: powershell -NoProfile -File scripts\tests\testteam.tests.ps1
+#>
+[CmdletBinding()]
+param([string]$Filter = "")
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $repoRoot "scripts\lib\TeamQueue.ps1")
+. (Join-Path $repoRoot "scripts\testteam\TestTeam.ps1")
+
+$script:Failures = 0
+$script:Passes = 0
+
+function Test-Case {
+    param([string]$Name, [scriptblock]$Body)
+    if ($Filter -and $Name -notmatch $Filter) { return }
+    try { & $Body; $script:Passes++; Write-Host "  PASS  $Name" }
+    catch {
+        $script:Failures++
+        Write-Host "  FAIL  $Name" -ForegroundColor Red
+        Write-Host "        $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+function Assert-Equal {
+    param($Expected, $Actual, [string]$Because)
+    if ($Expected -ne $Actual) { throw "$Because`n          expected: <$Expected>`n          actual  : <$Actual>" }
+}
+
+function Assert-True {
+    param([bool]$Condition, [string]$Because)
+    if (-not $Condition) { throw $Because }
+}
+
+function New-Work {
+    $path = Join-Path $env:TEMP ("pagentos-testteam-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+    [void](New-Item -ItemType Directory -Force -Path $path)
+    return $path
+}
+
+function Write-Utf8 {
+    param([string]$Path, [string]$Text)
+    [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+$powershell = Join-Path $PSHOME "powershell.exe"
+$runScenario = Join-Path $repoRoot "scripts\testteam\run-scenario.ps1"
+$testRound = Join-Path $repoRoot "scripts\testteam\test-round.ps1"
+
+# ============================================================================ staging only
+
+Write-Host ""
+Write-Host "staging only"
+
+Test-Case "only the staging api and web on this machine are staging; every near miss is refused" {
+    foreach ($good in @("http://127.0.0.1:28001", "http://127.0.0.1:28001/v1/watches", "http://localhost:28000/", "HTTP://127.0.0.1:28000/x?y=1")) {
+        Assert-True -Condition (Test-TestTeamStagingUrl -Url $good) -Because "'$good' is staging"
+    }
+    foreach ($bad in @(
+            "http://127.0.0.1:8000", "http://127.0.0.1:3000/", "https://127.0.0.1:28001", "http://127.0.0.2:28001",
+            "http://pagentos.tailnet.ts.net:28001", "http://127.0.0.1:28001@evil.example/", "http://user:pw@127.0.0.1:28001/",
+            "http://0.0.0.0:28001", "http://[::1]:28001", "ftp://127.0.0.1:28001", "127.0.0.1:28001", "", "http://127.0.0.1"
+        )) {
+        Assert-True -Condition (-not (Test-TestTeamStagingUrl -Url $bad)) -Because "'$bad' is not staging"
+    }
+}
+
+Test-Case "run-scenario refuses a scenario against a non-staging host, exit 2, before it sends anything" {
+    $work = New-Work
+    try {
+        $listener = New-Object System.Net.HttpListener
+        $port = Get-Random -Minimum 41000 -Maximum 49000
+        $listener.Prefixes.Add("http://127.0.0.1:$port/")
+        $listener.Start()
+        try {
+            $scenario = Join-Path $work "s.json"
+            Write-Utf8 $scenario ('{"id":"health","family":"saglik","steps":[{"name":"saglik","method":"GET","path":"/v1/system/health","expect_status":200}]}')
+            $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -OutDir $work -NoAuth 2>&1
+            Assert-Equal -Expected 2 -Actual $LASTEXITCODE -Because "a host that is not staging: $out"
+            Assert-True -Condition (($out -join " ") -match "STAGING DE") -Because "it says why (the console folds the Turkish letters): $out"
+            $pending = $listener.GetContextAsync()
+            Assert-True -Condition (-not $pending.Wait(300)) -Because "nothing reached the other host"
+        }
+        finally { $listener.Stop(); $listener.Close() }
+        # A scenario step that names a full url of another host is refused too, whatever -BaseUrl says.
+        Write-Utf8 (Join-Path $work "t.json") ('{"id":"jump","family":"x","steps":[{"name":"dis","method":"GET","url":"http://127.0.0.1:8000/v1/system/health","expect_status":200}]}')
+        $out = & $powershell -NoProfile -File $runScenario -Scenario (Join-Path $work "t.json") -OutDir $work -NoAuth -DryRun 2>&1
+        Assert-Equal -Expected 2 -Actual $LASTEXITCODE -Because "a step's own url is judged as well: $out"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# ============================================================================ the cap
+
+Write-Host ""
+Write-Host "the cap"
+
+Test-Case "cycle-settings.json names test_parallel (default 4) and the memory floor; the worker seats do not move" {
+    $work = New-Work
+    try {
+        $file = Join-Path $work "cycle-settings.json"
+        $read = { param($text)
+            if ($null -ne $text) { Write-Utf8 $file $text }
+            $s = Read-TeamCycleSettings -Path $file -Workers 4 -Inspectors 3 -Integrators 1
+            "$($s.Workers)/$($s.Testers)/$($s.TestFloorGb)/$(@($s.Problems).Count)"
+        }
+        Assert-Equal -Expected "4/4/8/0" -Actual (& $read $null) -Because "no file: four testers, an 8 GB floor"
+        Assert-Equal -Expected "4/2/8/0" -Actual (& $read '{"max_parallel":4,"test_parallel":2}') -Because "the test cap is its own"
+        Assert-Equal -Expected "4/0/8/0" -Actual (& $read '{"test_parallel":0}') -Because "0 switches the test team off"
+        Assert-Equal -Expected "4/4/12/0" -Actual (& $read '{"test_memory_floor_gb":12}') -Because "the floor"
+        foreach ($bad in @('{"test_parallel":-1}', '{"test_parallel":"4"}', '{"test_parallel":17}', '{"test_memory_floor_gb":0}')) {
+            Assert-Equal -Expected "4/4/8/1" -Actual (& $read $bad) -Because "'$bad' changes nothing and is said"
+        }
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case "the test cap drops under the memory floor and while the gate holds a heavy slot, and says why" {
+    $gb = [int64]1GB
+    $free = Get-TeamTestCap -Configured 4 -FreeBytes (20 * $gb) -FloorGb 8 -GateRunning $false
+    Assert-Equal -Expected 4 -Actual $free.Cap -Because "enough memory, no gate"
+    Assert-Equal -Expected 0 -Actual @($free.Reasons).Count -Because "nothing to say"
+    $low = Get-TeamTestCap -Configured 4 -FreeBytes (7 * $gb) -FloorGb 8 -GateRunning $false
+    Assert-Equal -Expected 0 -Actual $low.Cap -Because "under the floor nothing new starts"
+    Assert-True -Condition ((@($low.Reasons) -join " ") -match "bellek") -Because "the reason names memory: $($low.Reasons)"
+    $gate = Get-TeamTestCap -Configured 4 -FreeBytes (20 * $gb) -FloorGb 8 -GateRunning $true
+    Assert-Equal -Expected 1 -Actual $gate.Cap -Because "a gate runs: one tester"
+    Assert-True -Condition ((@($gate.Reasons) -join " ") -match "kap") -Because "the reason names the gate: $($gate.Reasons)"
+    Assert-Equal -Expected 0 -Actual (Get-TeamTestCap -Configured 4 -FreeBytes (2 * $gb) -FloorGb 8 -GateRunning $true).Cap -Because "both: none"
+    Assert-Equal -Expected 0 -Actual (Get-TeamTestCap -Configured 0 -FreeBytes (40 * $gb) -FloorGb 8 -GateRunning $false).Cap -Because "switched off stays off"
+    Assert-Equal -Expected 4 -Actual (Get-TeamTestCap -Configured 4 -FreeBytes (8 * $gb) -FloorGb 8 -GateRunning $false).Cap -Because "the floor itself is enough"
+}
+
+Test-Case "the gate holds a heavy slot only when an entry of the role gate is granted or running with heavy" {
+    $e = { param($role, $state, $kinds) [pscustomobject]@{ role = $role; state = $state; kinds = @($kinds) } }
+    Assert-True -Condition (Test-TeamGateHoldsHeavy -Entries @((& $e "gate" "running" @("heavy")))) -Because "running"
+    Assert-True -Condition (Test-TeamGateHoldsHeavy -Entries @((& $e "gate" "granted" @("database", "heavy")))) -Because "granted"
+    Assert-True -Condition (-not (Test-TeamGateHoldsHeavy -Entries @((& $e "gate" "waiting" @("heavy"))))) -Because "a waiting gate holds nothing"
+    Assert-True -Condition (-not (Test-TeamGateHoldsHeavy -Entries @((& $e "worker" "running" @("heavy"))))) -Because "a worker's corpus is not the gate"
+    Assert-True -Condition (-not (Test-TeamGateHoldsHeavy -Entries @((& $e "gate" "running" @("database"))))) -Because "the gate's database step is not heavy"
+    Assert-True -Condition (-not (Test-TeamGateHoldsHeavy -Entries @())) -Because "an empty queue"
+}
+
+# ============================================================================ cards and seats
+
+Write-Host ""
+Write-Host "cards and seats"
+
+Test-Case "the test team has its own five seats, none of them a software seat" {
+    Assert-Equal -Expected "test-lead,tester-1,tester-2,tester-3,tester-4" -Actual ((Get-TestTeamSeats) -join ",") -Because "one test lead, four testers"
+    foreach ($seat in @(Get-TestTeamSeats)) { Assert-True -Condition ($seat -notmatch '^(lead|worker-\d|inspector|integrator|researcher)$') -Because "$seat" }
+}
+
+Test-Case "a test card moves planned -> running -> passed/failed/broke, and a failed one only back to running" {
+    Assert-Equal -Expected "planned,running,passed,failed,broke" -Actual ((Get-TeamTestCardStates) -join ",") -Because "the five states"
+    foreach ($ok in @("planned>running", "running>passed", "running>failed", "running>broke", "failed>running", "broke>running", "passed>running")) {
+        $p = $ok -split ">"
+        Assert-True -Condition (Test-TeamTestCardMove -From $p[0] -To $p[1]) -Because $ok
+    }
+    foreach ($no in @("planned>passed", "planned>failed", "failed>passed", "broke>passed", "passed>failed", "running>planned", "x>running")) {
+        $p = $no -split ">"
+        Assert-True -Condition (-not (Test-TeamTestCardMove -From $p[0] -To $p[1])) -Because $no
+    }
+}
+
+Test-Case "jobs are dealt to the four testers in turn, one scenario family a job" {
+    $jobs = @(1..6 | ForEach-Object { [pscustomobject]@{ family = "f$_"; scenario = "s$_.json"; improvise = ($_ -eq 1) } })
+    $cards = @(New-TestTeamCards -Round "r1" -Jobs $jobs)
+    Assert-Equal -Expected 6 -Actual @($cards).Count -Because "a card per job"
+    Assert-Equal -Expected "tester-1,tester-2,tester-3,tester-4,tester-1,tester-2" -Actual ((@($cards) | ForEach-Object { $_.tester }) -join ",") -Because "in turn"
+    Assert-Equal -Expected "planned" -Actual (@($cards)[0].state) -Because "a new card is planned"
+    Assert-Equal -Expected "tj-r1-1" -Actual (@($cards)[0].id) -Because "ids"
+    $twice = @([pscustomobject]@{ family = "a"; scenario = "x" }, [pscustomobject]@{ family = "a"; scenario = "y" })
+    $threw = $false
+    try { [void](New-TestTeamCards -Round "r1" -Jobs $twice) } catch { $threw = $true }
+    Assert-True -Condition $threw -Because "one family is one job"
+}
+
+Test-Case "a failure becomes a software card with steps, expected, actual, the scenario, the screenshot and the staging sha; two alike are one" {
+    $failure = [pscustomobject]@{
+        card = "tj-r1-2"; tester = "tester-2"; family = "nobet"; scenario = "scripts/testteam/scenarios/watches.json"
+        step = "nöbet listesi"; steps = @("POST /v1/watches", "GET /v1/watches"); expected = "200"; actual = "500"
+        screenshot = "team/testteam/r1/shots/tj-r1-2.png"
+    }
+    $same = $failure.PSObject.Copy(); $same.card = "tj-r1-5"
+    $merged = @(Merge-TestTeamFailures -Failures @($failure, $same))
+    Assert-Equal -Expected 1 -Actual @($merged).Count -Because "the same scenario, step and actual are one failure"
+    $task = ConvertTo-TestTeamFailureTask -Failure $failure -StagingSha ("a" * 40) -Round "r1" -Now "2026-10-05T12:00:00Z"
+    Assert-Equal -Expected "proposed" -Actual $task.state -Because "the software Proje Yöneticisi decides"
+    foreach ($word in @("Adımlar", "Beklenen: 200", "Gerçekleşen: 500", "watches.json", "tj-r1-2.png", ("a" * 40))) {
+        Assert-True -Condition ($task.goal -match [regex]::Escape($word)) -Because "the goal carries '$word': $($task.goal)"
+    }
+    $schemaProblems = @(Test-TeamQueue -Queue ([pscustomobject]@{ version = 1; tasks = @($task) }))
+    Assert-Equal -Expected 0 -Actual @($schemaProblems).Count -Because "a normal card of the queue: $($schemaProblems -join '; ')"
+}
+
+Test-Case "one result whose steps fail alike is one failure, the others named in it; a different actual is a failure of its own" {
+    # Found by the first real round (2026-10-05): staging was a release behind, every watch step
+    # answered 404, and five cards were opened for one cause.
+    $step = { param($name, $actual, $ok) [pscustomobject]@{ name = $name; method = "GET"; path = "/v1/$name"; expected = "200"; actual = $actual; ok = $ok } }
+    $result = [pscustomobject]@{ card = "tj-1"; tester = "tester-2"; family = "nobet"; scenario = "w.json"; state = "failed"; screenshot = ""
+        steps = @((& $step "a" "404" $false), (& $step "b" "404" $false), (& $step "c" "200" $true), (& $step "d" "404" $false), (& $step "e" "500" $false)) }
+    $failures = @(Get-TestTeamFailures -Result $result)
+    Assert-Equal -Expected "a,e" -Actual ((@($failures) | ForEach-Object { $_.step }) -join ",") -Because "404 once, 500 once"
+    Assert-Equal -Expected "b,d" -Actual ((@(@($failures)[0].alike)) -join ",") -Because "the steps that failed alike are named"
+    $task = ConvertTo-TestTeamFailureTask -Failure @($failures)[0] -Round "r1" -Now "2026-10-05T12:00:00Z"
+    Assert-True -Condition ($task.goal -match "Aynı sonuçla kalan adımlar: b, d") -Because "the card says so: $($task.goal)"
+}
+
+Test-Case "the breaking-point report is short, names the first failing load with its numbers, and is addressed to the Danışman" {
+    $results = @(
+        [pscustomobject]@{ card = "tj-r1-1"; tester = "tester-1"; family = "yuk"; breaking = [pscustomobject]@{
+                tried = @([pscustomobject]@{ load = 1; ok = 1; errors = 0; p95_ms = 40 }, [pscustomobject]@{ load = 8; ok = 8; errors = 0; p95_ms = 90 }, [pscustomobject]@{ load = 32; ok = 20; errors = 12; p95_ms = 4100 })
+                first_failure = [pscustomobject]@{ load = 32; ok = 20; errors = 12; p95_ms = 4100 }; what = "GET /v1/watches eşzamanlı" } },
+        [pscustomobject]@{ card = "tj-r1-2"; tester = "tester-2"; family = "iptal"; breaking = [pscustomobject]@{ tried = @([pscustomobject]@{ load = 4; ok = 4; errors = 0; p95_ms = 50 }); first_failure = $null; what = "aynı istek iki kez" } }
+    )
+    $report = Format-TestTeamBreakingReport -Round "r1" -Results $results -StagingSha ("b" * 40)
+    Assert-True -Condition ($report.Note.Length -le 280) -Because "a board note: $($report.Note.Length)"
+    Assert-True -Condition ($report.Note -match "^Danışman'a") -Because "addressed: $($report.Note)"
+    Assert-True -Condition ($report.Note -match "32" -and $report.Note -match "12") -Because "the numbers: $($report.Note)"
+    Assert-True -Condition ($report.Markdown -match "kırılmadı" -and $report.Markdown -match "aynı istek iki kez") -Because "what was tried and did not break is said"
+    Assert-True -Condition ($report.Markdown -notmatch "sahib") -Because "the report goes to the Danışman, not to the owner"
+    # A ladder of a scenario whose steps already failed measures that failure, not a load
+    # (the first real round: every watch request 404, "broke at load 2").
+    $failedToo = @([pscustomobject]@{ card = "tj-r1-3"; tester = "tester-3"; family = "nobet"; state = "failed"; breaking = [pscustomobject]@{
+                tried = @([pscustomobject]@{ load = 2; ok = 0; errors = 2; p95_ms = 30 }); first_failure = [pscustomobject]@{ load = 2; ok = 0; errors = 2; p95_ms = 30 }; what = "POST /v1/watches" } }) + $results
+    $report = Format-TestTeamBreakingReport -Round "r1" -Results $failedToo
+    Assert-True -Condition ($report.Note -match "yük 32" -and $report.Note -notmatch "yük 2 ") -Because "the headline is the real breaking point: $($report.Note)"
+    Assert-True -Condition ($report.Markdown -match "ölçüm geçersiz") -Because "the failed scenario's ladder is said, and why it does not count: $($report.Markdown)"
+}
+
+Test-Case "a tester's board note is what the Ofis' Test odası reads: 'iş: <job>', then 'sonuç: <state> - <job> - kopma: ...'" {
+    $card = [pscustomobject]@{ id = "tj-r1-2"; family = "saglik"; state = "running" }
+    Assert-Equal -Expected "iş: saglik (tj-r1-2)" -Actual (Format-TestTeamSeatNote -Card $card) -Because "a running card is the seat's job"
+    $card.state = "broke"
+    $result = [pscustomobject]@{ breaking = [pscustomobject]@{ first_failure = [pscustomobject]@{ load = 256; ok = 250; errors = 6; p95_ms = 7982 } } }
+    Assert-Equal -Expected "sonuç: broke - saglik (tj-r1-2) - kopma: yük 256, 6 hata / 256, p95 7982 ms" -Actual (Format-TestTeamSeatNote -Card $card -Result $result) -Because "a broken card carries its numbers"
+    $card.state = "passed"
+    Assert-Equal -Expected "sonuç: passed - saglik (tj-r1-2)" -Actual (Format-TestTeamSeatNote -Card $card -Result $result) -Because "a passed card is just its end"
+}
+
+# ============================================================================ a real scenario run
+
+Write-Host ""
+Write-Host "a scenario against a stand-in staging"
+
+function Start-FakeStaging {
+    # A listener on the staging api's port would collide with the real staging stack; the
+    # runner's -AllowTestPort is the one way to point it elsewhere, and only at 127.0.0.1.
+    param([int]$Port, [int]$FailAbove = 0)
+    $script = @"
+`$l = New-Object System.Net.HttpListener
+`$l.Prefixes.Add('http://127.0.0.1:$Port/')
+`$l.Start()
+`$inFlight = 0
+while (`$true) {
+    `$c = `$l.GetContext()
+    `$p = `$c.Request.Url.AbsolutePath
+    `$code = 200; `$body = '{"status":"ok","release":{"version":"$("c" * 40)"},"items":[]}'
+    if (`$p -eq '/broken') { `$code = 500; `$body = '{"detail":"boom"}' }
+    if (`$p -eq '/load' -and $FailAbove -gt 0 -and `$c.Request.Headers['X-Load'] -and [int]`$c.Request.Headers['X-Load'] -gt $FailAbove) { `$code = 503; `$body = '{}' }
+    if (`$p -eq '/stop') { `$c.Response.Close(); break }
+    `$b = [Text.Encoding]::UTF8.GetBytes(`$body)
+    `$c.Response.StatusCode = `$code
+    `$c.Response.OutputStream.Write(`$b, 0, `$b.Length)
+    `$c.Response.Close()
+}
+"@
+    $file = Join-Path $env:TEMP ("pagentos-fake-staging-$Port.ps1")
+    Write-Utf8 $file $script
+    $p = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-File", $file) -PassThru -WindowStyle Hidden
+    for ($i = 0; $i -lt 50; $i++) {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/v1/system/health" -TimeoutSec 2); break } catch { Start-Sleep -Milliseconds 200 }
+    }
+    return $p
+}
+
+Test-Case "a scenario run writes passed/failed with expected and actual per step, the staging sha, and a breaking-point ladder" {
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $fake = Start-FakeStaging -Port $port -FailAbove 8
+    try {
+        $scenario = Join-Path $work "s.json"
+        Write-Utf8 $scenario ('{"id":"mix","family":"karma","steps":[{"name":"saglik","method":"GET","path":"/v1/system/health","expect_status":200,"expect_contains":"ok"},{"name":"kirik","method":"GET","path":"/broken","expect_status":200}],"breaking":{"method":"GET","path":"/load","start":2,"factor":2,"max":32,"what":"yuk merdiveni"}}')
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -NoAuth -Card "tj-t-1" 2>&1
+        Assert-Equal -Expected 1 -Actual $LASTEXITCODE -Because "a failing step is exit 1: $out"
+        $result = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $work "tj-t-1.result.json") | ConvertFrom-Json
+        Assert-Equal -Expected "failed" -Actual $result.state -Because "one step failed"
+        Assert-Equal -Expected ("c" * 40) -Actual $result.staging_sha -Because "the sha staging said"
+        Assert-Equal -Expected "500" -Actual ([string]@($result.steps)[1].actual) -Because "the actual status"
+        Assert-Equal -Expected "200" -Actual ([string]@($result.steps)[1].expected) -Because "the expected status"
+        Assert-Equal -Expected 16 -Actual ([int]$result.breaking.first_failure.load) -Because "2,4,8 pass; 16 is the first over 8: $(@($result.breaking.tried | ForEach-Object { $_.load }) -join ',')"
+        Assert-True -Condition ([int]$result.breaking.first_failure.errors -gt 0) -Because "with its errors counted"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fake.HasExited) { $fake.Kill() }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ============================================================================ a round
+
+Write-Host ""
+Write-Host "a round"
+
+function New-FakeTester {
+    # A stand-in for `claude -p`: reads its card from standard input, writes the result file the
+    # card names, prints the result document. The family 'kirik' fails, 'yuk' breaks at 16.
+    param([string]$Dir)
+    $file = Join-Path $Dir "fake-tester.ps1"
+    Write-Utf8 $file @'
+$card = [Console]::In.ReadToEnd()
+$log = $env:PAGENTOS_FAKE_TESTER_LOG
+$role = ""
+for ($i = 0; $i -lt $args.Count; $i++) { if ($args[$i] -eq "--append-system-prompt-file") { $role = [IO.Path]::GetFileNameWithoutExtension($args[$i + 1]) } }
+$path = [regex]::Match($card, '(?m)^- result_file: (.+)$').Groups[1].Value.Trim()
+$id = [regex]::Match($card, '(?m)^- id: (.+)$').Groups[1].Value.Trim()
+$family = [regex]::Match($card, '(?m)^- family: (.+)$').Groups[1].Value.Trim()
+$seat = [regex]::Match($card, '(?m)^- tester: (.+)$').Groups[1].Value.Trim()
+[IO.File]::AppendAllText($log, "$role $seat $id $family $([datetime]::UtcNow.ToString('o'))`r`n")
+Start-Sleep -Milliseconds 600
+$state = "passed"; $steps = @(@{ name = "adim"; expected = "200"; actual = "200"; ok = $true })
+$breaking = @{ what = "ayni istek iki kez"; tried = @(@{ load = 2; ok = 2; errors = 0; p95_ms = 30 }); first_failure = $null }
+if ($family -eq "kirik") { $state = "failed"; $steps = @(@{ name = "nobet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = "500"; ok = $false }) }
+if ($family -eq "yuk") { $state = "broke"; $breaking = @{ what = "GET /v1/watches esz."; tried = @(@{ load = 8; ok = 8; errors = 0; p95_ms = 80 }, @{ load = 16; ok = 10; errors = 6; p95_ms = 3000 }); first_failure = @{ load = 16; ok = 10; errors = 6; p95_ms = 3000 } } }
+$doc = @{ card = $id; tester = $seat; family = $family; state = $state; scenario = "scripts/testteam/scenarios/$family.json"; staging_sha = ("d" * 40); steps = $steps; breaking = $breaking; screenshot = "" }
+[IO.File]::WriteAllText($path, ($doc | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+Write-Output '{"type":"result","subtype":"success","is_error":false,"result":"rapor yazildi","total_cost_usd":0}'
+'@
+    return $file
+}
+
+Test-Case "a round deals four jobs to four testers at once, gets four results back, forwards the failure as one card and writes the breaking report" {
+    $work = New-Work
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"saglik","scenario":"scripts/testteam/scenarios/health.json"},{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"yuk","scenario":"scripts/testteam/scenarios/yuk.json","improvise":true},{"family":"iptal","scenario":"scripts/testteam/scenarios/iptal.json","improvise":true}]}'
+        $fake = New-FakeTester -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls.log"
+        $out = & $powershell -NoProfile -File $testRound -Round "r9" -TeamRoot $team -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
+        $calls = @(Get-Content -LiteralPath $env:PAGENTOS_FAKE_TESTER_LOG | Where-Object { $_ })
+        Assert-Equal -Expected 4 -Actual @($calls).Count -Because "four tester runs"
+        Assert-Equal -Expected "tester-1,tester-2,tester-3,tester-4" -Actual ((@($calls) | ForEach-Object { ($_ -split " ")[1] } | Sort-Object) -join ",") -Because "one each"
+        Assert-True -Condition (@($calls | Where-Object { ($_ -split " ")[0] -ne "tester" }).Count -eq 0) -Because "every run is on the tester role file"
+        $cards = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "testteam\r9\cards.json") | ConvertFrom-Json
+        Assert-Equal -Expected "passed,failed,broke,passed" -Actual ((@($cards.cards) | ForEach-Object { $_.state }) -join ",") -Because "four results came back"
+        $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
+        Assert-Equal -Expected 1 -Actual @($queue.tasks).Count -Because "the one failure is one card in the software queue"
+        Assert-Equal -Expected "proposed" -Actual (@($queue.tasks)[0].state) -Because "for the Proje Yöneticisi"
+        Assert-Equal -Expected (@($queue.tasks)[0].id) -Actual ([string](@($cards.cards)[1].forwarded_task)) -Because "the card remembers the forwarded task"
+        $breaking = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "testteam\r9\kopma-noktasi.md")
+        Assert-True -Condition ($breaking -match "16") -Because "the first failing load"
+        # A second round over the same queue forwards nothing twice.
+        $out = & $powershell -NoProfile -File $testRound -Round "r10" -TeamRoot $team -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
+        Assert-Equal -Expected 1 -Actual @($queue.tasks).Count -Because "an open card for the same failure is not opened again: $out"
+    }
+    finally {
+        Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "with the Cloud Core's queue the failure goes through the feed's create-only write, and a known id is not written again" {
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $puts = Join-Path $work "puts.log"
+    # A stand-in Cloud Core: GET /v1/team/queue answers one task (the id the failure would get
+    # a second time), PUT /v1/team/queue/tasks/<id> is recorded and answered 200.
+    $core = @"
+`$l = New-Object System.Net.HttpListener
+`$l.Prefixes.Add('http://127.0.0.1:$port/')
+`$l.Start()
+while (`$true) {
+    `$c = `$l.GetContext()
+    `$p = `$c.Request.Url.AbsolutePath
+    `$body = '{}'
+    if (`$p -eq '/stop') { `$c.Response.Close(); break }
+    if (`$c.Request.HttpMethod -eq 'GET' -and `$p -eq '/v1/team/queue') { `$body = [IO.File]::ReadAllText('$work\queue-answer.json') }
+    if (`$c.Request.HttpMethod -eq 'PUT') {
+        `$in = (New-Object IO.StreamReader(`$c.Request.InputStream, [Text.Encoding]::UTF8)).ReadToEnd()
+        [IO.File]::AppendAllText('$puts', `$p + ' ' + `$in + "``n")
+        `$body = '{"ok":true}'
+    }
+    `$b = [Text.Encoding]::UTF8.GetBytes(`$body)
+    `$c.Response.ContentType = 'application/json'
+    `$c.Response.OutputStream.Write(`$b, 0, `$b.Length)
+    `$c.Response.Close()
+}
+"@
+    Write-Utf8 (Join-Path $work "queue-answer.json") '{"version":1,"tasks":[]}'
+    Write-Utf8 (Join-Path $work "core.ps1") $core
+    $listener = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-File", (Join-Path $work "core.ps1")) -PassThru -WindowStyle Hidden
+    try {
+        for ($i = 0; $i -lt 50; $i++) { try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/v1/team/queue" -TimeoutSec 2); break } catch { Start-Sleep -Milliseconds 200 } }
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        $token = Join-Path $work "token.txt"; Write-Utf8 $token "test-token"
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"saglik","scenario":"s.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls.log"
+        $out = & $powershell -NoProfile -File $testRound -Round "api1" -TeamRoot $team -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
+        $written = @(Get-Content -LiteralPath $puts -Encoding UTF8 | Where-Object { $_ })
+        Assert-Equal -Expected 1 -Actual @($written).Count -Because "one failure, one create: $out"
+        Assert-True -Condition ($written[0] -match '^/v1/team/queue/tasks/test-fail-kirik-[0-9a-f]{10} ') -Because "the task's own path: $($written[0])"
+        Assert-True -Condition ($written[0] -match '"expected_updated_at":null') -Because "create-only: $($written[0])"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "queue.json"))) -Because "no local queue file is written in API mode"
+        # The same failure next round: the store has the id, nothing is written.
+        $id = [regex]::Match($written[0], 'tasks/(\S+) ').Groups[1].Value
+        Write-Utf8 (Join-Path $work "queue-answer.json") ('{"version":1,"tasks":[{"id":"' + $id + '","state":"proposed"}]}')
+        $out = & $powershell -NoProfile -File $testRound -Round "api2" -TeamRoot $team -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
+        Assert-Equal -Expected 1 -Actual @(Get-Content -LiteralPath $puts -Encoding UTF8 | Where-Object { $_ }).Count -Because "a known id is not written again: $out"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $listener.HasExited) { $listener.Kill() }
+        Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "under the memory floor a round starts no tester and says so; while a gate runs one tester at a time" {
+    $work = New-Work
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"},{"family":"b","scenario":"b.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls.log"
+        $out = & $powershell -NoProfile -File $testRound -Round "low" -TeamRoot $team -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 3 -AssumeGateRunning 0 -NoBoard 2>&1
+        Assert-True -Condition (-not (Test-Path -LiteralPath $env:PAGENTOS_FAKE_TESTER_LOG)) -Because "no tester started: $out"
+        Assert-True -Condition (($out -join " ") -match "bellek") -Because "it says why: $out"
+        $out = & $powershell -NoProfile -File $testRound -Round "gate" -TeamRoot $team -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 1 -NoBoard 2>&1
+        $calls = @(Get-Content -LiteralPath $env:PAGENTOS_FAKE_TESTER_LOG | Where-Object { $_ })
+        Assert-Equal -Expected 2 -Actual @($calls).Count -Because "both jobs ran: $out"
+        $t1 = [datetime]::Parse((@($calls)[0] -split " ")[4]); $t2 = [datetime]::Parse((@($calls)[1] -split " ")[4])
+        Assert-True -Condition ([math]::Abs(($t2 - $t1).TotalMilliseconds) -ge 500) -Because "one after the other, not together ($t1 / $t2)"
+    }
+    finally {
+        Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a retest after the fix is released closes the card when the scenario passes and reopens it when it fails" {
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $fake = Start-FakeStaging -Port $port
+    try {
+        $team = Join-Path $work "team"
+        $roundDir = Join-Path $team "testteam\r1"
+        [void](New-Item -ItemType Directory -Force -Path $roundDir)
+        $good = Join-Path $work "good.json"; Write-Utf8 $good '{"id":"g","family":"g","steps":[{"name":"saglik","method":"GET","path":"/v1/system/health","expect_status":200}]}'
+        $bad = Join-Path $work "bad.json"; Write-Utf8 $bad '{"id":"b","family":"b","steps":[{"name":"kirik","method":"GET","path":"/broken","expect_status":200}]}'
+        $task = { param($id, $state) [pscustomobject]@{ id = $id; title = "t"; roadmap_row = "r"; state = $state; area = @(); branch = ""; worktree = ""; assignee = ""; reports = @(); budget = [pscustomobject]@{ max_usd = 0 }; created_at = "2026-10-05T00:00:00Z"; updated_at = "2026-10-05T00:00:00Z" } }
+        $queue = [pscustomobject]@{ version = 1; tasks = @((& $task "test-fail-g" "released"), (& $task "test-fail-b" "released"), (& $task "test-fail-w" "in_progress")) }
+        Write-Utf8 (Join-Path $team "queue.json") ($queue | ConvertTo-Json -Depth 6)
+        $cards = [pscustomobject]@{ round = "r1"; cards = @(
+                [pscustomobject]@{ id = "tj-r1-1"; tester = "tester-1"; family = "g"; scenario = $good; improvise = $false; state = "failed"; forwarded_task = "test-fail-g" },
+                [pscustomobject]@{ id = "tj-r1-2"; tester = "tester-2"; family = "b"; scenario = $bad; improvise = $false; state = "failed"; forwarded_task = "test-fail-b" },
+                [pscustomobject]@{ id = "tj-r1-3"; tester = "tester-3"; family = "w"; scenario = $bad; improvise = $false; state = "failed"; forwarded_task = "test-fail-w" }) }
+        Write-Utf8 (Join-Path $roundDir "cards.json") ($cards | ConvertTo-Json -Depth 6)
+        $out = & $powershell -NoProfile -File $testRound -Retest -Round "r1" -TeamRoot $team -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -NoAuth -NoBoard 2>&1
+        $after = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $roundDir "cards.json") | ConvertFrom-Json
+        Assert-Equal -Expected "passed,failed,failed" -Actual ((@($after.cards) | ForEach-Object { $_.state }) -join ",") -Because "fixed closes, still broken reopens, not yet released waits: $out"
+        Assert-Equal -Expected 1 -Actual ([int](Get-TeamProperty -InputObject @($after.cards)[1] -Name "reopened" -Default 0)) -Because "the reopen is counted"
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject @($after.cards)[2] -Name "reopened" -Default 0)) -Because "an unreleased fix is not re-run"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fake.HasExited) { $fake.Kill() }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ============================================================================ the role files
+
+Write-Host ""
+Write-Host "the role files"
+
+Test-Case "test-lead and tester have role files with tools; the tester's names staging as its only target" {
+    foreach ($role in @("test-lead", "tester")) {
+        $file = Join-Path $repoRoot "scripts\testteam\roles\$role.md"
+        Assert-True -Condition (Test-Path -LiteralPath $file) -Because "$role.md"
+        Assert-True -Condition (@(Get-TeamRoleTools -RoleFile $file).Count -gt 0) -Because "$role grants tools"
+        Assert-True -Condition (@(Get-TeamRoleTools -RoleFile $file) -notcontains "Agent") -Because "$role starts no agents"
+        Assert-True -Condition (@(Get-TeamRoleTools -RoleFile $file) -notcontains "Edit") -Because "$role edits no code"
+        # The installed copy (.claude/agents/) is the source byte for byte when it is there.
+        $installed = Join-Path $repoRoot ".claude\agents\$role.md"
+        if (Test-Path -LiteralPath $installed) {
+            Assert-Equal -Expected (Get-FileHash -LiteralPath $file).Hash -Actual (Get-FileHash -LiteralPath $installed).Hash -Because ".claude/agents/$role.md is a copy of scripts/testteam/roles/$role.md"
+        }
+    }
+    $tester = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\testteam\roles\tester.md"), [System.Text.Encoding]::UTF8)
+    Assert-True -Condition ($tester -match "127\.0\.0\.1:28001" -and $tester -match "run-scenario\.ps1") -Because "the tester's target and tool"
+}
+
+Write-Host ""
+Write-Host "testteam tests: $script:Passes passed, $script:Failures failed"
+if ($script:Failures -gt 0) { exit 1 }
+exit 0
