@@ -22,7 +22,13 @@ vi.mock("../../app/lib/session", () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
-import { WatchListView, type WatchListViewProps } from "../../app/routines/WatchList";
+import WatchList, {
+  INITIAL_WATCH_STATE,
+  WatchListView,
+  type WatchListViewProps,
+  type WatchState,
+  watchHandlers,
+} from "../../app/routines/WatchList";
 import {
   EMPTY_SENTENCE,
   addOne,
@@ -103,10 +109,20 @@ describe("the /v1/watches client", () => {
 
   it("a refused removal keeps the row and says the server's sentence", async () => {
     apiFetch.mockResolvedValue(
-      json(404, { detail: { code: "not_found", message: "Bu nöbet yok; silinmiş olabilir." } }),
+      json(503, { detail: { code: "unavailable", message: "Veritabanı şu an yanıt vermiyor." } }),
     );
     const next = await removeOne(THREE, "w2");
     expect(next.items).toHaveLength(3);
+    expect(next.notice).toBe("Veritabanı şu an yanıt vermiyor.");
+  });
+
+  it("a removal the Cloud Core answers not_found drops the row: it is already gone", async () => {
+    // Forgotten by voice, or removed in another tab: the row must not stay to be pressed again.
+    apiFetch.mockResolvedValue(
+      json(404, { detail: { code: "not_found", message: "Bu nöbet yok; silinmiş olabilir." } }),
+    );
+    const next = await removeOne(THREE, "w2");
+    expect(next.items.map((row) => row.id)).toEqual(["w1", "w3"]);
     expect(next.notice).toBe("Bu nöbet yok; silinmiş olabilir.");
   });
 
@@ -342,6 +358,127 @@ describe("the Nöbetler list", () => {
     );
     expect(boxes).toHaveLength(1);
     expect(boxes[0].props.disabled).toBe(true);
+  });
+});
+
+// --------------------------------------------------------------- the wrapper
+
+/** `WatchList`'s own handlers, driven over a plain store as the component drives them. */
+function harness(over: Partial<WatchState> = {}) {
+  const store: { state: WatchState } = { state: { ...INITIAL_WATCH_STATE, ...over } };
+  const handlers = watchHandlers(
+    () => store.state,
+    (patch) => {
+      store.state = { ...store.state, ...patch };
+    },
+  );
+  return { store, handlers };
+}
+
+const DRAFT = { url: "https://duyuru.example.org/", label: "Duyuru", kind: "changed" as const, value: "", every_hours: "6" };
+
+describe("WatchList's handlers (the wrapper between the buttons and /v1/watches)", () => {
+  it("Kaldır on a row sends DELETE /v1/watches/{that id} and the row leaves", async () => {
+    apiFetch.mockResolvedValue(json(200, { deleted: 1 }));
+    const { store, handlers } = harness({ items: THREE });
+    await handlers.onRemove("w2");
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch.mock.calls[0][0]).toBe("/v1/watches/w2");
+    expect(apiFetch.mock.calls[0][1]).toMatchObject({ method: "DELETE" });
+    expect(store.state.items?.map((row) => row.id)).toEqual(["w1", "w3"]);
+    expect(store.state.notice).toBe("“Duyuru” nöbeti kaldırıldı.");
+    expect(store.state.busy).toBe(false);
+  });
+
+  it("the view's Kaldır button reaches the DELETE through the handlers", async () => {
+    apiFetch.mockResolvedValue(json(200, { deleted: 1 }));
+    const { store, handlers } = harness({ items: THREE });
+    const remove = buttons({ ...store.state, ...handlers }).filter((el) => text(el.props.children) === "Kaldır");
+    (remove[2].props.onClick as () => void)();
+    await vi.waitFor(() => expect(store.state.busy).toBe(false));
+    expect(apiFetch.mock.calls[0][0]).toBe("/v1/watches/w3");
+    expect(store.state.items?.map((row) => row.id)).toEqual(["w1", "w2"]);
+  });
+
+  it("'Hepsini unut' sends one DELETE /v1/watches and says the count", async () => {
+    apiFetch.mockResolvedValue(json(200, { deleted: 3 }));
+    const { store, handlers } = harness({ items: THREE });
+    await handlers.onForgetAll();
+    expect(apiFetch.mock.calls).toEqual([["/v1/watches", { method: "DELETE" }]]);
+    expect(store.state.items).toEqual([]);
+    expect(store.state.notice).toBe("3 nöbet unutuldu; okumalarıyla birlikte silindi.");
+  });
+
+  it("an add joins the list, empties the form and clears an old refusal", async () => {
+    apiFetch.mockResolvedValue(json(201, watch({ id: "w9", label: "Duyuru", last_read_at: null, last_outcome: null })));
+    const { store, handlers } = harness({ items: [THREE[0]], draft: DRAFT, refusal: "eski ret" });
+    await handlers.onAdd();
+    expect(apiFetch.mock.calls[0][0]).toBe("/v1/watches");
+    expect(JSON.parse(apiFetch.mock.calls[0][1].body as string).url).toBe("https://duyuru.example.org/");
+    expect(store.state.items?.map((row) => row.id)).toEqual(["w1", "w9"]);
+    expect(store.state.refusal).toBeNull();
+    expect(store.state.draft).toEqual(INITIAL_WATCH_STATE.draft);
+  });
+
+  it("a refused add keeps the form and stands its reason beside it", async () => {
+    apiFetch.mockResolvedValue(json(422, { detail: { code: "watch_refused", message: "Bu adres izlenemez." } }));
+    const { store, handlers } = harness({ items: THREE, draft: DRAFT });
+    await handlers.onAdd();
+    expect(store.state.refusal).toBe("Bu adres izlenemez.");
+    expect(store.state.draft).toEqual(DRAFT);
+    expect(store.state.items).toHaveLength(3);
+  });
+
+  it("refresh: a failed list stays null with its one line", async () => {
+    apiFetch.mockResolvedValue(json(503, { detail: { code: "unavailable", message: "Veritabanı şu an yanıt vermiyor." } }));
+    const { store, handlers } = harness();
+    await handlers.refresh();
+    expect(store.state.items).toBeNull();
+    expect(store.state.error).toBe("Nöbetler okunamadı: Veritabanı şu an yanıt vermiyor.");
+  });
+
+  it("an unread list and a refused add: never 'Henüz nöbet yok'", async () => {
+    apiFetch.mockResolvedValue(json(422, { detail: { code: "watch_refused", message: "Bu adres izlenemez." } }));
+    const { store, handlers } = harness({ items: null, error: "Nöbetler okunamadı: HTTP 503", draft: DRAFT });
+    await handlers.onAdd();
+    expect(store.state.items).toBeNull();
+    expect(store.state.error).toBe("Nöbetler okunamadı: HTTP 503");
+    const page = html({ ...store.state });
+    expect(page).not.toContain("Henüz nöbet yok");
+    expect(page).toContain("Bu adres izlenemez.");
+  });
+
+  it("an unread list and a successful add: the list is read again, not shown as the one row", async () => {
+    apiFetch
+      .mockResolvedValueOnce(json(201, watch({ id: "w9", label: "Duyuru" })))
+      .mockResolvedValueOnce(json(200, { items: [...THREE, watch({ id: "w9", label: "Duyuru" })] }));
+    const { store, handlers } = harness({ items: null, error: "Nöbetler okunamadı: HTTP 503", draft: DRAFT });
+    await handlers.onAdd();
+    expect(apiFetch.mock.calls.map((call) => [call[0], (call[1] as RequestInit | undefined)?.method ?? "GET"])).toEqual([
+      ["/v1/watches", "POST"],
+      ["/v1/watches", "GET"],
+    ]);
+    expect(store.state.items?.map((row) => row.id)).toEqual(["w1", "w2", "w3", "w9"]);
+    expect(store.state.error).toBeNull();
+    expect(store.state.notice).toBe("“Duyuru” nöbeti kuruldu; ilk okuma birkaç dakika içinde.");
+  });
+
+  it("an unread list, an add, and the list still unreadable: no partial list, the add still said", async () => {
+    apiFetch
+      .mockResolvedValueOnce(json(201, watch({ id: "w9", label: "Duyuru" })))
+      .mockResolvedValueOnce(json(503, { detail: { code: "unavailable", message: "Veritabanı şu an yanıt vermiyor." } }));
+    const { store, handlers } = harness({ items: null, error: "Nöbetler okunamadı: HTTP 503", draft: DRAFT });
+    await handlers.onAdd();
+    expect(store.state.items).toBeNull();
+    expect(store.state.error).toBe("Nöbetler okunamadı: Veritabanı şu an yanıt vermiyor.");
+    expect(store.state.notice).toBe("“Duyuru” nöbeti kuruldu; ilk okuma birkaç dakika içinde.");
+    expect(html({ ...store.state })).not.toContain("data-panel-badge");
+  });
+
+  it("the component mounts with the list loading and the form ready", () => {
+    const page = renderToStaticMarkup(<WatchList />);
+    expect(page).toContain("yükleniyor");
+    expect(page).toContain("<form");
   });
 });
 
