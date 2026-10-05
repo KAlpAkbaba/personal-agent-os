@@ -155,7 +155,8 @@ function Invoke-GateStepGroup {
     $index = 0
     foreach ($step in @($Steps)) {
         $index++
-        $slug = ($step.Name -replace '[^A-Za-z0-9]+', '-').Trim('-')
+        # -creplace: under tr-TR a case-insensitive class does not match the capital I (2026-10-05)
+        $slug = ($step.Name -creplace '[^A-Za-z0-9]+', '-').Trim('-')
         if ($slug.Length -gt 60) { $slug = $slug.Substring(0, 60) }
         $deadline = if ($step.DeadlineSeconds -gt 0) { $step.DeadlineSeconds } else { $DeadlineSeconds }
         [void]$states.Add([pscustomobject]@{

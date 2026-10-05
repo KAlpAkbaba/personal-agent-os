@@ -268,6 +268,19 @@ Test-Case "6b. the named defaults: three at once, a deadline, a timeout word" {
     Assert-Equal "TIMEOUT" $script:GateStepTimeoutWord "the timeout word"
 }
 
+Test-Case "6c. a step's log files keep its name's capital I under the tr-TR culture (the group's log of 2026-10-05 read '06-nstaller-invocation-tests')" {
+    $dir = New-CaseDir
+    $culture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = New-Object System.Globalization.CultureInfo("tr-TR")
+        $step = New-GateStep -Name "Installer Identity tests" -Script $fakeStep -What "installer tests" -Arguments @("-Dir", $dir, "-Id", "i", "-Mode", "sleep", "-Exit", "0", "-Milliseconds", "10")
+        $r = @(Invoke-GateStepGroup -Steps @($step) -MaxParallel 1 -LogRoot (Join-Path $dir "logs"))
+    }
+    finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $culture }
+    Assert-Equal "01-Installer-Identity-tests.stdout.log" (Split-Path -Leaf $r[0].StdoutPath) "the stdout log's name"
+    Assert-Equal "01-Installer-Identity-tests.stderr.log" (Split-Path -Leaf $r[0].StderrPath) "the stderr log's name"
+}
+
 # ------------------------------------------- 7: the gate prints the same either way
 
 function Get-GateFunctionText {
