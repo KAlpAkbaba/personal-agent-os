@@ -21,6 +21,7 @@ testable today without any of it existing yet.
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 import time
 import uuid
@@ -28,7 +29,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Protocol, runtime_checkable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from app.devices.commands import (
     CommandExpired,
@@ -260,6 +261,30 @@ class FakeBrowserGateway:
                     )
                 )
         return records
+
+
+#: The fetch_evidence/selector CONTRACT (watch-engine, browser-redirect-guard): a CSS
+#: selector of at most this many characters; anything else is ``validation_error``.
+MAX_SELECTOR_CHARS: Final = 200
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True, slots=True)
+class PageDigest:
+    """One page as a watch sees it: the digest of its text and a bounded excerpt.
+
+    ``text_sha256`` is the worker's hash of the whitespace-collapsed text the selector
+    matched (or of the whole primary text without one); ``selector_matched`` is True/False
+    with a selector and None without. The excerpt lives in memory only - a watch stores the
+    hash and at most one number."""
+
+    url: str
+    final_url: str
+    excerpt: str
+    text_sha256: str | None
+    selector_matched: bool | None
+    page_kind: str
+    http_status: int | None
 
 
 class BrowserDispatchError(RuntimeError):
@@ -824,6 +849,56 @@ class DeviceBrowserGateway:
             command_id=str(command_id) if command_id else None,
         )
 
+    def fetch_page_digest(self, url: str, *, selector: str | None = None) -> PageDigest:
+        """One ``browser.fetch_evidence`` for a watch: the digest of a page, optionally of
+        what ``selector`` matches (the fetch_evidence/selector CONTRACT). Read-only, on this
+        gateway's session (the research profile). The destination is checked here before
+        anything is sent, and a final URL on another host is checked again on return: a
+        redirect into the tailnet is ``security_scope_error`` and its text is never handed
+        on. A malformed hash from the worker is dropped (``text_sha256=None``)."""
+        try:
+            validate_fetch_target(url)
+        except DestinationPolicyError as exc:
+            raise BrowserDispatchError("security_scope_error", str(exc), False) from exc
+        if selector is not None and (
+            not isinstance(selector, str)
+            or not selector.strip()
+            or len(selector) > MAX_SELECTOR_CHARS
+        ):
+            raise BrowserDispatchError("validation_error", "selector is not acceptable", False)
+        payload: dict[str, Any] = {
+            "session_id": self._session_id,
+            "url": url,
+            "query": "",
+            "source_class": "watch",
+            "excerpt_chars": self._excerpt_chars,
+            "timeout_ms": int(self._timeout_s * 1000),
+        }
+        if selector is not None:
+            payload["selector"] = selector
+        # The session is the reading (the reader opens one per reading), so the key is new
+        # for every reading and a stale terminal ack can never be replayed as today's page.
+        key = fetch_idempotency_key(self._session_id, f"{url} {selector or ''}")
+        result, _command_id = self._run("browser.fetch_evidence", payload, key)
+        final_url = str(result.get("final_url") or url)
+        if urlsplit(final_url).hostname != urlsplit(url).hostname:
+            try:
+                validate_fetch_target(final_url)
+            except DestinationPolicyError as exc:
+                raise BrowserDispatchError("security_scope_error", str(exc), False) from exc
+        sha = result.get("text_sha256")
+        matched = result.get("selector_matched")
+        status = result.get("http_status")
+        return PageDigest(
+            url=url,
+            final_url=final_url,
+            excerpt=str(result.get("excerpt") or ""),
+            text_sha256=sha if isinstance(sha, str) and _SHA256_HEX.fullmatch(sha) else None,
+            selector_matched=matched if isinstance(matched, bool) else None,
+            page_kind=str(result.get("page_kind") or "ok"),
+            http_status=status if isinstance(status, int) else None,
+        )
+
     def close_session(self) -> None:
         if not self._session_opened:
             return
@@ -880,6 +955,8 @@ __all__ = [
     "DeviceBrowserGateway",
     "FakeBrowserGateway",
     "FetchQuery",
+    "MAX_SELECTOR_CHARS",
+    "PageDigest",
     "SearchHit",
     "UnwiredBrowserGateway",
     "fetch_idempotency_key",

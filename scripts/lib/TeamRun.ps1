@@ -661,6 +661,27 @@ function Wait-TeamRun {
 
 # ---------------------------------------------------------------------------- the report
 
+function Format-TeamOwnerTrial {
+    <#
+    .SYNOPSIS
+        One owner trial as one Turkish report line (ADR-0258): the object form names its
+        sentence, machine, expectation and state; the old plain-string form prints as it is.
+    #>
+    param([Parameter(Mandatory = $true)][string]$TaskId, [Parameter(Mandatory = $true)]$Trial)
+    if ($Trial -is [string]) { return "${TaskId}: $Trial" }
+    $sentence = [string](Get-TeamProperty -InputObject $Trial -Name "sentence" -Default "")
+    $machine = [string](Get-TeamProperty -InputObject $Trial -Name "machine" -Default "?")
+    $expect = [string](Get-TeamProperty -InputObject $Trial -Name "expect" -Default "")
+    $verdict = [string](Get-TeamProperty -InputObject $Trial -Name "verdict" -Default "")
+    $said = [string](Get-TeamProperty -InputObject $Trial -Name "said" -Default "")
+    $state = switch ($verdict) {
+        "oldu" { "oldu" }
+        "olmadi" { if ($said) { "olmadı ($said)" } else { "olmadı" } }
+        default { "denenmedi" }
+    }
+    return "${TaskId}: `"$sentence`" — makine: $machine — beklenen: $expect — durum: $state"
+}
+
 function New-TeamCycleReport {
     <#
     .SYNOPSIS
@@ -714,7 +735,7 @@ function New-TeamCycleReport {
     $real = @($tasks | Where-Object { $_.state -eq "awaiting_real_evidence" } | ForEach-Object {
             $rows = @(Get-TeamProperty -InputObject $_ -Name "owner_trials" -Default @())
             if (@($rows).Count -eq 0) { "$($_.id) — $($_.title): deneme cümlesi yazılmamış" }
-            else { foreach ($trial in $rows) { "$($_.id): $trial" } }
+            else { foreach ($trial in $rows) { Format-TeamOwnerTrial -TaskId $_.id -Trial $trial } }
         })
     Add-Section -Title "Sahibin gerçek cihazda deneyecekleri (cümle cümle, hangi makinede)" -Rows $real
 

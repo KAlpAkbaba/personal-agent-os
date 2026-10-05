@@ -27,7 +27,9 @@ writes); a value without the ``Z`` (no zone, or an offset) cannot be read and is
 more than two minutes ahead of the clock (skew) is not live either.
 
 A status is live only while its ``updated_at`` is under ten minutes old AND the lock is held
-(not stale) by the cycle that wrote it; otherwise ``running`` is false and no seat works.
+(not stale) by the cycle that wrote it; otherwise ``running`` is false and no seat works. The
+lock's age counts from the holder's own last status (``team_store.lock_alive_since``): a cycle
+seven hours old that wrote its status two minutes ago is running.
 
 The model policy (ADR-0214 addendum 7): every seat carries ``model``, the model its role is set
 to (the owner seat: none), and ``running_model`` only while a live run of the seat is on another
@@ -48,7 +50,9 @@ from app.team import store as team_store
 CAPACITY = 6
 LOWERED_MAX = 20  # limits.lowered: this cycle's downgrades, newest last
 STATUS_STALE_MINUTES = 10
-STATUS_FUTURE_SKEW_MINUTES = 2  # a clock a little ahead is fine; further ahead is not "live"
+#: A clock a little ahead is fine; further ahead is not "live". The lock's heartbeat holds the
+#: same bound (``team_store.lock_alive_since``).
+STATUS_FUTURE_SKEW_MINUTES = team_store.STATUS_FUTURE_SKEW_MINUTES
 SUMMARY_MAX_LINES = 40  # queue.schema.json: report.summary maxItems
 MIN_WORKER_SEATS = 4
 _ROLE_SEATS = ("lead", "researcher", "integrator", "inspector")
@@ -99,7 +103,7 @@ def _is_live(lock: dict[str, Any] | None, status: dict[str, Any] | None, now: da
         return False
     if written - now > timedelta(minutes=STATUS_FUTURE_SKEW_MINUTES):
         return False
-    if not team_store.lock_is_running(lock, now):
+    if not team_store.lock_is_running(lock, now, status):
         return False
     holder = (lock or {}).get("cycle_id")
     return not holder or holder == status.get("cycle_id")

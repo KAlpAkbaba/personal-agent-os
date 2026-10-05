@@ -311,13 +311,6 @@ def test_the_cases_that_are_not_correct_are_exactly_the_known_gaps():
     assert VERDICT_WRONG_DEVICE not in KNOWN_GAPS.values()  # never a tolerated gap
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "ADR-0224 target NOT MET: measured 73/106 = 68.9 % on 2026-10-01 (stt_corpus.KNOWN_GAPS). "
-        "Strict: the day the layers reach 95 % this fails until the marker is removed."
-    ),
-)
 def test_stt_corpus_meets_the_target():
     """ADR-0224: >= 95 % correct - the meant reading at HIGH or MEDIUM, or the one question."""
     report = build_stt_report(_all_results(), corpus_version=STT_CORPUS_VERSION)

@@ -16,7 +16,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.artifacts.runtime import ArtifactRuntime
 from app.config import Settings
@@ -47,9 +46,12 @@ TURKISH = set("çğıöşüÇĞİÖŞÜ")
 
 
 @pytest.fixture()
-def engine():
+def engine(tmp_path):
+    # A file, not one shared in-memory connection: the application starts more than one purge
+    # loop in threads (the watch's beside this one since 2026-10-04), and on a single StaticPool
+    # connection a sibling's rollback undid this purge's delete (2 rows left, the gate red).
     eng = create_engine(
-        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+        f"sqlite:///{tmp_path / 'misheard.db'}", connect_args={"check_same_thread": False}
     )
     MisheardUtterance.__table__.create(eng)
     yield eng

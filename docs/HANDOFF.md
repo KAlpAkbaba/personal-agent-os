@@ -15,12 +15,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `321e43b04e1eb7f88f8d1afa4d3d1de1da305fa4` (2026-10-04 16:04 UTC = 19:04 yerel, api-blue), LKG `002c6292`,
-pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. QUALIFICATION Stage 53. Ana kopya `team/nightly/lead` (= main).
-PY nöbeti canlı (ADR-0283); 4000 karakter sınırı bir SONRAKİ döngü başlangıcında devreye girer - o zamana kadar 1200'ü aşan
-duty dosyası (team/plans/<döngü>-duty-N.json) reddedilir, Danışman elle uygular. Ekip hesap3'te. DİKKAT: işçilerin Postgres
-testleri ortak dev DB'yi kendi göçlerine taşıyabiliyor (kart dev-db-branch-migration-leak); kapı 'Can't locate revision' derse
-o dalın worktree'sinden `alembic downgrade 0065_misheard_utterances`. SIRADAKİ entegrasyon: integrate/d20261003.**
+**ÜRETİM: main `b30df6c547ebc8afb826441ac56091688aba2c3f` (2026-10-05 00:32 UTC = 03:32 yerel, api-green), LKG `321e43b0`,
+pin = RELEASE, reconcile OK, şema `0066_watches`. QUALIFICATION Stage 54 (2026-10-04 entegrasyonu: staging, nöbet motoru,
+tarayıcı koruması, oto-yayın, limitten devam, ilerleme şeridi, pano konuşması). Ana kopya `team/nightly/lead` (= main). Kapıda
+bekleyen YOK. test-team artık staging-stack'i beklemiyor. Ekip hesap3'te; hesap geçişi için tek seferlik görev
+`PagentOS Team Account Switch` + `%USERPROFILE%\.pagentos-team\switch-account.ps1 -Account .claude-hesapN`. Ön kontrole ekle:
+`uv run ruff check .`, test_multi_device_invariant.py, installer-strictmode.tests.ps1, provision.tests.ps1.**
 **ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
 `team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
 yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**

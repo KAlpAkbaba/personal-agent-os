@@ -68,6 +68,8 @@ class LemmaReading(NamedTuple):
     dropped: tuple[tuple[str, str], ...]
     #: (the fused token, casefolded; the two words).
     splits: tuple[tuple[str, str], ...]
+    #: (the word with an ending nobody said, casefolded; the word): ("notü", "not").
+    invented: tuple[tuple[str, str], ...] = ()
 
 
 # ------------------------------------------------------------------ the closed vocabularies
@@ -179,6 +181,7 @@ _WORDS: Final[frozenset[str]] = frozenset(
         "bana",
         "seni",
         "kendi",
+        "kendin",
         "bir",
         "her",
         "tüm",
@@ -257,9 +260,20 @@ _NOUNS: Final[tuple[str, ...]] = (
     "gün",
     "bugün",
     "buçuk",
+    "bug",
+    "resim",
 )
 #: Stems whose vowel harmony is lexical, not the last vowel's: saati, maili, rutini.
 _FRONT: Final[frozenset[str]] = frozenset({"saat", "mail", "rutin"})
+#: ... and the loanword said with an "a" it is not written with: bug'ı ("bag").
+_FLAT: Final[frozenset[str]] = frozenset({"bug"})
+#: Stems that lose their last vowel before a vowel-initial suffix: resim -> resmi.
+_ELIDED: Final[dict[str, str]] = {"resim": "resm"}
+_UNELIDED: Final[dict[str, str]] = {short: stem for stem, short in _ELIDED.items()}
+#: The suffixes that begin with a vowel after a consonant-final stem.
+_VOWEL_INITIAL: Final[frozenset[str]] = frozenset(
+    {"poss1sg", "poss2sg", "poss3sg", "poss1pl", "poss2pl", "acc", "dat", "gen"}
+)
 
 _MI_PARTICLES: Final[frozenset[str]] = frozenset(
     f"{m}{s}"
@@ -275,10 +289,12 @@ def _last_vowel(s: str) -> str:
     return next((c for c in reversed(s) if c in _VOWELS), "a")
 
 
-def _high(s: str, front: bool = False) -> str:
+def _high(s: str, front: bool = False, flat: bool = False) -> str:
     v = _last_vowel(s)
     if front and v in "aı":
         v = "e" if v == "a" else "i"
+    if flat and v in "ou":
+        v = "a"
     return {"a": "ı", "ı": "ı", "e": "i", "i": "i", "o": "u", "u": "u", "ö": "ü", "ü": "ü"}[v]
 
 
@@ -309,10 +325,10 @@ _VERB_CHAINS: Final[tuple[tuple[str, ...], ...]] = (
 
 
 def _attach_noun(stem: str, chain: tuple[str, ...]) -> str:
-    front = stem in _FRONT
-    w = stem
+    front, flat = stem in _FRONT, stem in _FLAT
+    w = _ELIDED[stem] if stem in _ELIDED and chain[:1] and chain[0] in _VOWEL_INITIAL else stem
     for sfx in chain:
-        h, lo, vf = _high(w, front), _low(w, front), _vowel_final(w)
+        h, lo, vf = _high(w, front, flat), _low(w, front), _vowel_final(w)
         n = "n" if (sfx in _CASES and "poss3sg" in chain) else ""  # pronominal n after -(s)i
         d = "t" if (not n and w[-1] in _VOICELESS) else "d"
         if sfx == "pl":
@@ -381,7 +397,9 @@ def _endings(
     for stem in stems:
         for chain in chains:
             if chain:
-                found = table.setdefault(attach(stem, chain)[len(stem) :], [])
+                form = attach(stem, chain)
+                base = stem if form.startswith(stem) else _ELIDED.get(stem, stem)
+                found = table.setdefault(form[len(base) :], [])
                 if chain not in found:
                     found.append(chain)
     return table
@@ -397,14 +415,24 @@ def _is_known_stem(stem: str, kind: str) -> bool:
     return stem in (_ALL_VERBS if kind == VERB else _NOUN_STEMS)
 
 
+def _stems_at(head: str, kind: str) -> tuple[str, ...]:
+    """The known stems ``head`` can be the front of: itself, or the stem it is with its last
+    vowel elided ("resm" -> "resim")."""
+    stems = [head] if _is_known_stem(head, kind) else []
+    if kind == NOUN and head in _UNELIDED:
+        stems.append(_UNELIDED[head])
+    return tuple(stems)
+
+
 def _strip(token: str, kind: str) -> tuple[str, tuple[str, ...]] | None:
     endings, attach = (
         (_VERB_ENDINGS, _attach_verb) if kind == VERB else (_NOUN_ENDINGS, _attach_noun)
     )
     for cut in range(len(token) - 1, 0, -1):  # longest remaining stem first
         chains = endings.get(token[cut:])
-        stem = token[:cut]
-        if chains and _is_known_stem(stem, kind):
+        if not chains:
+            continue
+        for stem in _stems_at(token[:cut], kind):
             for chain in chains:
                 if attach(stem, chain) == token:
                     return stem, chain
@@ -496,6 +524,32 @@ def _split(token: str) -> tuple[str, str] | None:
     return found[0] if len(found) == 1 else None
 
 
+# ------------------------------------------------------------------ the invented ending
+
+
+def _invented(token: str) -> str | None:
+    """The word a token is once the ending the STT invented is dropped ("notü" -> "not",
+    "Ofisü" on 2026-09-30), or None. Only ONE vowel after a consonant-final word this module
+    knows that is not a verb, and only a vowel that word's harmony cannot take: "notu" is
+    the accusative, "notü" is no Turkish word. A known token is never one."""
+    if len(token) < 3 or token[-1] not in _VOWELS or "'" in token:
+        return None
+    word = token[:-1]
+    if word[-1] in _VOWELS or _known(token) is not None or _known(word) in (None, VERB):
+        return None
+    lemma = _lemma(word)
+    front, flat = lemma.stem in _FRONT, lemma.stem in _FLAT
+    harmonic = _high(word, front, flat) + _low(word, front)
+    if token[-1] in harmonic + harmonic.translate(_LETTER_SWAPS):
+        # "ekranlari", "haberlerı": the harmony's own vowel with its dot lost or misplaced -
+        # a letter confusion, not an ending nobody said.
+        return None
+    return word
+
+
+_LETTER_SWAPS: Final = str.maketrans("ıiöü", "iıou")
+
+
 # ------------------------------------------------------------------ the STT confusion list
 
 CONFUSIONS_FILE: Final[str] = "stt-confusions.json"
@@ -571,8 +625,7 @@ def _readings(token: str, kind: str) -> list[tuple[str, ...]]:
     )
     found: list[tuple[str, ...]] = []
     for cut in range(len(token) - 1, 0, -1):
-        stem = token[:cut]
-        if _is_known_stem(stem, kind):
+        for stem in _stems_at(token[:cut], kind):
             found += [c for c in endings.get(token[cut:], ()) if attach(stem, c) == token]
     return found
 
@@ -650,6 +703,7 @@ def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | No
     out: list[str] = []
     dropped: list[tuple[str, str]] = []
     splits: list[tuple[str, str]] = []
+    invented: list[tuple[str, str]] = []
     cursor = 0
     index = 0
     while index < len(words):
@@ -657,10 +711,14 @@ def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | No
         raw = match.group()
         parts = [(raw, token)]
         halves = _split(token) if len(token) == len(raw) else None
+        word = _invented(token) if halves is None and len(token) == len(raw) else None
         if halves is not None:
             cut = len(halves[0])
             parts = [(raw[:cut], halves[0]), (raw[cut:], halves[1])]
             splits.append((token, " ".join(halves)))
+        elif word is not None:
+            parts = [(raw[: len(word)], word)]
+            invented.append((token, word))
         end = match.end()
         written: list[str] = []
         for position, (said, part) in enumerate(parts):
@@ -687,10 +745,10 @@ def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | No
         out.append(" ".join(written))
         cursor = end
         index += 1
-    if not dropped and not splits:
+    if not dropped and not splits and not invented:
         return None
     out.append(text[cursor:])
-    return LemmaReading("".join(out), tuple(dropped), tuple(splits))
+    return LemmaReading("".join(out), tuple(dropped), tuple(splits), tuple(invented))
 
 
 def lemma_tokens(text: str, *, confusions: dict[str, str] | None = None) -> tuple[str, ...]:

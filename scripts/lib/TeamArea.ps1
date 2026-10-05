@@ -22,10 +22,15 @@
       * whether the return still counts as one of the worker's two (Test-TeamAreaReturnCounts);
       * whether a counted second return still stops the task: not when the inspector's
         `onceki_bulgular: kapandi` line says the previous items are closed - one extra round,
-        never a third (Get-TeamPriorFindings, Resolve-TeamReturnStop).
+        never a third (Get-TeamPriorFindings, Resolve-TeamReturnStop);
+      * which changed files are the WORKER's when its branch contains the cycle's integration
+        branch (rebuilt on it, or merged with it): the files of its diff against
+        `integrate/<cycle>` (Select-TeamWorkerChangedFiles, Get-TeamWorkerChangedFiles).
 
     As in `TeamQueue.ps1`, every rule is a function that takes its inputs and returns its
-    answer: this file starts no process, reads no file and writes no store. Nothing here is
+    answer: this file starts no process, reads no file and writes no store. The one named
+    exception is Get-TeamWorkerChangedFiles: it asks git, but through the -Git scriptblock
+    its caller gives (by default TeamRun.ps1's Invoke-TeamGit, which the caller loads). Nothing here is
     called by the cycle yet; the wiring is a later card, and the fields `area_widenings` and
     `area_history` reach the queue's schema and the store with it.
 
@@ -510,4 +515,81 @@ function Resolve-TeamReturnStop {
     $reason = $stopped
     if (@($prior.Open).Count -gt 0) { $reason = "$stopped; açık kalan maddeler: $(@($prior.Open) -join ', ')" }
     return [pscustomobject]@{ State = "stopped"; Returns = $returns; Reason = $reason; Extra = $false }
+}
+
+function Select-TeamWorkerChangedFiles {
+    <#
+    .SYNOPSIS
+        The files the area check counts as the worker's, from two diffs already taken.
+
+    .DESCRIPTION
+        BaseDiff is `git diff --name-only <base>...<branch>`, AlsoBaseDiff the same against the
+        cycle's integration branch, ContainsAlsoBase whether the branch contains that branch.
+        Not contained: BaseDiff as it is (today's check). Contained: every file of AlsoBaseDiff -
+        first those also in BaseDiff, in BaseDiff's order, then the rest in AlsoBaseDiff's order.
+        A file the integration branch brought in and the worker left alone is in BaseDiff only
+        and is not counted. A file the worker changed is in AlsoBaseDiff, also one it took back
+        to main's bytes (then it is missing from BaseDiff: the reason AlsoBaseDiff, not the
+        intersection, is the answer). Paths are compared as git wrote them.
+    #>
+    param(
+        [AllowEmptyCollection()][string[]]$BaseDiff = @(),
+        [AllowEmptyCollection()][string[]]$AlsoBaseDiff = @(),
+        [bool]$ContainsAlsoBase = $false
+    )
+    if (-not $ContainsAlsoBase) { return @($BaseDiff) }
+    $also = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($AlsoBaseDiff)) { [void]$also.Add($path) }
+    $base = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($BaseDiff)) { [void]$base.Add($path) }
+    $both = @(@($BaseDiff) | Where-Object { $also.Contains($_) })
+    $alsoOnly = @(@($AlsoBaseDiff) | Where-Object { -not $base.Contains($_) })
+    return @($both + $alsoOnly)
+}
+
+function Get-TeamWorkerChangedFiles {
+    <#
+    .SYNOPSIS
+        The files a worker's branch changed, for the area check: Get-TeamChangedFiles' answer,
+        less the files the cycle's integration branch brought in.
+
+    .DESCRIPTION
+        Without -AlsoBase, when that branch does not exist, or when the worker's branch does not
+        contain it (`git merge-base --is-ancestor`), the answer is Get-TeamChangedFiles':
+        `git diff --name-only <Base>...<Branch>`. Otherwise it is the files of
+        `git diff --name-only <AlsoBase>...<Branch>`, ordered by the first diff where they are in
+        it (Select-TeamWorkerChangedFiles).
+
+        The named exception to "this file starts no process": git is asked through -Git, a
+        scriptblock `{ param($Directory, $Arguments) }` that returns Invoke-TeamGit's shape
+        (Success, ExitCode, StdOut, StdErr). Not given: TeamRun.ps1's Invoke-TeamGit, which the
+        caller has loaded. A failed diff throws, as Get-TeamChangedFiles does.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [string]$Base = "main",
+        [string]$AlsoBase = "",
+        [scriptblock]$Git = $null
+    )
+    if ($null -eq $Git) {
+        if (-not (Get-Command -Name "Invoke-TeamGit" -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw "Get-TeamWorkerChangedFiles needs -Git or TeamRun.ps1's Invoke-TeamGit"
+        }
+        $Git = { param($Directory, $Arguments) Invoke-TeamGit -WorkingDirectory $Directory -Arguments $Arguments }
+    }
+    $names = {
+        param($Range)
+        $result = & $Git $RepoRoot @("diff", "--name-only", $Range)
+        if (-not $result.Success) { throw "git diff failed: $(([string]$result.StdErr).Trim())" }
+        return @(([string]$result.StdOut) -split "`r?`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+    }
+    $baseDiff = @(& $names "$Base...$Branch")
+    if (-not $AlsoBase) { return $baseDiff }
+    $exists = & $Git $RepoRoot @("rev-parse", "--verify", "--quiet", "refs/heads/$AlsoBase")
+    if (-not $exists.Success) { return $baseDiff }
+    $ancestor = & $Git $RepoRoot @("merge-base", "--is-ancestor", "refs/heads/$AlsoBase", $Branch)
+    if ([int]$ancestor.ExitCode -ne 0) { return $baseDiff }
+    $alsoDiff = @(& $names "$AlsoBase...$Branch")
+    return @(Select-TeamWorkerChangedFiles -BaseDiff $baseDiff -AlsoBaseDiff $alsoDiff -ContainsAlsoBase $true)
 }
