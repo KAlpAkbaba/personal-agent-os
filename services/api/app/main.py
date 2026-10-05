@@ -145,6 +145,7 @@ from app.state.routes import router as state_router
 from app.team.allowlist_routes import router as team_allowlist_router
 from app.team.routes import router as team_router
 from app.team.routes_board import router as team_board_router
+from app.telephony.loop import HEALTH_NAME as TELEPHONY_HEALTH_NAME
 from app.telephony.loop import TelephonyLoop
 from app.telephony.routes import audio_router as telephony_audio_router
 from app.telephony.routes import router as telephony_router
@@ -761,6 +762,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await watch_purge.start()
         # Does nothing while ``watch_runner_enabled`` is off (the health check says skipped).
         await watch_runner.start()
+        # jarvis-calls-owner: the no-answer retry and the important-event calls. Without
+        # Twilio credentials a pass does nothing, so health still tells "idle" from "dead".
+        await telephony_loop.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -792,6 +796,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
+            await telephony_loop.stop()
             await watch_runner.stop()
             await watch_purge.stop()
             await misheard_purge.stop()
@@ -1099,6 +1104,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # watch-engine: the runner ("skipped" while off) and the readings' 30-day purge.
         checks["watch_runner"] = watch_runner.health_check()
         checks["watch_purge"] = watch_purge.health_check()
+        # jarvis-calls-owner: the call loop (retry + event calls). Advisory like the above.
+        checks[TELEPHONY_HEALTH_NAME] = telephony_loop.health_check()
         # B08 req 646/648/649/650: the safety net answers for itself. Both records have
         # been written for weeks and nothing read either of them; a backup nobody checks is
         # one you find out about on the day you need it.

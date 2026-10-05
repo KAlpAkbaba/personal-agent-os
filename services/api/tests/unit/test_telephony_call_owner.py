@@ -245,6 +245,8 @@ def test_with_our_tts_down_twilio_says_it_in_turkish(session_scope: Any) -> None
     "base",
     [
         "https://pagentos-core.tail1234.ts.net",
+        # A fully-qualified name's trailing dot must not slip past the suffix check.
+        "https://pagentos-core.tail1234.ts.net.",
         "https://100.101.102.103",
         "https://localhost:8000",
         "https://192.168.1.20",

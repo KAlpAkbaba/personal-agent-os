@@ -101,7 +101,8 @@ def is_public_https_origin(base_url: str) -> bool:
     (100.64/10), private, loopback or link-local address is not reachable from Twilio, and a
     ``<Play>`` of it would be a call that says "an application error has occurred"."""
     parsed = urllib.parse.urlsplit(base_url or "")
-    host = (parsed.hostname or "").lower()
+    # A trailing dot (``foo.ts.net.``) is the same name and must not pass the suffix check.
+    host = (parsed.hostname or "").lower().rstrip(".")
     if parsed.scheme != "https" or not host:
         return False
     if host == "localhost" or host.endswith((".ts.net", ".local", ".internal", ".localhost")):

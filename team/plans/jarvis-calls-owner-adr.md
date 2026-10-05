@@ -64,12 +64,11 @@ Tarih: 2026-10-05 · Görev: jarvis-calls-owner · Sahibin isteği 2026-10-05 (T
 
 - Twilio'nun Türkiye'ye dakika ücreti, Türkiye arayan-kimliği kuralları, `Polly.Filiz` sesinin hesapta
   açık olduğu: NOT_RUN - entegratör/denetleyici doğrulamalı. Lisans: harici kütüphane eklenmedi (httpx mevcut).
-- Döngü (`telephony_loop`, 30 sn) kuruldu ama lifespan'de başlatılmadı (ALAN_ISTEGI): başlatınca
-  `test_bounded_delivery.py` `reported` haritasına `"telephony_loop": "telephony_calls"`,
-  `test_health_endpoint.py` `ALL_CHECKS`'e (danışma) `"telephony_calls"` girmeli; lifespan'e
-  `await telephony_loop.start()` / `await telephony_loop.stop()` ve sağlık `checks`'ine
-  `telephony_calls` (main.py, alanda) aynı committe. Koruma dosyaları alan dışı olduğu için
-  iki koruma kırmızı kalmasın diye main.py'deki başlatma da onlarla birlikte yapılacak.
-- Açık ses rotası `test_identity_enforcement.py` `EXPECTED_OPEN`'a
-  `("GET", "/v1/telephony/audio/{token}")` olarak girmeli (alarm ses rotasının ikizi).
+- Döngü (`telephony_loop`, 30 sn) lifespan'de başlatılır, kapanışta ilk durdurulur; sağlıkta
+  `telephony_calls` (danışma) satırı. `test_bounded_delivery.py` haritası ve
+  `test_health_endpoint.py` `ALL_CHECKS` aynı committe güncellendi (3. dönüş).
+- Açık ses rotası `test_identity_enforcement.py` `EXPECTED_OPEN`'da
+  `("GET", "/v1/telephony/audio/{token}")` (alarm ses rotasının ikizi: Twilio'nun çektiği
+  tek kullanımlık, 10 dakikalık ses; oturum taşımaz).
+- Sondaki noktalı ad (`foo.ts.net.`) kırpılarak `.ts.net` kontrolüne takılır.
 - PROVEN_REAL: sahibin 'Test araması yap' denemesi - READY_FOR_OWNER.
