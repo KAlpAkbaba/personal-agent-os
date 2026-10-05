@@ -30,6 +30,13 @@ PROVIDERS: tuple[str, ...] = (PROVIDER_GMAIL, PROVIDER_MICROSOFT)
 STATE_CONNECTED = "connected"
 STATE_ERROR = "error"
 
+#: The names the env (IMAP/SMTP, CalDAV/ICS) account answers to beside the connected ones
+#: (``app.accounts.wiring``); no owner account may take them, or "IMAP hesabından gönder"
+#: would pick whichever of the two came first.
+ENV_MAIL_ACCOUNT_NAME = "IMAP"
+ENV_CALENDAR_ACCOUNT_NAME = "Takvim"
+RESERVED_NAMES: tuple[str, ...] = (ENV_MAIL_ACCOUNT_NAME, ENV_CALENDAR_ACCOUNT_NAME)
+
 
 class MailAccountRow(Base):
     __tablename__ = "mail_accounts"

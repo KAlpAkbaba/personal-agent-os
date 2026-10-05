@@ -668,10 +668,48 @@ def test_a_rename_does_not_announce_old_mail_again(factory, tmp_path) -> None:
         assert service.poll(db, now=NOW)["new"] == 0
         names["acc-1"] = "Ofis"
         again = service.poll(db, now=NOW)
+        # The inbox answer indexes what it read too - under the same key.
+        assert "Ofis hesabında 3 okunmamış" in service.inbox_summary(db)["speech"]
         rows = db.execute(select(MailIndexRow)).scalars().all()
     assert again["new"] == 0, again
     assert "Ofis" in again["accounts"]
     assert len(rows) == 3 and {r.account_key for r in rows} == {"acc-1"}
+
+
+def test_the_wiring_keeps_one_reader_per_account_and_keys_it_by_id() -> None:
+    """Finding 9: a reader (and its one httpx.Client) per account for the process's life,
+    not a new one per question; the key is the row's id, the name is what is spoken."""
+    from app.accounts.wiring import build_account_mail
+
+    class Rows:
+        def __init__(self) -> None:
+            self.rows_ = [("id-1", "İş", "gmail", "is@x"), ("id-2", "Kişisel", "microsoft", "")]
+
+        def rows(self) -> list:
+            return list(self.rows_)
+
+        def token(self, account_id: str) -> Any:
+            return lambda: f"tok-{account_id}"
+
+        def mark_synced(self, key: str, error_class: str | None) -> None:
+            return None
+
+    directory = Rows()
+    provider, sender = build_account_mail(
+        Settings(_env_file=None, accounts_google_client_id="g"), directory, None, None
+    )
+    first = provider.entries()
+    assert [(k, n, type(p).__name__) for k, n, p in first] == [
+        ("id-1", "İş", "GmailApiMailProvider"),
+        ("id-2", "Kişisel", "GraphMailProvider"),
+    ]
+    directory.rows_[0] = ("id-1", "Ofis", "gmail", "is@x")
+    again = provider.entries()
+    assert again[0][1] == "Ofis" and again[0][2] is first[0][2]
+    assert again[1][2] is first[1][2]
+    directory.rows_.pop()
+    directory.rows_.append(("id-2", "Kişisel", "microsoft", ""))
+    assert provider.entries()[1][2] is first[1][2]
 
 
 def test_switching_oauth_on_does_not_announce_the_env_accounts_old_mail(factory, tmp_path) -> None:
@@ -803,12 +841,9 @@ def test_the_agenda_names_the_account_of_every_event() -> None:
         }
         return httpx.Response(200, json={"value": [item]})
 
-    multi = MultiAccountCalendarProvider(
-        lambda: [
-            ("Kişisel", GoogleCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(google))),
-            ("İş", GraphCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(graph))),
-        ]
-    )  # fmt: skip
+    personal = GoogleCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(google))
+    work = GraphCalendarProvider(token=lambda: "t", transport=httpx.MockTransport(graph))
+    multi = MultiAccountCalendarProvider(lambda: [("Kişisel", personal), ("İş", work)])
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
     )

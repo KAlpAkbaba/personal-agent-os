@@ -53,7 +53,7 @@ class MailIndexRow(Base):
         # (he mails himself), so identity is (account, Message-ID); "" is the env account.
         Index(
             "ix_mail_index_account_message_id",
-            "account_name",
+            "account_key",
             "provider_message_id",
             unique=True,
         ),
@@ -62,9 +62,11 @@ class MailIndexRow(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    #: The owner's name for the account ("İş"); "" for the single env (IMAP) account.
-    account_name: Mapped[str] = mapped_column(
-        String(40), nullable=False, default="", server_default=""
+    #: The account's stable key - ``mail_accounts.id`` as text; "" for the env (IMAP)
+    #: account in both wirings. Never its NAME: a rename (or the env account becoming
+    #: "IMAP" when an OAuth client is set) must not make old mail new again.
+    account_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
     )
     #: The provider's own Message-ID header (spec §3) — identity across folders/providers,
     #: never a folder-local IMAP UID (which is not stable across a provider swap).
@@ -101,9 +103,10 @@ class MailDraftRow(Base):
     subject: Mapped[str] = mapped_column(String(998), nullable=False, default="")
     body: Mapped[str] = mapped_column(String(20000), nullable=False, default="")
     in_reply_to: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    #: The account the draft goes from - named in the read-back the owner confirms; None
-    #: for the single env account.
-    account_name: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: The account the draft goes from, by its stable key (``mail_accounts.id``; "" the
+    #: env account; None a draft from before accounts). Its CURRENT name is what the
+    #: read-back speaks, so a draft made before a rename still leaves from that account.
+    account_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default=DRAFT_STATE_PREPARED)
     #: Set ONLY by the explicit read-back act (``mail.read_draft``, or the Cockpit's
     #: pending listing presenting the row) — never at prepare time (H1, ADR-0084

@@ -41,6 +41,7 @@ from app.accounts.models import (
     PROVIDER_GMAIL,
     PROVIDER_MICROSOFT,
     PROVIDERS,
+    RESERVED_NAMES,
     STATE_CONNECTED,
     STATE_ERROR,
     MailAccountPendingRow,
@@ -114,6 +115,15 @@ def clean_name(raw: str) -> str:
     if not name or len(name) > NAME_MAX or any(ord(c) < 32 for c in name):
         raise AccountError(
             "name_invalid", f"Hesap adı 1 ile {NAME_MAX} karakter arasında olmalı efendim."
+        )
+    # Both foldings: "imap" is "IMAP" to the owner, though Turkish folds "I" to "ı".
+    reserved_keys = {turkish_key(r) for r in RESERVED_NAMES} | {
+        r.casefold() for r in RESERVED_NAMES
+    }
+    if turkish_key(name) in reserved_keys or name.casefold() in reserved_keys:
+        raise AccountError(
+            "name_reserved",
+            f"'{name}' adı ortam hesabına ayrılmış; başka bir ad seçin efendim.",
         )
     return name
 
@@ -267,7 +277,11 @@ class AccountsService:
                 f"Sağlayıcı anahtarı vermedi (HTTP {response.status_code}) efendim.",
                 status=502,
             )
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:  # a captive portal's or a proxy's HTML page under a 200
+            logger.warning("mail_account_token_not_json", status=response.status_code)
+            data = None
         if not isinstance(data, dict) or not data.get("access_token"):
             raise AccountError("token_refused", "Sağlayıcı anahtar döndürmedi efendim.", status=502)
         return data
@@ -531,10 +545,13 @@ class AccountsService:
         return access
 
     def mark_synced(
-        self, db: Session, name: str, error_class: str | None, *, now: datetime | None = None
+        self, db: Session, account_id: str, error_class: str | None, *, now: datetime | None = None
     ) -> None:
-        row = self._by_name(db, name)
-        if row is None:
+        """Bookkeeping for the page's "son eşitleme" - by the account's id (the key the
+        readers report under; "" is the env account, which has no row)."""
+        try:
+            row = self._by_id(db, account_id)
+        except AccountError:
             return
         if error_class is None:
             row.last_sync_at = now or datetime.now(UTC)

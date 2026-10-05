@@ -37,6 +37,9 @@ API_ROOT = Path(__file__).resolve().parents[2]
 BEFORE = "0066_watches"
 TAG = "pg-mail-accounts-test"
 REFRESH = "1//REFRESH-SECRET-postgres"  # noqa: S105 - test fixture
+#: Index rows are keyed by the account's id (``mail_accounts.id`` as text), never its name.
+IS_KEY = "6f1d2c3b-0000-4000-8000-000000000001"
+KISISEL_KEY = "6f1d2c3b-0000-4000-8000-000000000002"
 
 ACCOUNTS = {
     "id": ("uuid", None, "NO"),
@@ -144,12 +147,22 @@ def _connect(service: AccountsService, session: Session, provider: str, name: st
     return service.complete(session, state=state, code="c")
 
 
+def test_the_chain_has_one_head_and_0068_follows_the_base_tip() -> None:
+    """Inspector finding 11: 0068 and a sibling's 0067 both revising 0066 would give two
+    heads and ``upgrade head`` would refuse."""
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(_alembic())
+    assert script.get_heads() == ["0068_mail_accounts"]
+    assert script.get_revision("0068_mail_accounts").down_revision == BEFORE
+
+
 def test_the_migration_makes_the_tables_and_columns(factory) -> None:
     with factory() as session:
         assert _columns(session, "mail_accounts") == ACCOUNTS
         assert _columns(session, "mail_account_pending") == PENDING
-        assert _columns(session, "mail_index")["account_name"] == ("character varying", 40, "NO")
-        assert _columns(session, "mail_drafts")["account_name"] == ("character varying", 40, "YES")
+        assert _columns(session, "mail_index")["account_key"] == ("character varying", 64, "NO")
+        assert _columns(session, "mail_drafts")["account_key"] == ("character varying", 64, "YES")
 
 
 def test_connect_refresh_rename_disconnect_on_postgres(factory) -> None:
@@ -195,11 +208,11 @@ def test_the_name_key_is_unique_in_the_database(factory) -> None:
 def test_one_message_is_indexed_once_per_account(factory) -> None:
     now = datetime.now(UTC)
     with factory() as session:
-        for account in ("İş", "Kişisel"):
+        for account in (IS_KEY, KISISEL_KEY):
             session.add(
                 MailIndexRow(
                     id=uuid.uuid4(),
-                    account_name=account,
+                    account_key=account,
                     provider_message_id="<same@example.com>",
                     folder=TAG,
                     last_used_at=now,
@@ -209,7 +222,7 @@ def test_one_message_is_indexed_once_per_account(factory) -> None:
         session.add(
             MailIndexRow(
                 id=uuid.uuid4(),
-                account_name="İş",
+                account_key=IS_KEY,
                 provider_message_id="<same@example.com>",
                 folder=TAG,
                 last_used_at=now,
@@ -232,8 +245,8 @@ def test_downgrade_drops_it_all_and_upgrade_brings_it_back(factory) -> None:
         with factory() as session:
             assert _columns(session, "mail_accounts") == {}
             assert _columns(session, "mail_account_pending") == {}
-            assert "account_name" not in _columns(session, "mail_index")
-            assert "account_name" not in _columns(session, "mail_drafts")
+            assert "account_key" not in _columns(session, "mail_index")
+            assert "account_key" not in _columns(session, "mail_drafts")
     finally:
         command.upgrade(_alembic(), "head")
     with factory() as session:

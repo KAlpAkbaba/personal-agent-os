@@ -145,6 +145,8 @@ def mail_draft(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         subject=str(arguments.get("subject") or ""),
         body=body,
         session_id=str(ctx.session_id),
+        # Card mail-accounts-connect: "İş hesabından gönder" - the account by its name.
+        account=str(arguments.get("account") or "") or None,
     )
 
 
@@ -335,7 +337,8 @@ def register_mail_tools(reg: ToolRegistry) -> ToolRegistry:
                 "maile bir CEVAP - 'to' alanını BOŞ bırak) ya da 'Yeni mail: Ayşe'ye, "
                 "konu ..., ...' (YENİ bir mail - 'to' alanına alıcıyı ver). 'body' alanına "
                 "sahibin söylediği mesaj metnini aynen ver; 'subject' sadece yeni mail "
-                "için. Taslak GÖNDERİLMEZ - sadece hazırlanır ve okunur. Dönen 'speech' "
+                "için; 'account' sahip bir hesap adı söylediyse ('İş hesabından') o ad. "
+                "Taslak GÖNDERİLMEZ - sadece hazırlanır ve okunur. Dönen 'speech' "
                 "metnini aynen oku."
             ),
             parameters={
@@ -344,6 +347,7 @@ def register_mail_tools(reg: ToolRegistry) -> ToolRegistry:
                     "to": {"type": "string", "maxLength": 320},
                     "subject": {"type": "string", "maxLength": 200},
                     "body": {"type": "string", "maxLength": 4000},
+                    "account": {"type": "string", "maxLength": 40},
                 },
                 "additionalProperties": False,
             },

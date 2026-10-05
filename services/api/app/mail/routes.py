@@ -46,7 +46,7 @@ def _service(request: Request) -> MailService:
     return request.app.state.mail_service
 
 
-def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
+def _draft_dict(row: MailDraftRow, service: MailService) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "kind": row.kind,
@@ -56,7 +56,7 @@ def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
         "body": row.body,
         "in_reply_to": row.in_reply_to,
         # Card mail-accounts-connect: the account the Cockpit's confirm sends from.
-        "account": row.account_name,
+        "account": service.draft_account_name(row),
         "state": row.state,
         "read_back_at": row.read_back_at.isoformat() if row.read_back_at else None,
         "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
@@ -92,7 +92,7 @@ async def list_pending_drafts(request: Request) -> dict[str, Any]:
                     row.read_back_turn = None
                     row.updated_at = now
             db.commit()
-            return [_draft_dict(r) for r in rows]
+            return [_draft_dict(r, _service(request)) for r in rows]
 
     drafts = await asyncio.to_thread(load)
     return {"drafts": drafts}

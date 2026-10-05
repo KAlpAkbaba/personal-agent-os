@@ -70,6 +70,9 @@ class MailMessage:
     #: The owner's name for the account this message came to ("İş", "Kişisel") - set by
     #: ``app.mail.accounts.MultiAccountMailProvider``; empty for the single env account.
     account: str = ""
+    #: The account's stable key (``mail_accounts.id``; "" the env account) - what the
+    #: index and a reply's draft are keyed by, so a rename changes nothing stored.
+    account_key: str = ""
 
     @property
     def snippet(self) -> str:
@@ -117,9 +120,9 @@ class DraftInput:
     body: str
     in_reply_to: str | None = None
     references: tuple[str, ...] = ()
-    #: The account name the draft goes from (``MailDraftRow.account_name``); empty for the
-    #: single env account.
-    account: str = ""
+    #: The account KEY the draft goes from (``MailDraftRow.account_key``); "" the env
+    #: account, None a draft from before accounts.
+    account: str | None = None
 
 
 def build_email_message(draft: DraftInput, mail_from: str) -> EmailMessage:

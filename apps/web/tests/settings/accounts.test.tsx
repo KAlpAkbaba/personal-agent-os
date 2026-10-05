@@ -5,6 +5,9 @@
  * sign-in page.
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,6 +30,7 @@ import {
   renameAccount,
 } from "../../app/settings/accounts/accounts";
 import { AccountsView, type AccountsViewProps } from "../../app/settings/accounts/AccountsView";
+import { ACCOUNTS_PAGE_HREF, AccountsLinkPanel } from "../../app/settings/accounts/AccountsLinkPanel";
 
 const REDIRECT = "https://pagentos-core.tail1234.ts.net/v1/accounts/oauth/callback";
 
@@ -179,5 +183,20 @@ describe("the accounts client", () => {
     apiFetch.mockResolvedValueOnce(json(200, { revoked: true, speech: "'Kişisel' hesabının bağlantısı kesildi." }));
     expect(await disconnectAccount("a1")).toEqual({ ok: true, speech: "'Kişisel' hesabının bağlantısı kesildi." });
     expect(apiFetch.mock.calls[1][1].method).toBe("DELETE");
+  });
+});
+
+describe("the way in from /settings", () => {
+  it("a Hesaplar panel links to /settings/accounts and the settings page renders it", () => {
+    const html = renderToStaticMarkup(<AccountsLinkPanel />);
+    expect(ACCOUNTS_PAGE_HREF).toBe("/settings/accounts");
+    expect(html).toContain('href="/settings/accounts"');
+    expect(html).toContain("Hesaplar");
+    const settings = readFileSync(
+      fileURLToPath(new URL("../../app/settings/page.tsx", import.meta.url)),
+      "utf8",
+    );
+    // The settings page itself mounts the panel (inspector, 3rd return: nothing linked here).
+    expect(settings).toMatch(/<AccountsLinkPanel\s*\/>/);
   });
 });

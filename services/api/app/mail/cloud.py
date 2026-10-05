@@ -1,11 +1,17 @@
 """Gmail API and Microsoft Graph behind the same ``MailProvider``/``MailSender`` Protocols
 (card mail-accounts-connect).
 
-Both read the message as raw RFC822 (Gmail ``format=raw``, Graph ``/$value``) and hand it to
-``app.mail.providers.message_from_rfc822`` - the ONE bounded parser the IMAP provider already
-uses, so header decoding, the MIME depth/part bounds and the 32 KB body bound are the same
-for every account. Sending assembles the MIME with ``build_email_message`` and posts it
-(Gmail ``messages/send`` with ``raw``, Graph ``sendMail`` with a base64 MIME body).
+A LISTING (``list_messages``, ``search``) reads headers and the provider's own preview only -
+Gmail ``format=metadata`` + ``snippet``, Graph ``$select`` with ``bodyPreview`` - never the
+message itself: a voice question over three accounts must not download up to 150 messages,
+attachments included (inspector, 3rd return). Reading ONE message (``get_message``,
+``thread``, an attachment) fetches it raw (Gmail ``format=raw``, Graph ``/$value``) and hands
+it to ``app.mail.providers.message_from_rfc822`` - the ONE bounded parser the IMAP provider
+already uses, so header decoding, the MIME depth/part bounds and the 32 KB body bound are the
+same for every account. Every reader keeps ONE ``httpx.Client`` for its life
+(``app.accounts.wiring`` keeps one reader per account). Sending assembles the MIME with
+``build_email_message`` and posts it (Gmail ``messages/send`` with ``raw``, Graph
+``sendMail`` with a base64 MIME body).
 
 ``token`` is a callable returning a current access token (``app.accounts.service.
 AccountsService.access_token`` behind it, refreshing as needed); nothing here stores or logs
@@ -16,8 +22,10 @@ response body, which may echo a header back.
 from __future__ import annotations
 
 import base64
+import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -27,6 +35,8 @@ from app.mail.providers import (
     DraftInput,
     MailAttachment,
     MailMessage,
+    _bounded,
+    _decode_header_value,
     attachment_from_rfc822,
     build_email_message,
     message_from_rfc822,
@@ -46,6 +56,38 @@ def _b64url_decode(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def _thread_key(subject: str) -> str:
+    # The same reduction ``message_from_rfc822`` applies.
+    return subject.removeprefix("Re: ").removeprefix("RE: ").strip() or subject
+
+
+def _header_date(value: str) -> datetime | None:
+    try:
+        return parsedate_to_datetime(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_date(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+    except ValueError:
+        return None
+    if parsed is not None and parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+#: The headers a Gmail listing asks for - everything a summary, a reply and the index need.
+_GMAIL_LIST_HEADERS = ("From", "To", "Cc", "Subject", "Date", "Message-ID", "In-Reply-To",
+                       "References")  # fmt: skip
+#: The fields a Graph listing selects - the same, plus its own preview.
+_GRAPH_LIST_SELECT = (
+    "id,isRead,subject,from,toRecipients,ccRecipients,receivedDateTime,internetMessageId,"
+    "bodyPreview,hasAttachments,conversationId"
+)
+
+
 class _Api:
     def __init__(
         self,
@@ -57,14 +99,27 @@ class _Api:
         self._token = token
         self._transport = transport
         self._timeout = timeout
+        self._http: httpx.Client | None = None
+        self._http_lock = threading.Lock()
         #: M1 parity with ImapMailProvider: messages the LAST read skipped as unparseable.
         self.last_unparseable_count = 0
+
+    def _client(self) -> httpx.Client:
+        with self._http_lock:
+            if self._http is None or self._http.is_closed:
+                self._http = httpx.Client(transport=self._transport, timeout=self._timeout)
+            return self._http
+
+    def close(self) -> None:
+        with self._http_lock:
+            if self._http is not None:
+                self._http.close()
+                self._http = None
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {self._token()}"
-        with httpx.Client(transport=self._transport, timeout=self._timeout) as http:
-            response = http.request(method, url, headers=headers, **kwargs)
+        response = self._client().request(method, url, headers=headers, **kwargs)
         if response.status_code >= 300:
             raise MailApiError(response.status_code)
         return response
@@ -104,6 +159,55 @@ class GmailApiMailProvider(_Api):
                 out.append(message)
         return out
 
+    def _summary(self, gmail_id: str, folder: str | None) -> MailMessage | None:
+        """Headers + Gmail's snippet - a listing never downloads the message."""
+        data = self._json(
+            f"{GMAIL_API}/messages/{gmail_id}",
+            {"format": "metadata", "metadataHeaders": list(_GMAIL_LIST_HEADERS)},
+        )
+        payload = data.get("payload") or {}
+        headers: dict[str, str] = {}
+        for header in payload.get("headers") or []:
+            name = str(header.get("name") or "").lower()
+            if name and name not in headers:
+                headers[name] = _decode_header_value(str(header.get("value") or ""))
+        labels = list(data.get("labelIds") or [])
+        where = folder or ("INBOX" if "INBOX" in labels else (labels[0] if labels else ""))
+        from_name, from_email = parseaddr(headers.get("from", ""))
+        subject = headers.get("subject", "")
+        return MailMessage(
+            message_id=headers.get("message-id") or f"<{gmail_id}@{where}>",
+            uid=gmail_id,
+            folder=where,
+            from_name=from_name,
+            from_email=from_email,
+            to=tuple(a for _n, a in getaddresses([headers.get("to", "")]) if a),
+            cc=tuple(a for _n, a in getaddresses([headers.get("cc", "")]) if a),
+            subject=subject,
+            date=_header_date(headers.get("date", "")),
+            unread="UNREAD" in labels,
+            body_text=_bounded(str(data.get("snippet") or "")),
+            has_attachments=str(payload.get("mimeType") or "") == "multipart/mixed",
+            in_reply_to=headers.get("in-reply-to") or None,
+            references=tuple(headers.get("references", "").split()),
+            thread_key=_thread_key(subject),
+        )
+
+    def _summaries(self, ids: list[str], folder: str | None) -> list[MailMessage]:
+        self.last_unparseable_count = 0
+        out: list[MailMessage] = []
+        for gmail_id in ids:
+            try:
+                message = self._summary(gmail_id, folder)
+            except MailApiError:
+                raise
+            except Exception:  # noqa: BLE001 - one bad message never takes the listing down
+                self.last_unparseable_count += 1
+                continue
+            if message is not None:
+                out.append(message)
+        return out
+
     def _ids(self, params: dict[str, Any]) -> list[str]:
         data = self._json(f"{GMAIL_API}/messages", params)
         return [str(m["id"]) for m in data.get("messages") or [] if m.get("id")]
@@ -121,13 +225,13 @@ class GmailApiMailProvider(_Api):
         }
         if since is not None:
             params["q"] = f"after:{int(since.timestamp())}"
-        return self._messages(self._ids(params), folder)
+        return self._summaries(self._ids(params), folder)
 
     def search(self, query: str, *, limit: int = MAX_LIST_MESSAGES) -> list[MailMessage]:
         if not query.strip():
             return []
         ids = self._ids({"q": query, "maxResults": max(1, min(limit, MAX_LIST_MESSAGES))})
-        return self._messages(ids, None)
+        return self._summaries(ids, None)
 
     def _gmail_id(self, message_id: str) -> str | None:
         ids = self._ids({"q": f"rfc822msgid:{message_id.strip('<>')}", "maxResults": 1})
@@ -202,6 +306,49 @@ class GraphMailProvider(_Api):
                 out.append(message)
         return out
 
+    @staticmethod
+    def _summary(item: dict[str, Any], folder: str) -> MailMessage:
+        """A listing item as a message - Graph's selected fields, never the MIME."""
+
+        def address(entry: Any) -> tuple[str, str]:
+            box = (entry or {}).get("emailAddress") or {}
+            return (
+                _decode_header_value(str(box.get("name") or "")),
+                _decode_header_value(str(box.get("address") or "")),
+            )
+
+        graph_id = str(item.get("id") or "")
+        subject = _decode_header_value(str(item.get("subject") or ""))
+        from_name, from_email = address(item.get("from"))
+        return MailMessage(
+            message_id=_decode_header_value(str(item.get("internetMessageId") or ""))
+            or f"<{graph_id}@{folder}>",
+            uid=graph_id,
+            folder=folder,
+            from_name=from_name,
+            from_email=from_email,
+            to=tuple(a for _n, a in map(address, item.get("toRecipients") or []) if a),
+            cc=tuple(a for _n, a in map(address, item.get("ccRecipients") or []) if a),
+            subject=subject,
+            date=_iso_date(str(item.get("receivedDateTime") or "")),
+            unread=not item.get("isRead", True),
+            body_text=_bounded(str(item.get("bodyPreview") or "")),
+            has_attachments=bool(item.get("hasAttachments")),
+            thread_key=_thread_key(subject),
+        )
+
+    def _summaries(self, items: list[dict[str, Any]], folder: str) -> list[MailMessage]:
+        self.last_unparseable_count = 0
+        out: list[MailMessage] = []
+        for item in items:
+            if not item.get("id"):
+                continue
+            try:
+                out.append(self._summary(item, folder))
+            except Exception:  # noqa: BLE001 - one bad item never takes the listing down
+                self.last_unparseable_count += 1
+        return out
+
     def _find(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         return list(self._json(f"{GRAPH_API}/messages", params).get("value") or [])
 
@@ -215,13 +362,13 @@ class GraphMailProvider(_Api):
         well_known = _GRAPH_FOLDERS.get(folder.upper(), folder)
         params: dict[str, Any] = {
             "$top": max(1, min(limit, MAX_LIST_MESSAGES)),
-            "$select": "id,isRead",
+            "$select": _GRAPH_LIST_SELECT,
             "$orderby": "receivedDateTime desc",
         }
         if since is not None:
             params["$filter"] = f"receivedDateTime ge {since.strftime('%Y-%m-%dT%H:%M:%SZ')}"
         data = self._json(f"{GRAPH_API}/mailFolders/{well_known}/messages", params)
-        return self._messages(list(data.get("value") or []), folder)
+        return self._summaries(list(data.get("value") or []), folder)
 
     def search(self, query: str, *, limit: int = MAX_LIST_MESSAGES) -> list[MailMessage]:
         needle = query.strip().replace('"', " ")
@@ -231,10 +378,10 @@ class GraphMailProvider(_Api):
             {
                 "$search": f'"{needle}"',
                 "$top": max(1, min(limit, MAX_LIST_MESSAGES)),
-                "$select": "id,isRead",
+                "$select": _GRAPH_LIST_SELECT,
             }
         )
-        return self._messages(items, "INBOX")
+        return self._summaries(items, "INBOX")
 
     def _by_message_id(self, message_id: str) -> dict[str, Any] | None:
         items = self._find(

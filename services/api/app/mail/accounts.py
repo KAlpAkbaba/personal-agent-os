@@ -8,8 +8,14 @@ connected on the page is live at the next question, no restart). One failing acc
 silences the others: it is skipped and reported through ``on_synced``; only when EVERY
 account fails does the call raise.
 
-The sender picks the account by the draft's ``account`` name - the name the read-back spoke
-- and refuses a name it does not know rather than sending from another account.
+An account is ``(key, name, provider)``: ``key`` is its stable identity (``mail_accounts.id``;
+"" the env account) and is what the index, the poll watermark and a draft store - a rename
+changes the name the owner hears, never which mail is "new" or where a draft leaves from
+(inspector, 3rd return). A two-tuple ``(name, provider)`` is an account whose key is its name
+(the test fakes).
+
+The sender picks the account by the draft's ``account`` key and refuses a key it does not
+know rather than sending from another account.
 """
 
 from __future__ import annotations
@@ -24,12 +30,23 @@ from app.mail.providers import MAX_LIST_MESSAGES, DraftInput, MailAttachment, Ma
 
 logger = get_logger(__name__)
 
-AccountList = Sequence[tuple[str, Any]]
+AccountList = Sequence[tuple[Any, ...]]
+Account = tuple[str, str, Any]
 
 
 def account_key(name: str) -> str:
     """Turkish casefold ("İş" == "iş", "IŞIK" == "ışık")."""
     return name.replace("I", "ı").replace("İ", "i").lower().strip()
+
+
+def _entries(raw: AccountList) -> list[Account]:
+    out: list[Account] = []
+    for entry in raw:
+        if len(entry) == 2:
+            out.append((str(entry[0]), str(entry[0]), entry[1]))
+        else:
+            out.append((str(entry[0]), str(entry[1]), entry[2]))
+    return out
 
 
 class MailAccountUnknownError(LookupError):
@@ -51,47 +68,66 @@ class MultiAccountMailProvider:
         self._loader = loader
         self._on_synced = on_synced
         self.last_unparseable_count = 0
+        #: name -> unread count of the LAST ``list_messages``, counted per account BEFORE the
+        #: merged listing is cut to ``limit`` (an old unread in a quiet account is still
+        #: unread when a busy account fills the newest 50).
+        self.last_unread_by_account: dict[str, int] = {}
 
     # ------------------------------------------------------------------ accounts
 
+    def entries(self) -> list[Account]:
+        return _entries(self._loader())
+
     def accounts(self) -> list[tuple[str, Any]]:
-        return list(self._loader())
+        return [(name, provider) for _key, name, provider in self.entries()]
 
     def account_names(self) -> list[str]:
-        return [name for name, _ in self.accounts()]
+        return [name for _key, name, _p in self.entries()]
 
     def has_accounts(self) -> bool:
-        return bool(self.accounts())
+        return bool(self.entries())
 
     def resolve(self, name: str) -> str | None:
         """The connected account's own spelling of ``name``, or None."""
-        key = account_key(name)
-        for known in self.account_names():
-            if account_key(known) == key:
-                return known
+        found = self.resolve_key(name)
+        return found[1] if found else None
+
+    def resolve_key(self, name: str) -> tuple[str, str] | None:
+        """(key, name) of the account the owner called ``name``, or None."""
+        wanted = account_key(name)
+        for key, known, _p in self.entries():
+            if account_key(known) == wanted:
+                return key, known
         return None
 
-    def report(self, name: str, error_class: str | None) -> None:
+    def name_of(self, key: str) -> str | None:
+        """The CURRENT name of the account ``key``, or None when it is not connected."""
+        for known_key, name, _p in self.entries():
+            if known_key == key:
+                return name
+        return None
+
+    def report(self, key: str, error_class: str | None) -> None:
         if self._on_synced is None:
             return
         try:
-            self._on_synced(name, error_class)
+            self._on_synced(key, error_class)
         except Exception:  # noqa: BLE001 - bookkeeping never breaks a read
-            logger.warning("mail_account_report_failed", account=name)
+            logger.warning("mail_account_report_failed", account=key)
 
     @staticmethod
-    def tag(name: str, messages: list[MailMessage]) -> list[MailMessage]:
-        return [replace(m, account=name) for m in messages]
+    def tag(key: str, name: str, messages: list[MailMessage]) -> list[MailMessage]:
+        return [replace(m, account=name, account_key=key) for m in messages]
 
-    def _each(self, call: Callable[[Any], Any]) -> list[tuple[str, Any]]:
+    def _each(self, call: Callable[[Any], Any]) -> list[tuple[str, str, Any]]:
         """``call`` on every account; failures skipped and logged, all failing raises."""
-        results: list[tuple[str, Any]] = []
+        results: list[tuple[str, str, Any]] = []
         errors: list[BaseException] = []
-        accounts = self.accounts()
+        accounts = self.entries()
         unparseable = 0
-        for name, provider in accounts:
+        for key, name, provider in accounts:
             try:
-                results.append((name, call(provider)))
+                results.append((key, name, call(provider)))
             except Exception as exc:  # noqa: BLE001 - one account never silences another
                 logger.warning(
                     "mail_account_read_failed", account=name, error_class=type(exc).__name__
@@ -108,7 +144,7 @@ class MultiAccountMailProvider:
 
     def folders(self) -> list[str]:
         seen: list[str] = []
-        for _name, folders in self._each(lambda p: p.folders()):
+        for _key, _name, folders in self._each(lambda p: p.folders()):
             seen.extend(f for f in folders if f not in seen)
         return seen
 
@@ -116,18 +152,23 @@ class MultiAccountMailProvider:
         self, folder: str, *, limit: int = MAX_LIST_MESSAGES, since: datetime | None = None
     ) -> list[MailMessage]:
         merged: list[MailMessage] = []
-        for name, found in self._each(lambda p: p.list_messages(folder, limit=limit, since=since)):
-            merged.extend(self.tag(name, found))
+        unread: dict[str, int] = {}
+        for key, name, found in self._each(
+            lambda p: p.list_messages(folder, limit=limit, since=since)
+        ):
+            unread[name] = sum(1 for m in found if m.unread)
+            merged.extend(self.tag(key, name, found))
+        self.last_unread_by_account = unread
         return _newest_first(merged)[:limit]
 
     def search(self, query: str, *, limit: int = MAX_LIST_MESSAGES) -> list[MailMessage]:
         merged: list[MailMessage] = []
-        for name, found in self._each(lambda p: p.search(query, limit=limit)):
-            merged.extend(self.tag(name, found))
+        for key, name, found in self._each(lambda p: p.search(query, limit=limit)):
+            merged.extend(self.tag(key, name, found))
         return _newest_first(merged)[:limit]
 
     def _owner_of(self, message_id: str) -> tuple[str, Any, MailMessage] | None:
-        for name, provider in self.accounts():
+        for key, name, provider in self.entries():
             try:
                 found = provider.get_message(message_id)
             except Exception as exc:  # noqa: BLE001
@@ -136,7 +177,7 @@ class MultiAccountMailProvider:
                 )
                 continue
             if found is not None:
-                return name, provider, replace(found, account=name)
+                return key, provider, replace(found, account=name, account_key=key)
         return None
 
     def get_message(self, message_id: str) -> MailMessage | None:
@@ -151,8 +192,8 @@ class MultiAccountMailProvider:
         owner = self._owner_of(message_id)
         if owner is None:
             return []
-        name, provider, _message = owner
-        return self.tag(name, provider.thread(message_id))
+        key, provider, message = owner
+        return self.tag(key, message.account, provider.thread(message_id))
 
 
 class MultiAccountMailSender:
@@ -160,14 +201,13 @@ class MultiAccountMailSender:
         self._loader = loader
 
     def send(self, draft: DraftInput) -> str:
-        accounts = list(self._loader())
+        accounts = _entries(self._loader())
         if not accounts:
             raise MailAccountUnknownError("no account connected")
-        if not draft.account:
-            return accounts[0][1].send(draft)
-        key = account_key(draft.account)
-        for name, sender in accounts:
-            if account_key(name) == key:
+        # None: a draft from before accounts existed - it was made on the env account.
+        wanted = "" if draft.account is None else draft.account
+        for key, _name, sender in accounts:
+            if key == wanted:
                 return sender.send(draft)
         raise MailAccountUnknownError("draft account is not connected")
 

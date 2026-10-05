@@ -54,6 +54,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_MAIL,
 )
 from app.logging import get_logger
+from app.mail.accounts import MailAccountUnknownError
 from app.mail.models import (
     DRAFT_KIND_NEW,
     DRAFT_KIND_REPLY,
@@ -98,6 +99,10 @@ ERROR_INVALID_RECIPIENT = "invalid_recipient"
 #: Card mail-accounts-connect: the draft names an account that is not connected.
 ERROR_ACCOUNT_UNKNOWN = "account_unknown"
 SPEECH_INVALID_RECIPIENT = "Bu alıcı adresi geçerli görünmüyor efendim."
+SPEECH_ACCOUNT_GONE = (
+    "Bu taslağın gönderileceği hesap artık bağlı değil efendim; taslak duruyor. "
+    "Hesabı Ayarlar > Hesaplar'dan yeniden bağlayın ya da başka bir hesaptan yeni taslak isteyin."
+)
 
 _GATE_SPEECH: dict[str, str] = {
     GATE_ACCOUNT_MISSING: SPEECH_ACCOUNT_MISSING,
@@ -137,7 +142,7 @@ def _fmt_date(dt: datetime | None) -> str:
     return local.strftime("%d %B %Y")
 
 
-def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
+def _draft_dict(row: MailDraftRow, account: str | None = None) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "kind": row.kind,
@@ -146,7 +151,7 @@ def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
         "subject": row.subject,
         "body": row.body,
         "in_reply_to": row.in_reply_to,
-        "account": row.account_name,
+        "account": account,
         "state": row.state,
         "read_back_at": row.read_back_at.isoformat() if row.read_back_at else None,
         "read_back_session_id": row.read_back_session_id,
@@ -158,10 +163,14 @@ def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
     }
 
 
-def _draft_speech(row: MailDraftRow) -> str:
+def _draft_speech(row: MailDraftRow, account: str | None = None, *, gone: bool = False) -> str:
     to = ", ".join(row.to_json or []) or "?"
-    # Card mail-accounts-connect: the account the owner confirms is the one it leaves from.
-    source = f" ({row.account_name} hesabından)" if row.account_name else ""
+    # Card mail-accounts-connect: the account the owner confirms is the one it leaves from,
+    # under its CURRENT name (the draft keeps the account's key, so a rename follows it).
+    if gone:
+        source = " (artık bağlı olmayan bir hesaptan)"
+    else:
+        source = f" ({account} hesabından)" if account else ""
     return (
         f"Taslak{source}: Kime: {to}. Konu: {row.subject}. Mesaj: {row.body} "
         "Göndermemi ister misiniz?"
@@ -197,18 +206,36 @@ class MailService:
         return list(names()) if callable(names) else []
 
     def _resolve_account(self, requested: str | None) -> tuple[str | None, str | None]:
-        """(account name to draft from, refusal speech). The env account has no name."""
-        names = self._named_accounts()
-        if not names:
+        """(account KEY to draft from, refusal speech). The env-only wiring has no key."""
+        entries = getattr(self._provider, "entries", None)
+        accounts = list(entries()) if callable(entries) else []
+        if not accounts:
             return None, None
         if not requested or not requested.strip():
-            return names[0], None
-        resolve = getattr(self._provider, "resolve", None)
+            return accounts[0][0], None
+        resolve = getattr(self._provider, "resolve_key", None)
         found = resolve(requested) if callable(resolve) else None
         if found is None:
-            listed = ", ".join(names)
+            listed = ", ".join(name for _key, name, _p in accounts)
             return None, f"'{requested.strip()}' adında bir hesap yok efendim. Hesaplar: {listed}."
-        return found, None
+        return found[0], None
+
+    def _draft_account(self, row: MailDraftRow) -> tuple[str | None, bool]:
+        """(the draft's account's CURRENT name, whether that account is gone)."""
+        if row.account_key is None:
+            return None, False
+        name_of = getattr(self._provider, "name_of", None)
+        if not callable(name_of):
+            return None, False
+        name = name_of(row.account_key)
+        return name, name is None
+
+    def draft_account_name(self, row: MailDraftRow) -> str | None:
+        return self._draft_account(row)[0]
+
+    def _draft_view(self, row: MailDraftRow) -> tuple[dict[str, Any], str]:
+        name, gone = self._draft_account(row)
+        return _draft_dict(row, name), _draft_speech(row, name, gone=gone)
 
     # ------------------------------------------------------------------ plumbing
 
@@ -318,7 +345,7 @@ class MailService:
             db.execute(
                 select(MailIndexRow).where(
                     MailIndexRow.provider_message_id == message.message_id,
-                    MailIndexRow.account_name == message.account,
+                    MailIndexRow.account_key == message.account_key,
                 )
             )
             .scalars()
@@ -328,7 +355,7 @@ class MailService:
             row = MailIndexRow(
                 id=uuid.uuid4(),
                 provider_message_id=message.message_id,
-                account_name=message.account,
+                account_key=message.account_key,
             )
             db.add(row)
         row.folder = message.folder
@@ -368,21 +395,31 @@ class MailService:
         for m in messages:
             self._index_upsert(db, m, now=now)
         unread = [m for m in messages if m.unread]
+        names = self._named_accounts()
+        # Card mail-accounts-connect (inspector, 3rd return): each account's unread is
+        # counted on ITS OWN listing, before the merged one is cut to the newest 50.
+        by_account: dict[str, int] = {}
+        if names:
+            counted = dict(getattr(self._provider, "last_unread_by_account", {}) or {})
+            for name in names:
+                by_account[name] = int(
+                    counted.get(name, sum(1 for m in unread if m.account == name))
+                )
+        unread_count = sum(by_account.values()) if names else len(unread)
         self._ledger(
             db,
             event_type=EVENT_TYPE_MAIL_READ,
             action="mail.inbox",
-            summary=f"mail.inbox -> {folder} ({len(unread)} okunmamış)",
-            detail={"folder": folder, "count": len(messages), "unread": len(unread)},
+            summary=f"mail.inbox -> {folder} ({unread_count} okunmamış)",
+            detail={"folder": folder, "count": len(messages), "unread": unread_count},
         )
         self._publish(folder=folder)
-        names = self._named_accounts()
         if names:
             # Card mail-accounts-connect: "İş hesabında 3 okunmamış posta var, Kişisel
             # hesabında okunmamış posta yok efendim." - every account, by its own name.
             parts = []
             for name in names:
-                count = sum(1 for m in unread if m.account == name)
+                count = by_account[name]
                 parts.append(
                     f"{name} hesabında {count} okunmamış posta var"
                     if count
@@ -392,21 +429,22 @@ class MailService:
         elif not unread:
             speech = "Okunmamış mailiniz yok efendim."
         else:
-            speech = f"{folder} klasöründe {len(unread)} okunmamış mailiniz var efendim."
+            speech = f"{folder} klasöründe {unread_count} okunmamış mailiniz var efendim."
         speech += self._unparseable_suffix(unparseable)
         return self._receipt(
             capability="mail.inbox",
             requested_state="read",
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
-            server={"folder": folder, "count": len(messages), "unread": len(unread)},
+            server={"folder": folder, "count": len(messages), "unread": unread_count},
             speech=speech,
             db=db,
             session_id=session_id,
             extra={
                 "folder": folder,
                 "count": len(messages),
-                "unread": len(unread),
+                "unread": unread_count,
+                "unread_by_account": by_account,
                 "unparseable": unparseable,
                 "messages": [m.as_summary() for m in messages],
             },
@@ -422,17 +460,19 @@ class MailService:
         if not self._account_ready():
             return {"status": "no_account", "new": 0, "new_unread": 0}
         now = now or _now()
-        accounts = getattr(self._provider, "accounts", None)
-        if not callable(accounts):
-            return self._poll_one(db, self._provider, "", now=now, folder=folder)
-        # Card mail-accounts-connect: every connected account on its own watermark, its
-        # messages tagged with its name; one failing account never stops the others.
+        entries = getattr(self._provider, "entries", None)
+        if not callable(entries):
+            return self._poll_one(db, self._provider, "", "", now=now, folder=folder)
+        # Card mail-accounts-connect: every connected account on its own watermark, keyed
+        # by the account's stable key (never its name: a rename must not make old mail new
+        # again), its messages tagged with its name; one failing account never stops the
+        # others.
         totals: dict[str, Any] = {"status": "polled", "new": 0, "new_unread": 0, "seen": 0}
         per_account: dict[str, Any] = {}
         report = getattr(self._provider, "report", None)
-        for name, provider in accounts():
+        for key, name, provider in entries():
             try:
-                result = self._poll_one(db, provider, name, now=now, folder=folder)
+                result = self._poll_one(db, provider, key, name, now=now, folder=folder)
             except Exception as exc:  # noqa: BLE001 - logged by class, the next account runs
                 db.rollback()
                 logger.warning(
@@ -440,24 +480,24 @@ class MailService:
                 )
                 per_account[name] = {"status": "failed", "error_class": type(exc).__name__}
                 if callable(report):
-                    report(name, type(exc).__name__)
+                    report(key, type(exc).__name__)
                 continue
             per_account[name] = result
-            for key in ("new", "new_unread", "seen"):
-                totals[key] += result[key]
+            for field in ("new", "new_unread", "seen"):
+                totals[field] += result[field]
             if callable(report):
-                report(name, None)
+                report(key, None)
         totals["accounts"] = per_account
         return totals
 
     def _poll_one(
-        self, db: Session, provider: Any, account: str, *, now: datetime, folder: str
+        self, db: Session, provider: Any, key: str, account: str, *, now: datetime, folder: str
     ) -> dict[str, Any]:
         latest = db.execute(
             select(MailIndexRow.date)
             .where(
                 MailIndexRow.folder == folder,
-                MailIndexRow.account_name == account,
+                MailIndexRow.account_key == key,
                 MailIndexRow.date.is_not(None),
             )
             .order_by(MailIndexRow.date.desc())
@@ -469,7 +509,7 @@ class MailService:
             latest = latest.replace(tzinfo=UTC)
         messages = provider.list_messages(folder, limit=50, since=latest)
         if account:
-            messages = [replace(m, account=account) for m in messages]
+            messages = [replace(m, account=account, account_key=key) for m in messages]
         new = 0
         new_unread = 0
         for message in messages:
@@ -477,7 +517,7 @@ class MailService:
                 db.execute(
                     select(MailIndexRow.id).where(
                         MailIndexRow.provider_message_id == message.message_id,
-                        MailIndexRow.account_name == account,
+                        MailIndexRow.account_key == key,
                     )
                 ).scalar()
                 is not None
@@ -565,7 +605,10 @@ class MailService:
         found = sorted(
             found, key=lambda m: m.date or datetime.min.replace(tzinfo=UTC), reverse=True
         )
-        return found[0], None
+        # A cloud account's search answers headers and a snippet only (it never downloads
+        # every hit); the one message picked is read in full.
+        full = self._provider.get_message(found[0].message_id)
+        return (full or found[0]), None
 
     def read(
         self, db: Session, *, target: str = "current", session_id: str | None = None
@@ -917,8 +960,9 @@ class MailService:
             subject=subject,
             body=body,
             in_reply_to=message.message_id,
-            # A reply leaves from the account the message came to.
-            account_name=message.account or None,
+            # A reply leaves from the account the message came to (its key; the env-only
+            # wiring keeps the legacy None).
+            account_key=message.account_key if self._named_accounts() else None,
             state=DRAFT_STATE_PREPARED,
             read_back_at=None,
             created_at=now,
@@ -944,10 +988,10 @@ class MailService:
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
             server={"draft_id": str(row.id)},
-            speech=_draft_speech(row),
+            speech=self._draft_view(row)[1],
             db=db,
             session_id=session_id,
-            extra={"draft": _draft_dict(row), "references": references},
+            extra={"draft": self._draft_view(row)[0], "references": references},
         )
 
     def draft_new(
@@ -969,7 +1013,7 @@ class MailService:
         # Card mail-accounts-connect: "İş hesabından gönder" names the account; with none
         # named the first connected one is used and the read-back says which. A name that
         # is not connected is refused - never sent from another account.
-        account_name, refusal = self._resolve_account(account)
+        account_key, refusal = self._resolve_account(account)
         if refusal is not None:
             return self._receipt(
                 capability="mail.draft",
@@ -991,7 +1035,7 @@ class MailService:
             subject=subject,
             body=body,
             in_reply_to=None,
-            account_name=account_name,
+            account_key=account_key,
             state=DRAFT_STATE_PREPARED,
             read_back_at=None,
             created_at=now,
@@ -1015,10 +1059,10 @@ class MailService:
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
             server={"draft_id": str(row.id)},
-            speech=_draft_speech(row),
+            speech=self._draft_view(row)[1],
             db=db,
             session_id=session_id,
-            extra={"draft": _draft_dict(row)},
+            extra={"draft": self._draft_view(row)[0]},
         )
 
     def _current_draft(self, db: Session) -> MailDraftRow | None:
@@ -1077,10 +1121,10 @@ class MailService:
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
             server={"draft_id": str(row.id)},
-            speech=_draft_speech(row),
+            speech=self._draft_view(row)[1],
             db=db,
             session_id=session_id,
-            extra={"draft": _draft_dict(row)},
+            extra={"draft": self._draft_view(row)[0]},
         )
 
     def read_draft(
@@ -1120,10 +1164,10 @@ class MailService:
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
             server={"draft_id": str(row.id)},
-            speech=_draft_speech(row),
+            speech=self._draft_view(row)[1],
             db=db,
             session_id=session_id,
-            extra={"draft": _draft_dict(row)},
+            extra={"draft": self._draft_view(row)[0]},
         )
 
     # ---------------------------------------------------------- EXTERNAL MUTATION
@@ -1262,11 +1306,12 @@ class MailService:
             body=row.body,
             in_reply_to=row.in_reply_to,
             references=self._reply_references(row),
-            account=row.account_name or "",
+            account=row.account_key,
         )
         try:
             sent_message_id = self._sender.send(draft_input)
         except Exception as exc:  # noqa: BLE001 - L1: a provider failure reverts, never crashes
+            gone = isinstance(exc, MailAccountUnknownError)
             failed_at = _now()
             db.execute(
                 sa_update(MailDraftRow)
@@ -1292,12 +1337,17 @@ class MailService:
                 requested_state="sent",
                 execution=EXECUTION_FAILED,
                 terminal=TERMINAL_FAILED,
-                server={"draft_id": str(row.id), "reason": ERROR_SEND_FAILED},
-                speech="Maili gönderemedim efendim; taslak duruyor.",
+                server={
+                    "draft_id": str(row.id),
+                    "reason": ERROR_ACCOUNT_UNKNOWN if gone else ERROR_SEND_FAILED,
+                },
+                speech=(
+                    SPEECH_ACCOUNT_GONE if gone else "Maili gönderemedim efendim; taslak duruyor."
+                ),
                 db=db,
                 session_id=session_id,
-                error_class=ERROR_SEND_FAILED,
-                extra={"draft": _draft_dict(row)},
+                error_class=ERROR_ACCOUNT_UNKNOWN if gone else ERROR_SEND_FAILED,
+                extra={"draft": self._draft_view(row)[0]},
             )
         row.state = DRAFT_STATE_SENT
         row.sent_message_id = sent_message_id
@@ -1321,7 +1371,7 @@ class MailService:
             speech="Maili gönderdim efendim.",
             db=db,
             session_id=session_id,
-            extra={"draft": _draft_dict(row)},
+            extra={"draft": self._draft_view(row)[0]},
         )
 
     def discard(
@@ -1352,7 +1402,7 @@ class MailService:
             speech="Taslağı sildim efendim.",
             db=db,
             session_id=session_id,
-            extra={"draft": _draft_dict(row)},
+            extra={"draft": self._draft_view(row)[0]},
         )
 
 

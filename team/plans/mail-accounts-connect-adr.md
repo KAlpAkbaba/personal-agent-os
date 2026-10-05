@@ -33,21 +33,30 @@ three accounts, each with a name he chooses, connected from the page.
 5. **Disconnect**: Google - revoke the refresh token, then delete. Microsoft has no per-app
    revoke of a delegated token (`revokeSignInSessions` would sign the owner out of every app),
    so the tokens are deleted and the answer names myapps.microsoft.com for the consent.
-6. **Reading**: Gmail `format=raw` / Graph `/$value` feed the existing bounded RFC822 parser,
-   so one parser and one set of MIME bounds serve IMAP, Gmail and Graph. Calendar: Google
+6. **Reading**: a LISTING (inbox, poll, search) reads headers + the provider preview only
+   (Gmail `format=metadata` + `snippet`, Graph `$select` with `bodyPreview`) - never the
+   message or its attachments; reading ONE message (read, thread, attachment) fetches it raw
+   (Gmail `format=raw` / Graph `/$value`) into the existing bounded RFC822 parser. One reader
+   and one sender per account live for the process, each on ONE `httpx.Client`. Calendar: Google
    Calendar `events` (singleEvents) and Graph `calendarView`, read-only (writes stay CalDAV).
 7. **Several accounts behind one provider**: `MultiAccountMailProvider` / `...Sender` /
    `MultiAccountCalendarProvider` read the account list on every call (a new account is live
    at the next question) and tag every message/event with the account's name. One failing
    account is skipped and reported; a calendar pass that missed an account is marked
-   truncated, so the mirror deletes nothing on it. `mail_index` is keyed (account, Message-ID).
+   truncated, so the mirror deletes nothing on it. `mail_index` and drafts are keyed by the
+   account's ID (`account_key` = `mail_accounts.id`; "" the env account in both wirings),
+   never its name: a rename re-announces nothing, a draft made before a rename leaves from the
+   same account (a draft whose account was disconnected says so and stays), and switching
+   OAuth on beside the env account keeps its index. Each account's unread is counted on its
+   own listing, before the merged one is cut to 50.
 8. **Speech by name**: the inbox answer names every account ("İş hesabında 3 okunmamış posta
    var, Kişisel hesabında okunmamış posta yok efendim."). A draft names its account in the
    read-back ("Taslak (İş hesabından): ..."); a reply goes from the account the message came
    to; an unknown account name is refused, never sent from another. Send stays behind the
    existing read-back + confirmation gate (owner decision 2026-09-18/19).
 9. **No OAuth client configured = no change**: the env account is used exactly as before.
-   With a client configured, a still-configured env account rides along as "IMAP"/"Takvim".
+   With a client configured, a still-configured env account rides along as "IMAP"/"Takvim";
+   both names are reserved (an owner account cannot take them, in either case folding).
 10. **Migration `0068_mail_accounts`** (expand-only, reversible; down drops the account rows
     of the `mail_index` cache before restoring the old unique index).
 
@@ -73,9 +82,10 @@ Redirect URL to register at both providers (exactly):
 
 ## Consequences / follow-ups
 
-- Voice cannot yet NAME the account for a new draft ("İş hesabından gönder"): the service takes
-  `account`, the voice tool (`tools_mail.mail_draft`) does not pass it yet - follow-up card.
+- Voice names the account for a new draft: `mail.draft` takes `account` ("İş hesabından").
 - Mission-path sends (`app.executive.activities.get_mail_service`) still build the env-only
   service - follow-up card.
-- Gmail `format=raw` downloads attachments with the message on a listing; acceptable at the
-  poll's `since` watermark, revisit if an inbox listing is slow.
+- The calendar agenda says each event's account ("Diş hekimi (10:00, Kişisel)").
+- Follow-ups (inspector): an unreadable `mail_accounts` reads as "no account"; a `name_taken`
+  after the token exchange leaves Google tokens unrevoked; the callback's code/state land in
+  the access log (uvicorn) - each a card of its own.
