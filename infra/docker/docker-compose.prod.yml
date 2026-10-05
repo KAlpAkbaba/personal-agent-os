@@ -184,6 +184,8 @@ services:
       PAGENTOS_MEMORY_RERANK_MODEL: ${PAGENTOS_MEMORY_RERANK_MODEL:-onnx-community/bge-reranker-v2-m3-ONNX#int8}
       PAGENTOS_MEMORY_RERANK_CACHE_DIR: /srv/pagentos/var/models
       PAGENTOS_MEMORY_RERANK_TOP_K: ${PAGENTOS_MEMORY_RERANK_TOP_K:-20}
+      # office-progress: where the Ofis's İlerleme strip reads the roadmap and the v1.0 list.
+      PAGENTOS_PROGRESS_ROOT: /srv/pagentos/progress
     volumes:
       # ADR-0200: the embedding model files, shared by both colours (see the env above).
       - ${PAGENTOS_MODELS_DIR:-/mnt/pagentos-data/models}:/srv/pagentos/var/models
@@ -200,6 +202,9 @@ services:
       - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/LAST_BACKUP.json:/var/lib/pagentos-backup/LAST_BACKUP.json:ro
       - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/drills:/var/lib/pagentos-backup/drills:ro
       - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/failures:/var/lib/pagentos-backup/failures:ro
+      # office-progress: the two documents the strip counts, read-only, from the release checkout.
+      - ../../docs/ROADMAP.md:/srv/pagentos/progress/docs/ROADMAP.md:ro
+      - ../../docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:/srv/pagentos/progress/docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md:ro
     ports:
       # The ONE published socket, and only on the tailnet address. If PAGENTOS_BIND_IP
       # is unset the stack refuses to start rather than defaulting to 0.0.0.0.
@@ -326,4 +331,56 @@ services:
     # Measured at first start 2026-09-21: 1.03 GiB resident (the Vite dev server holds
     # Cesium's bundle); 2 GiB leaves it room on the 7.7 GiB host without starving the api.
     mem_limit: 2048m
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ the web shell on the Cloud Core
+  # The owner's web shell (apps/web: Ofis, Onay Merkezi, voice) so that it works from the
+  # phone when the home PC is off (docs/DECISIONS.md, "web on the Cloud Core"). It is a
+  # static-heavy Next.js server that rewrites `/api/*` to the api THROUGH THE EDGE - never
+  # a fixed colour - so a blue/green switch is followed without touching this container.
+  # Posture: published on the host's LOOPBACK only; nothing listens on a public or tailnet
+  # interface. HTTPS for the phone is `tailscale serve` on the host in front of this
+  # loopback port (scripts/cloud/enable-web-tailnet-https.sh), never `tailscale funnel`.
+  # Under the `aux` profile like godseye: the release brings it up AFTER the api's own
+  # transaction, best effort (release-cloud-core-bluegreen.sh aux_up), so a failed build
+  # here can never fail or roll back an api release; the recovery bundle does not need it.
+  # No secret: the build arguments are a public path and a compose-internal service name.
+  web:
+    build:
+      # The repository root: the pnpm workspace and its lockfile live there. The context is
+      # cut down to the web package by infra/docker/web/Dockerfile.dockerignore.
+      context: ../..
+      dockerfile: infra/docker/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: /api
+        # `next build` bakes the rewrite into the routes manifest (the runtime does not
+        # re-read it), hence a build argument. `edge` is the service above.
+        PAGENTOS_API_UPSTREAM: http://edge:8001
+    image: pagentos/web:local
+    container_name: pagentos-prod-web
+    profiles: ["aux"]
+    init: true
+    ports:
+      - "127.0.0.1:3000:3000"
+    # Measured 2026-10-03 on the image: ~40 MiB idle (cgroup), ~47 MiB after a burst of page
+    # loads, 95 MB peak RSS of the node process. 512 MiB is more than five times that on the
+    # 7.7 GiB host that also runs the api, Postgres, Temporal, Redis and MinIO; swap is
+    # capped to the same figure so a leak is killed, not paged.
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 256
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # `/` is a prerendered page: it answers whether or not the api is up or mid-release.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped

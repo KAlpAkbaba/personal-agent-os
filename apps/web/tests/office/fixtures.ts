@@ -34,6 +34,14 @@ export function twoWorkers(): OfficeView {
         task_title: "İkinci iş",
         since: "2026-10-01T10:05:00Z",
       };
+    if (agent.seat === "worker-4")
+      return {
+        ...agent,
+        state: "returned" as const,
+        task_id: "t-back",
+        task_title: "Geri dönen iş",
+        since: null,
+      };
     if (agent.seat === "inspector")
       return {
         ...agent,
@@ -77,6 +85,16 @@ export function twoWorkers(): OfficeView {
         branch: "team/cycle/worker-two",
         sha: null,
         reason: null,
+        report: null,
+      },
+      "t-back": {
+        title: "Geri dönen iş",
+        state: "returned",
+        goal: "dönen hedef",
+        acceptance: "dönen kabul",
+        branch: "team/cycle/back",
+        sha: null,
+        reason: "test eksik",
         report: null,
       },
       "t-old": {
@@ -123,7 +141,7 @@ export function twoWorkers(): OfficeView {
 
 /**
  * office-stable-seats: worker-3 holds a task that waits for its next run (`queued`), beside
- * the inspector's returned one - two states the page must draw differently.
+ * worker-4's returned one - two states the page must draw differently.
  */
 export function queuedTask(): OfficeView {
   const view = twoWorkers();
@@ -156,6 +174,30 @@ function working(agent: OfficeAgent, titles: string[], firstMinute: number): Off
     since: stamp(firstMinute + i),
   }));
   return { ...agent, state: "working", ...runs[0], runs };
+}
+
+/**
+ * The model policy's answer (ADR-0214 addenda 7 and 14): the defaults as the setting, every
+ * seat with its role's model, the workers as the API names their role, limits unknown.
+ */
+export function modelPolicy(): OfficeView {
+  const view = twoWorkers();
+  const roles = {
+    lead: "claude-fable-5-1",
+    researcher: "claude-opus-5-5",
+    integrator: "claude-opus-5-5",
+    worker: "claude-opus-5-5",
+    inspector: "claude-fable-5-1",
+  } as const;
+  view.models = { roles: { ...roles }, fallback: true, updated_at: "2026-10-01T09:00:00Z" };
+  view.agents = view.agents.map((agent) => {
+    const role = agent.seat.startsWith("worker-") ? "worker" : agent.seat;
+    const model = role in roles ? roles[role as keyof typeof roles] : null;
+    return { ...agent, role, model };
+  });
+  const unknown = { state: "ok" as const, resets_at: null, used_pct: null };
+  view.cycle.limits = { fable: { ...unknown }, all: { ...unknown }, fallback: true, lowered: [] };
+  return view;
 }
 
 /** A cycle with `workers` worker runs and `inspections` inspector runs, as the API sends it. */

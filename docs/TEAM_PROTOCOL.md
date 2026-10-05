@@ -15,7 +15,7 @@ and secret rules).
 
 | Role | File | Does | Never |
 |---|---|---|---|
-| Lead — Proje Hakimi | `lead.md` | Owns ROADMAP + definition of done; splits work into non-overlapping tasks; assigns; sends back incomplete/wrong work; owns the integration branch; merges; writes the cycle report to the owner | writes feature code itself; merges without inspector approval; releases without owner approval |
+| Lead — Proje Yöneticisi | `lead.md` | Owns ROADMAP + definition of done; splits work into non-overlapping tasks; assigns; sends back incomplete/wrong work; owns the integration branch; merges; writes the cycle report to the owner | writes feature code itself; merges without inspector approval; releases without owner approval |
 | Researcher | `researcher.md` | Knows the whole project (ROADMAP, DECISIONS, HANDOFF, QUALIFICATION); scans the web for models, libraries, methods; writes proposals with cost/risk/evidence to the owner | edits ROADMAP; writes code; assigns work |
 | Integrator | `integrator.md` | For an assigned task, finds existing code/libraries (GitHub etc.), checks licence, security, device safety; writes the integration plan; registers in THIRD_PARTY_COMPONENTS | pulls a dependency into the tree without the licence/safety record; writes feature code |
 | Worker (×2–3) | `worker.md` | Implements one task in its own worktree/branch under DEVELOPMENT_POLICY: red test first, code, mutation RED with sha256 restore, ADR when a decision is made, HANDOFF block | touches files outside its assigned area; touches main; runs releases; touches secrets, LKG, recovery roots, `feat/hand-gestures-stage1` |

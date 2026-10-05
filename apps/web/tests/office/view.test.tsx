@@ -115,7 +115,7 @@ describe("the office with every run on the page", () => {
       );
       expect(seat).toContain("var(--office-shirt)");
     }
-    expect(html).toContain('aria-label="Çalışan 4, bekliyor"');
+    expect(html).toContain('aria-label="Çalışan 4, döndü"');
     expect(html).not.toContain('data-seat="worker-5"');
   });
 
@@ -185,7 +185,7 @@ describe("a task that waits for its next run (office-stable-seats)", () => {
   it("draws the queued seat seated, its title muted and sırada, with NO warning; the returned one keeps it", () => {
     const html = render({ view: queuedTask() });
     const queued = seatHtml(html, "worker-3");
-    const returned = seatHtml(html, "inspector");
+    const returned = seatHtml(html, "worker-4");
     expect(queued).toContain('data-warning="false"');
     expect(queued).not.toContain("office-warning");
     expect(queued).toContain('aria-label="Çalışan 3, sırada"');
@@ -200,7 +200,7 @@ describe("a task that waits for its next run (office-stable-seats)", () => {
   it("renders an older server's answer (no queued field) as today: no sırada anywhere", () => {
     const html = render();
     expect(html).not.toContain("sırada");
-    expect(seatHtml(html, "worker-4")).toContain('aria-label="Çalışan 4, bekliyor"');
+    expect(seatHtml(html, "worker-3")).toContain('aria-label="Çalışan 3, bekliyor"');
     expect(html.match(/data-warning="true"/g)).toHaveLength(1);
   });
 });

@@ -65,7 +65,9 @@ from app.voice.providers import (
 from app.voice.providers_soniox import SONIOX_DEFAULT_MODEL, SONIOX_URL_US, SonioxSTTProvider
 from app.voice.spoken_device import resolve_without_device_phrase
 
-REPORT_SCHEMA_VERSION = "1.0"
+#: 1.1: the ``recorded_live`` rows - ``source`` on every row, ``heard_live_by``,
+#: ``from_browser`` and the items' ``browser_engine``.
+REPORT_SCHEMA_VERSION = "1.1"
 MANIFEST_NAME = "manifest.json"
 TEMPLATE_NAME = "manifest.template.json"
 
@@ -91,6 +93,20 @@ SKIP_NOT_WAV = "unsupported container (WAV only)"
 #: A failure on one file that is not a ``VoiceError`` (a model that will not load, a body
 #: that is not JSON): ``"unexpected: <ExceptionType>"`` in that file's error.
 ERROR_UNEXPECTED = "unexpected"
+#: A recording that carries no sentence for a ``recorded_live`` engine: that file's error,
+#: never a perfect and never an empty hearing.
+ERROR_NO_READY_TRANSCRIPT = "no ready transcript"
+
+#: Where a row's sentences came from: this run sent the file to the engine, or the engine
+#: wrote the sentence in the browser while the owner was reading (``ready_transcripts``).
+SOURCE_FILE = "file"
+SOURCE_RECORDED_LIVE = "recorded_live"
+
+#: Who heard the sound of a ``recorded_live`` row, at recording time.
+LIVE_DESTINATIONS = {
+    "chrome-web-speech": "Google (Chrome'un konuşma tanıyıcısı, kayıt anında tarayıcıda)",
+}
+LIVE_DESTINATION_OTHER = "tarayıcının tanıyıcısı, kayıt anında"
 
 EXIT_OK = 0
 EXIT_BAD_INPUT = 2
@@ -240,10 +256,33 @@ class Recording:
     path: Path
     reference: str
     recorded_where: str
+    #: engine label -> the sentence that engine wrote WHEN THE RECORDING WAS MADE (Chrome's
+    #: recogniser on the recording page). Absent = it did not run; ``""`` = it wrote nothing.
+    ready_transcripts: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    #: The browser's own name for that recogniser, as the recording page saw it.
+    browser_engine: str | None = None
+    #: The item came from the recording page (it carries either field): the audio is what the
+    #: system hears, after the browser's noise suppression - not the raw microphone.
+    from_browser: bool = False
+
+
+def _ready_transcripts(index: int, item: dict[str, Any]) -> dict[str, str]:
+    if "ready_transcripts" not in item:
+        return {}
+    ready = item["ready_transcripts"]
+    if not isinstance(ready, dict) or not all(
+        isinstance(label, str) and label and isinstance(text, str) for label, text in ready.items()
+    ):
+        raise ManifestError(
+            f'item {index} ({item["file"]}): "ready_transcripts" must map an engine label to '
+            "the sentence it wrote"
+        )
+    return dict(ready)
 
 
 def load_manifest(folder: Path) -> tuple[str, list[Recording]]:
-    """``(language, recordings)`` from ``<folder>/manifest.json``."""
+    """``(language, recordings)`` from ``<folder>/manifest.json``. Two item fields are
+    optional: ``ready_transcripts`` and ``browser_engine`` (the Cloud Core's manifest)."""
     path = folder / MANIFEST_NAME
     if not path.is_file():
         raise ManifestError(f"no {MANIFEST_NAME} in {folder}")
@@ -268,8 +307,19 @@ def load_manifest(folder: Path) -> tuple[str, list[Recording]]:
         item_id = target.relative_to(root).as_posix()
         if any(existing.item_id == item_id for existing in recordings):
             raise ManifestError(f'item {index}: "{item_id}" is listed twice')
+        browser_engine = item.get("browser_engine")
+        if browser_engine is not None and not isinstance(browser_engine, str):
+            raise ManifestError(f'item {index} ({item["file"]}): "browser_engine" must be text')
         recordings.append(
-            Recording(item_id, target, reference.strip(), str(item.get("recorded_where") or ""))
+            Recording(
+                item_id,
+                target,
+                reference.strip(),
+                str(item.get("recorded_where") or ""),
+                ready_transcripts=_ready_transcripts(index, item),
+                browser_engine=browser_engine,
+                from_browser="ready_transcripts" in item or "browser_engine" in item,
+            )
         )
     language = raw.get("language")
     return (language if isinstance(language, str) and language else "tr-TR"), recordings
@@ -372,6 +422,73 @@ def _rate(edits: int, total: int) -> float | None:
     return round(edits / total, 4) if total else None
 
 
+class _Tally:
+    """One engine row being filled, file by file - the transcribed rows and the
+    ``recorded_live`` rows score and close through the SAME code."""
+
+    def __init__(self) -> None:
+        self.ran = 0
+        self.latencies: list[float] = []
+        self.sentence_wers: list[float] = []
+        self.intent_changes = 0
+
+    def score(
+        self,
+        row: dict[str, Any],
+        item: dict[str, Any],
+        label: str,
+        recording: Recording,
+        text: str,
+        latency_ms: float | None,
+    ) -> None:
+        score = score_pair(recording.reference, text)
+        changed = intent_changed(recording.reference, text)
+        item["results"][label] = {
+            "hypothesis": text,
+            "word_edits": score.word_edits,
+            "ref_words": score.ref_words,
+            "char_edits": score.char_edits,
+            "ref_chars": score.ref_chars,
+            "wer": round(score.wer, 4),
+            "cer": round(score.cer, 4),
+            "intent_changed": changed,
+            "latency_ms": latency_ms,
+        }
+        for name in ("word_edits", "ref_words", "char_edits", "ref_chars"):
+            row[name] += getattr(score, name)
+        self.ran += 1
+        if latency_ms is not None:
+            self.latencies.append(latency_ms)
+        self.sentence_wers.append(score.wer)
+        self.intent_changes += int(changed)
+
+    @staticmethod
+    def fail(
+        row: dict[str, Any],
+        item: dict[str, Any],
+        label: str,
+        recording: Recording,
+        error_class: str,
+    ) -> None:
+        row["errors"].append({"id": recording.item_id, "error_class": error_class})
+        item["results"][label] = {"error": error_class}
+
+    def close(self, row: dict[str, Any]) -> None:
+        row["files_ran"] = self.ran
+        row["files_failed"] = len(row["errors"])
+        row["reason"] = ""
+        if not self.ran:
+            row["status"] = STATUS_FAILED
+            return
+        row["status"] = STATUS_RAN
+        row["wer"] = _rate(row["word_edits"], row["ref_words"])
+        row["cer"] = _rate(row["char_edits"], row["ref_chars"])
+        row["mean_sentence_wer"] = round(sum(self.sentence_wers) / len(self.sentence_wers), 4)
+        row["intent_changes"] = self.intent_changes
+        row["latency_p50_ms"] = percentile(self.latencies, 50)
+        row["latency_p95_ms"] = percentile(self.latencies, 95)
+
+
 def run_comparison(
     folder: Path,
     engines: Sequence[Engine],
@@ -405,10 +522,27 @@ def run_comparison(
             "id": recording.item_id,
             "reference": recording.reference,
             "recorded_where": recording.recorded_where,
+            "browser_engine": recording.browser_engine,
             "audio_ms": wav_duration_ms(audio),
             "results": {},
         }
         for recording, audio in usable
+    ]
+    # Every label something wrote at recording time; one the configured engines do not have
+    # gets its own row after theirs, so nothing recorded is dropped silently.
+    ready_labels = list(
+        dict.fromkeys(label for recording in recordings for label in recording.ready_transcripts)
+    )
+    heard_live = {
+        label for label in ready_labels if any(label in r.ready_transcripts for r, _ in usable)
+    }
+    engines = [
+        *engines,
+        *(
+            Engine(label, None, reason=REASON_NO_RECORDING)
+            for label in ready_labels
+            if label not in labels
+        ),
     ]
     runnable = [engine for engine in engines if engine.provider is not None] if usable else []
     engine_rows: list[dict[str, Any]] = []
@@ -431,23 +565,37 @@ def run_comparison(
             "latency_p50_ms": None,
             "latency_p95_ms": None,
             "errors": [],
+            "source": SOURCE_FILE,
         }
         engine_rows.append(row)
         if engine.provider is None:
+            # An engine that cannot be handed a file is scored from what it wrote while the
+            # owner read - unless this run left it out on purpose.
+            if engine.label in heard_live and engine.reason != REASON_NOT_SELECTED:
+                row["source"] = SOURCE_RECORDED_LIVE
+                row["destination"] = engine.destination or LIVE_DESTINATIONS.get(
+                    engine.label, LIVE_DESTINATION_OTHER
+                )
+                tally = _Tally()
+                for (recording, _audio), item in zip(usable, item_rows, strict=True):
+                    text = recording.ready_transcripts.get(engine.label)
+                    if text is None:
+                        # not written is not heard: never a perfect or an empty hearing
+                        tally.fail(row, item, engine.label, recording, ERROR_NO_READY_TRANSCRIPT)
+                        continue
+                    tally.score(row, item, engine.label, recording, text, None)
+                tally.close(row)
             continue
         if engine not in runnable:
             row["reason"] = REASON_NO_RECORDING
             continue
-        latencies: list[float] = []
-        sentence_wers: list[float] = []
-        intent_changes = 0
+        tally = _Tally()
         for (recording, audio), item in zip(usable, item_rows, strict=True):
             started = clock()
             try:
                 result = engine.provider.transcribe(audio, language=language)
                 latency_ms = round((clock() - started) * 1000, 2)
-                score = score_pair(recording.reference, result.text)
-                changed = intent_changed(recording.reference, result.text)
+                tally.score(row, item, engine.label, recording, result.text, latency_ms)
             except Exception as exc:
                 # ANY failure is this file's error, not the run's: the engines before this
                 # one already received the audio, and the report is what names them. Only
@@ -457,40 +605,11 @@ def run_comparison(
                     if isinstance(exc, VoiceError)
                     else f"{ERROR_UNEXPECTED}: {type(exc).__name__}"
                 )
-                row["errors"].append({"id": recording.item_id, "error_class": error_class})
-                item["results"][engine.label] = {"error": error_class}
-                continue
-            item["results"][engine.label] = {
-                "hypothesis": result.text,
-                "word_edits": score.word_edits,
-                "ref_words": score.ref_words,
-                "char_edits": score.char_edits,
-                "ref_chars": score.ref_chars,
-                "wer": round(score.wer, 4),
-                "cer": round(score.cer, 4),
-                "intent_changed": changed,
-                "latency_ms": latency_ms,
-            }
-            for name in ("word_edits", "ref_words", "char_edits", "ref_chars"):
-                row[name] += getattr(score, name)
-            latencies.append(latency_ms)
-            sentence_wers.append(score.wer)
-            intent_changes += int(changed)
-        row["files_ran"] = len(latencies)
-        row["files_failed"] = len(row["errors"])
-        row["reason"] = ""
-        if not latencies:
-            row["status"] = STATUS_FAILED
-            continue
-        row["status"] = STATUS_RAN
-        row["wer"] = _rate(row["word_edits"], row["ref_words"])
-        row["cer"] = _rate(row["char_edits"], row["ref_chars"])
-        row["mean_sentence_wer"] = round(sum(sentence_wers) / len(sentence_wers), 4)
-        row["intent_changes"] = intent_changes
-        row["latency_p50_ms"] = percentile(latencies, 50)
-        row["latency_p95_ms"] = percentile(latencies, 95)
+                tally.fail(row, item, engine.label, recording, error_class)
+        tally.close(row)
 
     tried = [row for row in engine_rows if row["status"] != STATUS_NOT_RUN]
+    live = [row for row in tried if row["source"] == SOURCE_RECORDED_LIVE]
     report: dict[str, Any] = {
         "kind": "stt_compare",
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -510,9 +629,17 @@ def run_comparison(
             "skipped": skipped,
         },
         "engines": engine_rows,
+        # this run sent audio only to the engines it transcribed with; a recorded_live row
+        # was sent nothing now - what it heard, it heard in the browser while the owner read
         "audio_sent_to": [
-            {"engine": row["label"], "destination": row["destination"]} for row in tried
+            {"engine": row["label"], "destination": row["destination"]}
+            for row in tried
+            if row["source"] != SOURCE_RECORDED_LIVE
         ],
+        "heard_live_by": [
+            {"engine": row["label"], "destination": row["destination"]} for row in live
+        ],
+        "from_browser": any(recording.from_browser for recording, _ in usable),
         "items": item_rows,
         "worst": {row["label"]: _worst(row["label"], item_rows) for row in tried},
     }
@@ -597,8 +724,10 @@ def summary_tr(report: dict[str, Any]) -> list[str]:
                 f"{row['label']} | BAŞARISIZ - {row['files_failed']} dosyanın hiçbiri dönmedi"
             )
             continue
+        live = row.get("source") == SOURCE_RECORDED_LIVE
         lines.append(
-            f"{row['label']} | ÖLÇÜLDÜ | {_tr_number(row['wer'])} | {_tr_number(row['cer'])} | "
+            f"{row['label']} | {'KAYIT ANINDA YAZILDI' if live else 'ÖLÇÜLDÜ'} | "
+            f"{_tr_number(row['wer'])} | {_tr_number(row['cer'])} | "
             f"{row['intent_changes']} | {_tr_number(row['latency_p50_ms'], 0)}/"
             f"{_tr_number(row['latency_p95_ms'], 0)} | "
             f"{row['files_ran']} ölçüldü, {row['files_failed']} hata"
@@ -609,6 +738,17 @@ def summary_tr(report: dict[str, Any]) -> list[str]:
         lines.append(f"Ses şu motorlara gönderildi, başka hiçbir yere gönderilmedi: {names}")
     else:
         lines.append("Ses hiçbir motora gönderilmedi; bilgisayardan çıkmadı.")
+    for entry in report.get("heard_live_by", []):
+        lines.append(
+            f"{entry['engine']} satırı, kayıt anında tarayıcıda yazılan cümledir; bu çalıştırma "
+            f"o motora ses göndermedi. Sesi kayıt anında duyan: {entry['destination']} "
+            "(Chrome sesi tanımak için Google'a göndermiş olabilir); gecikme ölçülmedi."
+        )
+    if report.get("from_browser"):
+        lines.append(
+            "Kayıtlar sistemin duyduğu sestir (tarayıcının gürültü bastırma ayarı açık), "
+            "ham mikrofon sesi değildir."
+        )
     lines += [
         "WER/CER havuzlanmış orandır (toplam hata / toplam referans kelime ya da harf); "
         "sayılar söylendiği gibi bırakıldı, Türkçe harfler korunuyor.",

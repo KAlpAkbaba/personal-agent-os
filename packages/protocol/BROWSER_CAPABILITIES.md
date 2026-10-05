@@ -1,7 +1,18 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.7** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.8** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
+
+- **v1.8 (2026-10-03, ADR-0207, PR-C): the ceiling on a write** — no new operation name
+  and no new `contracts` key (§4a). `browser.fill`, `browser.select_option` and
+  `browser.set_checked` accept the same optional `risk_ceiling` as `browser.click`. With
+  it, the worker classifies the WRITE from the element it resolved (its name, whether it
+  submits, whether it sits in a form — the collector's terms of §3c), applies the session
+  policy with that class, refuses above the ceiling exactly as a click is refused, before
+  anything is typed, chosen or ticked, and answers `risk_class` beside `ok`. A payload
+  without the field is served as in v1.7, and the result is v1.7's (`{"ok": true}`). A
+  consumer that sent a ceiling and got no `risk_class` back is talking to a worker from
+  before v1.8, which ignored the field: it must stop acting on that device.
 
 - **v1.7 (2026-09-29, ADR-0207, PR-B): the device's half of the task gate** — two
   refusals, no new operation name (§4a). `browser.click` accepts an optional
@@ -332,8 +343,20 @@ owner run without evidence on 2026-09-03).
 ```json
 {"url":"…","final_url":"…","title":"…","excerpt":"…","text_chars":18234,"fetched_at":"2026-09-03T09:00:00Z",
  "extraction_method":"dom_text","page_kind":"ok","http_status":200,
- "metadata":{…as extract…},"source_class":"news","query":"…","injection_markers":0,"links_count":142}
+ "metadata":{…as extract…},"source_class":"news","query":"…","injection_markers":0,"links_count":142,
+ "text_sha256":"…64 hex…","selector_matched":null}
 ```
+
+Optional payload field `selector` (2026-10-04): a CSS selector string of at most 200 characters
+(anything else - not a string, blank, longer, or a selector the browser cannot parse - is
+`validation_error`). `text_sha256` is the 64-hex sha256 of the page's text after whitespace is
+collapsed to single spaces and trimmed, taken from the elements the selector matches (joined by
+one newline, document order) or, without a selector, from the WHOLE primary text before the
+excerpt is cut at `excerpt_chars` - so a change past the excerpt still changes the hash.
+`selector_matched` is `true`/`false` when a selector was given, `null` without one. With a
+selector the excerpt is cut from the matched text. A selector that matches nothing is not a
+failure: `selector_matched:false`, `text_sha256:null`, `excerpt:""`. A navigation that reaches
+a forbidden destination on the way (§5a) is `security_scope_error` and returns no page text.
 
 The excerpt is verbatim page text (main/article region first, body fallback), never a
 paraphrase; `injection_markers` counts instruction-like patterns found in the page text
@@ -611,6 +634,30 @@ The element is not clicked. A value that is not a risk class is a `validation_er
 A payload without the field is served as in v1.6. A ceiling never WIDENS anything: the
 session policy is applied first and a ceiling above it opens nothing.
 
+**`risk_ceiling` on `browser.fill`, `browser.select_option` and `browser.set_checked`
+(contract v1.8).** The same field, the same values, the same refusal. When it is present
+the worker describes the element it resolved IN THE COLLECTOR'S TERMS (§3c: the
+accessible `name` an observation would show, `submits`, `in_form` — never a field's
+value, which a click's description falls back to) and classifies the write:
+
+1. a HIGH_IMPACT marker in the name (§4) → `HIGH_IMPACT`;
+2. `submits`, or an EXTERNAL_COMMUNICATION marker in the name → `EXTERNAL_COMMUNICATION`;
+3. an UNNAMED control (no letter or digit in its name) that submits or sits in a form,
+   for `select_option` and `set_checked` → `EXTERNAL_COMMUNICATION` (nothing says what it
+   does, and where it sits says it may send); not for `fill` — typing sends nothing, and
+   what sends the form is judged when IT is pressed;
+4. otherwise → `REVERSIBLE_WRITE`.
+
+A field's role does not make the write reversible: a `<select>` that buys on change is
+named by the page like any button. The worker applies the session policy with that
+class, then the ceiling; above it: `security_scope_error`, `retryable:false`, evidence
+`{"reason":"above_ceiling","risk_class":…,"risk_ceiling":…}` — BEFORE anything is
+typed, chosen or ticked. On success the result is `{"ok": true, "risk_class": …}`.
+Without the field the operation is served as in v1.7: its static class
+(`REVERSIBLE_WRITE`), no description, result `{"ok": true}`. A consumer that sent a
+ceiling and received no `risk_class` is talking to a worker from before contract v1.8
+(it ignored the field and wrote); it must not send that device another write.
+
 **The task deny-list.** `packages/protocol/browser-task-denylist.json` names the sites
 no browser task acts on — banks, government identity, payment providers, password
 managers, the owner's employer, Kolay Monitor and this system's own hosts — as
@@ -651,11 +698,52 @@ before acting (the device is the side that sits on the owner's LAN and tailnet):
 `*.localhost`, `*.home.arpa` and cloud metadata names refused; IP literals and EVERY
 address the host resolves to must be outside loopback, RFC 1918, link-local
 (`169.254.0.0/16` incl. the metadata address), CGNAT `100.64.0.0/10` (the tailnet),
-multicast, reserved, unspecified, IPv6 loopback/link-local/ULA. A refusal is
-`security_scope_error` (not retryable) with the query string stripped from the evidence.
+multicast, reserved, unspecified, IPv6 loopback/link-local/ULA. On the worker this is an
+ALLOW-LIST (browser-redirect-guard return 3): an address is public only when it is global
+(Python's `is_global`), not multicast and outside `100.64.0.0/10`, AND every IPv4 address
+embedded in it passes the same test - IPv4-mapped (`::ffff:100.90.158.26` is the tailnet),
+6to4 (`2002::/16`), both ends of Teredo, NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) and
+IPv4-compatible (`::a.b.c.d`). Anything else, an unparseable address included, is refused. A
+refusal is `security_scope_error` (not retryable) with the query string stripped from the evidence.
 Discovery output (search hits, feeds, APIs) is third-party content and gets no exemption.
 The worker's `--allow-private-destinations` flag exists for the fixture-site test suite
 only; the companion never passes it.
+
+**Every request, every redirect hop (browser-redirect-guard, 2026-10-04).** The rule above is
+not only for the REQUESTED url. The worker holds every request its pages send to it - each
+redirect hop, sub-requests (img, script, fetch/XHR, iframe documents) - through CDP `Fetch`
+interception at the request stage, so a forbidden request is failed BEFORE it is sent
+(Playwright's `page.route` is not called for redirect hops and is not used for this). A
+navigation (`navigate`, `tab_new`, `fetch_evidence`, or any op whose page navigation the guard
+refused) whose requested URL, any redirect hop or the final URL is a forbidden destination ends
+with `security_scope_error`, not retryable, and no page text is returned. After the navigation
+the worker checks the response's redirect chain and the address Chromium was served from
+again (a name the policy resolved as public but Chromium reached on a forbidden address - DNS
+rebinding - is refused). A forbidden sub-request is blocked and the page itself still reads. A
+check that cannot decide (DNS down) fails the request too (fail closed). The trusted-origin
+exception is unchanged: on the configured origin only the report-view route is admitted, for
+hops and sub-requests as well.
+
+**The network layer (same day, the inspector's return).** Every browser the worker LAUNCHES
+(research, isolated, media) is started behind the worker's in-process egress proxy
+(`--proxy-server=http://127.0.0.1:<port>`, `--proxy-bypass-list=<-loopback>`, non-proxied WebRTC
+UDP off). Every connection the browser makes - cross-site (out-of-process) iframes, popups
+from their first request, WebSockets, workers, beacons, each redirect hop - is a CONNECT or an
+absolute-form request there and is held to the same policy; the proxy connects to the address
+it checked (no second DNS answer, so rebinding cannot move it). A refused connection is a
+`403` from the proxy (the page sees a failed sub-request; a refused page navigation is still
+`security_scope_error`, not retryable - also when ONLY the proxy refused it, e.g. a name the
+page guard resolved as public and the proxy as private: the proxy's refusals since the op began
+are matched to the page navigations' host:port). A redirect to a non-http scheme (`file:///`),
+which Chromium refuses itself (`ERR_UNSAFE_REDIRECT`), is `security_scope_error` too. A tunnel (CONNECT: https, wss, and a ws:// WebSocket too) carries no
+path, so it never gets the trusted-origin exception: the trusted origin is reached only by an
+absolute-form http request whose path is the report-view route. An https trusted origin is
+therefore not reachable from a launched browser (fail closed).
+On an **owner-profile** session (the owner's own Chrome) there is no proxy - the browser is not
+the worker's to launch. The page guard intercepts the owner's tab only while a worker op drives
+it and is released (`Fetch.disable`, detached) when the op ends, so the owner's own requests to
+private addresses are never failed afterwards. `--allow-private-destinations` turns both
+layers off (fixture suites only).
 
 ## 6. Untrusted content boundary
 

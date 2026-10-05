@@ -41,6 +41,10 @@ GATES: dict[str, str] = {"awaiting_owner": "fikir", "awaiting_release": "yayin"}
 APPROVED_STATE = "approved"
 RELEASE_GATE_STATE = "awaiting_release"
 STOPPED_STATE = "stopped"
+#: What an owner's rejection puts in front of his reason. The Proje Yöneticisi's duty run is never
+#: handed a task stopped this way (pm-duty-stopped review 2026-10-04: a duty decision could send
+#: back a task the owner had rejected and overwrite his words); scripts/lib/TeamQueue.ps1 reads it.
+OWNER_REJECTED_PREFIX = "Sahip reddetti: "
 
 SUBSYSTEM_TEAM = "team"
 EVENT_TASK_APPROVED = "team.task.approved"
@@ -49,6 +53,8 @@ EVENT_TASK_REJECTED = "team.task.rejected"
 LOCK_STALE_HOURS = team_store.LOCK_STALE_HOURS  # TeamQueue.ps1: $script:TeamLockStaleHours
 TEXT_MAX_CHARS = 20000
 _WRITE_LOCK = threading.Lock()
+#: Shared with ``trials.decide``: one owner decision at a time, whichever gate it is.
+WRITE_LOCK = _WRITE_LOCK
 
 
 @dataclass
@@ -90,7 +96,8 @@ def normalize_gate(word: str | None) -> str | None:
 
 def cycle_running(team_root: Path, *, now: datetime | None = None) -> bool:
     """A held, non-stale ``team/lock.json``. A missing or unreadable lock is not a running cycle."""
-    return team_store.lock_is_running(team_store.FileStore(team_root).read_lock(), now or _now())
+    files = team_store.FileStore(team_root)
+    return team_store.lock_is_running(files.read_lock(), now or _now(), files.read_status())
 
 
 def _read_inside(team_root: Path, relative: str) -> str | None:
@@ -109,10 +116,10 @@ def decisions_open(store: team_store.TeamStore, lock: dict[str, Any] | None, at:
     """Whether the owner can decide now. The listing says it and :func:`decide` enforces it.
 
     Always on the database store: its writes are per task and conditional (module docstring).
-    On the file store only while no cycle holds the queue."""
+    On the file store only while no cycle holds the queue (its status is its heartbeat)."""
     if store.kind == "db":
         return True
-    return not team_store.lock_is_running(lock, at)
+    return not team_store.lock_is_running(lock, at, store.read_status())
 
 
 PROPOSALS_PREFIX = "team/proposals/"
@@ -242,7 +249,7 @@ def decide(
         lock = store.read_lock()
         if not decisions_open(store, lock, at):
             raise Refused(409, "cycle_running", "Bir döngü kuyruğu tutuyor; bitince tekrar dene.")
-        running = team_store.lock_is_running(lock, at)
+        running = team_store.lock_is_running(lock, at, store.read_status())
         from_state = task["state"]
         seen_updated_at = task.get("updated_at")
         release_approval = decision == "approve" and from_state == RELEASE_GATE_STATE
@@ -267,7 +274,7 @@ def decide(
         )
         task["state"] = to_state
         if decision == "reject":
-            task["reason"] = reason
+            task["reason"] = OWNER_REJECTED_PREFIX + reason
         if release_approval:
             task["release_approved"] = True
             task["release_approved_at"] = _stamp(at)

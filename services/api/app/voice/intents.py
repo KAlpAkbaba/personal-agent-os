@@ -8480,7 +8480,12 @@ def resolve_intent(
                 return capped
             return _taught_app_open(text, capped, ()) or capped
     first = _resolve_intent_rules(text, **state)
-    if owned_by_a_table(first) or not first.tokens:
+    if not first.tokens:
+        return first
+    read = _layer_one_route(text, first, state)
+    if read is not None:
+        return read
+    if owned_by_a_table(first):
         return first
     polite = polite_imperative_readings(text)
     if first.intent is Intent.NONE:
@@ -8501,6 +8506,141 @@ def resolve_intent(
 ROUTE_REPAIR_POLITE: Final = "polite"
 ROUTE_REPAIR_ASCII_FOLD: Final = "ascii_fold"
 ROUTE_REPAIR_CAPS_FOLD: Final = "caps_fold"
+#: ADR-0224: a token the STT wrote as one word was read as the two it is ("hesapmakinesini").
+ROUTE_REPAIR_FUSED: Final = "fused"
+#: ADR-0224 addendum 4, step 2: a word read without the ending the STT invented ("notü").
+ROUTE_REPAIR_INVENTED: Final = "invented"
+#: ... and two rules that claim the same words once a word is repaired: written
+#: "contested:<the other intent>", so the policy can name both and ask.
+ROUTE_REPAIR_CONTESTED: Final = "contested"
+#: The confidence a rule reading earns by how it matched (``understanding.combine``'s
+#: ``RULE_CONFIDENCE``, held equal by a test): layer 1 dropped a suffix / repaired a word.
+_SUFFIX_DROPPED_CONFIDENCE: Final = 0.9
+_REPAIRED_WORD_CONFIDENCE: Final = 0.75
+_listed_verb_forms_cache: frozenset[str] | None = None
+
+
+def _listed_verb_forms() -> frozenset[str]:
+    """The verb forms the rule tables list letter for letter (:func:`rule_verb_words`)."""
+    global _listed_verb_forms_cache
+    if _listed_verb_forms_cache is None:
+        _listed_verb_forms_cache = rule_verb_words()[0]
+    return _listed_verb_forms_cache
+
+
+def _layer_one_route(
+    text: str, first: ResolvedIntent, state: dict[str, Any]
+) -> ResolvedIntent | None:
+    """ADR-0224: the rule tables read layer 1's reading (``normalize.lemma_reading``) - every
+    polite form of a verb it knows as the bare imperative, a fused token as its two words, a
+    word without the ending the STT invented - through the very same rules, for every table
+    at once. None when layer 1 changes nothing or its reading is not taken; ``first`` is what
+    the words as heard reached.
+
+    * The surface form wins where a table lists it: "Raporu okuyun." and "Hesap makinesini
+      açın." are exact closed forms and are not re-read.
+    * A polite form no table lists is the imperative it asks for, at the suffix-dropped
+      confidence. Where the words as heard already reached that intent (a stem table read
+      "yazar mısın" by its prefix) the surface reading keeps the owner's slots.
+    * Where the words as heard reached ANOTHER intent, a table owns the sentence and it
+      stands: the polite form or the fused word is inside what the owner dictated ("Şunu
+      hatırla: ışıkları söndürün." is a memory, not a window closed). The one exception is
+      a question read with no verb at all (:func:`_asks_with_no_verb_of_its_own`):
+      "Kendi kendini geliştirmeyi duraklatın." is a pause, not a question about it.
+    * Except where a REPAIRED word lets another table claim the very words the table as
+      heard claimed (:func:`_claim_the_same_words`: "Şubug'ı kendin düzelt."): two claimants,
+      neither exact - the words-as-heard reading at the confusion's confidence, the other
+      named in ``route_repair`` ("contested:selfdev_fix"); the policy asks between them.
+    * A split reading carries the slots: the surface ones were read off the fused token.
+    * Never into a mail or calendar ACTION (deferred by the owner, B45/B46: "Gönderir
+      misin?" is not newly a send); reading mail changes nothing the owner can see.
+    """
+    from app.voice.understanding import normalize as layer_one  # it imports this module
+
+    reading = layer_one.lemma_reading(text, keep=_POLITE_NOT_A_REQUEST)
+    if reading is None:
+        return None
+    owned = owned_by_a_table(first)
+    listed = _listed_verb_forms()
+    # Only listed polite forms and invented endings changed: the words as heard were read.
+    as_heard = not reading.splits and all(said in listed for said, _ in reading.dropped)
+    if owned:
+        if first.intent.value.startswith(_REPAIR_NEVER_PREFIXES):
+            return None
+        if as_heard and not reading.invented:
+            return None
+    second = _resolve_intent_rules(reading.text, **state)
+    if not owned_by_a_table(second):
+        return None
+    if second.intent.value.startswith(_REPAIR_NEVER_PREFIXES) and second.klass != KLASS_QUERY:
+        return None
+    repaired_word = bool(reading.splits or reading.invented)
+    labels = [
+        label
+        for label, used in (
+            (ROUTE_REPAIR_POLITE, reading.dropped),
+            (ROUTE_REPAIR_FUSED, reading.splits),
+            (ROUTE_REPAIR_INVENTED, reading.invented),
+        )
+        if used
+    ]
+    if owned and second.intent is first.intent and as_heard:
+        return None  # an invented ending the same table reads either way changes nothing
+    if (
+        owned
+        and second.intent is not first.intent
+        and not _asks_with_no_verb_of_its_own(text, first, reading)
+    ):
+        if repaired_word and _claim_the_same_words(text, first, second):
+            # Two claimants, neither exact: the looser rule took the words as heard only
+            # because the STT broke a word the other rule needed. MEDIUM at most, both named;
+            # the policy asks (ADR-0224 addendum 4, step 2).
+            contested = f"{ROUTE_REPAIR_CONTESTED}:{second.intent.value}"
+            return replace(
+                first,
+                route_repair="+".join([*labels, contested]),
+                confidence=min(first.confidence, _REPAIRED_WORD_CONFIDENCE),
+            )
+        return None
+    ceiling = _REPAIRED_WORD_CONFIDENCE if repaired_word else _SUFFIX_DROPPED_CONFIDENCE
+    keeps_slots = owned and not repaired_word and second.intent is first.intent
+    chosen = first if keeps_slots else second
+    return replace(
+        chosen, route_repair="+".join(labels), confidence=min(chosen.confidence, ceiling)
+    )
+
+
+#: A clause ends inside the sentence: what stands beside it may be the owner's dictated words.
+_CLAUSE_BREAK_RE: Final[re.Pattern[str]] = re.compile(r"[,;:.!?…]\s+\S")
+
+
+def _claim_the_same_words(text: str, first: ResolvedIntent, second: ResolvedIntent) -> bool:
+    """The rule that read the words as heard and the rule that read layer 1's repair rest on
+    the same word ("düzelt" of "bug'ı düzelt", "yeniden" of "yeniden çiz"): two claimants of
+    one command. A table that owns the sentence for OTHER words - a second command, dictated
+    content after a clause break - is not contested by a repaired word."""
+    if _CLAUSE_BREAK_RE.search(text):
+        return False
+    return bool(set(first.matched.split()) & set(second.matched.split()))
+
+
+def _asks_with_no_verb_of_its_own(text: str, first: ResolvedIntent, reading: Any) -> bool:
+    """The words as heard were read as a QUESTION, in one clause, and no word of theirs but
+    the polite form is a verb - a noun table read the sentence without its verb. Only then
+    may layer 1's imperative take a sentence a table owns. A command a table read ("hatırla",
+    "yaz", "durdur"), a verb the tables list or layer 1 knows, or a second clause, each say
+    the rewritten words may be content - and the sentence stays as heard."""
+    from app.voice.understanding import normalize as layer_one  # it imports this module
+
+    if first.klass != KLASS_QUERY:
+        return False
+    if _CLAUSE_BREAK_RE.search(text):
+        return False
+    polite = {word for said, _ in reading.dropped for word in said.split()}
+    listed = _listed_verb_forms()
+    return not any(
+        token in listed or layer_one.is_verb(token) for token in first.tokens if token not in polite
+    )
 
 
 def _is_ambiguous_caps(text: str) -> bool:

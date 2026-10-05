@@ -111,6 +111,8 @@ Claude outputs/
 # when the researcher last ran, a stop request. State of one machine's run, never committed.
 team/status.json
 team/limits.json
+team/duty-ledger.json
+team/plans/*-duty-*.json
 team/research-last.txt
 team/stop.flag
 team/lock.json.tmp

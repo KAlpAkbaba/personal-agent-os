@@ -15,22 +15,42 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `661a5efe4a4989a0996fb3264302264c8c977bfa` (2026-10-03 01:14 UTC = 04:14 yerel, api-green), LKG `e9f8c2d6`,
-pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. Kapı 39/39 (`cc5b39ec`, 65 dk). QUALIFICATION Stage 48. Ana kopya
-`team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
-**DÖNGÜ `d20261003` (pid 42348) 04:16 yerelde yeni kodla başladı: koşularda arka plan komutu YOK, tek komut 1 saate kadar
-(ADR-0214 ek 16). 04:15'e kadar ekip DURMUŞTU: önceki döngü bittiği halde 02:00 zamanlayıcı süreci, bir ajanın bıraktığı
-`tail -f` + `grep` yüzünden kapanmadı, zamanlayıcı her turu atladı - lead ikisini durdurdu, görevi elle başlattı. Kalıcı
-düzeltme kartı `tick-not-held-by-orphans` (ÖNCELİKLİ). DİKKAT: Ofis "0/6" ya da durum belgesi eski pid gösterirse önce
-`Get-ScheduledTaskInfo` (LastTaskResult 0x800710E0 = önceki tur hâlâ açık) ve yetim süreçlere bak.**
+**ÜRETİM: main `b30df6c547ebc8afb826441ac56091688aba2c3f` (2026-10-05 00:32 UTC = 03:32 yerel, api-green), LKG `321e43b0`,
+pin = RELEASE, reconcile OK, şema `0066_watches`. QUALIFICATION Stage 54 (2026-10-04 entegrasyonu: staging, nöbet motoru,
+tarayıcı koruması, oto-yayın, limitten devam, ilerleme şeridi, pano konuşması). Ana kopya `team/nightly/lead` (= main). Kapıda
+bekleyen YOK. test-team artık staging-stack'i beklemiyor. Ekip hesap3'te; hesap geçişi için tek seferlik görev
+`PagentOS Team Account Switch` + `%USERPROFILE%\.pagentos-team\switch-account.ps1 -Account .claude-hesapN`. Ön kontrole ekle:
+`uv run ruff check .`, test_multi_device_invariant.py, installer-strictmode.tests.ps1, provision.tests.ps1.**
+**ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
+`team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
+yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**
+**ÇALIŞAN SINIRI: `team/cycle-settings.json` max_parallel 4 (bellek ölçüldü: kapının birim adımı 21,7 GB; o adımda 3'e indir).**
+**DEV KABUĞU: ev PC'sindeki `next dev` (:3000) ana kopyanın dal değişimlerinde bozulabiliyor (telefonda 'Oturum kontrol ediliyor'
+takılı, web.err.log'da 'Blocked cross-origin'). Yeniden başlatma: süreç ağacını durdur, `scripts/voice/start-web-voice.ps1 -PnpmPath
+C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd` Start-Process ile, çıktılar %LOCALAPPDATA%/PagentOS/web-shell. Kalıcı adres sunucudaki.**
+**KUYRUK BİRLEŞTİRİLDİ (ek 20): 17 başlamamış kart -> 8 (team-engine ÖNCELİKLİ, project-manager-seat ÖNCELİKLİ, team-board-talk,
+office-talk-visible, gate-faster, memory-safe-runs, account-pool, run-liveness-visible-all). DİKKAT: 28 kaydın Türkçesi BOM'suz .ps1
+yüzünden bozulmuştu ("YÃ¶neticisi"), onarıldı (scratchpad fix_mojibake.ps1); Türkçe metinli .ps1'e BOM koy.**
+**TELEFON (49.3, PROVEN_REAL): web kabuğu sunucuda, tailnet HTTPS: https://pagentos-core.tail0e6789.ts.net (yalnız tailnet;
+`tailscale serve` -> 127.0.0.1:3000; geri almak: `enable-web-tailnet-https.sh --off`). Ev PC dev kabuğu da telefondan
+`http://100.92.148.30:3000` (allowedDevOrigins). Sahip yeni adrese bir kez giriş yapar (oturum adres başına).**
+**DİSK (2026-10-03): C: ~12:00'de SIFIRA indi (kapı `OSError(28)`, Docker motoru durdu - lead Docker Desktop'ı yeniden başlattı).
+C:'nin sahipleri ölçüldü: Program Files 112 GB, Docker 47 GB, pagefile+hiberfil 53 GB; OneDrive 222 GB'ın tamamı yalnız bulutta
+(diskte 0). AppData altında E:'ye junction ÇÖZÜLMÜYOR (STATUS_MOUNT_POINT_NOT_RESOLVED, Android ile ölçüldü, geri alındı);
+kullanıcı kökündekiler (.gradle, anaconda3) junction ile E:\C-tasinan'a taşınıyor (`scratchpad/move_to_e.ps1`). Docker kendi
+"Disk image location" ayarıyla taşınmalı (junction değil). Program listesi sahibe verildi; silmeler onun.**
+**SAHİBİN OFİS MODELİ (2026-10-03, kartlar kuyrukta, hepsi sahibin fikri): `team-board` (pano, denetimde), `team-board-consult`
+(danışma: bağlam + A/B seçenekleri, cevaplayan işi okuyarak), `office-board-bubbles`, `inspector-advice` (öneri + ekip dersleri),
+`lead-on-duty` (nöbetçi Hakim), `test-slots-on-board`, `worker-owns-its-return` (geri dönen iş aynı çalışana, oturumu sürdürerek;
+ÖNCELİKLİ), `continuous-team-loop` (döngü kalkar, sürekli akış, devralma; ÖNCELİKLİ). 15:00'te döngü 4 saat sınırında boşaldı -
+yarım saatten fazla 1 çalışan + 1 denetleyici (ölçüldü) - continuous-team-loop'un sebebi.**
 **BELLEK ÇÖKÜŞÜ (2026-10-03 ~05:00-05:50 yerel): 48 GB'lık ev bilgisayarının belleği TÜKENDİ - lead'in oturumu, sahibin web
 kabuğu (`next dev` :3000) ve sekizinci entegrasyonun kapısı (`gate/d20261003-4` @ `4f80a564`) çöktü. Kapı kırmızı ama KUSUR DEĞİL:
 PS paketlerinde `OutOfMemoryException`, `git: Out of memory`, pnpm 0xC0000409. 10:57'de bulunan: `test-slots` çalışanının TÜM birim
 paketi (tek `pytest tests/unit` süreci) 14 GB'a çıkmış ve büyüyordu - lead durdurdu (boş bellek 17,6 -> 28 GB). Önlemler: (1) web
 kabuğu oturumdan BAĞIMSIZ yeniden başlatıldı (günlük `%LOCALAPPDATA%/PagentOS/web-shell`); (2) `team/cycle-settings.json`: 3 çalışan +
 2 denetleyici (GEÇİCİ - bellek önlemi gelene kadar; sahip daha çok çalışan istiyor); (3) worker.md / inspector.md: ajanlar TÜM birim
-paketini kendileri koşturmaz, kapı koşturur. Kartlar: `run-memory-cap`, `unit-suite-memory`. Sekizinci entegrasyonun kapısı yeniden
-koşacak (`gate/d20261003-4`: `execution-call-site-routines` + `owner-trials-api`).**
+paketini kendileri koşturmaz, kapı koşturur. Kartlar: `run-memory-cap`, `unit-suite-memory`.**
 **SAHİBİN KURALI (2026-10-03 00:07): "bundan sonra kapısı yeşil olanlar otomatik canlıya geçsin, beklemesinler" - denetimden geçen
 iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü HEMEN yeni koda (`team/stop.flag`). Ek 9'un üç istisnası
 (compose/ortam değişikliği, geri alınamayan migration, sağlık ok değil) duruyor.**

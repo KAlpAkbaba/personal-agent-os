@@ -327,6 +327,10 @@ describe("the controller against a session the server has closed", () => {
     expect(limited.rateLimited).toBe(0);
     expect(eventPosts(limited.requests) - before).toBe(1);
     expect(t.scheduler.pendingTimers).toBe(0);
+    // Attaches after the first one, which the closed session answered 410: one per later
+    // flap before the session was made terminal (ADR-0251 addendum 1 counted 4).
+    const firstAttach = limited.requests.findIndex((path) => path.endsWith("/attach"));
+    expect(limited.requests.slice(firstAttach + 1).filter((path) => path.endsWith("/attach")).length).toBe(0);
   });
 });
 

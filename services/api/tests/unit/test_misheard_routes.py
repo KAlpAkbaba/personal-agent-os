@@ -8,6 +8,7 @@ The router is NOT included by the test: ``create_app`` registers it, or these ar
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -15,7 +16,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.artifacts.runtime import ArtifactRuntime
 from app.config import Settings
@@ -46,9 +46,12 @@ TURKISH = set("çğıöşüÇĞİÖŞÜ")
 
 
 @pytest.fixture()
-def engine():
+def engine(tmp_path):
+    # A file, not one shared in-memory connection: the application starts more than one purge
+    # loop in threads (the watch's beside this one since 2026-10-04), and on a single StaticPool
+    # connection a sibling's rollback undid this purge's delete (2 rows left, the gate red).
     eng = create_engine(
-        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+        f"sqlite:///{tmp_path / 'misheard.db'}", connect_args={"check_same_thread": False}
     )
     MisheardUtterance.__table__.create(eng)
     yield eng
@@ -179,13 +182,22 @@ def test_get_purges_before_it_lists(owner, engine) -> None:
 # ------------------------------------------------------------------- the lifespan's purge
 
 
+def _until(condition) -> None:
+    """The first pass is the loop task's first iteration (misheard-purge-start-bounded), so
+    the application serves before it has run; the ceiling is a hang guard, not the claim."""
+    deadline = time.monotonic() + 30
+    while not condition():
+        assert time.monotonic() < deadline, "the purge loop's first pass never ran"
+        time.sleep(0.005)
+
+
 def test_the_lifespan_purges_at_start(api, engine) -> None:
-    """No request is made: the application's own start is what deletes the expired row, and
-    it has done so by the time the application serves."""
+    """No request is made: the application's own start is what deletes the expired row."""
     app, _, _ = api
     _seed_one_fresh_and_one_expired(engine)
     with TestClient(app):
         purge = app.state.misheard_purge
+        _until(lambda: purge.passes >= 1)
         assert purge.passes == 1
         assert purge.last_removed == 1
         assert _count(engine) == 1
@@ -201,7 +213,8 @@ def test_the_lifespan_starts_the_purge_loop_and_cancels_it_at_shutdown(api) -> N
         assert purge._interval_s == service.PURGE_INTERVAL_SECONDS
         task = purge._task
         assert task is not None and not task.done()
-        # The pass at start was the loop's own; the next one is 24 h away.
+        # The pass at start is the loop's own; the next one is 24 h away.
+        _until(lambda: purge.passes >= 1)
         assert purge.passes == 1
     assert purge.running is False
     assert task.cancelled()
@@ -227,8 +240,11 @@ def test_a_lifespan_purge_that_cannot_reach_the_table_does_not_stop_the_start(ap
         session.commit()
     MisheardUtterance.__table__.drop(app.state.artifacts._engine)
     with TestClient(app):
-        assert app.state.misheard_purge.passes == 1
-        assert app.state.misheard_purge.last_removed is None
+        purge = app.state.misheard_purge
+        _until(lambda: purge.passes >= 1)
+        assert purge.passes == 1
+        assert purge.last_removed is None
+        assert purge.health_check()["failures"] == 1
 
 
 def test_post_meaning_answers_the_row_and_open_counts_unanswered_only(owner, engine) -> None:
@@ -262,6 +278,33 @@ def test_a_body_without_a_written_meant_is_422_in_turkish(owner, engine, body) -
     response = owner.post(f"{BASE}/{row_id}/meaning", json=body)
     assert response.status_code == 422, response.text
     _refusal(response)
+
+
+#: Raw bodies, as a client sends them: not JSON at all, a JSON array, and a meaning holding a
+#: lone surrogate (valid JSON, no UTF-8 can carry it) - FastAPI's own English 422 and an
+#: unhandled UnicodeEncodeError (500) before misheard-purge-start-bounded.
+SECRET = "GIZLIANLAM9C1D"
+RAW_BODIES = {
+    "not-json": f"meant={SECRET} aç".encode(),
+    "json-array": f'["{SECRET}"]'.encode(),
+    "lone-surrogate": ('{"meant": "' + SECRET + ' \\ud800"}').encode(),
+}
+
+
+@pytest.mark.parametrize("raw", list(RAW_BODIES.values()), ids=list(RAW_BODIES))
+def test_a_body_that_is_not_a_written_meaning_is_the_contracts_refusal(
+    owner, engine, raw: bytes
+) -> None:
+    row_id = _seed(engine, "Maillerime bakın")
+    response = owner.post(
+        f"{BASE}/{row_id}/meaning", content=raw, headers={"content-type": "application/json"}
+    )
+    assert response.status_code == 422, response.text
+    detail = _refusal(response)
+    assert isinstance(detail["code"], str) and detail["code"]
+    assert SECRET not in response.text
+    stored = owner.get(BASE).json()["items"]
+    assert [(item["sentence"], item["meant"]) for item in stored] == [("Maillerime bakın", None)]
 
 
 def test_an_id_that_is_no_uuid_is_404_in_turkish(owner, engine) -> None:

@@ -56,6 +56,21 @@ Two existing tests changed because they encoded meaning (B) replaces: a `returne
 reads `waiting` + `queued` (`test_returned_worker_tasks_fill_the_free_seats_up_to_the_fourth`,
 `test_a_returned_worker_task_is_shown_while_another_worker_runs`).
 
+## The spoken summary
+
+`speech.py` reads the office's seats, so the voice summary changes with the page: its "Bir görev
+geri döndü" now counts only `stopped` worker tasks (what a person must look at); a `returned` task
+that waits for its next run is no longer spoken as "geri döndü". That matches what the page draws.
+`test_team_speech.py`'s two cases that said it for a `returned` task now use `stopped`.
+
+## One number for the board and the page
+
+`team/nightly/lead` (the team board, 2026-10-03) had already given a worker run a board seat
+`worker-<n>` by the same rule (lowest free, for the run's life) but kept it out of the status. The
+merge keeps one number: `Get-FreeWorkerSeat` gives the run its integer `seat` (in the status), and
+the board's `PAGENTOS_TEAM_SEAT` is `worker-<seat>` (empty above 9, as before); other roles keep
+their role as the board seat and carry no `seat`.
+
 ## What the owner sees now
 
 When one worker finishes, the others stay on their seats; a new run sits on the lowest empty desk.

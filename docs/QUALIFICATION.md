@@ -1342,3 +1342,97 @@ is identical) in 65 minutes: 14 914 unit, 162 integration. Released under the st
 | 48.2 | A run of the cycle cannot start a background command and may run one foreground command for an hour | `PROVEN_AUTOMATED` + `PROVEN_REAL` (the switches) | `scripts/tests/team-cycle.tests.ps1`, case "each role runs on the model the team's setting names for it": RED without each variable, GREEN with both (`scripts/lib/TeamRun.ps1`). The tool's own behaviour, measured by the lead on claude 2.1.285: with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` a Bash call with `run_in_background` is refused as an unexpected parameter; with `BASH_MAX_TIMEOUT_MS=3600000` an eleven-minute command finishes where the default cuts it at 10 min 0 s |
 | 48.3 | The cycle runs on it | `PROVEN_REAL` | the pool cycle `d20261003` ended on `team/stop.flag`; the scheduler's tick that had started it stayed alive afterwards - held by two processes an agent run had left (`tail -f` on a worker's log and a `grep` reading it; card `tick-not-held-by-orphans`) - and the lead stopped those two and started the task: a new cycle (pid 42348) took the lock at 01:16:52 UTC from the lead branch that carries the switches |
 | 48.4 | The local embedder's cache under concurrent threads | `PROVEN_AUTOMATED` | `tests/unit/test_memory_local_embedder.py` (forced interleavings, both partial-lock mutants RED); ADR-0256. `OpenAIEmbedder` keeps the same unlocked cache: `openai-embedder-lru-lock` |
+
+## Stage 49 — d20261003, eighth and ninth integrations together: the Ofis as a room, the web shell on the Cloud Core, the cycle's fifteen approved tasks (ADR-0257..0271 and addenda)
+
+Released 2026-10-03 13:22 UTC as main `e6682a61688d7c4531f5a0ff19de91fd3e780d9d` (api-blue; previous `661a5efe…` kept as
+last known good; schema unchanged, `0065_misheard_utterances`; no migration). Full gate PASS on `22d90798` (the merge
+commit's tree is identical) in 96 minutes: 15 294 unit, 178 integration, .NET 1 256 + 185. Released under the standing
+rule; the compose change (the `web` aux service) is the owner's approved "Sunucuda barındır" of the same day.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 49.1 | The release, verified | `PROVEN_REAL` | 13:22 UTC: `RELEASE OK: e6682a61… is running as api-blue behind the edge`, 2/2 device sessions handed over after 1 s, health through the edge `ok`; `aux: web up`; the recovery supervisor re-pinned to the full sha by the lead (`RECOVERY SUPERVISOR INSTALLED from e6682a61…`), then `RECONCILE OK: api-blue is canonical` |
+| 49.2 | The web shell runs on the Cloud Core, loopback only | `PROVEN_REAL` | `pagentos-prod-web` healthy, restart count 0; `curl 127.0.0.1:3000/` and `/core/office` 200; `/api/v1/system/health` through the container's rewrite returns the edge's release `e6682a61…` |
+| 49.3 | The phone reaches it over tailnet HTTPS | `PROVEN_REAL` | first run exit 3 (certificates not enabled); the owner enabled HTTPS in the Tailscale admin console (16:5x local); re-run: `SERVED https://pagentos-core.tail0e6789.ts.net -> http://127.0.0.1:3000 (tailnet only)`, `--status` exit 0; from the home PC over the tailnet `/`, `/core/office`, `/api/v1/system/health` 200 with a verified certificate (ssl_verify_result 0), health release `e6682a61…` |
+| 49.4 | The gate's two red runs of the day were not code defects of the released content | `PROVEN_REAL` | `fda57727`: C: full (`OSError(28)`, Docker's engine stopped - restarted by the lead); `176c11c8`: 12 ruff errors in a new test (fixed); `e6127370`: Unity's player build fails with TEMP on E: (measured: passes in 56 s with TEMP on C:) and the test hid the cause behind an IOException - the test now reads the log with shared access (regression test RED with `FileShare.Read`) |
+| 49.5 | The dev web shell opens from the phone | `PROVEN_REAL` | before: the page hung at "Oturum kontrol ediliyor..." (Next blocked its dev scripts for `100.92.148.30`); after `allowedDevOrigins`: a script chunk fetched from the Cloud Core over the tailnet 200 (1 MB), no blocked request in the dev server's log; the owner's screenshot shows the Ofis room |
+
+## Stage 50 — d20261003, tenth integration: the Ofis comes alive (moods, walk-in, tech office, the CTO), the Proje Yöneticisi, run temp folders on E: (ADR-0272, ADR-0214 addenda 19-20)
+
+Released 2026-10-03 16:12 UTC (19:12 local) as main `a5e68d92d9271ececec51da01b713e43a394e28c` (api-green; previous
+`e6682a61…` kept as last known good; no migration, no compose change). Full gate PASS on `7a6531ef` (the merge commit's tree
+is identical), started 17:37, PASS 19:09 local. The first run of this integration (`ffa1e4fe`, without the office) was stopped
+at minute 13 so the owner's office request rode the same gate. Released under the standing rule.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 50.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: a5e68d92… is running as api-green behind the edge`, health through the edge settled at once; `aux: web up`; recovery supervisor re-pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical`; `pagentos-prod-web` healthy, restart count 0, started 16:13:30 UTC (rebuilt) |
+| 50.2 | The owner reaches the new office from the phone | `PROVEN_REAL` (transport) | `https://pagentos-core.tail0e6789.ts.net/core/office` 200 over the tailnet; `/api/v1/system/health` reports release `a5e68d92…`. The drawing itself is client-rendered after sign-in: the owner's own look is the evidence |
+| 50.3 | Moods, walk-in, tech office, CTO | `PROVEN_AUTOMATED` | `apps/web/tests/office/mood.test.tsx` 11 + office suite 87/87; mutations RED (tired bound, stopped-not-angry, nobody walks, walking under reduced motion); ADR-0272. The owner saw the moods live on the home PC's dev shell at 19:06 (worker 4 angry on `cycle-auto-release`, stopped after its second return - the mood was right) |
+| 50.4 | Run temp folders on E: | `PROVEN_REAL` | the 16:52 cycle created `E:\AI\tmp-team\owner-trials-page-worker-9e134492` and `cycle-auto-release-worker-fe3fdd84`; team-cycle 214/214 with the new case (two mutations RED); ADR-0214 addendum 19 |
+
+## Stage 51 — d20261003, eleventh integration: the team's board, the model picker, the guards, the Dene list, the test queue, the dark Ofis, the tick's -MaxHours (ADR-0273..0282)
+
+Released 2026-10-04 01:31 UTC (04:31 local) as main `eac453fc0ffc0e7d05d0c1803746c5f670f7c68f` (api-blue; previous
+`a5e68d92…` kept as last known good; no migration). Full gate PASS on `bf3e4ed9` (the merge commit's tree is identical),
+started 02:56, PASS 04:28 local. Three earlier runs were red, each on ONE test and none on the integration's own code:
+`95217a92` - team-integrate's contract test still looked for `$failed` after test-slots renamed it `$script:failed` (fixed,
+83/83, the no-exit mutation still fails the regex); `b98ed094` - the order-dependent ledger-explain integration test (passed
+alone; card `ledger-explain-test-order`); `b98ed094` rerun - the selfmodel refresher test's 10 s holder deadline (a loaded POST
+reached the route after the holder let go; 180 s hang guard now, the unwired-route mutation RED at 188 s). Released under the
+standing rule.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 51.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: eac453fc… is running as api-blue behind the edge`, device handoff 2/2, health through the edge settled at once, `aux: web up`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-blue is canonical (release eac453fc…)` |
+| 51.2 | The dark Ofis is served | `PROVEN_REAL` (transport) | `pagentos-prod-web` rebuilt 01:33 UTC; its CSS chunk carries the floor colour `#1b2143`; `/core/office` 200 over the tailnet. The look after sign-in is the owner's |
+| 51.3 | The tick passes -MaxHours | `PROVEN_AUTOMATED` | `scripts/tests/team-tick.tests.ps1` 7/7 with case 5b; the scheduled task passes `-MaxHours 12` since 2026-10-04 04:55 |
+| 51.4 | The scheduled tick runs again | `PROVEN_REAL` | the wrapper under %LOCALAPPDATA% was invisible to Task Scheduler (the desktop app's MSIX redirect; exit 0xFFFD0000); moved to `%USERPROFILE%\.pagentos-team`, a probe task saw it, the 01:00 tick ran and exited 3 (the lock of the running cycle - correct) |
+
+## Stage 52 — the Proje Yöneticisi's duty run for stopped tasks, and the Ofis names the Claude account (ADR-0283, ADR-0214 addendum 23)
+
+Released 2026-10-04 12:07 UTC (15:07 local) as main `002c6292cc0de9fd1c87423a30757b4b5ea64961` (api-green; previous
+`eac453fc…` kept as last known good; no migration). Full gate PASS on `5711e33f` (the merge commit's tree is identical),
+started 12:05, PASS 15:03 local; it waited 72 minutes in the test queue behind a worker's own full gate whose unit-test child
+had hung (140 MB, about one CPU second per 30 s for over two hours) - the Danışman stopped that child; the case is in card
+`pm-stuck-run-check`. The duty change was reviewed by an independent inspector (RETURN, two findings: an owner's rejection
+could be handed to the duty; the hand-over record died with the cycle), both fixed before the gate.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 52.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 002c6292… is running as api-green behind the edge`, health through the edge settled at once, `aux: web up`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical (release 002c6292…)` |
+| 52.2 | The duty run decides stopped tasks; an owner's rejection is never handed; the ledger outlives the cycle | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 255/255 with `duty: the ledger outlives the cycle` and `duty: a task the owner rejected` (both mutations RED: the ledger read removed, the owner skip removed); `services/api/tests/unit/test_team_approvals.py`, `test_team_approvals_while_running.py`, `tests/integration/test_team_approvals_postgres.py` on the dev stack 2/2. The first real duty run is the next cycle's |
+| 52.3 | The Ofis names the account | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_office.py::test_the_status_names_the_claude_account_and_the_office_shows_it` and its contract half; `apps/web/tests/office/model.test.ts` (mutation RED: the label returns null). Shown once a cycle started from this release writes its status |
+
+## Stage 53 — a duty decision's reason may be 4000 characters (ADR-0283 addendum 1)
+
+Released 2026-10-04 16:04 UTC (19:04 local) as main `321e43b04e1eb7f88f8d1afa4d3d1de1da305fa4` (api-blue; previous
+`002c6292…` kept as last known good; no migration). Full gate PASS on `29aa2232` (tree-equal), second run; the first stopped at
+`Alembic upgrade head` (`Can't locate revision '0066_watches'`): a worker's Postgres test had left the SHARED dev database at
+its branch's head. The Danışman downgraded the dev database to `0065` from the watch-engine worktree; card
+`dev-db-branch-migration-leak`. A power cut at about 16:00 local stopped the PC; the dev stack, the web shell and the cycle were
+brought back by the Danışman (no git damage found in the main checkout or the active worktrees).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 53.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 321e43b…`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-blue is canonical (release 321e43b…)` |
+| 53.2 | A long duty reason is a decision, not a broken file | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` (`duty: a sound decision file passes` takes 1341 characters; `a reason over 4000 characters` is refused; the old bound as a mutation RED). Real cause: duty-1 (1341) and duty-2 (1442) of 2026-10-04 were refused whole; the Danışman applied both by hand. Live from the next cycle start |
+
+## Stage 54 — the integration of 2026-10-04: staging stack, watch engine, browser redirect guard, auto-release, resume after a limit, progress strip, board talk (ADR-0284..0297 and addenda)
+
+Released 2026-10-05 00:32 UTC (03:32 local) as main `b30df6c547ebc8afb826441ac56091688aba2c3f` (api-green; previous
+`321e43b0…` kept as last known good; migration `0066_watches`, expand-only: two new tables). Full gate PASS on `6c83d15a`
+(tree-equal), the seventh start. The six before were each red on ONE thing the pre-check had not run, all fixed on the branch:
+the gate's ruff (import order in two watch tests); the multi-device guard (the Cloud Core's tailnet address in a browser
+comment); the installer StrictMode lint (22 bare `.Count` reads in the board, pulse and test-slot libraries); the
+parameter-collision guard (`integrate.ps1` assigned its own `[switch]$BesideCycle` through `$besideCycle`); the misheard route
+tests on one shared in-memory SQLite connection beside the watch's new purge loop; and a leftover dev-database row from an
+earlier gate's research workflow test that broke the migration round trip (deleted; card `dev-db-branch-migration-leak`). The
+lead wired owner-trials-wiring's two area requests (trial events in the ledger vocabulary, the trial form in inspector.md).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 54.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: b30df6c…`, `api-green schema at 0066_watches (database matches the tree)`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical (release b30df6c…)` |
+| 54.2 | The integration's own suites | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 261/261, `scripts/tests/team-integrate.tests.ps1` 93/93, `scripts/tests/staging.tests.ps1` 33/33, `scripts/tests/team-release.tests.ps1` 59/59 (the last three now gate and CI steps); web 2343/2343 |
+| 54.3 | The watch runner ships switched off | `PROVEN_AUTOMATED` | `services/api/app/config.py` `watch_runner_enabled = False` until the redirect guard is proven live; `services/api/tests/unit/test_watch_service.py` |

@@ -47,6 +47,68 @@ def test_public_addresses_pass(address: str) -> None:
     assert not address_is_forbidden(address)
 
 
+# Return 3 (inspector 2026-10-04, GHSA-gwph-fp79-379w class): an IPv6 spelling that carries
+# an IPv4 address inside it went around the deny-list - ``::ffff:100.90.158.26`` (the Cloud
+# Core API, IPv4-mapped) was ADMITTED, and a dual-stack socket on the Linux host dials it as
+# the IPv4 address. The policy is now an allow-list: embedded IPv4 is unwrapped and checked
+# too, and only a global, non-CGNAT address is public.
+@pytest.mark.parametrize(
+    "address",
+    [
+        "::ffff:100.90.158.26",  # IPv4-mapped, the Cloud Core API
+        "::ffff:645a:9e1a",  # the same address in hex
+        "::ffff:100.64.0.1",  # IPv4-mapped CGNAT
+        "::ffff:127.0.0.1",
+        "::ffff:169.254.169.254",
+        "64:ff9b::6440:1",  # NAT64 (RFC 6052 /96) of 100.64.0.1
+        "64:ff9b::645a:9e1a",  # NAT64 of 100.90.158.26
+        "64:ff9b::7f00:1",  # NAT64 of 127.0.0.1
+        "64:ff9b:1:6440:0:100::",  # local-use NAT64 /48 of 100.64.0.1
+        "2002:6440:1::",  # 6to4 of 100.64.0.1
+        "2002:645a:9e1a::1",  # 6to4 of 100.90.158.26
+        "2001:0:4136:e378:8000:63bf:9bbf:fffe",  # Teredo, client end 100.64.0.1
+        "::100.90.158.26",  # IPv4-compatible (::/96)
+        "::6440:1",
+        "198.18.0.1",  # benchmarking: not private, not global either
+        "192.0.0.8",
+        "2001:db8::1",  # documentation
+        "not-an-address",
+        "",
+    ],
+)
+def test_embedded_and_non_global_addresses_are_forbidden(address: str) -> None:
+    assert address_is_forbidden(address)
+
+
+@pytest.mark.parametrize("address", ["::ffff:8.8.8.8", "64:ff9b::808:808", "2606:4700::1111%1"])
+def test_an_embedded_public_ipv4_stays_public(address: str) -> None:
+    assert not address_is_forbidden(address)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[::ffff:100.90.158.26]:8001/v1/devices",
+        "http://[::ffff:645a:9e1a]:8001/v1/devices",
+        "http://[::ffff:100.64.0.1]/",
+        "http://[64:ff9b::6440:1]/",
+        "http://[2002:6440:1::]/",
+    ],
+)
+def test_embedded_tailnet_literals_are_refused(url: str) -> None:
+    err = _refused(url)
+    assert err.error_class == ErrorClass.SECURITY_SCOPE_ERROR
+    assert err.retryable is False
+
+
+def test_a_name_resolving_to_a_mapped_tailnet_address_is_refused() -> None:
+    err = _refused(
+        "https://mapped.example/",
+        resolver=_resolver({"mapped.example": ["::ffff:100.90.158.26"]}),
+    )
+    assert err.error_class == ErrorClass.SECURITY_SCOPE_ERROR
+
+
 def test_public_host_passes_when_every_address_is_public() -> None:
     require_public_destination(
         "https://example.com/news",

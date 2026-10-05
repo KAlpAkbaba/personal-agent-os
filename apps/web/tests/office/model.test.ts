@@ -1,7 +1,46 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { buildOffice, buildPanel, selectSeat } from "../../app/core/office/officeModel";
+import {
+  TASK_STATE_TR,
+  buildOffice,
+  buildPanel,
+  selectSeat,
+  taskStateText,
+} from "../../app/core/office/officeModel";
 import { SEAT_ORDER, busyCycle, queuedTask, twoWorkers } from "./fixtures";
+
+/** The queue's states, read from team/queue.schema.json at the repository root. */
+function queueStates(): string[] {
+  const schema = JSON.parse(readFileSync(resolve(__dirname, "../../../../team/queue.schema.json"), "utf8"));
+  return schema.$defs.task.properties.state.enum as string[];
+}
+
+describe("the task's state in Turkish", () => {
+  it("has a phrase for every state of the queue's schema", () => {
+    const states = queueStates();
+    expect(states.length).toBeGreaterThanOrEqual(13);
+    for (const state of states) {
+      expect(Object.hasOwn(TASK_STATE_TR, state), state).toBe(true);
+      expect(taskStateText(state), state).not.toBe(state);
+      expect(taskStateText(state), state).not.toContain("_");
+    }
+  });
+
+  it("does not give the same phrase to states that mean different things to the owner", () => {
+    const four = ["in_progress", "inspecting", "returned", "stopped"].map(taskStateText);
+    expect(new Set(four).size).toBe(4);
+    const all = queueStates().map(taskStateText);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("returns a state it does not know unchanged, prototype names included", () => {
+    for (const unknown of ["brand_new_state", "", "constructor", "toString"])
+      expect(taskStateText(unknown)).toBe(unknown);
+  });
+});
 
 describe("the office model", () => {
   it("draws two working workers typing with their task titles and 2/6 in the top bar", () => {
@@ -18,9 +57,19 @@ describe("the office model", () => {
   });
 
   it("stands a returned seat beside the desk with the warning mark", () => {
-    const seat = buildOffice(twoWorkers()).seats.find((s) => s.seat === "inspector")!;
+    const seat = buildOffice(twoWorkers()).seats.find((s) => s.seat === "worker-4")!;
     expect(seat.pose).toBe("standing");
     expect(seat.warning).toBe(true);
+  });
+
+  it("seats the inspector calm when its last task came back: it sent it back, the worker fixes it", () => {
+    const seat = buildOffice(twoWorkers()).seats.find((s) => s.seat === "inspector")!;
+    expect(seat.state).toBe("waiting");
+    expect(seat.pose).toBe("seated");
+    expect(seat.warning).toBe(false);
+    expect(seat.mood).toBe("relaxed");
+    // its panel still names the task it sent back
+    expect(buildPanel(twoWorkers(), "inspector")!.task?.title).toBe("Eski iş");
   });
 
   it("seats a waiting seat still, without a mark or a label", () => {
@@ -33,8 +82,9 @@ describe("the office model", () => {
   it("names role and state in the aria-label", () => {
     const office = buildOffice(twoWorkers());
     expect(office.seats.find((s) => s.seat === "worker-1")!.ariaLabel).toBe("Çalışan 1, çalışıyor");
-    expect(office.seats.find((s) => s.seat === "inspector")!.ariaLabel).toBe("Denetleyici, döndü");
-    expect(office.seats.find((s) => s.seat === "lead")!.ariaLabel).toBe("Hakim, bekliyor");
+    expect(office.seats.find((s) => s.seat === "worker-4")!.ariaLabel).toBe("Çalışan 4, döndü");
+    expect(office.seats.find((s) => s.seat === "inspector")!.ariaLabel).toBe("Denetleyici, bekliyor");
+    expect(office.seats.find((s) => s.seat === "lead")!.ariaLabel).toBe("Proje Yöneticisi, bekliyor");
   });
 
   it("gives the owner seat the count of waiting approvals", () => {
@@ -78,6 +128,14 @@ describe("the office model", () => {
     expect(top.cycleId).toBe("döngü yok");
     expect(top.runningAgents).toBe("koşan ajan 0/6");
   });
+
+  it("names the Claude account the team runs under, as the owner says it", () => {
+    const v = twoWorkers();
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: ".claude-hesap3" } }).topBar.account).toBe("Hesap 3");
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: ".claude-hesap2" } }).topBar.account).toBe("Hesap 2");
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: "varsayilan" } }).topBar.account).toBe("Ana hesap");
+    expect(buildOffice({ ...v, cycle: { ...v.cycle, account: undefined } }).topBar.account).toBeNull();
+  });
 });
 
 const names = (view: ReturnType<typeof busyCycle>) => buildOffice(view).seats.map((s) => s.name);
@@ -85,7 +143,7 @@ const names = (view: ReturnType<typeof busyCycle>) => buildOffice(view).seats.ma
 describe("the seats the API sends", () => {
   it("draws four worker desks, Çalışan 1 to Çalışan 4, in an office with no run", () => {
     expect(names(busyCycle(0, 0))).toEqual([
-      "Hakim",
+      "Proje Yöneticisi",
       "Araştırmacı",
       "Entegratör",
       "Çalışan 1",
@@ -93,10 +151,10 @@ describe("the seats the API sends", () => {
       "Çalışan 3",
       "Çalışan 4",
       "Denetleyici",
-      "Sahip",
+      "CTO",
     ]);
     expect(buildOffice(twoWorkers()).seats.find((s) => s.seat === "worker-4")!.ariaLabel).toBe(
-      "Çalışan 4, bekliyor",
+      "Çalışan 4, döndü",
     );
   });
 
@@ -204,7 +262,6 @@ describe("the seat panel", () => {
     expect(panel.role).toBe("Çalışan 1");
     expect(panel.task).toMatchObject({
       title: "Birinci iş",
-      state: "implementing",
       goal: "birinci hedef",
       acceptance: "birinci kabul",
     });
@@ -229,6 +286,16 @@ describe("the seat panel", () => {
     expect(buildPanel(twoWorkers(), "inspector")!.reason).toBe("testler kırmızı");
   });
 
+  it("gives the panel the task's state in Turkish and its start time", () => {
+    const panel = buildPanel(twoWorkers(), "worker-1")!;
+    expect(panel.task?.stateText).toBe("implementing"); // not a queue state: shown as it is
+    expect(panel.task?.since).toMatch(/^\d\d:\d\d$/);
+    expect(buildPanel(twoWorkers(), "inspector")!.task?.stateText).toBe(
+      taskStateText("returned"),
+    );
+    expect(buildPanel(twoWorkers(), "inspector")!.task?.since).toBeNull();
+  });
+
   it("selects on click and deselects on a second click", () => {
     expect(selectSeat(null, "lead")).toBe("lead");
     expect(selectSeat("lead", "worker-1")).toBe("worker-1");
@@ -251,12 +318,12 @@ describe("a task that waits for its next run (office-stable-seats)", () => {
       ariaLabel: "Çalışan 3, sırada",
     },
     {
-      seat: "inspector",
+      seat: "worker-4",
       pose: "standing",
       warning: true,
       queued: false,
       label: null,
-      ariaLabel: "Denetleyici, döndü",
+      ariaLabel: "Çalışan 4, döndü",
     },
   ])("draws $seat as pose $pose, warning $warning", ({ seat, ...expected }) => {
     const got = drawn(queuedTask(), seat);
@@ -276,25 +343,24 @@ describe("a task that waits for its next run (office-stable-seats)", () => {
   });
 
   it("draws a waiting seat without queued exactly as before, and queued:false the same", () => {
-    const before = drawn(twoWorkers(), "worker-4");
-    expect(drawn(queuedTask(), "worker-4")).toEqual(before);
+    const before = drawn(twoWorkers(), "worker-3");
     const explicit = twoWorkers();
     explicit.agents = explicit.agents.map((a) =>
-      a.seat === "worker-4" ? { ...a, queued: false } : a,
+      a.seat === "worker-3" ? { ...a, queued: false } : a,
     );
-    expect(drawn(explicit, "worker-4")).toEqual(before);
+    expect(drawn(explicit, "worker-3")).toEqual(before);
     expect([before.pose, before.warning, before.label, before.ariaLabel]).toEqual([
       "seated",
       false,
       null,
-      "Çalışan 4, bekliyor",
+      "Çalışan 3, bekliyor",
     ]);
   });
 
   it("reads an answer without the queued field (an older server) as today", () => {
     const office = buildOffice(twoWorkers());
     expect(office.seats.filter((s) => s.queued)).toEqual([]);
-    expect(office.seats.find((s) => s.seat === "inspector")!.warning).toBe(true);
-    expect(buildPanel(twoWorkers(), "worker-4")!.stateText).toBe("bekliyor");
+    expect(office.seats.find((s) => s.seat === "worker-4")!.warning).toBe(true);
+    expect(buildPanel(twoWorkers(), "worker-3")!.stateText).toBe("bekliyor");
   });
 });

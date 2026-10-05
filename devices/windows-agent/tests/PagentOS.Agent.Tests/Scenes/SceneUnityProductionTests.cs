@@ -40,7 +40,7 @@ public sealed class SceneUnityProductionTests
 
         // A build failure's cause is the tool output Unity prints BEFORE its LogError stack, so
         // each such stack brings the lines above it; other lines only when they say "error".
-        var lines = File.ReadAllLines(editorLog);
+        var lines = ReadShared(editorLog);
         var picked = new SortedSet<int>();
         for (var i = 0; i < lines.Length; i++)
         {
@@ -59,6 +59,46 @@ public sealed class SceneUnityProductionTests
         }
 
         return string.Join('\n', picked.Take(120).Select(i => lines[i]));
+    }
+
+    /// <summary>
+    /// The editor log while the editor (or a child it left behind) may still hold it open for
+    /// writing. File.ReadAllLines asks for FileShare.Read, which a live writer refuses, and its
+    /// IOException then replaced the real failure (the gate of 2026-10-03, 14:30). Read with
+    /// ReadWrite|Delete sharing instead: the failure message is the point of this helper.
+    /// </summary>
+    internal static string[] ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line)
+        {
+            lines.Add(line);
+        }
+
+        return lines.ToArray();
+    }
+
+    [Fact]
+    public void The_editor_log_is_read_while_the_editor_still_holds_it_open_for_writing()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"pagentos-unity-log-{Guid.NewGuid():N}.log");
+        try
+        {
+            // The editor's way: open for writing, let others read.
+            using (var writer = new StreamWriter(new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read)))
+            {
+                writer.WriteLine("Importing Assets/x");
+                writer.WriteLine("error CS1002: ; expected");
+                writer.Flush();
+                Assert.Equal(new[] { "Importing Assets/x", "error CS1002: ; expected" }, ReadShared(path));
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [SceneLabFact("unity")]

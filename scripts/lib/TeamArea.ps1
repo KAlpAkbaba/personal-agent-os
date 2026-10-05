@@ -19,10 +19,18 @@
         area is widened;
       * THE WRITING of that judgement onto the task (Add-TeamAreaWidening), which changes
         nothing when it is run a second time;
-      * whether the return still counts as one of the worker's two (Test-TeamAreaReturnCounts).
+      * whether the return still counts as one of the worker's two (Test-TeamAreaReturnCounts);
+      * whether a counted second return still stops the task: not when the inspector's
+        `onceki_bulgular: kapandi` line says the previous items are closed - one extra round,
+        never a third (Get-TeamPriorFindings, Resolve-TeamReturnStop);
+      * which changed files are the WORKER's when its branch contains the cycle's integration
+        branch (rebuilt on it, or merged with it): the files of its diff against
+        `integrate/<cycle>` (Select-TeamWorkerChangedFiles, Get-TeamWorkerChangedFiles).
 
     As in `TeamQueue.ps1`, every rule is a function that takes its inputs and returns its
-    answer: this file starts no process, reads no file and writes no store. Nothing here is
+    answer: this file starts no process, reads no file and writes no store. The one named
+    exception is Get-TeamWorkerChangedFiles: it asks git, but through the -Git scriptblock
+    its caller gives (by default TeamRun.ps1's Invoke-TeamGit, which the caller loads). Nothing here is
     called by the cycle yet; the wiring is a later card, and the fields `area_widenings` and
     `area_history` reach the queue's schema and the store with it.
 
@@ -414,4 +422,174 @@ function Test-TeamAreaReturnCounts {
     param([AllowNull()]$Resolution)
     $decision = [string](Get-TeamProperty -InputObject $Resolution -Name "Decision" -Default "")
     return [bool](@("widen", "wait") -cnotcontains $decision)
+}
+
+# ---------------------------------------------------------------------------------------
+# "İkinci dönüş yeni bulguysa iş durmasın" (team/proposals/2026-10-03-ikinci-donus-yeni-bulgu.md):
+# the other half of "does this return stop the task". A second RETURN whose previous items
+# are all closed is a NEW finding and buys one more round; anything else stops as today.
+
+# The inspector's key, case-sensitive, as `alan_disi`.
+$script:TeamPriorFindingsKey = "onceki_bulgular"
+
+# The return that stops a task whatever its report says: one extra round at most.
+$script:TeamReturnsHardCap = 3
+
+function Get-TeamPriorFindings {
+    <#
+    .SYNOPSIS
+        The inspector's `onceki_bulgular:` line: are the previous RETURN's items closed.
+
+    .DESCRIPTION
+        ONE line, alone on its line, above the verdict: the key, a colon, then `kapandi` or
+        `acik [n, n]` (the previous items still open; `acik` with an empty or no list is
+        still acik). Backticks, asterisks and spaces around the line, the key and the value
+        are ignored; a bullet, quote mark or number before the key makes the line prose, and
+        nothing may follow the value or the closing bracket. The LAST such line wins.
+        Anything else after the key, or no line at all, is acik - the safe default.
+
+        Returns Present (a line with the key was found), Closed (true only for a valid
+        `kapandi`), Open (the item numbers of a valid `acik [...]`) and Raw (the last line
+        as written, "" when there is none).
+    #>
+    param([AllowEmptyString()][string]$Report)
+    $key = [regex]::Escape($script:TeamPriorFindingsKey)
+    $present = $false
+    $closed = $false
+    $open = New-Object System.Collections.Generic.List[int]
+    $raw = ""
+    foreach ($line in @(([string]$Report) -split "`r?`n")) {
+        $text = $line.Trim().Trim('`', '*', ' ')
+        if ($text -cnotmatch ('^' + $key + '[\s`*]*:[\s`*]*(.*)$')) { continue }
+        $rest = $Matches[1].Trim().Trim('`', '*', ' ')
+        $present = $true
+        $raw = $line
+        $closed = [string]::Equals($rest, "kapandi", [System.StringComparison]::Ordinal)
+        $open.Clear()
+        if ($rest -cmatch '^acik\s*\[([^\]]*)\]$') {
+            foreach ($entry in @($Matches[1] -split ',')) {
+                $number = 0
+                if ([int]::TryParse($entry.Trim().Trim('`', '*', ' '), [ref]$number)) { $open.Add($number) }
+            }
+        }
+    }
+    return [pscustomobject]@{ Present = [bool]$present; Closed = [bool]$closed; Open = [int[]]$open.ToArray(); Raw = $raw }
+}
+
+function Resolve-TeamReturnStop {
+    <#
+    .SYNOPSIS
+        Where a returned task goes: back to its worker, or stopped for the lead.
+
+    .DESCRIPTION
+        The shape of Get-TeamStateAfterInspection's RETURN branch - State ('returned' |
+        'stopped'), Returns (the task's `returns` + 1), Reason - and Extra, true when the
+        round was granted by this rule. Called in place of that branch, after
+        Test-TeamAreaReturnCounts has said the return counts. In this order:
+
+          Returns >= $script:TeamReturnsHardCap               -> stopped, whatever the line says
+          Returns <  $script:TeamMaxReturns                   -> returned (no line needed)
+          Returns =  $script:TeamMaxReturns and `kapandi`     -> returned, Extra
+          otherwise (acik, malformed, no line)                -> stopped with today's reason,
+                                                                 plus the open items when known
+
+        Every 'stopped' reason starts with Get-TeamStateAfterInspection's own text.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]$Task,
+        [AllowEmptyString()][string]$Report
+    )
+    $returns = [int](Get-TeamProperty -InputObject $Task -Name "returns" -Default 0) + 1
+    $stopped = "ayni is iki kez geri verildi"
+    if ($returns -ge $script:TeamReturnsHardCap) {
+        return [pscustomobject]@{ State = "stopped"; Returns = $returns; Reason = "$stopped; $returns. dönüş - ek tur yalnız bir kez verilir"; Extra = $false }
+    }
+    if ($returns -lt $script:TeamMaxReturns) {
+        $why = if ((Get-TeamVerdict -Report $Report).Verdict -eq "NONE") { "rapor bir hukumle bitmedi" } else { "" }
+        return [pscustomobject]@{ State = "returned"; Returns = $returns; Reason = $why; Extra = $false }
+    }
+    $prior = Get-TeamPriorFindings -Report $Report
+    if ($prior.Closed) {
+        return [pscustomobject]@{ State = "returned"; Returns = $returns; Reason = "önceki dönüşün maddeleri kapandı, yeni bir bulgu geldi; bir ek tur verildi"; Extra = $true }
+    }
+    $reason = $stopped
+    if (@($prior.Open).Count -gt 0) { $reason = "$stopped; açık kalan maddeler: $(@($prior.Open) -join ', ')" }
+    return [pscustomobject]@{ State = "stopped"; Returns = $returns; Reason = $reason; Extra = $false }
+}
+
+function Select-TeamWorkerChangedFiles {
+    <#
+    .SYNOPSIS
+        The files the area check counts as the worker's, from two diffs already taken.
+
+    .DESCRIPTION
+        BaseDiff is `git diff --name-only <base>...<branch>`, AlsoBaseDiff the same against the
+        cycle's integration branch, ContainsAlsoBase whether the branch contains that branch.
+        Not contained: BaseDiff as it is (today's check). Contained: every file of AlsoBaseDiff -
+        first those also in BaseDiff, in BaseDiff's order, then the rest in AlsoBaseDiff's order.
+        A file the integration branch brought in and the worker left alone is in BaseDiff only
+        and is not counted. A file the worker changed is in AlsoBaseDiff, also one it took back
+        to main's bytes (then it is missing from BaseDiff: the reason AlsoBaseDiff, not the
+        intersection, is the answer). Paths are compared as git wrote them.
+    #>
+    param(
+        [AllowEmptyCollection()][string[]]$BaseDiff = @(),
+        [AllowEmptyCollection()][string[]]$AlsoBaseDiff = @(),
+        [bool]$ContainsAlsoBase = $false
+    )
+    if (-not $ContainsAlsoBase) { return @($BaseDiff) }
+    $also = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($AlsoBaseDiff)) { [void]$also.Add($path) }
+    $base = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($path in @($BaseDiff)) { [void]$base.Add($path) }
+    $both = @(@($BaseDiff) | Where-Object { $also.Contains($_) })
+    $alsoOnly = @(@($AlsoBaseDiff) | Where-Object { -not $base.Contains($_) })
+    return @($both + $alsoOnly)
+}
+
+function Get-TeamWorkerChangedFiles {
+    <#
+    .SYNOPSIS
+        The files a worker's branch changed, for the area check: Get-TeamChangedFiles' answer,
+        less the files the cycle's integration branch brought in.
+
+    .DESCRIPTION
+        Without -AlsoBase, when that branch does not exist, or when the worker's branch does not
+        contain it (`git merge-base --is-ancestor`), the answer is Get-TeamChangedFiles':
+        `git diff --name-only <Base>...<Branch>`. Otherwise it is the files of
+        `git diff --name-only <AlsoBase>...<Branch>`, ordered by the first diff where they are in
+        it (Select-TeamWorkerChangedFiles).
+
+        The named exception to "this file starts no process": git is asked through -Git, a
+        scriptblock `{ param($Directory, $Arguments) }` that returns Invoke-TeamGit's shape
+        (Success, ExitCode, StdOut, StdErr). Not given: TeamRun.ps1's Invoke-TeamGit, which the
+        caller has loaded. A failed diff throws, as Get-TeamChangedFiles does.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [string]$Base = "main",
+        [string]$AlsoBase = "",
+        [scriptblock]$Git = $null
+    )
+    if ($null -eq $Git) {
+        if (-not (Get-Command -Name "Invoke-TeamGit" -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw "Get-TeamWorkerChangedFiles needs -Git or TeamRun.ps1's Invoke-TeamGit"
+        }
+        $Git = { param($Directory, $Arguments) Invoke-TeamGit -WorkingDirectory $Directory -Arguments $Arguments }
+    }
+    $names = {
+        param($Range)
+        $result = & $Git $RepoRoot @("diff", "--name-only", $Range)
+        if (-not $result.Success) { throw "git diff failed: $(([string]$result.StdErr).Trim())" }
+        return @(([string]$result.StdOut) -split "`r?`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+    }
+    $baseDiff = @(& $names "$Base...$Branch")
+    if (-not $AlsoBase) { return $baseDiff }
+    $exists = & $Git $RepoRoot @("rev-parse", "--verify", "--quiet", "refs/heads/$AlsoBase")
+    if (-not $exists.Success) { return $baseDiff }
+    $ancestor = & $Git $RepoRoot @("merge-base", "--is-ancestor", "refs/heads/$AlsoBase", $Branch)
+    if ([int]$ancestor.ExitCode -ne 0) { return $baseDiff }
+    $alsoDiff = @(& $names "$AlsoBase...$Branch")
+    return @(Select-TeamWorkerChangedFiles -BaseDiff $baseDiff -AlsoBaseDiff $alsoDiff -ContainsAlsoBase $true)
 }
