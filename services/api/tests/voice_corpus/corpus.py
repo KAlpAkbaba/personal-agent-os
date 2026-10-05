@@ -1038,8 +1038,10 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
         ("a.song.11", "Yarım saat sonra Sezen Aksu çalarak uyandır.", None, None),
         ("a.song.12", "İki saat sonra Şımarık ile uyandır.", None, None),
         ("a.song.13", "Yarın 7'de beni Akşam Güneşi ile uyandır.", "07:00", None),
-        ("a.song.14", "Cuma 7'de beni Pazartesi Sendromu ile uyandır.", "07:00", None),
+        # A bare day name repeats (a.song.2); the title's "Pazartesi" adds no Monday.
+        ("a.song.14", "Cuma 7'de beni Pazartesi Sendromu ile uyandır.", "07:00", [4]),
         ("a.song.15", "Yarın sekize çeyrek kala Gece Yolcuları ile uyandır.", "07:45", None),
+        ("a.song.16", "Beni yarın 7'de Şımarık ile uyandır.", "07:00", None),
     ]
     # A pointing word names no song: the alarm is set, nothing is searched.
     for case_id, text in [

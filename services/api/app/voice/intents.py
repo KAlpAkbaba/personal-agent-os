@@ -2316,20 +2316,77 @@ def _song_start_stop(word: str) -> bool:
     )
 
 
+#: Where a clock phrase ENDS - the title's left edge when no "beni" stands before it. The
+#: edge word stays with the clock: "On dakika sonra | Şımarık'la", "sekize çeyrek kala |
+#: Gece Yolcuları", "7'de | Sezen Aksu". Exact forms, never stems (a title may hold "Gece").
+_CLOCK_END_WORDS: Final[frozenset[str]] = frozenset(
+    {"sonra", "geçe", "kala", "buçukta", "bucukta", "buçuğunda", "bucugunda"}
+)
+_CLOCK_END_NUMBER_RE: Final = re.compile(
+    r"^(?:bir|iki|üç|uc|dört|dort|beş|bes|altı|alti|yedi|sekiz|dokuz|on|yirmi|otuz|kırk|"
+    r"kirk|elli)(?:de|da|te|ta)$"
+)
+_CLOCK_END_DIGIT_RE: Final = re.compile(
+    r"^\d{1,2}(?:[:.]\d{2})?['’]?(?:de|da|te|ta)$|^\d{1,2}[:.]\d{2}$"
+)
+
+
+def _clock_end(words: list[str], index: int) -> bool:
+    lowered = words[index].casefold().replace("i̇", "i")
+    if lowered == "gece" and index > 0:
+        # "yediyi ceyrek gece": the recogniser's "geçe" without its cedilla - only after
+        # "çeyrek", so "Gece Yolcuları" stays a title.
+        return words[index - 1].casefold() in {"çeyrek", "ceyrek"}
+    return (
+        lowered in _CLOCK_END_WORDS
+        or bool(_CLOCK_END_NUMBER_RE.match(lowered))
+        or bool(_CLOCK_END_DIGIT_RE.match(lowered))
+    )
+
+
+def _title_left_edge(words: list[str], end: int) -> int | None:
+    """The index the title starts at, for a title ending before ``words[end]``.
+
+    The sentence is cut into two parts that never overlap: the title, and the rest the clock
+    is read from. (a) A "beni" before the title: everything after it is the title - a day
+    part, a day name or a number in it never reaches the clock ("beni Akşam Güneşi ile",
+    "beni Pazartesi Sendromu ile"); only a clock phrase standing right after "beni" ("Beni
+    yarın 7'de Şımarık ile") stays with the clock. (b) No "beni": the title starts where
+    the clock phrase ends ("On dakika sonra Şımarık'la"). None when neither edge is found.
+    """
+    beni = next((n for n in range(end - 1, -1, -1) if words[n].casefold() == "beni"), None)
+    if beni is not None:
+        start = beni + 1
+        for n in range(beni + 1, end):
+            if _clock_end(words, n):
+                start = n + 1
+            elif not _song_start_stop(words[n]):
+                break
+        return start
+    return next((n + 1 for n in range(end - 1, -1, -1) if _clock_end(words, n)), None)
+
+
 def _title_before(
     words: list[str], end: int, last: str | None = None
 ) -> tuple[int, str] | None:
     """``(first word's index, title)`` for the title ending at ``words[end - 1]`` (replaced
-    by ``last`` when its suffix was cut), walking back to the first stop word. None when
-    nothing - or nothing but a pointing word - is left."""
-    picked: list[str] = [last] if last is not None else []
-    index = end - (1 if last is not None else 0)
-    while index > 0 and len(picked) <= _SONG_MAX_WORDS:
-        word = words[index - 1]
-        if _song_start_stop(word):
-            break
-        picked.insert(0, word)
-        index -= 1
+    by ``last`` when its suffix was cut). The left edge is :func:`_title_left_edge`; a
+    sentence with neither edge walks back to the first stop word. None when nothing - or
+    nothing but a pointing word - is left."""
+    stop = end - (1 if last is not None else 0)
+    edge = _title_left_edge(words, stop)
+    if edge is not None:
+        index = min(edge, stop)
+        picked = words[index:stop] + ([last] if last is not None else [])
+    else:
+        picked = [last] if last is not None else []
+        index = stop
+        while index > 0 and len(picked) <= _SONG_MAX_WORDS:
+            word = words[index - 1]
+            if _song_start_stop(word):
+                break
+            picked.insert(0, word)
+            index -= 1
     if not picked or len(picked) > _SONG_MAX_WORDS or _names_no_song(picked):
         return None
     title = " ".join(picked).strip()[:200]

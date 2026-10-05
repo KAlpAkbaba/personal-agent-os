@@ -301,7 +301,8 @@ def _spoken_clock(tokens: list[str]) -> tuple[int, int] | None:
         if rest and rest[0] in _QUARTER_WORDS:
             if any(w.startswith("geç") or w.startswith("gec") for w in rest[1:2]):
                 return hour, 15
-            if any(w.startswith("var") for w in rest[1:2]):
+            # "sekize çeyrek var" and "sekize çeyrek kala" are both 07:45.
+            if any(w.startswith(("var", "kala")) for w in rest[1:2]):
                 return (hour - 1) % 24, 45
             return hour, 15
         if minute is not None and consumed and 0 <= minute <= 59:
@@ -380,6 +381,11 @@ def _relative_seconds(text: str, tokens: list[str]) -> int | None:
                 value, consumed = _word_number(tokens[i - 1 : i], 0)
             if value is not None and consumed:
                 total += value * unit
+                found = True
+                break
+            # "yarım saat sonra" / "yarım dakika": half of the unit, the word right before it.
+            if tokens[i - 1] in ("yarım", "yarim"):
+                total += unit // 2
                 found = True
                 break
     if not found or total <= 0:

@@ -672,9 +672,25 @@ SPLIT_FORMS = [
         "2026-10-06T04:45:00Z",
         "Gece Yolcuları",
     ),
+    # A clock right after "beni" stays with the clock; the title starts after it.
+    ("Beni yarın 7'de Şımarık ile uyandır.", "2026-10-06T04:00:00Z", "Şımarık"),
+    # The recogniser's "geçe" without its cedilla still ends the clock (not "night").
+    (
+        "yarin sabah yediyi ceyrek gece Aksam Gunesi ile uyandir",
+        "2026-10-06T04:15:00Z",
+        "Aksam Gunesi",
+    ),
     # Kept green from the first return.
-    ("Yarın sabah yediyi çeyrek geçe Bella Ciao ile uyandır.", "2026-10-06T04:15:00Z", "Bella Ciao"),
-    ("Yarın 7'de beni Duman'ın Bu Akşam'ıyla uyandır.", "2026-10-06T04:00:00Z", "Duman'ın Bu Akşam"),
+    (
+        "Yarın sabah yediyi çeyrek geçe Bella Ciao ile uyandır.",
+        "2026-10-06T04:15:00Z",
+        "Bella Ciao",
+    ),
+    (
+        "Yarın 7'de beni Duman'ın Bu Akşam'ıyla uyandır.",
+        "2026-10-06T04:00:00Z",
+        "Duman'ın Bu Akşam",
+    ),
     ("Yarın 6'da beni On Dakika ile uyandır.", "2026-10-06T03:00:00Z", "On Dakika"),
 ]
 
@@ -686,7 +702,10 @@ def test_the_title_and_the_clock_never_overlap(session, device, text, at, song):
     assert resolved.media_query == song
     assert out["execution_status"] == "executed", out["speech"]
     assert out["alarm"]["scheduled_for"] == at, out["speech"]
-    assert not (out["alarm"]["recurrence"] or {}).get("weekdays"), out["alarm"]["recurrence"]
+    # A bare day name repeats on that day (tr_time's rule, corpus a.song.2: "Pazartesi" is
+    # every Monday): "Cuma" is Friday ONLY - "Pazartesi" in the title adds no Monday.
+    weekdays = [4] if text.startswith("Cuma") else None
+    assert (out["alarm"]["recurrence"] or {}).get("weekdays") == weekdays, out["alarm"]
 
 
 @pytest.mark.parametrize(("text", "song"), [(t, s) for t, _, s in SPLIT_FORMS])

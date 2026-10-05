@@ -64,3 +64,20 @@ fallback. An alarm could not have its own song, and the voice could not name one
   title. `tr_time`: "çeyrek gece" (cedilla dropped) is "geçe", not night.
 - A song that was not found is said in the same answer ("X şarkısını bulamadım efendim;
   alarm uyandırma şarkınızla / zil sesiyle çalacak.").
+
+## Addendum 2 (inspector's second return, 2026-10-05)
+- The sentence is cut into two parts that never overlap: the title, and the rest the clock is
+  read from. The title's left edge is no longer a growing stop-word list: (a) a "beni" before
+  the title - everything after it is the title, except a clock phrase standing right after
+  "beni" ("Beni yarın 7'de Şımarık ile"); (b) otherwise the end of the clock phrase:
+  "sonra", "geçe" (and "ceyrek gece"), "kala", "buçukta", a suffixed clock ("7'de",
+  "6.30'da", "yedide"). The edge word stays with the clock. Only a sentence with neither
+  edge falls back to the old stop-word walk. A daypart, day name or number inside the title
+  ("Akşam Güneşi", "Pazartesi Sendromu", "Gece Yolcuları") never reaches the clock or the
+  repetition.
+- `tr_time`: "sekize çeyrek kala" = "sekize çeyrek var" = 07:45; "yarım saat/dakika" is
+  half of the unit.
+- Kept: a bare day name repeats (a.song.2 "Pazartesi ..." is every Monday), so "Cuma 7'de
+  beni Pazartesi Sendromu ile" is every Friday 07:00 - Friday only, the title adds no Monday.
+  Making a bare day name one-shot would change every existing day-name alarm; left to the
+  owner/PM as its own decision.
