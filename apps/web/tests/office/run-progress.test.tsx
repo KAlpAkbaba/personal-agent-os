@@ -8,7 +8,7 @@ vi.mock("../../app/lib/session", () => ({
 }));
 
 import OfficePanel from "../../app/core/office/OfficePanel";
-import { buildPanel, panelProgress } from "../../app/core/office/officeModel";
+import { buildOffice, buildPanel, panelProgress, waitText } from "../../app/core/office/officeModel";
 import { twoWorkers } from "./fixtures";
 
 // The owner, 2026-10-05: "tıkladığımda ajanların çalıştıkları kısımda kodun yüzde kaçını yazdığı
@@ -61,5 +61,28 @@ describe("how far a working run has got", () => {
     expect(html).toContain('aria-valuenow="75"');
     expect(html).toContain("Kartın dosyalarının %75");
     expect(html).toContain("Testler yazıldı");
+  });
+});
+
+// The owner, 2026-10-05: "işin durumu aslında Proje Yöneticisi değil, Çalışan 2'nin bitirmesini
+// beklediği için bunları bu şekilde güncelleyelim".
+describe("a stopped task names what it waits for", () => {
+  it("names the seat whose task holds its files, and the Danışman when it is with him", () => {
+    const view = twoWorkers();
+    const holder = view.agents.find((a) => a.seat === "worker-1")!;
+    const waiting = view.agents.find((a) => a.seat === "worker-4")!;
+    view.tasks[waiting.task_id!] = {
+      ...view.tasks[waiting.task_id!],
+      state: "stopped",
+      reason: `Proje Yöneticisi: testi ekle (alan çakışması: ${holder.task_id}; o iş bitince)`,
+    };
+    const text = waitText(view, view.tasks[waiting.task_id!])!;
+    expect(text.short).toBe("Çalışan 1'i bekliyor");
+    expect(text.long).toContain("Sırada: Çalışan 1");
+    expect(buildOffice(view).seats.find((s) => s.seat === "worker-4")!.label).toBe("Çalışan 1'i bekliyor");
+    expect(buildPanel(view, "worker-4")!.task!.stateText).toContain("Çalışan 1");
+    const parked = { ...view.tasks[waiting.task_id!], reason: "Danışman'a iletildi: entegrasyon dalında çakışma" };
+    expect(waitText(view, parked)!.short).toBe("Danışman'da");
+    expect(waitText(view, { ...parked, reason: "1: gerçek bir hata" })).toBeNull();
   });
 });

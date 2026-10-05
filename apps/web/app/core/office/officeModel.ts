@@ -69,6 +69,28 @@ export const TASK_STATE_TR: Record<string, string> = {
 };
 
 /** The task's state in Turkish; a state this page does not know is shown as it is. */
+/**
+ * What a stopped task is really waiting for, in the owner's words (the owner, 2026-10-05: "işin
+ * durumu aslında Proje Yöneticisi değil, Çalışan 2'nin bitirmesini beklediği için bunları bu
+ * şekilde güncelleyelim"). A duty return that waits for another task's files names the seat that
+ * holds them; a task with the Danışman says so; anything else is null (the plain state text).
+ */
+export function waitText(view: OfficeView, task: OfficeTask | undefined): { short: string; long: string } | null {
+  if (!task || task.state !== "stopped") return null;
+  const reason = task.reason ?? "";
+  const files = /\(alan çakışması: ([^;)]+);[^)]*\)\s*$/.exec(reason);
+  if (files) {
+    const holder = files[1].split(",")[0].trim();
+    const agent = view.agents.find((a) => a.task_id === holder && a.state === "working");
+    const seat = agent ? seatName(agent.seat) : null;
+    const title = view.tasks[holder]?.title ?? holder;
+    if (seat) return { short: `${seat}'i bekliyor`, long: `Sırada: ${seat} "${title}" işini bitirince başlayacak` };
+    return { short: "sırasını bekliyor", long: `Sırada: "${title}" işi bitince başlayacak` };
+  }
+  if (/^\s*Danışman'a iletildi:/.test(reason)) return { short: "Danışman'da", long: "Danışman'a iletildi: karar onda" };
+  return null;
+}
+
 export function taskStateText(state: string): string {
   return Object.hasOwn(TASK_STATE_TR, state) ? TASK_STATE_TR[state] : state;
 }
@@ -298,6 +320,7 @@ function drawSeat(
   task?: OfficeTask,
   now: Date = new Date(),
   limited = false,
+  waiting: string | null = null,
 ): DrawnSeat {
   const known = seatName(agent.seat);
   const name = known ?? agent.seat;
@@ -317,7 +340,7 @@ function drawSeat(
     pose: POSE[state],
     plain: known === null,
     warning: state === "returned" && (mood === "angry" || mood === "sad"),
-    label: state === "working" ? (agent.task_title ?? agent.task_id) : null,
+    label: state === "working" ? (agent.task_title ?? agent.task_id) : state === "returned" ? waiting : null,
     badge: owner ? String(ownerCount) : null,
     runCount: runs > 0 ? `×${runs}` : null,
     mood,
@@ -355,7 +378,14 @@ export function buildOffice(view: OfficeView, now: Date = new Date()) {
   return {
     topBar,
     seats: view.agents.map((agent) =>
-      drawSeat(agent, view.approvals.length, agent.task_id ? view.tasks[agent.task_id] : undefined, now, limited),
+      drawSeat(
+        agent,
+        view.approvals.length,
+        agent.task_id ? view.tasks[agent.task_id] : undefined,
+        now,
+        limited,
+        waitText(view, agent.task_id ? view.tasks[agent.task_id] : undefined)?.short ?? null,
+      ),
     ),
     approvals: view.approvals.map((a) => ({
       taskId: a.task_id,
@@ -391,7 +421,7 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
     task: task
       ? {
           title: task.title,
-          stateText: taskStateText(task.state),
+          stateText: waitText(view, task)?.long ?? taskStateText(task.state),
           since: agent.since ? clock(agent.since) : null,
           goal: task.goal,
           acceptance: task.acceptance,

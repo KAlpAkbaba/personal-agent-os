@@ -51,6 +51,18 @@ when it shares the subject or files (the merged card's state becomes `done`, its
 "BİRLEŞTİRİLDİ -> <card>"). Split only along a real seam (a separate layer another worker can
 build in parallel, or a part that needs the owner).
 
+**Cards that touch each other must not block each other** (the owner, 2026-10-05: "roadmap'te
+birbirine dokunan şeyleri birleştirsin ki ajanlar takılmasın sürekli"). Every split and every
+duty run, look across ALL approved, returned and stopped cards for shared area entries:
+- same subject and both small -> merge them into one card (as above);
+- different subjects sharing a file -> give the later one `depends_on` the earlier, so it is not
+  started at all and does not sit in a seat waiting (a waiting seat is wasted quota);
+- the shared file is a hub everyone touches (`services/api/app/voice/intents.py`,
+  `.../realtime_sessions/tools.py`, `services/api/tests/voice_corpus/corpus.py`,
+  `services/api/app/main.py`): keep each card's hub edit to the few registration lines it needs
+  and say so in the card, so the cards stay short in the hub and follow each other quickly.
+Write what you merged or ordered in your report, one line each.
+
 The owner is asked about NEW ideas only (ADR-0214 addendum 9): never put a roadmap item, a
 checklist item or a defect's fix in front of him as an idea - card it. What the researcher
 reports as "already on the roadmap" you card in the same cycle.
