@@ -151,6 +151,25 @@ def test_exchange_sdp_refuses_a_ticket_for_another_session(monkeypatch: pytest.M
         p.exchange_sdp(session_id=SESSION_ID, ticket="not-a-ticket", sdp_offer=OFFER)
 
 
+def test_exchange_sdp_refuses_an_expired_ticket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ticket's TTL is the only time limit on the browser's credential."""
+    monkeypatch.setattr(live, "_send", lambda *_a, **_k: pytest.fail("no vendor call"))
+    p = _provider()
+    cred = p.mint_credential(session_id=SESSION_ID, ttl_s=60, transport="webrtc")
+    later = cred.expires_at + timedelta(seconds=1)
+
+    class _Later(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+            return later
+
+    monkeypatch.setattr(live, "datetime", _Later)
+    with pytest.raises(VoiceError) as exc:
+        p.exchange_sdp(session_id=SESSION_ID, ticket=cred.secret, sdp_offer=OFFER)
+    assert exc.value.error_class == VoiceErrorClass.VALIDATION_ERROR
+    assert "expired" in exc.value.message
+
+
 # ----------------------------------------------------------------- (c) secret discipline
 
 

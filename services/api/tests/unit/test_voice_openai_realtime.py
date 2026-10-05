@@ -36,6 +36,7 @@ from app.voice.providers import (
     RealtimeSessionConfig,
     vendor_tool_name,
 )
+from app.voice.providers_openai_live import OPENAI_LIVE_PROVIDER_NAME
 from app.voice.providers_openai_realtime import (
     CMD_ITEM_CREATE,
     CMD_ITEM_TRUNCATE,
@@ -639,7 +640,8 @@ def test_dev_with_key_ranks_the_real_adapter_above_the_simulator() -> None:
     assert result.ranked == (OPENAI_REALTIME_PROVIDER_NAME, SIMULATOR_PROVIDER_NAME)
     assert result.transport == TRANSPORT_WEBRTC
     assert "transport=webrtc" in result.reasons and "end_of_turn=semantic" in result.reasons
-    assert inactive_candidates(settings) == {}
+    # The gpt-live measurement candidate is off by default, so it is the only one left out.
+    assert set(inactive_candidates(settings)) == {OPENAI_LIVE_PROVIDER_NAME}
     _assert_no_key(rt.health_check())
 
 
@@ -650,7 +652,11 @@ def test_prod_without_key_has_no_provider_and_says_why() -> None:
     # reaches for when there is no vendor - and it still cannot be the default.
     assert set(default_providers(settings)) == {LOCAL_ROUTER_PROVIDER_NAME}
     inactive = inactive_candidates(settings)
-    assert set(inactive) == {OPENAI_REALTIME_PROVIDER_NAME, SIMULATOR_PROVIDER_NAME}
+    assert set(inactive) == {
+        OPENAI_REALTIME_PROVIDER_NAME,
+        OPENAI_LIVE_PROVIDER_NAME,
+        SIMULATOR_PROVIDER_NAME,
+    }
     rt = _runtime(settings)
     with pytest.raises(VoiceError) as exc:
         rt.select()
@@ -669,8 +675,11 @@ def test_prod_with_key_registers_only_the_real_adapter() -> None:
     chosen, result = rt.select()
     assert chosen.name == OPENAI_REALTIME_PROVIDER_NAME
     assert result.ranked == (OPENAI_REALTIME_PROVIDER_NAME,)
-    assert rt.inactive == {SIMULATOR_PROVIDER_NAME: inactive_candidates(settings)[
-        SIMULATOR_PROVIDER_NAME]}
+    inactive = inactive_candidates(settings)
+    assert rt.inactive == {
+        OPENAI_LIVE_PROVIDER_NAME: inactive[OPENAI_LIVE_PROVIDER_NAME],
+        SIMULATOR_PROVIDER_NAME: inactive[SIMULATOR_PROVIDER_NAME],
+    }
     _assert_no_key(rt.health_check())
 
 

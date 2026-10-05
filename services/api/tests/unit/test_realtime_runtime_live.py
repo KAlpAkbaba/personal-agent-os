@@ -11,6 +11,7 @@ unknown name is ignored (never a 422) with the reason in ``reasons``.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -21,6 +22,8 @@ from app.voice import providers_openai_live as live_module
 from app.voice import providers_openai_realtime as realtime_module
 from app.voice.providers_openai_live import TICKET_HEADER, OpenAILiveProvider
 from app.voice.providers_openai_realtime import OpenAIRealtimeProvider
+from app.voice.realtime_sessions import service
+from app.voice.realtime_sessions.models import RealtimeSessionRow
 from app.voice.realtime_sessions.routes import CreateSessionRequest
 from app.voice.realtime_sessions.runtime import (
     RealtimeVoiceRuntime,
@@ -184,6 +187,54 @@ def test_route_sdp_exchange_is_refused_for_a_session_of_another_provider(
         headers={"Content-Type": "application/sdp", TICKET_HEADER: "x"},
     )
     assert response.status_code in (404, 409, 422)
+
+
+def _live_session_with_vendor(
+    wired: Any, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Any, Any, dict[str, Any], list[Any]]:
+    client, _identity, runtime, *_ = wired
+    _register_live(runtime, monkeypatch)
+    sent: list[Any] = []
+    monkeypatch.setattr(live_module, "_send", lambda req, **_k: sent.append(req))
+    return client, runtime, _create(client, prefer_provider=LIVE, session_ttl_s=60), sent
+
+
+def _post_offer(client: Any, created: dict[str, Any]) -> Any:
+    cred = created["credential"]
+    descriptor = cred["transport_descriptor"]
+    return client.post(
+        descriptor["sdp_exchange_url"],
+        content=b"v=0\r\noffer",
+        headers={"Content-Type": "application/sdp", descriptor["ticket_header"]: cred["secret"]},
+    )
+
+
+def test_route_sdp_exchange_is_refused_for_a_closed_session(
+    wired, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inspector-4: a closed session must not open a vendor session while its ticket lives."""
+    client, _runtime, created, sent = _live_session_with_vendor(wired, monkeypatch)
+    sid = created["session_id"]
+    assert client.post(f"/v1/voice/realtime/sessions/{sid}/close", json={}).status_code == 200
+    response = _post_offer(client, created)
+    assert response.status_code == 410, response.text
+    assert sent == []
+    assert VENDOR_KEY not in response.text
+
+
+def test_route_sdp_exchange_is_refused_for_an_expired_session(
+    wired, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runtime, created, sent = _live_session_with_vendor(wired, monkeypatch)
+    sid = created["session_id"]
+    with runtime.session() as db:
+        row = db.get(RealtimeSessionRow, uuid.UUID(sid))
+        row.expires_at = service.utcnow() - service.timedelta(seconds=1)
+        db.commit()
+    response = _post_offer(client, created)
+    assert response.status_code == 410, response.text
+    assert sent == []
+    assert client.get(f"/v1/voice/realtime/sessions/{sid}").json()["state"] == "expired"
 
 
 def test_route_unknown_prefer_provider_is_ignored_and_a_malformed_one_is_422(wired) -> None:

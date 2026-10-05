@@ -575,9 +575,13 @@ async def exchange_live_sdp(request: Request, session_id: uuid.UUID) -> Response
 
     def work() -> str:
         with runtime.session() as db:
-            return str(_load(db, session_id).provider)
+            # a closed/expired session opens no vendor session, whatever its ticket says
+            return str(service.require_live(db, _load(db, session_id)).provider)
 
-    provider_name = await asyncio.to_thread(work)
+    try:
+        provider_name = await asyncio.to_thread(work)
+    except VoiceError as exc:
+        _raise_http(exc)
     provider = runtime.provider(provider_name)
     exchange = getattr(provider, "exchange_sdp", None)
     if provider_name != OPENAI_LIVE_PROVIDER_NAME or exchange is None:
