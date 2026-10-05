@@ -57,7 +57,17 @@ def _full(**extra: Any) -> dict[str, Any]:
         "machine": "MAIL",
         "pid": 7,
         "started_at": STAMP,
-        "runs": [{"task": "a-task", "role": "worker", "started_at": STAMP, "model": OPUS}],
+        "runs": [
+            {
+                "task": "a-task",
+                "role": "worker",
+                "started_at": STAMP,
+                "model": OPUS,
+                "last_activity_at": STAMP,
+                "idle_minutes": 34,
+                "stuck_children": [{"pid": 4242, "name": "python.exe", "idle_minutes": 34}],
+            }
+        ],
         "estimated_usd": 1.5,
         "usage_limit": {"state": "waiting", "resets_at": STAMP},
         "limits": {
@@ -207,8 +217,9 @@ STAMP_PATHS = _stamp_paths(routes.StatusRequest, _full())
 def test_every_timestamp_field_of_the_request_model_is_in_the_sample():
     named = _stamp_fields(routes.StatusRequest)
     assert {owner for owner, _ in STAMP_PATHS} == named
-    # started_at twice (the cycle's, a run's), updated_at, three resets_at, a lowered's at
-    assert len(named) >= 5 and len(STAMP_PATHS) == 7, STAMP_PATHS
+    # started_at twice (the cycle's, a run's), updated_at, three resets_at, a lowered's at, a
+    # run's last_activity_at (pm-stuck-run-check)
+    assert len(named) >= 5 and len(STAMP_PATHS) == 8, STAMP_PATHS
 
 
 def test_the_bound_is_the_width_of_the_column_that_keeps_updated_at():
@@ -322,6 +333,9 @@ function Reset-Scenario {
     $script:limitWindows = @{}
     $script:loweredRuns = New-Object System.Collections.ArrayList
     $script:modelSetting = [pscustomobject]@{ fallback = $true }
+    # pm-stuck-run-check: the cycle's liveness look is on and its bound is the setting's.
+    $script:livenessOn = $true
+    $script:runIdleMinutes = 30
 }
 function Add-Run([string]$Task, [string]$Role, [string]$Model) {
     [void]$script:liveRuns.Add([pscustomobject]@{ task = $Task; role = $Role; started_at = (Get-TeamTimestamp); model = $Model })
@@ -343,6 +357,10 @@ Write-Shape "no runs"
 
 Reset-Scenario
 Add-Run "a-task" "worker" $chain[2]; Add-Run "b-task" "inspector" $chain[0]; Add-Run "c-task" "worker" $chain[1]
+# A run with no sign of life, as Watch-RunLiveness leaves it: its stuck child named.
+$script:liveRuns[2] | Add-Member -NotePropertyName last_activity_at -NotePropertyValue (Get-TeamTimestamp -Now $now.AddMinutes(-34)) -Force
+$script:liveRuns[2] | Add-Member -NotePropertyName idle_minutes -NotePropertyValue 34 -Force
+$script:liveRuns[2] | Add-Member -NotePropertyName stuck_children -NotePropertyValue @([pscustomobject]@{ pid = 4242; name = "python.exe"; idle_minutes = 34 }) -Force
 foreach ($i in 1..20) { Add-Lowered ("task-{0:00}" -f $i) }
 $script:cycle.spent_usd = 3.61237
 Write-Shape "three runs, twenty lowered"
@@ -426,5 +444,10 @@ def test_the_seven_shapes_the_cycle_writes_are_all_accepted(owner, cycle_shapes)
     shapes = dict(cycle_shapes)
     assert "limits" not in shapes["the old shape"]
     assert len(shapes["three runs, twenty lowered"]["limits"]["lowered"]) == 20
+    stuck = shapes["three runs, twenty lowered"]["runs"][2]
+    assert stuck["idle_minutes"] == 34
+    assert stuck["stuck_children"] == [{"pid": 4242, "name": "python.exe", "idle_minutes": 34}]
+    assert shapes["three runs, twenty lowered"]["run_idle_minutes"] == 30
+    assert "run_idle_minutes" not in shapes["the old shape"]
     assert shapes["every model limited"]["limits"]["all"]["state"] == "limited"
     assert shapes["waiting, the tool's percentages"]["limits"]["fable"]["used_pct"] == 37.5

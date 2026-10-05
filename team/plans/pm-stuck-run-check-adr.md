@@ -62,3 +62,14 @@ only wait for another task ("alan çakışması: X; o iş bitince") or for the D
   legacy status for the rest of that cycle (no model/limits on the Ofis) until the Core is released.
 - One look costs one Win32_Process query and a directory walk per run, once a minute.
 - The 5% CPU share is a choice, not a measurement on a real hung child.
+
+## Addendum (return 3): a decision is checked against the run as it is NOW
+
+- The PM decides on the card's minutes, but the run may write again while the duty runs. Before a
+  `restart` is applied the cycle looks at that run once more (`Test-PoolRunRevived`): under the
+  bound - its own minutes and its stuck children's - or, with no stuck child, active after the card
+  was written, and the restart becomes a wait ("yeniden canlandı"). A handed run that showed life
+  before the duty's card is written is taken off the card and climbs the ladder again.
+- A seat's `idle_minutes` is the most of its runs' own minutes and their stuck children's, and the
+  seat carries `stuck_children`: the Ofis says "takılmış olabilir - alt süreç python.exe 140 dk iz
+  yok" for the 2026-10-04 case (the run wrote, its test python did not).

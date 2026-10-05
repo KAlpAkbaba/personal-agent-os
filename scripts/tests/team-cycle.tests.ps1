@@ -2023,6 +2023,46 @@ try {
         Assert-Equal -Expected 0 -Actual ([int]$live.idle_minutes) -Because "the writing run: $($live | ConvertTo-Json -Compress)"
     }
 
+    # The inspector's probe (return 3): the PM decides on the card's minutes, but the silent run
+    # starts writing every two seconds while the duty runs. Its 'restart' is NOT applied - the run
+    # is looked at again first - and the report says it came back to life.
+    Test-Case "liveness: a run that writes again while the duty decides is not restarted - the PM's 'restart' is turned into a wait ('yeniden canlandı')" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "hung-one" -Area @("src/area")))
+        Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\TeamLiveness.ps1") -Destination (Join-Path $root "scripts\lib\TeamLiveness.ps1")
+        $temps = Join-Path $root "run-temps"
+        Write-TeamJson -Path (Join-Path $root "team\cycle-settings.json") -Document ([ordered]@{ run_idle_minutes = 1; run_temp_root = $temps })
+        $cards = Join-Path $root "duty-cards.txt"
+        $decision = '{"decisions":[],"stuck":[{"run":"hung-one/worker","action":"restart","reason":"bir dakikadır iz yok; yeniden başlat"}]}'
+        $hooks = @{
+            PAGENTOS_FAKE_CLAUDE_DUTY_CARD = $cards; PAGENTOS_FAKE_CLAUDE_DUTY_JSON = $decision; PAGENTOS_CYCLE_LIVENESS_SECONDS = "10"
+            PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:*=170,lead:*=30"
+        }
+        # Silent until the duty run starts (its line in the fake's log); from then on a write every
+        # two seconds - while the PM is still deciding on the card's minutes.
+        $writer = Start-Job -ArgumentList $temps, (Join-Path $root "fake.log") -ScriptBlock {
+            param($Temps, $Log)
+            for ($i = 0; $i -lt 200; $i++) {
+                if (@(Get-Content -LiteralPath $Log -ErrorAction SilentlyContinue | Where-Object { $_ -match '"role":"lead"' }).Count -gt 0) {
+                    foreach ($folder in @(Get-ChildItem -LiteralPath $Temps -Directory -Filter "hung-one-worker-*" -ErrorAction SilentlyContinue)) {
+                        Set-Content -LiteralPath (Join-Path $folder.FullName "progress.txt") -Value $i -Encoding ASCII -ErrorAction SilentlyContinue
+                    }
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
+        try {
+            Use-FakeHooks -Environment $hooks -Body { $script:revivedRun = Invoke-Cycle -Root $root -Scenario "approve" -Duty -RunMinutes 4.5 -ExtraArguments "-CycleMinutes 4" }
+        }
+        finally { Stop-Job -Job $writer -ErrorAction SilentlyContinue; Remove-Job -Job $writer -Force -ErrorAction SilentlyContinue }
+        $run = $script:revivedRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $card = if (Test-Path -LiteralPath $cards) { [System.IO.File]::ReadAllText($cards, [System.Text.Encoding]::UTF8) } else { "" }
+        Assert-True -Condition ($card -match '(?m)^- hung-one/worker: \d+ dk iz yok') -Because "it was silent when handed:`n$card`n$($run.Report)"
+        $workers = @($run.Calls | Where-Object { $_.role -eq "worker" -and [string]$_.task -eq "hung-one" })
+        Assert-Equal -Expected 1 -Actual @($workers).Count -Because "a run that writes again is never restarted:`n$($run.Report)"
+        Assert-True -Condition ($run.Report.Contains("hung-one/worker: yeniden canland") -and -not $run.Report.Contains("yeniden başlatıldı")) -Because $run.Report
+    }
+
     Test-Case "duty: a stopped task starts exactly one Proje Yöneticisi run (no Bash, no Edit); its card lists the task and its reason; 'return' sends it back with the prefixed reason" {
         $root = New-Sandbox -Tasks @((New-Stopped -Reason "ayni is iki kez geri verildi"))
         $run = Invoke-DutyCycle -Root $root -Decisions @((New-Decision -Reason "Eksik testi ekle; çağrıyı düzelt"))

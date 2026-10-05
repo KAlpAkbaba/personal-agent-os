@@ -42,6 +42,29 @@ describe("a run that showed no life", () => {
     });
   });
 
+  // The card's real case (inspector, return 3): the run writes, its test python sat idle 140 min.
+  it("a stuck child is named with its own minutes", () => {
+    const child = { pid: 300, name: "python.exe", idle_minutes: 140 };
+    expect(seatLiveness(seat({ stuck: true, idle_minutes: 140, stuck_children: [child] }), undefined)).toEqual({
+      kind: "stuck",
+      label: "takılmış olabilir - alt süreç python.exe 140 dk iz yok",
+    });
+  });
+
+  it("the run's own silence is named when it is longer than its child's", () => {
+    const child = { pid: 300, name: "python.exe", idle_minutes: 35 };
+    expect(seatLiveness(seat({ stuck: true, idle_minutes: 50, stuck_children: [child] }), undefined)?.label).toBe(
+      "takılmış olabilir - 50 dk iz yok",
+    );
+  });
+
+  it("a broken child entry is not named", () => {
+    const broken = [{ pid: 300, name: 7, idle_minutes: 140 }];
+    expect(seatLiveness(seat({ stuck: true, idle_minutes: 140, stuck_children: broken }), undefined)?.label).toBe(
+      "takılmış olabilir - 140 dk iz yok",
+    );
+  });
+
   it("a run that showed life is not flagged, however long it runs", () => {
     expect(seatLiveness(seat({ stuck: false, idle_minutes: 1, since: "2026-10-04T05:00:00Z" }), undefined)).toBeNull();
   });
@@ -110,6 +133,15 @@ describe("the Ofis seat shows it", () => {
     view.agents = view.agents.map((a) => (a.seat === "worker-1" ? ({ ...a, stuck: true, idle_minutes: 34 } as typeof a) : a));
     expect(page(view)).toContain("takılmış olabilir - 34 dk iz yok");
     expect(page(twoWorkers())).not.toContain("takılmış olabilir");
+  });
+
+  it("a seat whose test process is stuck names it on the page", () => {
+    const view = twoWorkers();
+    const child = { pid: 300, name: "python.exe", idle_minutes: 140 };
+    view.agents = view.agents.map((a) =>
+      a.seat === "worker-1" ? ({ ...a, stuck: true, idle_minutes: 140, stuck_children: [child] } as typeof a) : a,
+    );
+    expect(page(view)).toContain("takılmış olabilir - alt süreç python.exe 140 dk iz yok");
   });
 
   it("a task waiting for another's files reads calm 'sırada: X bitince'", () => {

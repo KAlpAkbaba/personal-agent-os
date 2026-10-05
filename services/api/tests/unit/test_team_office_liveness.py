@@ -120,8 +120,24 @@ def test_a_stuck_child_makes_the_seat_stuck_though_the_run_writes():
     child = {"pid": 300, "name": "python.exe", "idle_minutes": 140}
     seat = _seat(_view(_status([_run("gate-faster", idle=0, stuck_children=[child])])), "worker-1")
     assert seat["stuck"] is True
-    assert seat["idle_minutes"] == 0
+    # The card's real case (inspector, return 3): the seat says the CHILD's minutes, not the
+    # writing run's 0, and carries the child so the page can name it.
+    assert seat["idle_minutes"] == 140
+    assert seat["stuck_children"] == [child]
     assert seat["runs"][0]["stuck_children"] == [child]
+
+
+def test_the_seat_minutes_are_the_run_s_own_when_they_are_more_than_its_child_s():
+    child = {"pid": 300, "name": "python.exe", "idle_minutes": 35}
+    seat = _seat(_view(_status([_run("t", idle=50, stuck_children=[child])])), "worker-1")
+    assert seat["idle_minutes"] == 50
+    assert seat["stuck_children"] == [child]
+
+
+def test_a_seat_with_no_stuck_child_carries_no_children_list():
+    seat = _seat(_view(_status([_run("t", idle=34)])), "worker-1")
+    assert seat["idle_minutes"] == 34
+    assert "stuck_children" not in seat
 
 
 def test_an_older_cycle_without_the_fields_is_read_as_before():

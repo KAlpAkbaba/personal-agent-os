@@ -228,7 +228,14 @@ def _working_seat(
     measured = [r for r in listed if "stuck" in r]
     if measured:
         agent["stuck"] = any(r["stuck"] for r in measured)
-        agent["idle_minutes"] = max(r["idle_minutes"] for r in measured)
+        # A run that writes while its test process sits idle (the card's real case, 2026-10-04):
+        # the seat says the child's minutes and carries the child, so the page can name it.
+        children = [c for r in measured for c in r.get("stuck_children", [])]
+        agent["idle_minutes"] = max(
+            [r["idle_minutes"] for r in measured] + [c["idle_minutes"] for c in children]
+        )
+        if children:
+            agent["stuck_children"] = children
     return agent
 
 

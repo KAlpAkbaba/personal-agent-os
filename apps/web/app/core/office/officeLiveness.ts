@@ -20,7 +20,7 @@ import { moodOf } from "./officeMood";
 export type SeatLiveness = { kind: "stuck" | "queued" | "parked"; label: string };
 
 /** A seat as the API now sends it: a working one carries these when the cycle measured its runs. */
-export type MeasuredAgent = OfficeAgent & { stuck?: unknown; idle_minutes?: unknown };
+export type MeasuredAgent = OfficeAgent & { stuck?: unknown; idle_minutes?: unknown; stuck_children?: unknown };
 
 /** Whether a stop only waits is officeMood's decision ("waiting"); here only its words are taken. */
 const QUEUED = /\(alan çakışması: ([^;()]+)/;
@@ -50,12 +50,23 @@ export function waitingReason(task: OfficeTask | undefined): string | null {
   return queued ? `sırada: ${queued[1].replace(/\s+/g, " ").trim()} bitince` : null;
 }
 
+/** The stuck child the seat's minutes are: a test process idle while its run still writes. */
+function idleChild(children: unknown, idle: number): string | null {
+  if (!Array.isArray(children)) return null;
+  for (const child of children as unknown[]) {
+    const { name, idle_minutes: minutes } = (child ?? {}) as { name?: unknown; idle_minutes?: unknown };
+    if (typeof name === "string" && name && wholeMinutes(minutes) && minutes >= idle) return name;
+  }
+  return null;
+}
+
 /** The seat's liveness label, or null when there is nothing to say beyond its mood. */
 export function seatLiveness(agent: MeasuredAgent, task: OfficeTask | undefined): SeatLiveness | null {
   if (agent.state === "working") {
     const { stuck, idle_minutes: idle } = agent;
-    if (stuck === true && wholeMinutes(idle)) return { kind: "stuck", label: `takılmış olabilir - ${idle} dk iz yok` };
-    return null;
+    if (stuck !== true || !wholeMinutes(idle)) return null;
+    const child = idleChild(agent.stuck_children, idle);
+    return { kind: "stuck", label: `takılmış olabilir - ${child ? `alt süreç ${child} ` : ""}${idle} dk iz yok` };
   }
   if (agent.state !== "returned") return null;
   const reason = waitingReason(task);
