@@ -253,14 +253,23 @@ function Get-TeamStuckAction {
         What happens to a run idle this long: none (it is alive), duty (hand it to the Proje
         Yöneticisi, once), wait (it is with the PM), restart (90 minutes: once, without asking),
         escalate (90 minutes again after a restart: the Danışman's).
+    .DESCRIPTION
+        -StuckChildren (Update-TeamRunLiveness's) climbs the same ladder: the run is as idle as
+        its most idle stuck child. On 2026-10-04 the worker wrote while its test python sat
+        idle for two hours, so the run's own minutes alone never moved.
     #>
     param(
         [Parameter(Mandatory = $true)][int]$IdleMinutes,
+        [AllowEmptyCollection()][object[]]$StuckChildren = @(),
         [int]$Bound = $script:TeamRunIdleMinutesDefault,
         [int]$AutoMinutes = $script:TeamRunAutoRestartMinutes,
         [int]$Restarts = 0,
         [bool]$Handed = $false
     )
+    foreach ($child in @($StuckChildren | Where-Object { $null -ne $_ })) {
+        $minutes = [int]$child.idle_minutes
+        if ($minutes -gt $IdleMinutes) { $IdleMinutes = $minutes }
+    }
     if ($IdleMinutes -lt $Bound) { return "none" }
     if ($IdleMinutes -ge $AutoMinutes) {
         if ($Restarts -lt 1) { return "restart" }

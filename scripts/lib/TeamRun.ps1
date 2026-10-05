@@ -468,18 +468,40 @@ function Restart-TeamRun {
         Stop one run's process tree - that run's and no other's - and start it again, the same
         card in the same worktree (pm-stuck-run-check: a run the Proje Yöneticisi, or the 90-
         minute rule, judged stuck). Nothing in git is touched: what the run committed stays,
-        and the run starts again from it. Returns the new run, in Start-TeamRun's shape.
+        and the run starts again from it. Returns the new run, in Start-TeamRun's shape, with
+        ReleasedTickets.
+    .PARAMETER SlotStore
+        The test queue's store (scripts/lib/TeamTestSlots.ps1). A slot held by a process of this
+        run's tree is given back at once, not when the next ask notices its holder is gone: on
+        2026-10-04 a stuck child held the heavy slot and the release gate waited 140 minutes.
+        A sibling run's slot is never touched.
     #>
-    param([Parameter(Mandatory = $true)]$Run)
+    param([Parameter(Mandatory = $true)]$Run, [string]$SlotStore = "")
     $launchProperty = $Run.PSObject.Properties["Launch"]
     if ($null -eq $launchProperty -or $null -eq $launchProperty.Value) { throw "the run carries no launch record: it cannot be started again" }
     $launch = $launchProperty.Value
+    $held = @()
+    if ($SlotStore) {
+        if (-not (Get-Command Get-TestSlotEntries -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot "TeamTestSlots.ps1") }
+        if (-not (Get-Command Get-TeamDescendants -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot "TeamLiveness.ps1") }
+        if (-not $Run.Process.HasExited) {
+            $tree = @{ ([int]$Run.Process.Id) = $true }
+            foreach ($row in @(Get-TeamDescendants -ProcessTable @(Get-TeamProcessTable) -RootProcessId $Run.Process.Id)) { $tree[[int]$row.Id] = $true }
+            $held = @(Get-TestSlotEntries -Store $SlotStore | Where-Object { $_.state -eq "running" -and $tree.ContainsKey([int]$_.holder_pid) } | ForEach-Object { [string]$_.ticket })
+        }
+    }
     if (-not $Run.Process.HasExited) {
         Stop-TeamProcessTree -ProcessId $Run.Process.Id
         [void]$Run.Process.WaitForExit(15000)
     }
     try { $Run.Process.Dispose() } catch { }
-    return (Start-TeamRun @launch)
+    $released = New-Object System.Collections.ArrayList
+    foreach ($ticket in $held) {
+        if (Remove-TestSlotTicket -Store $SlotStore -Ticket $ticket) { [void]$released.Add($ticket) }
+    }
+    $again = Start-TeamRun @launch
+    $again | Add-Member -NotePropertyName ReleasedTickets -NotePropertyValue @($released.ToArray())
+    return $again
 }
 
 function Remove-TeamRunTemp {

@@ -340,6 +340,89 @@ Test-Case "restart stops exactly that run's tree and starts it again from its wo
     Assert-True ($again.Launch.Prompt -ceq "card a") "the same card"
 }
 
+Test-Case "a stuck child climbs the same ladder: the run writes, its child is idle 30 then 90 minutes" {
+    # The gate-faster case of 2026-10-04: the worker's temp folder was written while its test
+    # python sat idle for two hours; the run's own idle minutes never moved.
+    $temp = New-CaseDir
+    $run = [pscustomobject]@{ Restarts = 0; Handed = $false; State = (New-TeamLivenessState -Since $t0) }
+    $log = New-Object System.Collections.ArrayList
+    $cpu = 0.0
+    for ($minute = 1; $minute -le 200; $minute++) {
+        $now = $t0.AddMinutes($minute)
+        Set-Written -Path (Join-Path $temp "alive.txt") -At $now
+        $cpu += 2.0
+        $table = @(
+            (New-Row 100 1 "claude.exe" (10 + $minute) $t0),
+            (New-Row 200 100 "bash.exe" 0.2 $t0),
+            (New-Row 300 200 "python.exe" $cpu $t0)
+        )
+        $look = Update-TeamRunLiveness -State $run.State -Now $now -Paths @($temp) -RootProcessId 100 -ProcessTable $table -IdleMinutes 30
+        Assert-True (-not $look.Stuck) "minute ${minute}: the run itself writes"
+        $action = Get-TeamStuckAction -IdleMinutes $look.IdleMinutes -StuckChildren $look.StuckChildren -Bound 30 -AutoMinutes 90 -Restarts $run.Restarts -Handed $run.Handed
+        if ($action -eq "none" -or $action -eq "wait") { continue }
+        [void]$log.Add("${minute}:$action")
+        if ($action -eq "duty") { $run.Handed = $true }
+        if ($action -eq "restart") { $run.Restarts++; $run.Handed = $false; $run.State = New-TeamLivenessState -Since $now }
+        if ($action -eq "escalate") { break }
+    }
+    # The child is first seen at minute 1, so it is 30 minutes idle at 31; after the restart the
+    # same pids come back in this table and are new to the fresh state.
+    Assert-Equal "31:duty,91:restart,122:duty,182:escalate" ($log -join ",") "the child's ladder"
+    $child = [pscustomobject]@{ pid = 300; name = "python.exe"; idle_minutes = 29 }
+    Assert-Equal "none" (Get-TeamStuckAction -IdleMinutes 0 -StuckChildren @($child) -Bound 30) "a child under the bound is not stuck"
+    Assert-Equal "none" (Get-TeamStuckAction -IdleMinutes 0 -StuckChildren @() -Bound 30) "no stuck child"
+}
+
+function Start-FakeSlotRun {
+    <# A fake claude whose tool holds a test slot through the real test-slot.ps1 wrapper. #>
+    param([string]$Dir, [string]$Name, [string]$Store, [string]$Ticket)
+    $slot = Join-Path $repoRoot "scripts\team\test-slot.ps1"
+    $script = Join-Path $Dir "fake-$Name.ps1"
+    $body = @'
+$card = [Console]::In.ReadToEnd()
+$env:PAGENTOS_TEAM_URL = ""
+$child = Start-Process -FilePath "__PS5__" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "__SLOT__", "run", "-Ticket", "__TICKET__", "-Store", "__STORE__", "--", "__PS5__", "-NoProfile", "-Command", "Start-Sleep -Seconds 300") -PassThru -WindowStyle Hidden
+Set-Content -LiteralPath (Join-Path (Get-Location) "__NAME__-$PID.child") -Value $child.Id
+Start-Sleep -Seconds 300
+'@
+    $body = $body.Replace("__PS5__", $ps5).Replace("__NAME__", $Name).Replace("__SLOT__", $slot).Replace("__TICKET__", $Ticket).Replace("__STORE__", $Store)
+    [System.IO.File]::WriteAllText($script, $body)
+    $run = Start-TeamRun -FilePath $ps5 -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script) -Prompt "card $Name" -WorkingDirectory $Dir
+    [void]$script:Started.Add($run.Process)
+    return $run
+}
+
+function Wait-SlotRunning {
+    param([string]$Store, [string]$Ticket)
+    $guard = [datetime]::UtcNow.AddSeconds(60)
+    while (@(Get-TestSlotEntries -Store $Store | Where-Object { $_.ticket -eq $Ticket -and $_.state -eq "running" }).Count -eq 0) {
+        if ([datetime]::UtcNow -gt $guard) { throw "hang guard: slot $Ticket never ran" }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+Test-Case "restart releases the test slot its stuck child held, and only that one" {
+    . (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")
+    $store = New-CaseDir
+    $mine = Invoke-TestSlotAsk -Store $store -Kind @("heavy") -Task "gate-faster" -Role "worker" -What "full gate"
+    $theirs = Invoke-TestSlotAsk -Store $store -Kind @("desktop") -Task "other" -Role "worker" -What "operator lab"
+    Assert-Equal "ONAY" $mine.Decision "the heavy slot is free"
+    Assert-Equal "ONAY" $theirs.Decision "the desktop slot is free"
+    $a = Start-FakeSlotRun -Dir (New-CaseDir) -Name "a" -Store $store -Ticket $mine.Ticket
+    $b = Start-FakeSlotRun -Dir (New-CaseDir) -Name "b" -Store $store -Ticket $theirs.Ticket
+    Wait-SlotRunning -Store $store -Ticket $mine.Ticket
+    Wait-SlotRunning -Store $store -Ticket $theirs.Ticket
+
+    $again = Restart-TeamRun -Run $a -SlotStore $store
+    [void]$script:Started.Add($again.Process)
+    $left = @(Get-TestSlotEntries -Store $store | ForEach-Object { [string]$_.ticket })
+    Assert-True ($left -notcontains $mine.Ticket) "the stuck run's slot is released at once: $($left -join ',')"
+    Assert-True ($left -contains $theirs.Ticket) "the sibling run's slot is kept"
+    Assert-Equal $mine.Ticket (@($again.ReleasedTickets) -join ",") "the restart says which ticket it gave back"
+    $log = [System.IO.File]::ReadAllText((Get-TestSlotLogPath -Store $store))
+    Assert-True ($log -match "task=gate-faster.*exit=released") "logged as released, not as a run: $log"
+}
+
 Stop-Started
 try { Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction Stop } catch { Write-Host "  (temp folder left: $script:TempRoot)" }
 
