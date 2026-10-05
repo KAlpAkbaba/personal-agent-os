@@ -260,7 +260,13 @@ function severalRuns(agent: OfficeAgent): OfficeRun[] {
   return runs.length > 1 ? runs : [];
 }
 
-function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now: Date = new Date()): DrawnSeat {
+function drawSeat(
+  agent: OfficeAgent,
+  ownerCount: number,
+  task?: OfficeTask,
+  now: Date = new Date(),
+  limited = false,
+): DrawnSeat {
   const known = seatName(agent.seat);
   const name = known ?? agent.seat;
   const owner = agent.seat === "owner";
@@ -270,6 +276,7 @@ function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now
   const sentBack = agent.state === "returned" && !WORKER_SEAT.test(agent.seat);
   const state: SeatState = owner || sentBack ? "waiting" : agent.state;
   const runs = state === "working" ? severalRuns(agent).length : 0;
+  const mood = moodOf({ ...agent, state }, task, now, limited);
   const lowered = owner ? null : loweredText(agent);
   return {
     seat: agent.seat,
@@ -277,11 +284,11 @@ function drawSeat(agent: OfficeAgent, ownerCount: number, task?: OfficeTask, now
     state,
     pose: POSE[state],
     plain: known === null,
-    warning: state === "returned",
+    warning: state === "returned" && (mood === "angry" || mood === "sad"),
     label: state === "working" ? (agent.task_title ?? agent.task_id) : null,
     badge: owner ? String(ownerCount) : null,
     runCount: runs > 0 ? `×${runs}` : null,
-    mood: moodOf({ ...agent, state }, task, now),
+    mood,
     lowered,
     ariaLabel: `${name}, ${STATE_TR[state]}${runs > 0 ? `, ${runs} koşu` : ""}${lowered ? `, ${lowered}` : ""}`,
   };
@@ -298,6 +305,8 @@ export function accountLabel(account: string | null | undefined): string | null 
 
 export function buildOffice(view: OfficeView, now: Date = new Date()) {
   const cycle = view.cycle;
+  // The team's usage limit holds: the seats it keeps from working doze (the owner, 2026-10-05).
+  const limited = cycle.usage_limit.state === "waiting" || cycle.limits?.all?.state === "limited";
   const topBar: TopBar = {
     cycleId: cycle.cycle_id ?? "döngü yok",
     startedAt: startedAt(cycle.started_at),
@@ -314,7 +323,7 @@ export function buildOffice(view: OfficeView, now: Date = new Date()) {
   return {
     topBar,
     seats: view.agents.map((agent) =>
-      drawSeat(agent, view.approvals.length, agent.task_id ? view.tasks[agent.task_id] : undefined, now),
+      drawSeat(agent, view.approvals.length, agent.task_id ? view.tasks[agent.task_id] : undefined, now, limited),
     ),
     approvals: view.approvals.map((a) => ({
       taskId: a.task_id,

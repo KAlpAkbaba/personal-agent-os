@@ -144,6 +144,20 @@ function Face({ x, y, mood }: { x: number; y: number; mood: Mood }) {
           <path className="office-tear" d="M22.5 12.5 Q21 15 22.5 16.5 Q24 15 22.5 12.5 Z" fill="var(--office-tear)" />
         </>
       )}
+      {mood === "sleepy" && (
+        <>
+          <path d="M6.5 8.5 Q9.5 11 12.5 8.5" stroke={eye} strokeWidth="2" fill="none" strokeLinecap="round" />
+          <path d="M17.5 8.5 Q20.5 11 23.5 8.5" stroke={eye} strokeWidth="2" fill="none" strokeLinecap="round" />
+          <ellipse cx="15" cy="15" rx="2" ry="1.6" fill={eye} />
+        </>
+      )}
+      {mood === "waiting" && (
+        <>
+          <circle cx="9.5" cy="9" r="2.2" fill={eye} />
+          <circle cx="20.5" cy="9" r="2.2" fill={eye} />
+          <path d="M11 15 L19 15" stroke={eye} strokeWidth="2" strokeLinecap="round" />
+        </>
+      )}
       {(mood === "relaxed" || mood === "happy") && (
         <>
           <path d="M6.5 10 Q9.5 6 12.5 10" stroke={eye} strokeWidth="2" fill="none" strokeLinecap="round" />
@@ -155,8 +169,20 @@ function Face({ x, y, mood }: { x: number; y: number; mood: Mood }) {
   );
 }
 
-/** What a mood adds above the head: steam when angry, a drop of sweat when tired. */
+/** What a mood adds above the head: steam when angry, a drop of sweat when tired, Zz when dozing. */
 function MoodMark({ x, y, mood }: { x: number; y: number; mood: Mood }) {
+  if (mood === "sleepy") {
+    return (
+      <g className="office-zz" transform={`translate(${x} ${y})`} fill="var(--office-label)">
+        <text x="30" y="2" fontSize="9" fontWeight="700">
+          Z
+        </text>
+        <text x="37" y="-5" fontSize="7" fontWeight="700">
+          z
+        </text>
+      </g>
+    );
+  }
   if (mood === "angry") {
     return (
       <g className="office-steam" transform={`translate(${x} ${y})`} fill="var(--office-steam-angry)">
