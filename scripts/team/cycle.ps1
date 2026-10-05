@@ -405,6 +405,8 @@ $statusTickSeconds = 120
 # A test hook (the heartbeat is otherwise only visible after two minutes): a whole number of seconds.
 if ([string]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS -match '^[1-9]\d{0,3}$') { $statusTickSeconds = [int]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS }
 $liveRuns = New-Object System.Collections.ArrayList
+# A live run's measured progress, kept a minute (task/role -> @{ At; Value }).
+$runProgress = @{}
 $statusWrittenAt = [datetime]::MinValue
 # The pool: the runs in flight (what Start-RoleRun returned). $unwrittenMerges are the merges
 # whose write the store could not take when they were made (Resolve-UnwrittenMerges).
@@ -497,8 +499,14 @@ function New-CycleStatus {
                     $entry["model"] = $_.model
                     # The owner, 2026-10-05: how far the run has got, measured from its worktree.
                     if ($_.dir -and @($_.area).Count -gt 0) {
-                        $progress = Get-TeamRunProgress -Worktree $_.dir -Base $Base -Area @($_.area) -TaskId ([string]$_.task)
-                        if ($null -ne $progress) { $entry["progress"] = $progress }
+                        # At most once a minute per run: three git calls must never slow the refill.
+                        $key = [string]$_.task + "/" + [string]$_.role
+                        $cached = $script:runProgress[$key]
+                        if ($null -eq $cached -or ([datetime]::UtcNow - $cached.At).TotalSeconds -ge 60) {
+                            $cached = @{ At = [datetime]::UtcNow; Value = (Get-TeamRunProgress -Worktree $_.dir -Base $Base -Area @($_.area) -TaskId ([string]$_.task)) }
+                            $script:runProgress[$key] = $cached
+                        }
+                        if ($null -ne $cached.Value) { $entry["progress"] = $cached.Value }
                     }
                 }
                 $entry
