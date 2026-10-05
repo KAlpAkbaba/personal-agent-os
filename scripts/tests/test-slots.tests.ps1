@@ -24,8 +24,9 @@
       6  a wrapper killed (with its command) after migrating: no `finally` ran, but its guard
          record stays, and the next database run restores the database from the dead run's
          tree before its own command starts;
-      7  a wrapper killed while its command still runs: the next database ask and run are
-         refused (DURDU, the command's pid named, nothing touched) until that command is gone;
+      7  a wrapper killed while its command still runs: the next database ask is granted with a
+         warning, its run is refused (DURDU, the command's pid named, nothing touched) until
+         that command is gone, then the next run restores;
       8  a dead run's guard whose restore fails holds the database: the next run never starts.
 
     Run: powershell -NoProfile -File scripts\tests\test-slots.tests.ps1 [-Filter <regex>]
@@ -335,9 +336,17 @@ Test-Case "7 a wrapper killed while its command still runs: the next database ti
     finally { Stop-Process -Id $w.Id -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 1
     try {
+        # The slot belonged to the killed wrapper and is free (team-test-slots case 6); the ask
+        # warns, the run refuses before its command starts.
         $a = Invoke-Slot @("ask", "-Kind", "database", "-Task", "next-task", "-Role", "worker", "-What", "next", "-Store", $store)
-        Assert-Equal 6 $a.ExitCode "the next database ask is refused while the dead run's command runs ($($a.StdOut))"
-        Assert-True ($a.StdOut -match "^DURDU" -and $a.StdOut -match [string]$g.child_pid) "a DURDU line naming the command's pid: $($a.StdOut)"
+        Assert-Equal 0 $a.ExitCode "the killed wrapper's slot is free at the next ask ($($a.StdOut) $($a.StdErr))"
+        Assert-True ($a.StdErr -match [string]$g.child_pid) "the ask warns, naming the command's pid: $($a.StdErr)"
+        $tn = [regex]::Match($a.StdOut, 'ts-[0-9a-f]+').Value
+        $marker = Join-Path $script:TempRoot ("ran-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+        $rn = Invoke-SlotRun -Store $store -Ticket $tn -Script "Set-Content -LiteralPath '$marker' -Value x; exit 0"
+        Assert-Equal 6 $rn.ExitCode "the run is refused while the dead run's command runs ($($rn.StdErr))"
+        Assert-True ($rn.StdErr -match "DURDU" -and $rn.StdErr -match [string]$g.child_pid) "a DURDU line naming the command's pid: $($rn.StdErr)"
+        Assert-True (-not (Test-Path -LiteralPath $marker)) "the command never started"
         $h = Invoke-Slot @("ask", "-Kind", "heavy", "-Task", "other", "-Role", "worker", "-What", "unit", "-Store", $store)
         Assert-Equal 0 $h.ExitCode "a heavy ask is not held ($($h.StdOut))"
         [void](Invoke-Slot @("release", "-Ticket", ([regex]::Match($h.StdOut, 'ts-[0-9a-f]+').Value), "-Store", $store))

@@ -20,7 +20,11 @@
               (scripts/lib/TestSlots.ps1): it reads the alembic revision before the command and,
               when the command moved it, downgrades back from the run's own tree - success or
               failure. A downgrade that fails holds the database: every later 'database' ask
-              or run answers DURDU (exit 6) until `unblock`.
+              or run answers DURDU (exit 6) until `unblock`. The promise is also written to
+              <store>\database-guard.json before the command (a killed wrapper runs no
+              `finally`): the next 'database' run finds a dead owner's record and restores
+              from that tree first (or holds); while the dead run's command still runs, a
+              'database' ask warns and a 'database' run answers DURDU naming its pid (exit 6).
       status  The queue in Turkish: who runs what since when, who waits; a hold's DURDU line.
       who     Short, by seat name: who is testing what right now and the waiting line -
               ask it before you plan a heavy run.
@@ -148,27 +152,40 @@ $seat = [string](Get-Opt "seat")
 if (-not $seat -and $env:PAGENTOS_TEAM_SEAT) { $seat = [string]$env:PAGENTOS_TEAM_SEAT }
 
 function Restore-SlotSchema {
-    <# After a 'database' run: put the database back at the recorded revision from the run's
-       own tree, verify it, and on any failure hold the database. $true when it is where the
-       run found it. #>
-    param([Parameter(Mandatory = $true)]$Guard)
-    $expected = $Guard.Before.Revision
-    $after = Get-TestSlotSchemaRevision -AlembicDir $Guard.Dir
-    if ($after.Ok -and $after.Revision -eq $expected) { Write-Problem "SEMA_KORUMA ayni $expected"; return $true }
-    $found = if ($after.Ok) { $after.Revision } else { "?" }
-    $problem = $after.Error
-    if ($after.Ok) {
-        $restore = Invoke-TestSlotSchemaRestore -AlembicDir $Guard.Dir -Revision $expected
-        $check = Get-TestSlotSchemaRevision -AlembicDir $Guard.Dir
-        if ($restore.Ok -and $check.Ok -and $check.Revision -eq $expected) {
-            Write-Problem "SEMA_KORUMA geri_alindi $found -> $expected ('$($Guard.Before.Database)')"
-            return $true
+    <# After a 'database' run (or for a dead run's guard record): put the database back at the
+       recorded revision from that run's own tree, verify it, and on any failure hold the
+       database. $true when it is where the run found it. -Label prefixes the restore line. #>
+    param(
+        [Parameter(Mandatory = $true)]$Guard,
+        [string]$Label = ""
+    )
+    $expected = [string]$Guard.expected
+    $dir = [string]$Guard.tree
+    $found = "?"
+    $problem = ""
+    if (-not $expected -or -not $dir) { $problem = "the guard record has no revision or tree to restore" }
+    else {
+        $after = Get-TestSlotSchemaRevision -AlembicDir $dir
+        $problem = $after.Error
+        if ($after.Ok -and $after.Database -ne [string]$Guard.database) {
+            # The tree's settings point elsewhere now: restoring there would touch the wrong database.
+            $problem = "the tree's settings now point at '$($after.Database)', not '$($Guard.database)'"
         }
-        $problem = if (-not $restore.Ok) { $restore.Error } elseif (-not $check.Ok) { $check.Error } else { "after the downgrade the database is at '$($check.Revision)'" }
+        elseif ($after.Ok -and $after.Revision -eq $expected) { Write-Problem "SEMA_KORUMA ${Label}ayni $expected"; return $true }
+        elseif ($after.Ok) {
+            $found = $after.Revision
+            $restore = Invoke-TestSlotSchemaRestore -AlembicDir $dir -Revision $expected
+            $check = Get-TestSlotSchemaRevision -AlembicDir $dir
+            if ($restore.Ok -and $check.Ok -and $check.Revision -eq $expected) {
+                Write-Problem "SEMA_KORUMA ${Label}geri_alindi $found -> $expected ('$($Guard.database)')"
+                return $true
+            }
+            $problem = if (-not $restore.Ok) { $restore.Error } elseif (-not $check.Ok) { $check.Error } else { "after the downgrade the database is at '$($check.Revision)'" }
+        }
     }
     $hold = [pscustomobject][ordered]@{
-        at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); task = [string]$entry.task; role = [string]$entry.role
-        ticket = $ticket; database = $Guard.Before.Database; tree = $Guard.Dir; found = $found; expected = $expected; error = $problem
+        at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); task = [string]$Guard.task; role = [string]$Guard.role
+        ticket = [string]$Guard.ticket; database = [string]$Guard.database; tree = $dir; found = $found; expected = $expected; error = $problem
     }
     Set-TestSlotDatabaseHold -Store $store -Hold $hold
     Write-Problem "SEMA_KORUMA BASARISIZ: $found -> $expected geri alınamadı ($problem)"
@@ -193,6 +210,14 @@ try {
             if ($kinds -contains "database") {
                 $hold = Get-TestSlotDatabaseHold -Store $store
                 if ($null -ne $hold) { Write-Output (Format-TestSlotHoldLine -Hold $hold); exit 6 }
+                $left = Get-TestSlotDatabaseGuard -Store $store
+                if ($null -ne $left) {
+                    $state = Get-TestSlotGuardState -Guard $left
+                    # The slot belongs to the wrapper (a killed one frees it): the ask is answered as
+                    # usual and `run` refuses while the dead run's command still has the database.
+                    if ($state -eq "orphan") { Write-Problem ("SEMA_KORUMA uyarı - run bunu söyleyecek: " + (Format-TestSlotOrphanLine -Guard $left -ProcessId ([int]$left.child_pid))) }
+                    if ($state -eq "dead") { Write-Problem "SEMA_KORUMA ölen bir koşunun kaydı var ($($left.task), beklenen $($left.expected)): run komuttan önce geri alır" }
+                }
             }
             $r = Invoke-TestSlotAsk -Store $store -Kind $kinds -Task $task -Role $role -What $what -NowUtc $now -Seat $seat
             Write-Output $r.Line
@@ -222,6 +247,23 @@ try {
                     Write-Problem (Format-TestSlotHoldLine -Hold $hold)
                     exit 6
                 }
+                # A guard record left behind: its wrapper was killed before its `finally`.
+                $left = Get-TestSlotDatabaseGuard -Store $store
+                if ($null -ne $left) {
+                    $state = Get-TestSlotGuardState -Guard $left
+                    if ($state -ne "dead") {
+                        $holderPid = if ($state -eq "orphan") { [int]$left.child_pid } else { [int]$left.holder_pid }
+                        [void](Remove-TestSlotTicket -Store $store -Ticket $ticket)
+                        Write-Problem (Format-TestSlotOrphanLine -Guard $left -ProcessId $holderPid)
+                        exit 6
+                    }
+                    $restoredLeft = Restore-SlotSchema -Guard $left -Label "olu_kosu "
+                    Clear-TestSlotDatabaseGuard -Store $store
+                    if (-not $restoredLeft) {
+                        [void](Remove-TestSlotTicket -Store $store -Ticket $ticket)
+                        exit 6
+                    }
+                }
                 $cwd = (Get-Location).ProviderPath
                 $alembicDir = Find-TestSlotAlembicDir -StartDirectory $cwd
                 if (-not $alembicDir) { Write-Problem "SEMA_KORUMA ağaç yok: $cwd üstünde services\api\alembic.ini yok - şema kaydı ve geri alma yok" }
@@ -232,7 +274,13 @@ try {
                     elseif ($before.Revision -like "*,*") { Write-Problem "SEMA_KORUMA birden çok baş ($($before.Revision)) - geri alma yok" }
                     else {
                         Write-Problem "SEMA_KORUMA kayit $($before.Revision) ('$($before.Database)', ağaç $alembicDir)"
-                        $guard = [pscustomobject]@{ Dir = $alembicDir; Before = $before }
+                        $guard = [pscustomobject][ordered]@{
+                            at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); task = [string]$entry.task; role = [string]$entry.role
+                            ticket = $ticket; database = $before.Database; tree = $alembicDir; expected = $before.Revision
+                            holder_pid = $PID; holder_start = [string](Get-TestSlotProcessStamp -ProcessId $PID); child_pid = 0; child_start = ""
+                        }
+                        # Written down before the command: a killed wrapper's promise outlives it.
+                        Set-TestSlotDatabaseGuard -Store $store -Guard $guard
                     }
                 }
             }
@@ -256,6 +304,12 @@ try {
                 try { $child = [System.Diagnostics.Process]::Start($psi) }
                 catch { Write-Problem "the command could not be started: $exe ($($_.Exception.Message))" }
                 if ($null -ne $child) {
+                    if ($null -ne $guard) {
+                        # The command may outlive a killed wrapper: the next run must not restore under it.
+                        $guard.child_pid = $child.Id
+                        try { $guard.child_start = [string]$child.StartTime.ToUniversalTime().Ticks } catch { $guard.child_start = "?" }
+                        try { Set-TestSlotDatabaseGuard -Store $store -Guard $guard } catch { Write-Problem "SEMA_KORUMA kaydına komutun pid'i yazılamadı: $($_.Exception.Message)" }
+                    }
                     $child.WaitForExit()
                     $code = $child.ExitCode
                 }
@@ -263,8 +317,12 @@ try {
             finally {
                 # Still holding the slot: nobody else starts on the database while it is put back.
                 if ($null -ne $guard) {
-                    try { $restoreFailed = -not (Restore-SlotSchema -Guard $guard) }
-                    catch { $restoreFailed = $true; Write-Problem "SEMA_KORUMA BASARISIZ: $($_.Exception.Message)" }
+                    try {
+                        $restoreFailed = -not (Restore-SlotSchema -Guard $guard)
+                        # Restored, or held: either way the promise is settled (a hold speaks for itself).
+                        Clear-TestSlotDatabaseGuard -Store $store
+                    }
+                    catch { $restoreFailed = $true; Write-Problem "SEMA_KORUMA BASARISIZ: $($_.Exception.Message) - kayıt duruyor, sonraki database koşusu yeniden dener" }
                 }
                 $freed = Complete-TestSlotRun -Store $store -Ticket $ticket -ExitCode ([string]$code) -PassThru
                 if ($null -ne $freed) { Send-BoardEvent -Event "free" -Entry $freed -ExitCode ([string]$code) }
@@ -276,6 +334,8 @@ try {
             foreach ($line in @(Get-TestSlotStatusText -Store $store -NowUtc $now)) { Write-Output $line }
             $hold = Get-TestSlotDatabaseHold -Store $store
             if ($null -ne $hold) { Write-Output (Format-TestSlotHoldLine -Hold $hold) }
+            $left = Get-TestSlotDatabaseGuard -Store $store
+            if ($null -ne $left) { Write-Output ("şema kaydı: {0} ({1}) '{2}' {3}'e dönecek, ağaç {4} - sahibi: {5}" -f $left.task, $left.role, $left.database, $left.expected, $left.tree, (Get-TestSlotGuardState -Guard $left)) }
             exit 0
         }
         "unblock" {

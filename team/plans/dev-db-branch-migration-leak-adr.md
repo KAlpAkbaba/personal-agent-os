@@ -22,7 +22,18 @@ worktree'sinden elle 0065'e indirdi.
    ve bir DURDU satırı basılır; komut başarılı idiyse koşunun çıkış kodu 8 olur. Kilit durdukça her
    `database` ask'i ve run'ı DURDU ile reddedilir (çıkış 6; komut hiç başlamaz), `status` kilidi
    gösterir. Danışman veritabanını onarıp `test-slot.ps1 unblock` ile kilidi kaldırır.
-4. Kayıt yoksa (alembic_version tablosu yok) geri alma yapılmaz: geri almak `downgrade base`, yani
+4. Söz yazıya da geçer: komuttan önce `<store>\database-guard.json` (beklenen revizyon, ağaç,
+   veritabanı adı, sarmalayıcının ve komutun pid'i + başlangıç zamanı) yazılır; geri alma (ya da
+   kilit) bitince silinir. Sarmalayıcı öldürülürse (`finally` çalışmaz; ajanların Bash zaman aşımı
+   bunu sık üretir) kayıt kalır. Sonraki `database` run'ı, slotu tutarken ve komutundan ÖNCE:
+   - sahibi ölü, komutu da bitmişse: o ağaçtan geri alır (`SEMA_KORUMA olu_kosu geri_alindi`),
+     olmazsa (ağaç silinmiş, revizyon bilinmiyor, ayarlar başka veritabanını gösteriyor) kilidi
+     yazar ve DURDU ile çıkar (6), komut başlamaz;
+   - sarmalayıcı ölü ama komutu hâlâ çalışıyorsa: hiçbir şeye dokunmaz, komutun pid'ini söyleyen
+     DURDU ile çıkar (6). O süreç bitince sonraki run geri alır.
+   `ask` bu durumda sırayı değiştirmez (slot sarmalayıcıya aittir, öleni boşalır - ADR-0282 ve
+   team-test-slots 6. vaka); yalnız uyarır. Engel `run`'da, komut veritabanına dokunmadan önce.
+5. Kayıt yoksa (alembic_version tablosu yok) geri alma yapılmaz: geri almak `downgrade base`, yani
    her şeyi silmek olurdu. Kayıt okunamazsa (Postgres kapalı, uv yok) bu yüksek sesle söylenir ve koşu
    korumasız devam eder.
 
@@ -44,3 +55,10 @@ seçenekle başlayıp entegrasyon paketinin URL'i dışarıdan almasını sağla
 - Downgrade fonksiyonu eksik/yanlış yazılmış bir göç geri alınamaz: tam olarak bu durumda kilit devreye
   girer ve Danışman bakar.
 - Her korunan koşu 2-4 `uv run python` yoklaması ekler (her biri birkaç saniye).
+- Öldürülen bir koşunun geri alınması ancak SONRAKİ `test-slot.ps1 run` (database) ile olur;
+  arada kapı (kütüphaneden slot alır, kayda bakmaz) ya da slotsuz bir alembic koşarsa dev veritabanı
+  hâlâ yeni baştadır. Kapının da kayda bakması takip kartı.
+- Komutun kendi alt süreçleri (ör. pytest'in açtığı bir sunucu) kayıtta yok; yalnız doğrudan komutun
+  pid'i izlenir. Sarmalayıcıyla birlikte süreç ağacı öldürülürse (taskkill /T) sorun yok.
+- Testler Base/Head'i ağacın kendisinden türetir (`alembic heads`, başın Parent'ı); yeni göç
+  girdiğinde test kendiliğinden yeni çifte geçer.

@@ -16,6 +16,12 @@
         only one that knows the newer revision) downgrades back to the recorded one;
       * a downgrade that fails writes <store>\database-hold.json: every later 'database' ask or
         run is refused with a DURDU line until the Danışman repairs it and runs `unblock`;
+      * the record is also WRITTEN, to <store>\database-guard.json (revision, tree, database,
+        the wrapper's and the command's pid with start time), before the command and removed
+        after the restore: a killed wrapper runs no `finally`, so the next 'database' run that
+        finds a dead owner's record restores from that tree first (or holds), and while the
+        dead run's command still runs a 'database' ask warns and a 'database' run is refused
+        naming its pid (the slot itself belongs to the wrapper: a killed one frees it);
       * nothing is recorded when there was no alembic_version table (restoring would mean
         'downgrade base' - dropping everything), and a record that cannot be read is said
         loudly and the run goes on unguarded.
@@ -66,6 +72,68 @@ function Clear-TestSlotDatabaseHold {
     if (-not (Test-Path -LiteralPath $path)) { return $false }
     Remove-Item -LiteralPath $path -Force
     return $true
+}
+
+# ------------------------------------------------------------------------------- the guard record
+# A `finally` does not run when the wrapper is killed (an agent's Bash timeout kills it often).
+# So the promise "put it back" is also written down: <store>\database-guard.json, before the
+# command starts, removed only after the restore (or the hold). A later database ask/run that
+# finds a guard whose wrapper is dead finishes the dead run's restore first.
+
+function Get-TestSlotGuardPath {
+    param([Parameter(Mandatory = $true)][string]$Store)
+    return (Join-Path $Store "database-guard.json")
+}
+
+function Get-TestSlotDatabaseGuard {
+    <# The guard record, or $null. One that does not parse comes back with expected = '' (it cannot be restored: a hold). #>
+    param([Parameter(Mandatory = $true)][string]$Store)
+    $path = Get-TestSlotGuardPath -Store $Store
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    $raw = ""
+    try { $raw = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) } catch { }
+    try {
+        $g = $raw | ConvertFrom-Json
+        if ($null -ne $g -and @($g.PSObject.Properties.Name) -contains "expected") { return $g }
+    }
+    catch { }
+    return [pscustomobject]@{ at = ""; task = "?"; role = "?"; ticket = "?"; database = "?"; tree = ""; expected = ""; holder_pid = 0; holder_start = ""; child_pid = 0; child_start = "" }
+}
+
+function Set-TestSlotDatabaseGuard {
+    param([Parameter(Mandatory = $true)][string]$Store, [Parameter(Mandatory = $true)]$Guard)
+    if (-not (Test-Path -LiteralPath $Store)) { [void](New-Item -ItemType Directory -Path $Store -Force) }
+    $path = Get-TestSlotGuardPath -Store $Store
+    $tmp = "$path.$PID.tmp"
+    [System.IO.File]::WriteAllText($tmp, ($Guard | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    Move-Item -LiteralPath $tmp -Destination $path
+}
+
+function Clear-TestSlotDatabaseGuard {
+    param([Parameter(Mandatory = $true)][string]$Store)
+    $path = Get-TestSlotGuardPath -Store $Store
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+}
+
+function Get-TestSlotGuardState {
+    <# 'alive' (its wrapper runs), 'orphan' (the wrapper is dead, its command still runs) or
+       'dead' (both gone). A pid is a process only with its start time (TeamTestSlots.ps1). #>
+    param([Parameter(Mandatory = $true)]$Guard)
+    $holder = [pscustomobject]@{ holder_pid = [int]$Guard.holder_pid; holder_start = [string]$Guard.holder_start }
+    if ([int]$Guard.holder_pid -gt 0 -and (Test-TestSlotHolderAlive -Entry $holder)) { return "alive" }
+    if ([int]$Guard.child_pid -gt 0) {
+        $child = [pscustomobject]@{ holder_pid = [int]$Guard.child_pid; holder_start = [string]$Guard.child_start }
+        if (Test-TestSlotHolderAlive -Entry $child) { return "orphan" }
+    }
+    return "dead"
+}
+
+function Format-TestSlotOrphanLine {
+    <# -ProcessId: the process that still has the database (the dead run's command, or a wrapper that still runs). #>
+    param([Parameter(Mandatory = $true)]$Guard, [Parameter(Mandatory = $true)][int]$ProcessId)
+    return ("DURDU | bir database koşusunun süreci (pid {0}) hâlâ çalışıyor ve slotu tutmuyor: dev veritabanı '{1}' ona ait | görev {2} ({3}), bilet {4}, {5} | ağaç: {6} | o süreç bitince (ya da durdurulunca) sonraki database koşusu şemayı {7}'e geri alır" -f `
+            $ProcessId, $Guard.database, $Guard.task, $Guard.role, $Guard.ticket, $Guard.at, $Guard.tree, $Guard.expected)
 }
 
 function Format-TestSlotHoldLine {
