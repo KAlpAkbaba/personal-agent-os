@@ -3,8 +3,9 @@
 What SQLite cannot say and PostgreSQL does: the tables are the ones the MIGRATION makes; the
 CHECK refuses a voice profile without consent in the database itself; deleting a person sets
 their lines' ``person_id`` to NULL by the foreign key (so the label falls back to
-'Konuşmacı N'); deleting a conversation cascades to its lines; ILIKE searches Turkish text;
-and ``downgrade()`` takes all four tables away cleanly. The four tables are emptied around
+'Konuşmacı N'); deleting a conversation cascades to its lines; search folds the Turkish
+I/ı/İ/i and capitals whatever the database locale; a NUL is a 422, not a 500 whose log carries
+the line; and ``downgrade()`` takes all four tables away cleanly. The four tables are emptied around
 every test; nothing else writes to them.
 """
 
@@ -197,6 +198,68 @@ def test_the_routes_through_the_real_application(factory, settings) -> None:
     }
     assert client.delete(f"/v1/conversations/{uuid.uuid4()}").status_code == 404
     assert client.delete("/v1/conversations").json() == {"deleted": 1}
+
+
+@pytest.mark.parametrize(
+    ("needle", "text"),
+    [
+        ("ışık", "Işıkları kapat"),
+        ("IŞIK", "Işıkları kapat"),
+        ("istanbul", "İSTANBUL'a gidiyoruz"),
+        ("İSTANBUL", "istanbul'a gidiyoruz"),
+        ("şoför", "ŞOFÖR geldi"),
+    ],
+)
+def test_search_folds_turkish_letters_on_postgres(factory, needle, text) -> None:
+    """PostgreSQL's own lower() follows the database locale; the fold is spelled out in SQL."""
+    live = LiveConversations()
+    with factory() as db:
+        cid = service.start_conversation(db, live, now=NOON).id
+        service.add_segment(db, live, CIPHER, cid, text=text, is_owner=True)
+        db.commit()
+        assert [c.id for c in service.list_conversations(db, q=needle)] == [cid]
+        assert service.list_conversations(db, q="olmayan") == []
+
+
+def test_one_voice_is_one_person_on_postgres(factory) -> None:
+    """Inspector's probe: three lines of one group came back 'Konuşmacı 1', 'Ahmet',
+    'Konuşmacı 1'. A recognised group is pinned and its earlier lines relabelled."""
+    live = LiveConversations()
+    with factory() as db:
+        service.record_consent(db, live, CIPHER, name="Ahmet", now=NOON)
+        first = service.start_conversation(db, live, now=NOON).id
+        service.add_segment(db, live, CIPHER, first, text="Selam", embedding=VOICE_A)
+        service.name_speaker(db, live, CIPHER, first, 1, "Ahmet")
+        service.stop_conversation(db, live, first)
+        later = service.start_conversation(db, live).id
+        far = [0.6466, 0.7628, 0.0, 0.0]  # alone below Ahmet's bar, in his group
+        for text, vector in (("Bir", far), ("İki", VOICE_A), ("Üç", far)):
+            service.add_segment(db, live, CIPHER, later, text=text, embedding=vector)
+        db.commit()
+        segments = service.get_conversation(db, later).segments
+        assert [(s.speaker, s.speaker_no) for s in segments] == [("Ahmet", 1)] * 3
+
+
+def test_a_nul_in_a_line_is_a_422_and_never_reaches_the_log(factory, settings, capsys) -> None:
+    client = owner_client(settings)
+    cid = client.post("/v1/conversations", json={}).json()["id"]
+    secret = "Gizli satır 9c2e"
+    response = client.post(f"/v1/conversations/{cid}/segments", json={"content": f"{secret}\x00"})
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "text_invalid"
+    for body, code in (
+        ({"title": 5}, "title_invalid"),
+        ({"title": "a\x00"}, "title_invalid"),
+    ):
+        refused = client.post("/v1/conversations", json=body)
+        assert refused.status_code == 422 and refused.json()["detail"]["code"] == code
+    client.post(f"/v1/conversations/{cid}/segments", json={"content": "x", "embedding": VOICE_A})
+    big = client.post(f"/v1/conversations/{cid}/speakers/2147483648/name", json={"name": "Ahmet"})
+    assert big.status_code == 422 and big.json()["detail"]["code"] == "speaker_invalid"
+    captured = capsys.readouterr()
+    assert secret not in captured.out + captured.err
+    assert "request_failed" not in captured.out + captured.err
+    assert client.post(f"/v1/conversations/{cid}/stop").status_code == 200
 
 
 def test_downgrade_drops_the_four_tables_and_upgrade_recreates_them(factory) -> None:

@@ -1,8 +1,10 @@
 """``/v1/conversations``: the owner starts, stops, reads, searches and forgets conversations.
 
 POST starts one (``mode`` manual|home), ``/{id}/stop`` stops it, ``/{id}/segments`` adds a line
-(``content`` + an optional derived ``embedding`` + ``is_owner``; a body naming audio is
-refused), ``/{id}/speakers/{n}/name`` is 'bu Ahmet', ``/people`` lists the named people,
+(``content`` + an optional derived ``embedding`` + ``is_owner``; a body with a key naming audio
+in any case or as part of the key - ``Audio``, ``audio_data``, ``pcm16`` - is refused, and a
+line with an embedding is checked against the owner's enrolled voice profile),
+``/{id}/speakers/{n}/name`` is 'bu Ahmet', ``/people`` lists the named people,
 ``/people/{id}/consent`` is 'Ahmet izin verdi', DELETE ``/people/{id}`` deletes a person and
 their profile, GET ``?q=`` searches, DELETE ``/{id}`` and DELETE forget ('unut'), and
 ``/settings`` holds the standing 'evde dinle'. Under the owner session. A refusal is
@@ -18,15 +20,39 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 
 from app.conversations import service
 from app.conversations.service import ConversationView, PersonView, SegmentView
 from app.identity.dependencies import require_owner_session
+from app.logging import get_logger
+from app.voice.service import load_owner_profile
+from app.voice.speaker import OwnerProfile
 
 router = APIRouter(dependencies=[Depends(require_owner_session)])
 
-#: A line is text. Any of these keys means a client tried to send the sound itself.
-AUDIO_KEYS = ("audio", "audio_b64", "pcm", "wav", "samples", "recording")
+logger = get_logger("app.conversations")
+
+#: A line is text. A key containing any of these (any case) means a client tried to send the
+#: sound itself: 'audio', 'Audio', 'audio_data', 'rawAudio', 'pcm16', 'voice_wav', ...
+AUDIO_KEY_PARTS = (
+    "audio",
+    "pcm",
+    "wav",
+    "sample",
+    "recording",
+    "sound",
+    "mp3",
+    "ogg",
+    "opus",
+    "webm",
+    "flac",
+)
+
+
+def _names_audio(key: object) -> bool:
+    folded = str(key).lower()
+    return any(part in folded for part in AUDIO_KEY_PARTS)
 
 
 def _stamp(value: datetime | None) -> str | None:
@@ -130,6 +156,22 @@ async def _run(request: Request, work):  # noqa: ANN001, ANN202
         return await asyncio.to_thread(run)
     except service.ConversationRefused as refused:
         raise _refused(refused) from None
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        # KVKK: a database error's text carries the statement's parameters - the owner's
+        # conversation itself. Neither the answer nor the log carries more than the class.
+        logger.warning(
+            "conversation_store_failed", path=request.url.path, error=type(error).__name__
+        )
+        if isinstance(error, IntegrityError):
+            raise HTTPException(
+                409,
+                {"code": "store_conflict", "message": "Aynı anda iki yazım çakıştı; yeniden dene."},
+            ) from None
+        raise HTTPException(
+            500, {"code": "store_failed", "message": "Konuşma kaydedilemedi; yeniden dene."}
+        ) from None
 
 
 @router.get("/v1/conversations")
@@ -232,7 +274,7 @@ async def stop_conversation(conversation_id: str, request: Request) -> dict[str,
 async def add_segment(conversation_id: str, request: Request) -> dict[str, Any]:
     key = _key(conversation_id)
     payload = await _payload(request)
-    if any(name in payload for name in AUDIO_KEYS):
+    if any(_names_audio(name) for name in payload):
         raise HTTPException(
             422,
             {
@@ -240,17 +282,16 @@ async def add_segment(conversation_id: str, request: Request) -> dict[str, Any]:
                 "message": "Ses kaydı alınmaz; yalnızca yazıya dökülmüş metin.",
             },
         )
-    embedding = payload.get("embedding")
-    if embedding is not None and (
-        not isinstance(embedding, list)
-        or not embedding
-        or len(embedding) > 4096
-        or not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in embedding)
-    ):
-        raise HTTPException(
-            422, {"code": "embedding_invalid", "message": "Ses izi bir sayı listesi olmalı."}
-        )
     is_owner = payload.get("is_owner")
+    if is_owner is not None and not isinstance(is_owner, bool):
+        raise HTTPException(
+            422, {"code": "is_owner_invalid", "message": "'is_owner' doğru ya da yanlış olur."}
+        )
+    embedding = payload.get("embedding")
+    # The owner's enrolled voice decides 'Sen' for a line his device did not flag.
+    owner_profile = (
+        await _owner_profile(request) if embedding is not None and not is_owner else None
+    )
 
     def work(db, live, cipher):  # noqa: ANN001, ANN202
         result = service.add_segment(
@@ -258,13 +299,32 @@ async def add_segment(conversation_id: str, request: Request) -> dict[str, Any]:
             live,
             cipher,
             key,
-            text=str(payload.get("content") or ""),
+            text=payload.get("content"),
             embedding=embedding,
-            is_owner=is_owner if isinstance(is_owner, bool) else None,
+            is_owner=is_owner,
+            owner_profile=owner_profile,
         )
         return {**_segment(result.segment), "ask_who": result.ask_who}
 
     return await _run(request, work)
+
+
+async def _owner_profile(request: Request) -> OwnerProfile | None:
+    """The owner's enrolled voice profile (``/v1/voice/speaker/enroll``), or None.
+
+    An unreadable profile (object store down, other secret) only means his voice is not
+    recognised on this line - the line is still written, under 'Konuşmacı N'."""
+    voice = request.app.state.voice
+
+    def read() -> OwnerProfile | None:
+        with voice.session() as session:
+            return load_owner_profile(session, voice.store, voice.cipher)
+
+    try:
+        return await asyncio.to_thread(read)
+    except Exception as error:  # noqa: BLE001
+        logger.warning("conversation_owner_profile_unreadable", error=type(error).__name__)
+        return None
 
 
 @router.post("/v1/conversations/{conversation_id}/speakers/{speaker_no}/name")
@@ -273,9 +333,7 @@ async def name_speaker(conversation_id: str, speaker_no: int, request: Request) 
     payload = await _payload(request)
 
     def work(db, live, cipher):  # noqa: ANN001, ANN202
-        result = service.name_speaker(
-            db, live, cipher, key, speaker_no, str(payload.get("name") or "")
-        )
+        result = service.name_speaker(db, live, cipher, key, speaker_no, payload.get("name"))
         return {
             "person": _person(result.person),
             "applied": result.applied,

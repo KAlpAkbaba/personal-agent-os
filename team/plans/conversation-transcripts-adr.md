@@ -10,8 +10,13 @@ that voice is written under the name.
 1. **Text only.** A conversation (`conversations`, start/stop, `mode` manual|home) is lines in
    `conversation_segments`: text, time, `is_owner`, the voice's number in that conversation
    (`speaker_no`) and, for a consenting named person, `person_id`. No table has an audio column;
-   `POST /v1/conversations/{id}/segments` refuses a body carrying `audio`/`pcm`/`wav`/...
-   (422 `audio_refused`). Where a caller still holds the microphone buffer,
+   `POST /v1/conversations/{id}/segments` refuses a body with any key that contains, in any
+   case, `audio`/`pcm`/`wav`/`sample`/`recording`/`sound`/`mp3`/`ogg`/`opus`/`webm`/`flac`
+   (`Audio`, `audio_data`, `rawAudio`, `pcm16` - 422 `audio_refused`). Text, titles, names and
+   notes must be strings without NUL; an embedding is 1-4096 finite numbers, not all zero;
+   `speaker_no` is 1..2^31-1 - each a 422 with a code, never a 500. A database failure answers
+   `store_conflict` (409) / `store_failed` (500) and logs only the error's class: the
+   driver's own error text carries the INSERT's parameters, i.e. the conversation (KVKK). Where a caller still holds the microphone buffer,
    `transcribe_and_drop` runs STT and the embedder on it and zeroes it, also on failure.
 2. **Voices apart in memory.** Inside one conversation the derived embeddings are grouped by
    running centroid (`VoiceClusterer`, cosine >= 0.70) in process memory only and dropped at
@@ -22,9 +27,15 @@ that voice is written under the name.
    same secret as the owner's profile) into `conversation_people.profile_sealed`; a CHECK
    (`profile_sealed IS NULL OR consent_at IS NOT NULL`) refuses a profile without consent in
    the database itself. Later conversations recognise the person at cosine >= 0.75 (the owner
-   verifier's accept bar).
-4. **Labels are read, not stored.** 'Sen' (owner, by the caller's flag or the owner verifier
-   on his enrolled profile), the person's name, or 'Konuşmacı N'. Deleting a person deletes
+   verifier's accept bar), matched on the voice GROUP's centroid, not on the line alone. A
+   recognised group is pinned to the person for the rest of the conversation and its earlier
+   lines are relabelled: one voice never shows mixed labels, and 'bu kim?' is not asked for it.
+4. **Labels are read, not stored.** 'Sen' (owner: by the caller's `is_owner` flag, or - for a
+   line with an embedding - by the owner verifier on his profile enrolled through
+   `/v1/voice/speaker/enroll`, read by the segments route; an unreadable profile only means
+   the line is 'Konuşmacı N'), the person's name, or 'Konuşmacı N'. Search folds I/İ/ı/i to
+   one letter and the Turkish capitals explicitly, in SQL as in Python (SQLite's lower() is
+   ASCII-only, PostgreSQL's follows the database locale). Deleting a person deletes
    the profile and the name; `person_id` goes NULL (service + FK `ON DELETE SET NULL`) and every
    line reads 'Konuşmacı N' again. 'unut' (DELETE /v1/conversations) deletes every conversation
    and line; people and their consent are separate and deleted per person.

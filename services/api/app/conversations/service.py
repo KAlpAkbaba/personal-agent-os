@@ -15,15 +15,17 @@ the voices apart; when you ask 'bu kim?' or I name a voice, know it from then on
   the name only: no profile, the lines stay 'Konuşmacı N'. With consent
   (:func:`record_consent`, 'Ahmet izin verdi') the group's centroid is sealed as his profile,
   his lines in that conversation show 'Ahmet', and later conversations recognise him at
-  ``PERSON_MATCH_THRESHOLD``. KVKK treats a voiceprint as biometric data.
+  ``PERSON_MATCH_THRESHOLD`` on the voice group's centroid; a recognised group is pinned to
+  him (earlier lines relabelled, no 'bu kim?'). KVKK treats a voiceprint as biometric data.
 - **The owner's lines** are always 'Sen': by the caller's flag (his own device's channel) or
-  by the owner verifier on his enrolled profile.
+  by the owner verifier on his enrolled profile (the segments route reads it).
 - **Deleting a person** deletes the profile and the name; every line of theirs shows
   'Konuşmacı N' again (the label is read, never stored).
 """
 
 from __future__ import annotations
 
+import math
 import threading
 import uuid
 from collections.abc import Callable
@@ -219,6 +221,70 @@ def name_key(name: str) -> str:
     return " ".join(folded.split())
 
 
+#: Search folding, the same in Python and in SQL (SQLite's lower() is ASCII-only and
+#: PostgreSQL's depends on the database's locale, so the Turkish capitals are spelled out).
+#: All four i's are one letter: a transcript writes 'ışık' where the owner types 'isik', and
+#: 'IŞIK' must find 'Işıkları' as well as 'İSTANBUL' finds 'istanbul'.
+SEARCH_FOLD = (
+    ("I", "i"),
+    ("İ", "i"),
+    ("ı", "i"),
+    ("Ç", "ç"),
+    ("Ğ", "ğ"),
+    ("Ö", "ö"),
+    ("Ş", "ş"),
+    ("Ü", "ü"),
+)
+
+
+def search_fold(text: str) -> str:
+    for upper, lower in SEARCH_FOLD:
+        text = text.replace(upper, lower)
+    return text.lower()
+
+
+def _search_fold_sql(column):  # noqa: ANN001, ANN202
+    for upper, lower in SEARCH_FOLD:
+        column = func.replace(column, upper, lower)
+    return func.lower(column)
+
+
+#: PostgreSQL's ``integer``: a voice number beyond it is no voice of any conversation.
+SPEAKER_NO_MAX = 2**31 - 1
+EMBEDDING_MAX = 4096
+
+
+def _clean_text(value: object, *, code: str, message: str) -> str:
+    """A string without NUL (PostgreSQL refuses it in text; it is never speech)."""
+    if not isinstance(value, str) or "\x00" in value:
+        raise ConversationRefused(code, message)
+    return value
+
+
+def _optional_text(value: object, *, code: str, message: str) -> str | None:
+    if value is None:
+        return None
+    return _clean_text(value, code=code, message=message)
+
+
+def _vector(embedding: object) -> list[float] | None:
+    """A derived embedding: 1..4096 finite numbers, not all zero (a zero vector has no
+    direction and a NaN poisons a group's centroid or a person's profile for ever)."""
+    if embedding is None:
+        return None
+    refused = ConversationRefused(
+        "embedding_invalid", "Ses izi sıfır olmayan, sonlu sayılardan oluşan bir liste olmalı."
+    )
+    if not isinstance(embedding, (list, tuple)) or not 1 <= len(embedding) <= EMBEDDING_MAX:
+        raise refused
+    if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in embedding):
+        raise refused
+    vector = [float(x) for x in embedding]
+    if not all(math.isfinite(x) for x in vector) or not any(vector):
+        raise refused
+    return vector
+
+
 def _now(now: datetime | None) -> datetime:
     return now or datetime.now(UTC)
 
@@ -248,9 +314,10 @@ def start_conversation(
     live: LiveConversations,
     *,
     mode: str = "manual",
-    title: str | None = None,
+    title: object = None,
     now: datetime | None = None,
 ) -> ConversationView:
+    title = _optional_text(title, code="title_invalid", message="Başlık bir yazı olmalı.")
     if mode not in MODES:
         raise ConversationRefused("mode_invalid", "Konuşma ya elle ya da 'evde dinle' ile başlar.")
     open_one = db.execute(
@@ -329,21 +396,23 @@ def add_segment(
     cipher: ProfileCipher,
     cid: uuid.UUID,
     *,
-    text: str,
-    embedding: list[float] | None = None,
+    text: object,
+    embedding: object = None,
     is_owner: bool | None = None,
     owner_profile: OwnerProfile | None = None,
     now: datetime | None = None,
 ) -> SegmentResult:
+    content = _clean_text(
+        "" if text is None else text, code="text_invalid", message="Satır bir yazı olmalı."
+    ).strip()
+    vector = _vector(embedding)
     row = _conversation(db, cid)
     if row.ended_at is not None:
         raise ConversationRefused("closed", "Bu konuşma bitti; yeni satır eklenmez.")
-    content = (text or "").strip()
     if not content:
         raise ConversationRefused("text_empty", "Boş satır yazılmaz.")
     if len(content) > TEXT_WIDTH:
         raise ConversationRefused("text_too_long", f"Bir satır en çok {TEXT_WIDTH} karakter.")
-    vector = [float(x) for x in embedding] if embedding else None
 
     owner = bool(is_owner) or (vector is not None and _is_owner_voice(vector, owner_profile))
     speaker_no: int | None = None
@@ -355,10 +424,24 @@ def add_segment(
         speaker_no = state.base + number
         person_id = state.named.get(speaker_no)
         if person_id is None:
+            # The GROUP is matched, not the line alone: one voice is one person for the
+            # whole conversation, and a recognised group is pinned (no mixed labels).
+            centroid = state.clusterer.centroid(number) or vector
             found, _score = best_match(
-                vector, _consenting_profiles(db, cipher), threshold=PERSON_MATCH_THRESHOLD
+                centroid, _consenting_profiles(db, cipher), threshold=PERSON_MATCH_THRESHOLD
             )
-            person_id = uuid.UUID(found.person_id) if found is not None else None
+            if found is not None:
+                person_id = uuid.UUID(found.person_id)
+                state.named[speaker_no] = person_id
+                db.execute(
+                    update(SegmentRow)
+                    .where(
+                        SegmentRow.conversation_id == cid,
+                        SegmentRow.speaker_no == speaker_no,
+                        SegmentRow.is_owner.is_(False),
+                    )
+                    .values(person_id=person_id)
+                )
         if new_voice and person_id is None and speaker_no not in state.asked:
             state.asked.add(speaker_no)
             ask_who = True
@@ -383,10 +466,11 @@ def add_segment(
 # ---------------------------------------------------------------- people and consent
 
 
-def _person_by_name(db: Session, name: str, *, now: datetime) -> PersonRow:
-    clean = " ".join((name or "").split())
+def _person_by_name(db: Session, name: object, *, now: datetime) -> PersonRow:
+    message = f"İsim 1-{NAME_WIDTH} karakter olmalı."
+    clean = " ".join(_clean_text(name, code="name_invalid", message=message).split())
     if not clean or len(clean) > NAME_WIDTH:
-        raise ConversationRefused("name_invalid", f"İsim 1-{NAME_WIDTH} karakter olmalı.")
+        raise ConversationRefused("name_invalid", message)
     key = name_key(clean)
     row = db.execute(select(PersonRow).where(PersonRow.name_key == key)).scalar_one_or_none()
     if row is None:
@@ -435,11 +519,13 @@ def name_speaker(
     cipher: ProfileCipher,
     cid: uuid.UUID,
     speaker_no: int,
-    name: str,
+    name: object,
     *,
     now: datetime | None = None,
 ) -> NameResult:
     """'bu Ahmet' for voice ``speaker_no`` of conversation ``cid``."""
+    if isinstance(speaker_no, bool) or not 1 <= speaker_no <= SPEAKER_NO_MAX:
+        raise ConversationRefused("speaker_invalid", "Konuşmacı numarası 1 ya da daha büyük olur.")
     _conversation(db, cid)
     has_lines = db.execute(
         select(SegmentRow.id)
@@ -476,12 +562,13 @@ def record_consent(
     live: LiveConversations,
     cipher: ProfileCipher,
     *,
-    name: str | None = None,
+    name: object = None,
     person_id: uuid.UUID | None = None,
-    note: str | None = None,
+    note: object = None,
     now: datetime | None = None,
 ) -> PersonView:
     """'Ahmet izin verdi': the consent and its date; a waiting naming is applied now."""
+    note = _optional_text(note, code="note_invalid", message="İzin notu bir yazı olmalı.")
     if person_id is not None:
         person = db.get(PersonRow, person_id)
         if person is None:
@@ -553,11 +640,11 @@ def _view(db: Session, row: ConversationRow, *, with_segments: bool) -> Conversa
 
 def list_conversations(db: Session, *, q: str | None = None) -> list[ConversationView]:
     query = select(ConversationRow).order_by(ConversationRow.started_at.desc())
-    needle = (q or "").strip()
+    needle = search_fold((q or "").replace("\x00", "").strip())
     if needle:
         escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         matching = select(SegmentRow.conversation_id).where(
-            SegmentRow.text.ilike(f"%{escaped}%", escape="\\")
+            _search_fold_sql(SegmentRow.text).like(f"%{escaped}%", escape="\\")
         )
         query = query.where(ConversationRow.id.in_(matching))
     rows = db.execute(query.limit(LIST_LIMIT)).scalars()
