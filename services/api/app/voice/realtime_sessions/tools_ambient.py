@@ -175,7 +175,10 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
     try:
         if isinstance(when_spoken, str) and when_spoken.strip():
-            parsed = parse_when_text(when_spoken, now=ctx.now, timezone=timezone)
+            # The song's title comes out first: "Bu Akşam'ıyla" is not 19:00.
+            parsed = parse_when_text(
+                tools_alarms.when_without_song(when_spoken), now=ctx.now, timezone=timezone
+            )
         elif when:
             parsed = parse_when_struct(when, now=ctx.now, timezone=timezone)
         else:
@@ -195,7 +198,8 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
     # The song the sentence named ("... Şımarık'ıyla uyandır"), found now; None leaves the
     # alarm on the global wake song or the tone.
-    song = tools_alarms.song_for_create(ctx, arguments)
+    lookup = tools_alarms.song_lookup_for_create(ctx, arguments)
+    song = lookup.song if lookup is not None and lookup.ok else None
     unresolved_media = bool(media) and not media.get("url") and song is None
     if parsed.weekdays and unresolved_media:
         return _receipt(
@@ -235,6 +239,11 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         )
     if unresolved_media:
         speech = alarm_speech.ALARM_CREATE_NEEDS_MEDIA_TR
+    elif lookup is not None and not lookup.ok:
+        # Never a silent fallback (2026-09-08): the song was not found, and he hears it now.
+        speech = f"{speech} " + tools_alarms.song_not_found_speech(
+            lookup, has_wake_song=alarm.resolved_media_identity is not None
+        )
     return {
         **_receipt(
             ctx,

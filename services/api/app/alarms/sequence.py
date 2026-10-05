@@ -690,8 +690,9 @@ class WakeSequence:
         played: dict[str, Any] | None = None
         for attempt, (source, song) in enumerate(candidates):
             # The first attempt keeps the key it always had; a fallback song is a different
-            # command and must not be swallowed as a retry of the first.
-            suffix = "" if attempt == 0 else f":{source}"
+            # command and must not be swallowed as a retry of the first - nor of another
+            # fallback of the same source (the live global and its stored copy).
+            suffix = "" if attempt == 0 else f":{source}:{attempt}"
             play_step = self._run_step(
                 db,
                 alarm,

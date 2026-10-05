@@ -2259,12 +2259,46 @@ _SONG_START_STOPS: Final[frozenset[str]] = frozenset(
         "lutfen",
     }
 )
-#: "yedide", "buçukta", "otuzda": a spoken number with the time suffix is a clock, a stop.
+#: "yedide", "buçukta", "yediyi (çeyrek geçe)": a spoken number with a time suffix is a
+#: clock, a stop - and so are the clock's own words ("geçe", "kala", a bare "buçuk").
 _SONG_CLOCK_WORD_RE: Final = re.compile(
     r"^(?:bir|iki|üç|uc|dört|dort|beş|bes|altı|alti|yedi|sekiz|dokuz|on|yirmi|otuz|kırk|"
-    r"kirk|elli|buçuk|bucuk|çeyrek|ceyrek)['’]?(?:de|da|te|ta|e|a|ye|ya)$"
+    r"kirk|elli|buçuk|bucuk|çeyrek|ceyrek)['’]?(?:de|da|te|ta|e|a|ye|ya|yi|yı|i|ı|u|ü)$"
+)
+_SONG_CLOCK_STOPS: Final[frozenset[str]] = frozenset(
+    {"geçe", "kala", "buçuk", "bucuk", "çeyrek", "ceyrek"}
 )
 _SONG_MAX_WORDS: Final = 10
+#: Words that point at a song or call it generic and NAME none: a title made only of these
+#: is never searched ("seçtiğim müzikle" is the approved wake song). The ONE guard both
+#: :func:`alarm_song_query` and :func:`alarm_song_set_match` use.
+_SONG_NOT_A_TITLE_FORMS: Final[frozenset[str]] = frozenset(
+    {
+        "bu",
+        "şu",
+        "su",
+        "o",
+        "bunu",
+        "şunu",
+        "sunu",
+        "onu",
+        "bir",
+        "aynı",
+        "ayni",
+        "her",
+        "zamanki",
+        "seçtiğim",
+        "sectigim",
+        "istediğim",
+        "istedigim",
+        "sevdiğim",
+        "sevdigim",
+    }
+)
+
+
+def _names_no_song(words: list[str]) -> bool:
+    return all(w.casefold() in _SONG_NOT_A_TITLE_FORMS for w in words)
 
 
 def _song_words(utterance: str) -> list[str]:
@@ -2275,15 +2309,19 @@ def _song_start_stop(word: str) -> bool:
     lowered = word.casefold().replace("i̇", "i")
     return (
         lowered in _SONG_START_STOPS
+        or lowered in _SONG_CLOCK_STOPS
         or any(ch.isdigit() for ch in word)
         or bool(_SONG_CLOCK_WORD_RE.match(lowered))
         or lowered.startswith(("pazartesi", "salı", "çarşamba", "perşembe", "cumartesi"))
     )
 
 
-def _title_before(words: list[str], end: int, last: str | None = None) -> str | None:
-    """The title ending at ``words[end - 1]`` (replaced by ``last`` when its suffix was cut),
-    walking back to the first stop word. None when nothing is left."""
+def _title_before(
+    words: list[str], end: int, last: str | None = None
+) -> tuple[int, str] | None:
+    """``(first word's index, title)`` for the title ending at ``words[end - 1]`` (replaced
+    by ``last`` when its suffix was cut), walking back to the first stop word. None when
+    nothing - or nothing but a pointing word - is left."""
     picked: list[str] = [last] if last is not None else []
     index = end - (1 if last is not None else 0)
     while index > 0 and len(picked) <= _SONG_MAX_WORDS:
@@ -2292,10 +2330,53 @@ def _title_before(words: list[str], end: int, last: str | None = None) -> str | 
             break
         picked.insert(0, word)
         index -= 1
-    if not picked or len(picked) > _SONG_MAX_WORDS:
+    if not picked or len(picked) > _SONG_MAX_WORDS or _names_no_song(picked):
         return None
-    title = " ".join(picked).strip()
-    return title[:200] or None
+    title = " ".join(picked).strip()[:200]
+    return (index, title) if title else None
+
+
+def _alarm_song_span(words: list[str]) -> tuple[int, int, str] | None:
+    """``(start, stop, title)``: ``words[start:stop]`` is the song phrase (title AND its
+    marker), so the clock can be read from what is left."""
+    verb = next(
+        (n for n, w in enumerate(words) if w.casefold().startswith(("uyandır", "uyandir"))),
+        None,
+    )
+    if verb is None or verb == 0:
+        return None
+    end = verb
+    if words[end - 1].casefold() == "beni":
+        end -= 1
+    if end == 0:
+        return None
+    stop = end
+    marker = words[end - 1]
+    lowered = marker.casefold()
+    if lowered in _SONG_PLAYING_FORMS:
+        end -= 1
+        if end > 0 and words[end - 1].casefold() in _SONG_NOUN_OBJECT_FORMS:
+            end -= 1
+        found = _title_before(words, end)
+    elif lowered in _SONG_WITH_FORMS or lowered in _SONG_NOUN_WITH_FORMS:
+        found = _title_before(words, end - 1)
+    elif match := _SONG_APOSTROPHE_WITH_RE.match(marker):
+        found = _title_before(words, end, last=match.group("base"))
+    elif marker[:1].isupper() and (match := _SONG_BARE_WITH_RE.match(marker)):
+        found = _title_before(words, end, last=match.group("base"))
+    else:
+        return None
+    return (found[0], stop, found[1]) if found else None
+
+
+def alarm_text_without_song(utterance: str) -> str:
+    """The sentence with its song phrase taken out - what the clock is read from, so a
+    title never becomes a time ("Bu Akşam'ıyla" is not 19:00, "On Dakika ile" not 10 min)."""
+    words = _song_words(utterance or "")
+    span = _alarm_song_span(words)
+    if span is None:
+        return utterance
+    return " ".join(words[: span[0]] + words[span[1] :])
 
 
 def alarm_song_query(utterance: str) -> str | None:
@@ -2306,38 +2387,18 @@ def alarm_song_query(utterance: str) -> str | None:
     "... beni Bella Ciao ile uyandır." -> "Bella Ciao";
     "... Hans Zimmer Time şarkısıyla uyandır." -> "Hans Zimmer Time";
     "... Barış Manço'nun Gülpembe şarkısını çalarak beni uyandır." -> "Barış Manço'nun
-    Gülpembe". "Beni sevgiyle uyandır." names no song (None).
+    Gülpembe". "Beni sevgiyle uyandır." and "beni seçtiğim müzikle uyandır" (the approved
+    wake song) name no song (None).
     """
-    words = _song_words(utterance or "")
-    verb = next(
-        (
-            n
-            for n, w in enumerate(words)
-            if w.casefold().startswith(("uyandır", "uyandir"))
-        ),
-        None,
-    )
-    if verb is None or verb == 0:
-        return None
-    end = verb
-    if words[end - 1].casefold() == "beni":
-        end -= 1
-    if end == 0:
-        return None
-    marker = words[end - 1]
-    lowered = marker.casefold()
-    if lowered in _SONG_PLAYING_FORMS:
-        end -= 1
-        if end > 0 and words[end - 1].casefold() in _SONG_NOUN_OBJECT_FORMS:
-            end -= 1
-        return _title_before(words, end)
-    if lowered in _SONG_WITH_FORMS or lowered in _SONG_NOUN_WITH_FORMS:
-        return _title_before(words, end - 1)
-    if match := _SONG_APOSTROPHE_WITH_RE.match(marker):
-        return _title_before(words, end, last=match.group("base"))
-    if marker[:1].isupper() and (match := _SONG_BARE_WITH_RE.match(marker)):
-        return _title_before(words, end, last=match.group("base"))
-    return None
+    span = _alarm_song_span(_song_words(utterance or ""))
+    return span[2] if span else None
+
+
+def song_names_nothing(title: str) -> bool:
+    """True for "seçtiğim müzik" / "bu şarkı": a title the model passes that names no song."""
+    words = [w for w in _song_words(title or "") if w.casefold() not in _WAKE_SONG_NOUN_FORMS]
+    generic = {"şarkı", "sarki", "müzik", "muzik", "parça", "parca"}
+    return _names_no_song([w for w in words if w.casefold() not in generic])
 
 
 #: "Alarmımın şarkısını X yap" / "Uyandırma şarkımı değiştir": the song noun the owner
@@ -2376,10 +2437,6 @@ _ONE_ALARM_GENITIVE_FORMS: Final[frozenset[str]] = frozenset(
 )
 _WAKE_SONG_OWNER_FORMS: Final[frozenset[str]] = frozenset(
     {"alarm", "alarmım", "alarmim", "uyandırma", "uyandirma"} | _ONE_ALARM_GENITIVE_FORMS
-)
-#: "bu" / "şu" / "o" point at a song and name none: never a title to search for.
-_SONG_POINTING_FORMS: Final[frozenset[str]] = frozenset(
-    {"bu", "şu", "su", "o", "bunu", "şunu", "sunu", "onu"}
 )
 
 #: The scope :func:`alarm_song_set_match` returns.
@@ -2422,7 +2479,7 @@ def alarm_song_set_match(utterance: str) -> tuple[str, str | None] | None:
         else SONG_SCOPE_WAKE_SONG
     )
     between = [w for w in words[noun + 1 : verb] if w.casefold() != "olarak"]
-    if all(w.casefold() in _SONG_POINTING_FORMS for w in between):
+    if _names_no_song(between):
         between = []  # "Alarm müziğim bu olsun": points at a song, names none
     title = " ".join(between).strip()[:200]
     return scope, (title or None)

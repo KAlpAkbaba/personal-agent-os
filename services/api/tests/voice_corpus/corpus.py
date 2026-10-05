@@ -1027,7 +1027,30 @@ def _alarm_song_by_voice_cases() -> list[UtteranceCase]:
             "08:00",
             None,
         ),
+        # The title comes out first, the clock is read from the rest (inspector, 2026-10-05).
+        ("a.song.7", "Yarın sabah yediyi çeyrek geçe Bella Ciao ile uyandır.", "07:15", None),
+        ("a.song.8", "Yarın 7'de beni Duman'ın Bu Akşam'ıyla uyandır.", "07:00", None),
+        ("a.song.9", "Yarın 6'da beni On Dakika ile uyandır.", "06:00", None),
     ]
+    # A pointing word names no song: the alarm is set, nothing is searched.
+    for case_id, text in [
+        ("a.song.point.1", "Yarın 7:30'da beni seçtiğim müzikle uyandır."),
+        ("a.song.point.2", "Yarın 7:30'da beni bu şarkıyla uyandır."),
+        ("a.song.point.3", "Yarın 7:30'da beni her zamanki şarkıyla uyandır."),
+    ]:
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="alarm_create",
+                expected_tool="alarm.create",
+                expected={"local_time": "07:30"},
+                forbidden_tools=("media.play", "research.start"),
+                context=CTX_NONE,
+                category="alarm",
+                regression_issue_id="inspector 2026-10-05: a pointing word is not a title",
+            )
+        )
     for case_id, text, local_time, weekdays in forms:
         expected: dict[str, object] = {
             "local_time": local_time,

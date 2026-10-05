@@ -342,7 +342,12 @@ def _apply_daypart(hour: int, minute: int, tokens: list[str]) -> tuple[int, int]
     is never shifted, and neither is an hour written as an explicit "HH:MM" >= 13."""
     if hour >= 13:
         return hour, minute
-    if any(t in _EVENING_WORDS for t in tokens) and hour < 12:
+    # "çeyrek gece" is "çeyrek geçe" (past) with the cedilla dropped, never "night".
+    evening = any(
+        t in _EVENING_WORDS and not (t == "gece" and i > 0 and tokens[i - 1] in _QUARTER_WORDS)
+        for i, t in enumerate(tokens)
+    )
+    if evening and hour < 12:
         return hour + 12, minute
     return hour, minute
 

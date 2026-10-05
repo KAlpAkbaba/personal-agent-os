@@ -45,6 +45,8 @@ from app.voice.intents import (
     SONG_SCOPE_ALARM,
     SONG_SCOPE_WAKE_SONG,
     alarm_song_set_match,
+    alarm_text_without_song,
+    song_names_nothing,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -98,6 +100,7 @@ class FoundSong:
     ok: bool
     song: dict[str, str] | None = None
     error_class: str | None = None
+    query: str = ""
 
 
 def find_song(device_action: Any, spoken: str) -> FoundSong:
@@ -166,10 +169,11 @@ def _turn(ctx: ToolContext) -> dict[str, Any]:
     return dict(ctx.context.get("last_utterance") or {})
 
 
-def song_for_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, str] | None:
-    """The song ``alarm.create`` should carry, found now - or None (nothing named, an
-    explicit url given, or the search found nothing: the alarm is still set, and rings the
-    global wake song or the tone)."""
+def song_lookup_for_create(ctx: ToolContext, arguments: dict[str, Any]) -> FoundSong | None:
+    """The search ``alarm.create`` runs for the song the sentence named - None when nothing
+    was named (or an explicit url was given, or the title only points: "seçtiğim müzik" is
+    the approved wake song); a :class:`FoundSong` otherwise, found or NOT, so a song that
+    was not found is said, never silently replaced by the tone."""
     media = arguments.get("media") if isinstance(arguments.get("media"), dict) else {}
     if isinstance(media.get("url"), str) and media["url"].strip():
         return None
@@ -177,13 +181,31 @@ def song_for_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, st
     spoken = turn.get("media_query") if turn.get("intent") in _CREATE_INTENTS else None
     if not (isinstance(spoken, str) and spoken.strip()):
         spoken = media.get("title") if isinstance(media.get("title"), str) else None
-    if not spoken or not spoken.strip():
+    if not spoken or not spoken.strip() or song_names_nothing(spoken):
         return None
     found = find_song(ctx.live.get("device_action"), spoken)
     if not found.ok:
         logger.info("alarm_song_not_found", error_class=found.error_class)
-        return None
-    return found.song
+    return FoundSong(found.ok, found.song, found.error_class, query=spoken)
+
+
+def song_for_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, str] | None:
+    """The song ``alarm.create`` should carry, found now - or None."""
+    found = song_lookup_for_create(ctx, arguments)
+    return found.song if found is not None and found.ok else None
+
+
+def when_without_song(when_spoken: str) -> str:
+    """The "when" text with the song phrase taken out: the clock is read from the rest."""
+    return alarm_text_without_song(when_spoken)
+
+
+def song_not_found_speech(found: FoundSong, *, has_wake_song: bool) -> str:
+    """The second sentence of a set alarm whose song was not found."""
+    fallback = "uyandırma şarkınızla" if has_wake_song else "zil sesiyle"
+    if found.error_class == ERROR_NO_DEVICE:
+        return f"Şarkıyı aramak için bilgisayarınıza ulaşamadım; alarm {fallback} çalacak."
+    return f"{found.query} şarkısını bulamadım efendim; alarm {fallback} çalacak."
 
 
 def song_scope(utterance: str) -> str | None:
@@ -369,5 +391,8 @@ __all__ = [
     "register_alarm_song_tools",
     "song_created_speech",
     "song_for_create",
+    "song_lookup_for_create",
+    "song_not_found_speech",
     "song_scope",
+    "when_without_song",
 ]

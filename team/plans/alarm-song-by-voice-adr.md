@@ -47,3 +47,20 @@ fallback. An alarm could not have its own song, and the voice could not name one
 - The corpus rows a.wakesong.set.1-3 ("no voice path for the wake song") now go to
   `alarm.set_song` and are refused with `no_song_named` (they name no song).
 - The alarms page (apps/web) was left for a separate card.
+
+## Addendum (inspector's return, 2026-10-05)
+- The `song` column is the ONE truth for an alarm's own song: `alarm_song()` no longer falls
+  back to `media_source`; an alarm created with `media.url` gets that url as its song at
+  creation; `set_alarm_song` (set, change, clear) recomputes `media_source` and
+  `resolved_media_identity`, so a cleared or replaced song is never a fallback candidate.
+  A row written before this card with only `media_source.url` plays that url as the stored
+  copy (3rd), after the live wake song.
+- Every fallback play has its own idempotency key (`:{source}:{attempt}`): the device
+  command client returns the old command for a repeated key.
+- One guard (`_names_no_song`) for both readers: bu/şu/o/bir/aynı/her zamanki/seçtiğim/
+  istediğim/sevdiğim name no song; nothing is searched, the approved wake song plays.
+- The song phrase is taken out of the "when" text first (`alarm_text_without_song`); the
+  clock is read from the rest. Clock words (geçe, kala, buçuk, çeyrek, "yediyi") stop the
+  title. `tr_time`: "çeyrek gece" (cedilla dropped) is "geçe", not night.
+- A song that was not found is said in the same answer ("X şarkısını bulamadım efendim;
+  alarm uyandırma şarkınızla / zil sesiyle çalacak.").

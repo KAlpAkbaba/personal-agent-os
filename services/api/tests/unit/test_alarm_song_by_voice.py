@@ -633,3 +633,16 @@ def test_a_song_that_is_not_found_is_said_at_once(session, device):
     assert out["alarm"]["local_time"] == "07:00"
     assert "bulamadım" in out["speech"]
     assert out["alarm"]["song"] is None
+
+
+def test_a_quarter_past_without_its_cedilla_is_not_night():
+    """The corpus' ASCII variant: "yediyi ceyrek gece" is "geçe" (past), never "gece"
+    (night) - 07:15, not 19:15."""
+    from app.alarms.tr_time import parse_when_text
+
+    parsed = parse_when_text(
+        "yarin sabah yediyi ceyrek gece uyandir", now=NOW, timezone="Europe/Istanbul"
+    )
+    assert parsed.local_time == "07:15"
+    night = parse_when_text("yarın gece on birde uyandır", now=NOW, timezone="Europe/Istanbul")
+    assert night.local_time == "23:00"

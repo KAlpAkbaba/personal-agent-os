@@ -311,20 +311,22 @@ def set_alarm_song(
     if alarm.is_terminal:
         raise InvalidAlarmRequest(f"alarm {alarm_id} is {alarm.state}")
     alarm.song = None if url is None else _song_value(url, title)
+    # What was asked and what is resolved follow the song: a cleared or replaced song must
+    # not live on as the stored fallback (the inspector's finding 1, 2026-10-05).
+    alarm.media_source, alarm.resolved_media_identity = _media_source(
+        alarm.song, wake_song=get_wake_song(session)
+    )
     alarm.updated_at = utcnow()
     session.commit()
     return alarm
 
 
 def alarm_song(alarm: WakeAlarm) -> dict[str, Any] | None:
-    """THIS alarm's own song, or None - the column, or the url the alarm was created with
-    (``media.url``, which has always been a per-alarm choice)."""
+    """THIS alarm's own song, or None - the column alone, so a cleared song stays cleared
+    (an alarm created with ``media.url`` gets that url as its song at creation)."""
     song = alarm.song if isinstance(alarm.song, dict) else None
     if song and isinstance(song.get("url"), str) and song["url"]:
         return {"url": song["url"], "title": str(song.get("title") or "")}
-    source = alarm.media_source if isinstance(alarm.media_source, dict) else {}
-    if source.get("kind") == MEDIA_KIND_YOUTUBE and isinstance(source.get("url"), str):
-        return {"url": source["url"], "title": str(source.get("title") or "")}
     return None
 
 
@@ -399,6 +401,10 @@ def create_alarm(
     for, so it is also the media source and the resolved identity.
     """
     own_song = _song_value(song.get("url"), song.get("title")) if song else None
+    media_url = str((media or {}).get("url") or "")
+    if own_song is None and media_url.startswith(("https://", "http://")):
+        # A url given at creation has always been this alarm's own choice: it is its song.
+        own_song = _song_value(media_url, (media or {}).get("title"))
     if own_song is not None:
         media = {"url": own_song["url"], "title": own_song["title"] or None}
     source, resolved = _media_source(media, wake_song=get_wake_song(session))
