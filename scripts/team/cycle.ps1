@@ -181,6 +181,10 @@ $teamAreaLibrary = Join-Path $repoRoot "scripts\lib\TeamArea.ps1"
 if (Test-Path -LiteralPath $teamAreaLibrary) { . $teamAreaLibrary }
 . (Join-Path $repoRoot "scripts\lib\TeamRun.ps1")
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
+# A run's signs of life (pm-stuck-run-check). A copy of the scripts without it (a test's sandbox
+# of other steps) runs as before: no run is measured, flagged or restarted.
+$teamLivenessLibrary = Join-Path $repoRoot "scripts\lib\TeamLiveness.ps1"
+if (Test-Path -LiteralPath $teamLivenessLibrary) { . $teamLivenessLibrary }
 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $CycleId) { $CycleId = $(if ($DailyId) { "d" + (Get-Date).ToString("yyyyMMdd") } else { "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }) }
@@ -409,6 +413,15 @@ $statusWrittenAt = [datetime]::MinValue
 # The pool: the runs in flight (what Start-RoleRun returned). $unwrittenMerges are the merges
 # whose write the store could not take when they were made (Resolve-UnwrittenMerges).
 $pool = New-Object System.Collections.ArrayList
+# pm-stuck-run-check: every $livenessSeconds the runs in flight are looked at (Watch-RunLiveness);
+# $stuckForDuty are the ones waiting for the next duty run. $runIdleMinutes: the settings file's.
+$livenessOn = $null -ne (Get-Command -Name Update-TeamRunLiveness -CommandType Function -ErrorAction SilentlyContinue)
+$livenessSeconds = 60
+# A test hook, as the status tick's: a whole number of seconds.
+if ([string]$env:PAGENTOS_CYCLE_LIVENESS_SECONDS -match '^[1-9]\d{0,3}$') { $livenessSeconds = [int]$env:PAGENTOS_CYCLE_LIVENESS_SECONDS }
+$livenessLookedAt = [datetime]::MinValue
+$runIdleMinutes = 30
+$stuckForDuty = New-Object System.Collections.ArrayList
 $unwrittenMerges = New-Object System.Collections.ArrayList
 $usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
 $statusFailed = $false
@@ -493,7 +506,13 @@ function New-CycleStatus {
         started_at    = [string]$script:cycle.started_at
         runs          = @($script:liveRuns | ForEach-Object {
                 $entry = [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at }
-                if (-not $Legacy) { $entry["model"] = $_.model }
+                if (-not $Legacy) {
+                    $entry["model"] = $_.model
+                    $live = $_
+                    foreach ($name in @("last_activity_at", "idle_minutes", "stuck_children")) {
+                        if ($null -ne $live.PSObject.Properties[$name]) { $entry[$name] = $live.$name }
+                    }
+                }
                 $entry
             })
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
@@ -504,6 +523,7 @@ function New-CycleStatus {
         # Which Claude account the team runs under (the owner switches them, 2026-10-04, and wants
         # to see it on the Ofis): the folder CLAUDE_CONFIG_DIR names, set by the team wrapper.
         $document["account"] = if ($env:CLAUDE_CONFIG_DIR) { Split-Path -Leaf $env:CLAUDE_CONFIG_DIR } else { "varsayilan" }
+        if ($script:livenessOn) { $document["run_idle_minutes"] = $script:runIdleMinutes }
     }
     $document["updated_at"] = (Get-TeamTimestamp)
     return $document
@@ -841,6 +861,8 @@ try {
             Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel
             LoweredFrom = $loweredFrom; Where = $WorkingDirectory; Prompt = $Prompt; ExcludeTools = @($ExcludeTools)
             RunTemp = $runTemp; Label = $Label; Duty = $Duty
+            # pm-stuck-run-check: its signs of life between looks, and where it is on the ladder.
+            Liveness = $null; Restarts = 0; Handed = $false; Escalated = $false
         }
     }
 
@@ -1230,8 +1252,18 @@ try {
         try {
             $folder = Join-Path $repoRoot "team\plans"
             if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
-            $card = New-TeamDutyCard -Tasks $tasks -CycleId $CycleId -DutyFile $relative
-            $duty = [pscustomobject]@{ File = $relative; Label = $label; Tasks = @($listed.ToArray()) }
+            # The runs with no sign of life (pm-stuck-run-check), handed in the same run.
+            $stalled = @(Get-TeamProperty -InputObject $Item -Name "StuckRuns" -Default @() | Where-Object { $null -ne $_ })
+            $entries = @($stalled | ForEach-Object {
+                    $child = @($_.Live.stuck_children | Select-Object -First 1)
+                    [pscustomobject]@{
+                        run = "$($_.Live.task)/$($_.Role)"; idle_minutes = $_.Live.idle_minutes; last_activity_at = $_.Live.last_activity_at; restarts = $_.Restarts
+                        child = $(if (@($child).Count -gt 0) { "$($child[0].name) (pid $($child[0].pid), $($child[0].idle_minutes) dk)" } else { "" })
+                    }
+                })
+            foreach ($run in $stalled) { $script:stuckForDuty.Remove($run) }
+            $card = New-TeamDutyCard -Tasks $tasks -CycleId $CycleId -DutyFile $relative -StuckRuns $entries
+            $duty = [pscustomobject]@{ File = $relative; Label = $label; Tasks = @($listed.ToArray()); Stuck = @($entries | ForEach-Object { [string]$_.run }) }
             [void]$script:pool.Add((Start-RoleRun -Task $null -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit") -Pick $Item.Pick -Label $label -Duty $duty))
             return $true
         }
@@ -1346,6 +1378,112 @@ try {
         return $moved
     }
 
+    # ------------------------------------------------------------------ a run's signs of life (pm-stuck-run-check)
+
+    function Get-StuckPoolRuns {
+        <# The runs in flight named "<task>/<role>", as the duty card names them. #>
+        param([string[]]$Names = @())
+        return @($script:pool.ToArray() | Where-Object { @($Names) -ccontains "$($_.Live.task)/$($_.Role)" })
+    }
+
+    function Restart-PoolRun {
+        <# Stop exactly this run's process tree and start it again from its worktree (its commits
+           stay); a test slot its tree held is given back. Never an error out of the loop. #>
+        param($Started, [string]$Why)
+        $name = "$($Started.Live.task)/$($Started.Role)"
+        $slotStore = ""
+        if (Test-Path -LiteralPath (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")) {
+            if (-not (Get-Command -Name Get-TestSlotDefaultStore -ErrorAction SilentlyContinue)) { . (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1") }
+            $slotStore = Get-TestSlotDefaultStore
+        }
+        try { $again = Restart-TeamRun -Run $Started.Run -SlotStore $slotStore }
+        catch {
+            Add-CycleNote -List "risks" -Text "takılmış olabilir: ${name}: yeniden başlatılamadı: $($_.Exception.Message)"
+            return
+        }
+        $Started.Run = $again
+        $Started.Restarts = 1 + [int]$Started.Restarts
+        $Started.Liveness = $null
+        # The deadline stays the first start's: a restart is not more time.
+        $Started.Handed = $false
+        $tickets = @($again.ReleasedTickets)
+        Add-CycleNote -List "risks" -Text ("takılmış olabilir: ${name}: yeniden başlatıldı ($Why)" + $(if (@($tickets).Count -gt 0) { "; bırakılan test sırası: " + ($tickets -join ", ") } else { "" }))
+    }
+
+    function Watch-RunLiveness {
+        <# One look at every run in flight: its signs of life go into the status, and a run with
+           none for run_idle_minutes climbs the ladder (Get-TeamStuckAction): handed to the duty
+           once, at 90 minutes restarted once, then the Danışman's. A run that showed life is
+           never touched. The duty run itself is measured, never handed to itself. #>
+        $now = [datetime]::UtcNow
+        $script:runIdleMinutes = Read-TeamRunIdleMinutes -Path $settingsPath
+        $table = @(Get-TeamProcessTable)
+        foreach ($started in @($script:pool.ToArray())) {
+            if ($started.Run.Process.HasExited) { continue }
+            if ($null -eq $started.Liveness) { $started.Liveness = New-TeamLivenessState -Since $started.Run.Started }
+            # The run's own temp folder, and its worktree - never the shared checkout others write to.
+            $paths = @([string]$started.RunTemp)
+            if ([string]$started.Where -and ([string]$started.Where).TrimEnd('\') -ne ([string]$repoRoot).TrimEnd('\')) { $paths += [string]$started.Where }
+            $look = Update-TeamRunLiveness -State $started.Liveness -Now $now -Paths $paths -RootProcessId $started.Run.Process.Id -ProcessTable $table -IdleMinutes $script:runIdleMinutes
+            $live = $started.Live
+            $live | Add-Member -NotePropertyName last_activity_at -NotePropertyValue $look.LastActivityAt -Force
+            $live | Add-Member -NotePropertyName idle_minutes -NotePropertyValue $look.IdleMinutes -Force
+            $live | Add-Member -NotePropertyName stuck_children -NotePropertyValue @($look.StuckChildren) -Force
+            if ($null -ne $started.Duty) { continue }
+            $name = "$($live.task)/$($started.Role)"
+            $action = Get-TeamStuckAction -IdleMinutes $look.IdleMinutes -StuckChildren @($look.StuckChildren) -Bound $script:runIdleMinutes -Restarts $started.Restarts -Handed $started.Handed
+            switch ($action) {
+                "none" { $started.Handed = $false; $started.Escalated = $false }
+                "duty" {
+                    $started.Handed = $true
+                    $idle = [int]$look.IdleMinutes
+                    foreach ($child in @($look.StuckChildren)) { if ([int]$child.idle_minutes -gt $idle) { $idle = [int]$child.idle_minutes } }
+                    Add-CycleNote -List "risks" -Text ("takılmış olabilir: ${name}: $idle dk iz yok" + $(if ($NoDuty) { "" } else { "; Proje Yöneticisi'ne verildi" }))
+                    if (-not $NoDuty) { [void]$script:stuckForDuty.Add($started); $script:refillDue = $true }
+                }
+                "restart" { Restart-PoolRun -Started $started -Why "$($script:TeamRunAutoRestartMinutes) dk iz yok, sormadan bir kez" }
+                "escalate" {
+                    if (-not $started.Escalated) {
+                        $started.Escalated = $true
+                        Add-CycleNote -List "risks" -Text "Danışman'a iletildi: takılmış olabilir: ${name}: yeniden başlatıldıktan sonra yine $($look.IdleMinutes) dk iz yok"
+                    }
+                }
+            }
+        }
+        Write-CycleStatus
+    }
+
+    function Invoke-StuckDecisions {
+        <# The duty's "stuck" answers for the runs it was handed, judged whole (Test-TeamStuckDecisions). #>
+        param($Duty, [string[]]$Names)
+        $decisions = @()
+        try {
+            $document = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText((Join-Path $repoRoot ([string]$Duty.File -replace '/', '\')), [System.Text.Encoding]::UTF8))
+            $property = $document.PSObject.Properties["stuck"]
+            if ($null -ne $property) { $decisions = @($property.Value | Where-Object { $null -ne $_ }) }
+        }
+        catch { $decisions = @() }
+        $why = @(Test-TeamStuckDecisions -Decisions $decisions -Listed $Names)
+        if (@($why).Count -gt 0) {
+            Add-CycleNote -List "risks" -Text ("takılmış koşu kararı reddedildi ($($Duty.Label)): " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
+            return
+        }
+        foreach ($decision in $decisions) {
+            $name = [string]$decision.run
+            $reason = (([string]$decision.reason) -replace '\s+', ' ').Trim()
+            $started = @(Get-StuckPoolRuns -Names @($name))
+            if (@($started).Count -eq 0) { Add-CycleNote -List "risks" -Text "takılmış olabilir: ${name}: koşu karar gelmeden bitti; karar ($($decision.action)) uygulanmadı"; continue }
+            switch ([string]$decision.action) {
+                "restart" { Restart-PoolRun -Started $started[0] -Why "Proje Yöneticisi: $reason" }
+                "wait" { Add-CycleNote -List "risks" -Text "takılmış olabilir: ${name}: Proje Yöneticisi bekletiyor: $reason" }
+                "escalate" {
+                    $started[0].Escalated = $true
+                    Add-CycleNote -List "risks" -Text "Danışman'a iletildi: takılmış olabilir: ${name}: $reason"
+                }
+            }
+        }
+    }
+
     function Complete-Duty {
         <# The duty run ended: THIS script judges the file it wrote (Test-TeamDuty) and applies it
            whole, or refuses it whole and says why. #>
@@ -1362,12 +1500,16 @@ try {
                 $script:dutyTotal[[string]$listed.Id] = [Math]::Max(0, [int]$script:dutyTotal[[string]$listed.Id] - 1)
             }
             Save-DutyLedger
+            foreach ($run in @(Get-StuckPoolRuns -Names @(Get-TeamProperty -InputObject $duty -Name "Stuck" -Default @()))) { $run.Handed = $false }
             return
         }
         if (-not $Done.Ok) {
             Add-CycleNote -List "risks" -Text "nöbet koşusu (${label}): $($Done.Outcome)"
             return
         }
+        $stuckNames = @(Get-TeamProperty -InputObject $duty -Name "Stuck" -Default @())
+        if (@($stuckNames).Count -gt 0) { Invoke-StuckDecisions -Duty $duty -Names $stuckNames }
+        if (@($duty.Tasks).Count -eq 0) { return }
         $read = Read-TeamDutyFile -Path (Join-Path $repoRoot ([string]$duty.File -replace '/', '\'))
         $why = @()
         if (-not $read.Ok) { $why = @($read.Why) }
@@ -1486,7 +1628,8 @@ try {
                 # One lead seat: the duty for stopped tasks first (work that waits), then a split.
                 if (-not $NoDuty) {
                     $stuck = @(Get-DutyCandidates)
-                    if (@($stuck).Count -gt 0) { [void]$candidates.Add([pscustomobject]@{ Task = $null; Role = "lead"; Pick = $null; Duty = @($stuck) }) }
+                    $stalled = @($script:stuckForDuty.ToArray() | Where-Object { $script:pool.Contains($_) })
+                    if (@($stuck).Count -gt 0 -or @($stalled).Count -gt 0) { [void]$candidates.Add([pscustomobject]@{ Task = $null; Role = "lead"; Pick = $null; Duty = @($stuck); StuckRuns = @($stalled) }) }
                 }
                 foreach ($proposal in @(Get-TeamSplitCandidates -Queue $script:queue)) {
                     # A refused split leaves the proposal where it was; the next cycle asks again.
@@ -1790,6 +1933,16 @@ try {
             $pool.Remove($over)
             Complete-PoolRun -Started $over
             $refillDue = $true
+        }
+        # Are the runs in flight working, or stuck? (pm-stuck-run-check) A look that fails is said
+        # once and never ends the cycle.
+        if ($livenessOn -and @($pool).Count -gt 0 -and ([datetime]::UtcNow - $livenessLookedAt).TotalSeconds -ge $livenessSeconds) {
+            $livenessLookedAt = [datetime]::UtcNow
+            try { Watch-RunLiveness }
+            catch {
+                $failedLook = "koşuların canlılığına bakılamadı: $($_.Exception.Message)"
+                if (@($cycle.risks) -notcontains $failedLook) { Add-CycleNote -List "risks" -Text $failedLook }
+            }
         }
         # The limit was waited out - or somebody asked for a stop, which ends the wait.
         if ($null -ne $limitWaitUntil -and ([datetime]::UtcNow -ge $limitWaitUntil -or (Test-Path -LiteralPath $stopFlagPath))) {

@@ -1967,6 +1967,62 @@ try {
         return (@($Run.Calls | ForEach-Object { [string]$_.role }) -join ",")
     }
 
+    # pm-stuck-run-check (the owner, 2026-10-04: "arada gerçekten işte çalışıp çalışmadıklarını da
+    # kontrol etsin, iş takılmış olmasın"). Two workers sleep ("slow"); one of them is kept alive by
+    # writes into its own temp folder every two seconds, as a long test suite writes. With
+    # run_idle_minutes 1 the silent one is flagged, handed to the duty, and the duty's 'restart'
+    # starts it again; the writing one is never flagged, however long it runs.
+    Test-Case "liveness: a run that leaves no trace for run_idle_minutes is flagged in the status and handed to the duty, whose 'restart' starts it again; a long run that writes is never flagged" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "hung-one" -Area @("src/area")), (New-Task -Id "live-one" -Area @("src/area2")))
+        Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\TeamLiveness.ps1") -Destination (Join-Path $root "scripts\lib\TeamLiveness.ps1")
+        $temps = Join-Path $root "run-temps"
+        Write-TeamJson -Path (Join-Path $root "team\cycle-settings.json") -Document ([ordered]@{ run_idle_minutes = 1; run_temp_root = $temps })
+        $snapshots = Join-Path $root "snapshots"
+        $cards = Join-Path $root "duty-cards.txt"
+        $decision = '{"decisions":[],"stuck":[{"run":"hung-one/worker","action":"restart","reason":"bir dakikadır iz yok; yeniden başlat"}]}'
+        $hooks = @{
+            PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json")
+            PAGENTOS_FAKE_CLAUDE_DUTY_CARD = $cards; PAGENTOS_FAKE_CLAUDE_DUTY_JSON = $decision; PAGENTOS_CYCLE_LIVENESS_SECONDS = "10"
+            # Each worker run sits 100 s without a sound before it answers (and commits) as "approve".
+            PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:*=100"
+        }
+        # The live run's work: a write into its own temp folder every two seconds, for as long as the
+        # cycle runs - and the hung run's too once it was started again (the restart cured it).
+        $writer = Start-Job -ArgumentList $temps, (Join-Path $root "fake.log") -ScriptBlock {
+            param($Temps, $Log)
+            for ($i = 0; $i -lt 200; $i++) {
+                $working = @("live-one-worker-*")
+                $hungRuns = @(Get-Content -LiteralPath $Log -ErrorAction SilentlyContinue | Where-Object { $_ -match '"role":"worker","task":"hung-one"' }).Count
+                if ($hungRuns -ge 2) { $working += "hung-one-worker-*" }
+                foreach ($folder in @($working | ForEach-Object { Get-ChildItem -LiteralPath $Temps -Directory -Filter $_ -ErrorAction SilentlyContinue })) {
+                    Set-Content -LiteralPath (Join-Path $folder.FullName "progress.txt") -Value $i -Encoding ASCII -ErrorAction SilentlyContinue
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
+        try {
+            Use-FakeHooks -Environment $hooks -Body { $script:livenessRun = Invoke-Cycle -Root $root -Scenario "approve" -Duty -RunMinutes 3.6 -ExtraArguments "-CycleMinutes 3" }
+        }
+        finally { Stop-Job -Job $writer -ErrorAction SilentlyContinue; Remove-Job -Job $writer -Force -ErrorAction SilentlyContinue }
+        $run = $script:livenessRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $card = if (Test-Path -LiteralPath $cards) { [System.IO.File]::ReadAllText($cards, [System.Text.Encoding]::UTF8) } else { "" }
+        # (The fake reads its card in the console's code page: only the ASCII parts are compared.)
+        Assert-True -Condition ($card -match '(?m)^## Tak\S* olabilecek ' -and $card -match '(?m)^- hung-one/worker: \d+ dk iz yok') -Because "the silent run is handed to the duty:`n$card`n$($run.Report)"
+        Assert-True -Condition (-not $card.Contains("live-one/worker")) -Because "the run that writes is never handed:`n$card"
+        $workers = @($run.Calls | Where-Object { $_.role -eq "worker" } | ForEach-Object { [string]$_.task })
+        Assert-Equal -Expected 2 -Actual @($workers | Where-Object { $_ -eq "hung-one" }).Count -Because "the duty's restart started it again: $($workers -join ',')`n$($run.Report)"
+        Assert-Equal -Expected 1 -Actual @($workers | Where-Object { $_ -eq "live-one" }).Count -Because "the sibling was never restarted: $($workers -join ',')"
+        Assert-True -Condition ($run.Report.Contains("takılmış olabilir: hung-one/worker") -and -not $run.Report.Contains("takılmış olabilir: live-one/worker")) -Because $run.Report
+        # The status a reader saw while the duty ran: both runs measured, only the silent one idle.
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "lead-.json")
+        Assert-Equal -Expected 1 -Actual ([int]$seen.run_idle_minutes) -Because "the cycle's bound is in the status"
+        $hung = @($seen.runs | Where-Object { $_.task -eq "hung-one" })[0]
+        $live = @($seen.runs | Where-Object { $_.task -eq "live-one" })[0]
+        Assert-True -Condition ([int]$hung.idle_minutes -ge 1 -and [string]$hung.last_activity_at) -Because "the silent run: $($hung | ConvertTo-Json -Compress)"
+        Assert-Equal -Expected 0 -Actual ([int]$live.idle_minutes) -Because "the writing run: $($live | ConvertTo-Json -Compress)"
+    }
+
     Test-Case "duty: a stopped task starts exactly one Proje Yöneticisi run (no Bash, no Edit); its card lists the task and its reason; 'return' sends it back with the prefixed reason" {
         $root = New-Sandbox -Tasks @((New-Stopped -Reason "ayni is iki kez geri verildi"))
         $run = Invoke-DutyCycle -Root $root -Decisions @((New-Decision -Reason "Eksik testi ekle; çağrıyı düzelt"))

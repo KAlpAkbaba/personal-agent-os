@@ -43,10 +43,22 @@ only wait for another task ("alan çakışması: X; o iş bitince") or for the D
    bitince)" or starts "Danışman'a iletildi: " calm: "sırada: X bitince" / "Danışman'da: <a few
    words>". Angry stays for a stop nobody decided yet.
 
+7. The cycle (`cycle.ps1`, `Watch-RunLiveness`) looks every 60 s at each run in flight: its temp
+   folder and its worktree (never the shared checkout a lead or researcher runs in), its process
+   tree. The fields go into the status (`routes.py` `_Run`, `StatusRequest.run_idle_minutes`, all
+   optional). "duty" puts the run into the next duty run (a duty may now hold only stuck runs);
+   the answer's `stuck` list is judged whole by `Test-TeamStuckDecisions` and applied: restart
+   (`Restart-TeamRun -SlotStore`, the run's first deadline kept - a restart is not more time),
+   wait (a line), escalate (a line "Danışman'a iletildi: takılmış olabilir: ..."). The duty run
+   itself is measured but never handed to itself. Without `TeamLiveness.ps1` beside the cycle
+   nothing is measured (the tests' sandboxes of other steps).
+8. The page lists each seat with something to say under the scene (`OfficeView.tsx`,
+   `livenessLines`). Whether a stop only waits is `officeMood.moodOf`'s decision ("waiting");
+   `officeLiveness.ts` only takes its words.
+
 ## Consequences
 
-- Wiring left to files outside this task's area (ALAN_ISTEGI): the status schema (`routes.py`
-  `_Run` / `StatusRequest`), the cycle loop (`cycle.ps1`: look each tick, write the fields, run
-  the ladder with `-StuckChildren`, pass `-StuckRuns`, apply the decisions, call `Restart-TeamRun -SlotStore`), the seat
-  rendering (`officeMood.ts` / `OfficeView.tsx`, `officeApi.ts` types) and the setting itself.
-- One look costs one Win32_Process query and a directory walk per run.
+- A Cloud Core older than this `routes.py` refuses the new fields (422): the cycle then writes the
+  legacy status for the rest of that cycle (no model/limits on the Ofis) until the Core is released.
+- One look costs one Win32_Process query and a directory walk per run, once a minute.
+- The 5% CPU share is a choice, not a measurement on a real hung child.
