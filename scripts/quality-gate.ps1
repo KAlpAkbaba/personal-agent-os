@@ -764,16 +764,6 @@ if (-not $Fast) {
     Assert-ExitCode "native signing trust tests"
   }
 
-  Invoke-Step "Agent team tick not held by orphans (PS5.1, no model)" {
-    # 2026-10-03: a `tail -f` an agent run left behind held the scheduled tick (Start-Process
-    # -Wait waits for every descendant) and no cycle ran for two hours. The tick waits for its
-    # script's own process and stops what is left in the job it owns - fakes in place of both.
-    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    $script = Join-Path $repoRoot "scripts\tests\team-tick.tests.ps1"
-    Invoke-GateSuite $script
-    Assert-ExitCode "team-tick tests"
-  }
-
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
     # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
     # fake docker, apt, systemctl and curl. Nothing here touches a host.
@@ -825,6 +815,18 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\team-cycle.tests.ps1"
     Invoke-GateSuite $script
     Assert-ExitCode "team-cycle tests"
+  }
+
+  Invoke-Step "Agent team tick not held by orphans (PS5.1, no model)" {
+    # 2026-10-03: a `tail -f` an agent run left behind held the scheduled tick (Start-Process
+    # -Wait waits for every descendant) and no cycle ran for two hours. The tick waits for its
+    # script's own process and stops what is left in the job it owns - fakes in place of both.
+    # Not grouped: its case (5) holds a tick to a fixed 60 s guard; beside the group it passed
+    # 60 s and was red, alone the whole suite took 25 s (2026-10-05, this branch's runs).
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-tick.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "team-tick tests"
   }
 
   Invoke-Step "Gate suite group (PS5.1, fake steps)" {
