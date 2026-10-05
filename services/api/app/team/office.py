@@ -170,6 +170,8 @@ def _working_seat(seat: str, role: str, runs: list[dict], by_id: dict[str, dict]
         }
         if isinstance(run.get("model"), str) and run["model"]:
             entry["model"] = run["model"]  # a cycle older than the policy names none
+        if isinstance(run.get("progress"), dict):
+            entry["progress"] = run["progress"]  # measured by the cycle; an older one sends none
         listed.append(entry)
     return {"seat": seat, "role": role, "state": "working", **listed[0], "runs": listed}
 

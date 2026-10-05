@@ -426,6 +426,39 @@ function Get-DutyProblems {
     return @(Test-TeamDuty -Decisions @($document.decisions) -Listed $Listed -Queue (New-Queue -Tasks $Tasks))
 }
 
+Test-Case "progress: a run's progress is measured from its worktree - a folder entry counts once, the working tree's changes count, an ADR draft is seen" {
+    # The owner, 2026-10-05: "tikladigimda ajanlarin calistiklari kisimda kodun yuzde kacini yazdigi".
+    $m = Measure-TeamAreaProgress -Area @("services/api/app/x.py", "apps/web/app/y/", "docs/z.md", "scripts\tests\a.tests.ps1") -Changed @("services/api/app/x.py", "apps/web/app/y/one.tsx", "apps/web/app/y/two.tsx", "other/file.py")
+    Assert-Equal -Expected "4|2|False" -Actual ("{0}|{1}|{2}" -f $m.AreaTotal, $m.AreaTouched, $m.TestsChanged) -Because "two of four: a file and a folder (once, for two files inside it); no test changed"
+    $t = Measure-TeamAreaProgress -Area @("scripts/tests/a.tests.ps1") -Changed @("scripts\tests\a.tests.ps1")
+    Assert-Equal -Expected "1|1|True" -Actual ("{0}|{1}|{2}" -f $t.AreaTotal, $t.AreaTouched, $t.TestsChanged) -Because "backslashes and a test file"
+    $none = Measure-TeamAreaProgress -Area @("a.py") -Changed @()
+    Assert-Equal -Expected 0 -Actual $none.AreaTouched -Because "nothing changed"
+
+    $repo = Join-Path ([System.IO.Path]::GetTempPath()) ("progress-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    try {
+        [void](New-Item -ItemType Directory -Force -Path $repo)
+        foreach ($a in @(@("init", "-q", "-b", "main"), @("config", "user.email", "t@example.com"), @("config", "user.name", "t"))) { [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments $a) }
+        [System.IO.File]::WriteAllText((Join-Path $repo "base.txt"), "x")
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("add", "."))
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("commit", "-q", "-m", "base"))
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("checkout", "-q", "-b", "work"))
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $repo "src"))
+        [System.IO.File]::WriteAllText((Join-Path $repo "src\one.py"), "1")
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("add", "."))
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("commit", "-q", "-m", "one"))
+        [System.IO.File]::WriteAllText((Join-Path $repo "src\two.py"), "2")   # not committed: still counts
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $repo "team\plans"))
+        [System.IO.File]::WriteAllText((Join-Path $repo "team\plans\t-one-adr.md"), "# adr")
+        $p = Get-TeamRunProgress -Worktree $repo -Base "main" -Area @("src/one.py", "src/two.py", "src/three.py", "team/plans/t-one-adr.md") -TaskId "t-one"
+        Assert-True -Condition ($null -ne $p) -Because "a readable worktree has a progress"
+        Assert-Equal -Expected "4|3|1|True|False" -Actual ("{0}|{1}|{2}|{3}|{4}" -f $p.area_total, $p.area_touched, $p.commits, $p.adr_draft, $p.tests_changed) -Because "one committed, one uncommitted, the ADR; three of four"
+        Assert-True -Condition ([string]$p.last_change_at -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$') -Because "a stamp: $($p.last_change_at)"
+        Assert-True -Condition ($null -eq (Get-TeamRunProgress -Worktree (Join-Path $repo "nope") -Base "main" -Area @("a"))) -Because "no worktree: no progress, no throw"
+    }
+    finally { Remove-Item -LiteralPath $repo -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Test-Case "duty: the stopped tasks are handed once per stop; an escalated one, one set aside and a task in any other state are not" {
     $ids = { param($tasks, $handed, $skip) (@(Get-TeamDutyCandidates -Queue (New-Queue -Tasks $tasks) -Handed $handed -Skip $skip | ForEach-Object { $_.id }) -join ",") }
     $tasks = @((New-Stopped), (New-Stopped -Id "stuck-two" -Reason "Danışman'a iletildi: güvenlik kararı" -Area @("src/b")),

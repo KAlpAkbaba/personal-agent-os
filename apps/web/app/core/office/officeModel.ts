@@ -208,7 +208,39 @@ export type Panel = {
   shaFull: string | null;
   /** The role's model selector; null for the owner, an unknown seat, or no setting. */
   model: PanelModel | null;
+  /** How far the working run has got (the owner, 2026-10-05); null when the cycle sent none. */
+  progress: PanelProgress | null;
 };
+
+export type PanelProgress = {
+  /** 0..100: the share of the card's files that have a change - not "the work is X% done". */
+  percent: number;
+  label: string;
+  marks: { text: string; done: boolean }[];
+  lastChange: string | null;
+};
+
+/** The run's measured progress in the owner's words; null without a measurement or an area. */
+export function panelProgress(agent: OfficeAgent, now: Date = new Date()): PanelProgress | null {
+  const p = agent.progress;
+  if (agent.state !== "working" || !p || p.area_total <= 0) return null;
+  const percent = Math.min(100, Math.round((100 * p.area_touched) / p.area_total));
+  let lastChange: string | null = null;
+  if (p.last_change_at) {
+    const minutes = Math.max(0, Math.round((now.getTime() - Date.parse(p.last_change_at)) / 60000));
+    lastChange = Number.isNaN(minutes) ? null : minutes < 1 ? "az önce" : `${minutes} dk önce`;
+  }
+  return {
+    percent,
+    label: `Kartın dosyalarının %${percent}'i değişti (${p.area_touched}/${p.area_total})`,
+    marks: [
+      { text: "Testler yazıldı", done: p.tests_changed },
+      { text: "Kod değişti", done: p.area_touched > 0 },
+      { text: "ADR taslağı", done: p.adr_draft },
+    ],
+    lastChange,
+  };
+}
 
 const POSE: Record<SeatState, Pose> = { working: "typing", waiting: "seated", returned: "standing" };
 
@@ -374,6 +406,7 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
     sha: task?.sha ? task.sha.slice(0, SHA_SHORT) : null,
     shaFull: task?.sha ?? null,
     model: panelModel(view, agent),
+    progress: panelProgress(agent),
   };
 }
 

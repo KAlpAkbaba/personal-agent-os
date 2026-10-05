@@ -493,7 +493,14 @@ function New-CycleStatus {
         started_at    = [string]$script:cycle.started_at
         runs          = @($script:liveRuns | ForEach-Object {
                 $entry = [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at }
-                if (-not $Legacy) { $entry["model"] = $_.model }
+                if (-not $Legacy) {
+                    $entry["model"] = $_.model
+                    # The owner, 2026-10-05: how far the run has got, measured from its worktree.
+                    if ($_.dir -and @($_.area).Count -gt 0) {
+                        $progress = Get-TeamRunProgress -Worktree $_.dir -Base $Base -Area @($_.area) -TaskId ([string]$_.task)
+                        if ($null -ne $progress) { $entry["progress"] = $progress }
+                    }
+                }
                 $entry
             })
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
@@ -825,7 +832,9 @@ try {
             $boardEnvironment["PAGENTOS_TEAM_TOKEN_FILE"] = $QueueToken
         }
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp -Environment $boardEnvironment
-        $live = [pscustomobject]@{ task = $taskLabel; role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $seat }
+        # dir/area: what the Ofis panel measures the run's progress from (never sent as such).
+        $liveArea = $(if ($null -ne $Task) { @(Get-TeamProperty -InputObject $Task -Name "area" -Default @()) } else { @() })
+        $live = [pscustomobject]@{ task = $taskLabel; role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $seat; dir = [string]$WorkingDirectory; area = $liveArea }
         [void]$script:liveRuns.Add($live)
         $loweredFrom = ""
         if ([bool]$Pick.Lowered) {

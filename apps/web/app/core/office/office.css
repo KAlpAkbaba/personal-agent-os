@@ -740,3 +740,27 @@
   max-width: 100%;
   font: inherit;
 }
+
+/* The working run's measured progress in the panel (the owner, 2026-10-05). */
+.office-progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--office-floor-b, #20274d);
+  overflow: hidden;
+}
+.office-progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--office-neon, #38e1ff);
+}
+.office-progress-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+.office-progress-marks li[data-done="false"] {
+  opacity: 0.55;
+}

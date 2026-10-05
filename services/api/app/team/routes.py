@@ -354,12 +354,26 @@ STATUS_REFUSALS = {
 }
 
 
+class _RunProgress(_Strict):
+    """How far a live run has got, measured by the cycle from the run's own worktree (the
+    owner, 2026-10-05): how many of the card's area entries have a change, and three marks."""
+
+    area_total: int = Field(ge=0, le=500)
+    area_touched: int = Field(ge=0, le=500)
+    tests_changed: bool
+    adr_draft: bool
+    commits: int = Field(ge=0, le=10000)
+    last_change_at: _Stamp | None = None
+
+
 class _Run(_Strict):
     task: str
     role: _Role
     started_at: _Stamp
     #: The model the run was started on. An older cycle sends none.
     model: _ModelId | None = None
+    #: An older cycle sends none.
+    progress: _RunProgress | None = None
 
 
 class _UsageLimit(_Strict):

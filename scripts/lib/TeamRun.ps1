@@ -618,3 +618,82 @@ function New-TeamCycleReport {
     }
     return (($lines.ToArray()) -join "`n")
 }
+
+function Measure-TeamAreaProgress {
+    <#
+    .SYNOPSIS
+        How far a run's change has reached into its card's area (the owner, 2026-10-05: "kodun
+        yuzde kacini yazdigi"). Measured from the files, never from what the run says.
+
+    .DESCRIPTION
+        An area entry ending in "/" is a folder and counts ONCE, touched when any changed path
+        is inside it; any other entry is touched when that exact path changed. Paths compare
+        with "/" and case-insensitively (Windows). Pure: the caller hands in the changed paths.
+    #>
+    param([string[]]$Area = @(), [string[]]$Changed = @())
+    $norm = { param($p) (([string]$p) -replace '\\', '/').Trim().TrimStart('.', '/').ToLowerInvariant() }
+    $changedSet = @(@($Changed) | Where-Object { $_ } | ForEach-Object { & $norm $_ })
+    $entries = @(@($Area) | Where-Object { $_ } | ForEach-Object { & $norm $_ } | Select-Object -Unique)
+    $touched = 0
+    foreach ($entry in $entries) {
+        if ($entry.EndsWith("/")) {
+            if (@($changedSet | Where-Object { $_.StartsWith($entry) }).Count -gt 0) { $touched++ }
+        }
+        elseif ($changedSet -contains $entry) { $touched++ }
+    }
+    $tests = @($changedSet | Where-Object { $_ -match '(^|/)tests?/' -or $_ -match '\.tests\.ps1$' -or $_ -match '\.test\.tsx?$' }).Count -gt 0
+    return [pscustomobject]@{ AreaTotal = @($entries).Count; AreaTouched = $touched; TestsChanged = $tests }
+}
+
+function Get-TeamRunProgress {
+    <#
+    .SYNOPSIS
+        The live run's progress for the status document, or $null when its worktree cannot be
+        read. Cheap: three git calls, no model. Never throws (a status write must not fail on it).
+    #>
+    param([string]$Worktree, [string]$Base, [string[]]$Area = @(), [string]$TaskId = "")
+    try {
+        if (-not $Worktree -or -not (Test-Path -LiteralPath (Join-Path $Worktree ".git"))) { return $null }
+        $changed = New-Object System.Collections.ArrayList
+        $commits = 0
+        if ($Base) {
+            $diff = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("diff", "--name-only", "$Base...HEAD") -TimeoutSeconds 30
+            if ($diff.Success) { foreach ($l in @(([string]$diff.StdOut) -split "`r?`n")) { if ($l.Trim()) { [void]$changed.Add($l.Trim()) } } }
+            $count = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("rev-list", "--count", "$Base..HEAD") -TimeoutSeconds 30
+            if ($count.Success) { [void][int]::TryParse(([string]$count.StdOut).Trim(), [ref]$commits) }
+        }
+        $status = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("status", "--porcelain", "--untracked-files=all") -TimeoutSeconds 30
+        $newest = $null
+        if ($status.Success) {
+            foreach ($l in @(([string]$status.StdOut) -split "`r?`n")) {
+                if ($l.Length -lt 4) { continue }
+                $path = $l.Substring(3).Trim('"')
+                if ($path.Contains(" -> ")) { $path = $path.Substring($path.IndexOf(" -> ") + 4) }
+                [void]$changed.Add($path)
+                $full = Join-Path $Worktree $path
+                if (Test-Path -LiteralPath $full -PathType Leaf) {
+                    $t = (Get-Item -LiteralPath $full).LastWriteTimeUtc
+                    if ($null -eq $newest -or $t -gt $newest) { $newest = $t }
+                }
+            }
+        }
+        $last = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments @("log", "-1", "--format=%cI") -TimeoutSeconds 30
+        if ($last.Success -and ([string]$last.StdOut).Trim()) {
+            $t = ([datetime]::Parse(([string]$last.StdOut).Trim())).ToUniversalTime()
+            if ($null -eq $newest -or $t -gt $newest) { $newest = $t }
+        }
+        $m = Measure-TeamAreaProgress -Area $Area -Changed @($changed.ToArray())
+        $adr = $false
+        if ($TaskId) { $adr = Test-Path -LiteralPath (Join-Path $Worktree "team\plans\$TaskId-adr.md") }
+        $doc = [ordered]@{
+            area_total     = [Math]::Min(500, [int]$m.AreaTotal)
+            area_touched   = [Math]::Min(500, [int]$m.AreaTouched)
+            tests_changed  = [bool]$m.TestsChanged
+            adr_draft      = [bool]$adr
+            commits        = [Math]::Min(10000, [int]$commits)
+            last_change_at = $(if ($null -ne $newest) { $newest.ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture) } else { $null })
+        }
+        return $doc
+    }
+    catch { return $null }
+}

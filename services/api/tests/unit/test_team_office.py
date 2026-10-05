@@ -548,3 +548,37 @@ def test_a_cycle_seven_hours_old_with_a_two_minute_old_status_is_running_with_it
         "working",
         "alpha-task",
     )
+
+
+def test_a_run_carries_its_measured_progress_to_its_seat(owner):
+    """The owner, 2026-10-05: clicking a working seat shows how far its task has got - measured
+    by the cycle from the run's worktree, passed through untouched; an older cycle sends none."""
+    put = owner.put(
+        "/v1/team/queue/tasks/alpha-task",
+        json={"task": _task("alpha-task"), "expected_updated_at": None},
+    )
+    assert put.status_code == 200, put.text
+    owner.team_store.acquire_lock(machine="MAIL", cycle_id="c1", pid=7)
+    progress = {
+        "area_total": 4,
+        "area_touched": 2,
+        "tests_changed": True,
+        "adr_draft": False,
+        "commits": 3,
+        "last_change_at": "2026-10-05T16:00:00Z",
+    }
+    doc = _live_status([("alpha-task", "worker")])
+    doc["runs"][0]["progress"] = progress
+    assert owner.put(STATUS, json=doc).status_code == 200
+    assert _seat(owner.get(OFFICE).json(), "worker-1")["progress"] == progress
+    older = _live_status([("alpha-task", "worker")])
+    assert owner.put(STATUS, json=older).status_code == 200
+    assert "progress" not in _seat(owner.get(OFFICE).json(), "worker-1")
+    for bad in (
+        {**progress, "area_total": 501},
+        {**progress, "area_touched": -1},
+        {**progress, "extra": 1},
+    ):
+        wrong = _live_status([("alpha-task", "worker")])
+        wrong["runs"][0]["progress"] = bad
+        assert owner.put(STATUS, json=wrong).status_code == 422, bad
