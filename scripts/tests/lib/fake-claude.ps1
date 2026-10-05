@@ -16,7 +16,9 @@
       slow       the run sleeps for longer than the cycle lets it
       split      the lead's split run writes two sound tasks to the file its card names;
                  split-overlap / split-shared / split-missing write one task that breaks the
-                 rule named, any other scenario writes no file (cycle-lead-run)
+                 rule named, any other scenario writes no file (cycle-lead-run); a lead card
+                 that names a duty_file is the duty run whatever the scenario (pm-duty-stopped:
+                 PAGENTOS_FAKE_CLAUDE_DUTY_JSON is the file it writes, _DUTY_CARD where its card goes)
       limited    the FIRST worker run of a task answers with the subscription's usage-limit
                  error (reset time 200 s in the past); every later run is as approve
 
@@ -40,7 +42,8 @@
 
     The pool's hooks (cycle-seat-pool), independent of the scenario as well - described where
     they are read: PAGENTOS_FAKE_CLAUDE_SECONDS (how long each run takes),
-    PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS, PAGENTOS_FAKE_CLAUDE_SETTINGS (+ _JSON, _RUN).
+    PAGENTOS_FAKE_CLAUDE_SNAPSHOT_SECONDS, PAGENTOS_FAKE_CLAUDE_SETTINGS (+ _JSON, _RUN). And the
+    barrier (cycle-pool-test-barriers): PAGENTOS_FAKE_CLAUDE_MARKERS, _BARRIER, _BARRIER_SECONDS.
 #>
 # No param block, on purpose: with one, PowerShell binds the tool's `-p` to its own common
 # parameter -PipelineVariable and swallows the argument after it (`--output-format` never
@@ -108,6 +111,55 @@ if ($log) {
     $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; output = $format; verbose = $verbose; fallback_flag = $fallbackFlag; no_fallback_env = [string]$env:CLAUDE_CODE_NO_MODEL_FALLBACK; no_background_env = [string]$env:CLAUDE_CODE_DISABLE_BACKGROUND_TASKS; bash_max_timeout_env = [string]$env:BASH_MAX_TIMEOUT_MS; temp_env = [string]$env:TEMP; tmp_env = [string]$env:TMP; team_seat = [string]$env:PAGENTOS_TEAM_SEAT; team_task = [string]$env:PAGENTOS_TEAM_TASK; team_url = [string]$env:PAGENTOS_TEAM_URL; team_token_file = [string]$env:PAGENTOS_TEAM_TOKEN_FILE; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
     Add-SharedLine -Path $log -Line ($entry | ConvertTo-Json -Compress)
 }
+
+# cycle-pool-test-barriers hooks, independent of the scenario: the test decides the ORDER of events
+# instead of hoping a clock gives it (a snapshot taken a second after a start was ten seconds late
+# under load, 2026-10-02).
+#   PAGENTOS_FAKE_CLAUDE_MARKERS: a folder. Every run FIRST writes <role>-<task>.started there, holding
+#     the runs in flight as the markers say (a .started without its .ended, "task:role", sorted, this
+#     run among them), and writes <role>-<task>.ended just before it answers, holding how its barrier
+#     ended: "file" (it was opened), "guard" (nobody opened it) or "none" (it had none).
+#   PAGENTOS_FAKE_CLAUDE_BARRIER: "<role>:<task>=<file>[+<file>...]" entries, comma separated: that run
+#     waits after its .started marker until every file exists. A name that is not a full path is in
+#     the markers folder (inspector-ins-c.started: "until ins-c's inspector has started").
+#   PAGENTOS_FAKE_CLAUDE_BARRIER_SECONDS: the hang guard (default 60). It is not an assertion: a run
+#     whose barrier nobody opened goes on after it, and its .ended says "guard" for the test to see.
+$markers = [string]$env:PAGENTOS_FAKE_CLAUDE_MARKERS
+$barrierEnd = "none"
+function Write-Marker {
+    <# Whole or not at all: a reader never sees half a marker (written aside, then renamed). #>
+    param([string]$Name, $Document)
+    $path = Join-Path $markers $Name
+    $aside = "$path.$PID.tmp"
+    [System.IO.File]::WriteAllText($aside, ($Document | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    [System.IO.File]::Move($aside, $path)
+}
+if ($markers) {
+    if (-not (Test-Path -LiteralPath $markers)) { [void](New-Item -ItemType Directory -Force -Path $markers) }
+    $flying = @(Get-ChildItem -LiteralPath $markers -Filter "*.started" -File | Where-Object { -not (Test-Path -LiteralPath ([System.IO.Path]::ChangeExtension($_.FullName, ".ended"))) } |
+        ForEach-Object { $_.BaseName -replace '^([a-z]+)-(.+)$', '$2:$1' })
+    $flying = @(@($flying) + "${taskId}:$role" | Sort-Object -Unique)
+    # A run of the same task and role again (a rework): its own earlier end is not this run's.
+    $endedPath = Join-Path $markers "$role-$taskId.ended"
+    if (Test-Path -LiteralPath $endedPath) { Remove-Item -LiteralPath $endedPath -Force }
+    Write-Marker -Name "$role-$taskId.started" -Document ([ordered]@{ in_flight = ($flying -join ","); at = [datetime]::UtcNow.ToString("o") })
+}
+foreach ($entry in @(([string]$env:PAGENTOS_FAKE_CLAUDE_BARRIER).Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+    if ($entry -match '^([a-z]+):([a-z0-9*-]+)=(.+)$' -and $Matches[1] -eq $role -and ($Matches[2] -eq "*" -or $Matches[2] -eq $taskId)) {
+        $files = @($Matches[3].Split("+") | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { if ([System.IO.Path]::IsPathRooted($_)) { $_ } else { Join-Path $markers $_ } })
+        $guard = 60
+        if ([string]$env:PAGENTOS_FAKE_CLAUDE_BARRIER_SECONDS -match '^\d{1,4}$') { $guard = [int]$env:PAGENTOS_FAKE_CLAUDE_BARRIER_SECONDS }
+        $until = [datetime]::UtcNow.AddSeconds($guard)
+        $barrierEnd = "guard"
+        while ([datetime]::UtcNow -lt $until) {
+            if (@($files | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -eq 0) { $barrierEnd = "file"; break }
+            Start-Sleep -Milliseconds 50
+        }
+        break
+    }
+}
+$barrierSeen = [datetime]::UtcNow
 
 # The model the result says really ran: --model, unless the test names another one for this role.
 $ranModel = $model
@@ -208,6 +260,7 @@ foreach ($entry in @(([string]$env:PAGENTOS_FAKE_CLAUDE_SECONDS).Split(",") | Fo
         break
     }
 }
+if ($markers) { Write-Marker -Name "$role-$taskId.ended" -Document ([ordered]@{ barrier = $barrierEnd; released_at = $barrierSeen.ToString("o") }) }
 
 if ($scenario -eq "silent") {
     [Console]::Out.Write("I could not do that.")
@@ -266,6 +319,22 @@ switch ($role) {
         Send-Result -Text "1 öneri yazıldı: team/proposals/2026-09-30-anlati.md" -Cost $cost
     }
     "lead" {
+        # The Proje Yöneticisi's duty run for stopped tasks (pm-duty-stopped), whatever the scenario:
+        # its card names a duty_file. PAGENTOS_FAKE_CLAUDE_DUTY_CARD: the card is appended to that
+        # file; PAGENTOS_FAKE_CLAUDE_DUTY_JSON: the decision file's text, written as it is - unset,
+        # no file is written, as a run that failed to decide.
+        if ($card -match '(?m)^- duty_file: (\S+)') {
+            $dutyTarget = Join-Path $here ($Matches[1] -replace "/", "\")
+            if ([string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_CARD) { Add-SharedLine -Path ([string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_CARD) -Line $card }
+            $dutyText = [string]$env:PAGENTOS_FAKE_CLAUDE_DUTY_JSON
+            if ($dutyText) {
+                $folder = Split-Path -Parent $dutyTarget
+                if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+                [System.IO.File]::WriteAllText($dutyTarget, $dutyText, (New-Object System.Text.UTF8Encoding($false)))
+                Send-Result -Text "duty written: $dutyTarget" -Cost $cost
+            }
+            Send-Result -Text "I wrote no decision." -Cost $cost
+        }
         # The split run (cycle-lead-run): writes the file the card names, in the shape the
         # scenario asks for. Any other scenario writes nothing, as a lead that failed would.
         $target = ""

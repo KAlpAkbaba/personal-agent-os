@@ -10,7 +10,8 @@ the cycle reads it, the Ofis page writes it; ``models_setting`` holds its rules.
 
 Queue: the cycle's own surface (pilot-02). GET the whole queue; PUT one task by id with the
 ``updated_at`` the writer last saw (409 when it is stale); POST the lock (acquire / release,
-the six-hour staleness rule), the cycle report as text and a proposal's text (what the Onay
+the six-hour staleness rule counted from the holder's last status - the store reads it beside
+the lock), the cycle report as text and a proposal's text (what the Onay
 Merkezi shows for the idea that names it). All of it under the owner session,
 over whichever store ``app.state.team_store`` is: the database on the Cloud Core, otherwise
 the files under ``app.state.team_root``.
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -30,13 +32,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.identity.dependencies import require_owner_session
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import InvalidVocabulary
-from app.team import approvals, models_setting, office, trials
+from app.team import approvals, models_setting, office, progress, trials
 from app.team import store as team_store
 
 router = APIRouter(dependencies=[Depends(require_owner_session)])
 
 #: services/api/app/team/routes.py -> the repository root's ``team/``.
 DEFAULT_TEAM_ROOT = Path(__file__).resolve().parents[4] / "team"
+#: The repository tree whose roadmap and v1.0 matrix the Ofis's İlerleme strip reads.
+DEFAULT_PROGRESS_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _team_root(request: Request) -> Path:
@@ -77,7 +81,7 @@ async def list_approvals(request: Request) -> dict[str, Any]:
             "trials": trials.list_open(queue),
             "cycle_report": store.newest_report(),
             # For information; whether a decision is taken now is ``decisions_open``.
-            "cycle_running": team_store.lock_is_running(lock, at),
+            "cycle_running": team_store.lock_is_running(lock, at, store.read_status()),
             "decisions_open": approvals.decisions_open(store, lock, at),
         }
 
@@ -398,6 +402,12 @@ class StatusRequest(_Strict):
     #: ADR-0214 addendum 7. Optional: a cycle older than the model policy sends neither this
     #: nor a run's ``model``, and is still accepted.
     limits: _Limits | None = None
+    #: The Claude account the team runs under, as the team wrapper names it: the folder of
+    #: CLAUDE_CONFIG_DIR (".claude-hesap3") or "varsayilan". A folder name, never an e-mail -
+    #: the pattern refuses '@' and spaces. Optional: an older cycle does not send it.
+    account: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$"
+    )
     updated_at: _Stamp
 
 
@@ -520,6 +530,20 @@ async def read_office(request: Request) -> dict[str, Any]:
             approvals.list_pending(queue, root, store),
             team_store.utcnow(),
             models=_models_in_force(store),
-        )
+        ) | {"progress": _progress(request)}
 
     return await asyncio.to_thread(load)
+
+
+def _progress(request: Request) -> dict[str, Any]:
+    """The İlerleme strip (office-progress): additive, so a page that predates it ignores it."""
+    # The api image ships neither document: production mounts the two, read-only, under
+    # PAGENTOS_PROGRESS_ROOT (infra/docker/docker-compose.prod.yml); a checkout reads its tree.
+    root = (
+        getattr(request.app.state, "progress_root", None)
+        or os.environ.get("PAGENTOS_PROGRESS_ROOT", "").strip()
+        or DEFAULT_PROGRESS_ROOT
+    )
+    settings = getattr(request.app.state, "settings", None)
+    release = (getattr(settings, "release", None) or "").strip()
+    return progress.progress(Path(root), as_of=release or None)

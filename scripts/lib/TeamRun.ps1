@@ -256,6 +256,72 @@ function New-TeamSplitCard {
     return (($lines.ToArray()) -join "`n")
 }
 
+function New-TeamDutyCard {
+    <#
+    .SYNOPSIS
+        The prompt of the Proje Yöneticisi's duty run (pm-duty-stopped): the stopped tasks, each
+        with what it needs to be judged, and the one file to write. The run has Read, Grep, Glob
+        and Write; the cycle validates the file (Test-TeamDuty) and applies it.
+    .DESCRIPTION
+        No line starts with "- id:" - the run is about several tasks, not one.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Tasks,
+        [Parameter(Mandatory = $true)][string]$CycleId,
+        [Parameter(Mandatory = $true)][string]$DutyFile
+    )
+    $flat = { param($Value) return ((([string]$Value) -replace '\s+', ' ').Trim()) }
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add("# Nöbet run (lead / Proje Yöneticisi, cycle $CycleId)")
+    [void]$lines.Add("")
+    [void]$lines.Add("This run does ONE thing: for each stopped task below, decide what happens to it. You have Read, Grep, Glob")
+    [void]$lines.Add("and Write; you run no command, edit no file and dispatch no agent. Write exactly one file, the one named")
+    [void]$lines.Add("in duty_file. Follow the section 'Nöbet: duran işler (Proje Yöneticisi)' of your role file.")
+    [void]$lines.Add("")
+    [void]$lines.Add("- duty_file: $DutyFile")
+    [void]$lines.Add("")
+    [void]$lines.Add("duty_file is ONE JSON object: { `"decisions`": [ { `"task`": `"<id>`", `"action`": `"return`" | `"grant_and_return`" | `"escalate`",")
+    [void]$lines.Add("`"grant`": [`"repo/relative/path`"], `"reason`": `"<Türkçe, en çok 1200 karakter: işçinin ne yapacağı>`" } ] }.")
+    [void]$lines.Add("At most one decision per task; a task you leave out stays stopped. `"grant`" only with grant_and_return: 1 to 5")
+    [void]$lines.Add("plain repository-relative paths (no '..', no drive, no leading slash). The cycle - not you - checks the file and")
+    [void]$lines.Add("takes it WHOLE or refuses it whole: a task not listed here, an unknown action, an empty reason, a grant of a")
+    [void]$lines.Add("lead-protected path (the shared files, .claude/agents, the constitution, CLAUDE.md, secrets, the recovery roots,")
+    [void]$lines.Add("scripts/lib/TeamArea.ps1 and the rest of its list) all refuse it. A return that would put the task beside")
+    [void]$lines.Add("another task holding the same files is not forced: the task waits, stopped, until that work is done.")
+    [void]$lines.Add("")
+    [void]$lines.Add("## Duran işler")
+    foreach ($task in @($Tasks)) {
+        [void]$lines.Add("")
+        [void]$lines.Add("### $([string](Get-TeamProperty -InputObject $task -Name 'id' -Default '?'))")
+        foreach ($name in @("title", "branch", "sha", "returns", "failed_runs", "updated_at")) {
+            $value = Get-TeamProperty -InputObject $task -Name $name
+            if ($null -ne $value -and ([string]$value).Trim()) { [void]$lines.Add("  - ${name}: " + (& $flat $value)) }
+        }
+        $area = @(Get-TeamProperty -InputObject $task -Name "area" -Default @() | ForEach-Object { [string]$_ })
+        [void]$lines.Add("  - area: " + ($area -join ", "))
+        $depends = @(Get-TeamProperty -InputObject $task -Name "depends_on" -Default @() | ForEach-Object { [string]$_ })
+        [void]$lines.Add("  - depends_on: " + $(if (@($depends).Count -gt 0) { $depends -join ", " } else { "-" }))
+        $reason = & $flat (Get-TeamProperty -InputObject $task -Name "reason" -Default "")
+        if ($reason.Length -gt 1500) { $reason = $reason.Substring(0, 1500) + " [...]" }
+        [void]$lines.Add("  - stop reason: " + $(if ($reason) { $reason } else { "(none written)" }))
+        $reports = @(Get-TeamProperty -InputObject $task -Name "reports" -Default @() | Where-Object { $null -ne $_ })
+        $last = if (@($reports).Count -gt 3) { @($reports[(@($reports).Count - 3)..(@($reports).Count - 1)]) } else { @($reports) }
+        if (@($last).Count -eq 0) { [void]$lines.Add("  - last reports: none") }
+        else {
+            [void]$lines.Add("  - last reports (oldest first; read the inspector's in full):")
+            foreach ($entry in $last) {
+                $file = [string](Get-TeamProperty -InputObject $entry -Name "file" -Default "")
+                $role = [string](Get-TeamProperty -InputObject $entry -Name "role" -Default "?")
+                $cycle = [string](Get-TeamProperty -InputObject $entry -Name "cycle" -Default "?")
+                [void]$lines.Add("    - $(if ($file) { $file } else { '(no file)' }) ($role, cycle $cycle)")
+            }
+        }
+    }
+    [void]$lines.Add("")
+    [void]$lines.Add("Return your report as your final message, at most 40 lines: one line per task, the action and why.")
+    return (($lines.ToArray()) -join "`n")
+}
+
 function Get-TeamRunArguments {
     <#
     .SYNOPSIS
@@ -428,6 +494,27 @@ function Wait-TeamRun {
 
 # ---------------------------------------------------------------------------- the report
 
+function Format-TeamOwnerTrial {
+    <#
+    .SYNOPSIS
+        One owner trial as one Turkish report line (ADR-0258): the object form names its
+        sentence, machine, expectation and state; the old plain-string form prints as it is.
+    #>
+    param([Parameter(Mandatory = $true)][string]$TaskId, [Parameter(Mandatory = $true)]$Trial)
+    if ($Trial -is [string]) { return "${TaskId}: $Trial" }
+    $sentence = [string](Get-TeamProperty -InputObject $Trial -Name "sentence" -Default "")
+    $machine = [string](Get-TeamProperty -InputObject $Trial -Name "machine" -Default "?")
+    $expect = [string](Get-TeamProperty -InputObject $Trial -Name "expect" -Default "")
+    $verdict = [string](Get-TeamProperty -InputObject $Trial -Name "verdict" -Default "")
+    $said = [string](Get-TeamProperty -InputObject $Trial -Name "said" -Default "")
+    $state = switch ($verdict) {
+        "oldu" { "oldu" }
+        "olmadi" { if ($said) { "olmadı ($said)" } else { "olmadı" } }
+        default { "denenmedi" }
+    }
+    return "${TaskId}: `"$sentence`" — makine: $machine — beklenen: $expect — durum: $state"
+}
+
 function New-TeamCycleReport {
     <#
     .SYNOPSIS
@@ -481,7 +568,7 @@ function New-TeamCycleReport {
     $real = @($tasks | Where-Object { $_.state -eq "awaiting_real_evidence" } | ForEach-Object {
             $rows = @(Get-TeamProperty -InputObject $_ -Name "owner_trials" -Default @())
             if (@($rows).Count -eq 0) { "$($_.id) — $($_.title): deneme cümlesi yazılmamış" }
-            else { foreach ($trial in $rows) { "$($_.id): $trial" } }
+            else { foreach ($trial in $rows) { Format-TeamOwnerTrial -TaskId $_.id -Trial $trial } }
         })
     Add-Section -Title "Sahibin gerçek cihazda deneyecekleri (cümle cümle, hangi makinede)" -Rows $real
 

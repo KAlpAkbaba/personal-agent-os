@@ -89,6 +89,8 @@ export type OfficeTask = {
 export type OfficeCycle = {
   cycle_id: string | null;
   machine: string | null;
+  /** The Claude account the team runs under (".claude-hesap3", "varsayilan"); absent from an older API or cycle. */
+  account?: string | null;
   started_at: string | null;
   running: boolean;
   running_agents: number;
@@ -100,6 +102,36 @@ export type OfficeCycle = {
   updated_at: string | null;
 };
 
+export type JarvisState = "have" | "partial" | "missing" | "never" | "unknown";
+export type StepState = "done" | "partial" | "open";
+export type OrderStep = { n: number; title: string; state: StepState };
+
+/** The İlerleme strip (office-progress): read by the server from the roadmap and the v1.0
+ * matrix of the tree it serves. A section it could not read is null. */
+export type OfficeProgress = {
+  jarvis: {
+    have: number;
+    partial: number;
+    missing: number;
+    never: number;
+    unknown: string[];
+    counted: number;
+    percent: number | null;
+    rows: { name: string; state: JarvisState }[];
+  } | null;
+  order: { steps: OrderStep[]; percent: number | null; next: OrderStep | null } | null;
+  v1: {
+    total: number;
+    done: number;
+    by_status: Record<string, number>;
+    by_proof: Record<string, number>;
+    percent_done: number | null;
+    percent_proven_real: number | null;
+  } | null;
+  rule: string;
+  as_of: string | null;
+};
+
 export type OfficeView = {
   cycle: OfficeCycle;
   agents: OfficeAgent[];
@@ -107,6 +139,8 @@ export type OfficeView = {
   approvals: PendingApproval[];
   /** The setting in force; absent from an API older than the model policy. */
   models?: ModelSetting;
+  /** Additive (office-progress): an older server does not send it. */
+  progress?: OfficeProgress | null;
 };
 
 export async function fetchOffice(): Promise<OfficeView> {

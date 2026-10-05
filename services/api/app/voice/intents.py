@@ -8508,6 +8508,11 @@ ROUTE_REPAIR_ASCII_FOLD: Final = "ascii_fold"
 ROUTE_REPAIR_CAPS_FOLD: Final = "caps_fold"
 #: ADR-0224: a token the STT wrote as one word was read as the two it is ("hesapmakinesini").
 ROUTE_REPAIR_FUSED: Final = "fused"
+#: ADR-0224 addendum 4, step 2: a word read without the ending the STT invented ("notü").
+ROUTE_REPAIR_INVENTED: Final = "invented"
+#: ... and two rules that claim the same words once a word is repaired: written
+#: "contested:<the other intent>", so the policy can name both and ask.
+ROUTE_REPAIR_CONTESTED: Final = "contested"
 #: The confidence a rule reading earns by how it matched (``understanding.combine``'s
 #: ``RULE_CONFIDENCE``, held equal by a test): layer 1 dropped a suffix / repaired a word.
 _SUFFIX_DROPPED_CONFIDENCE: Final = 0.9
@@ -8527,9 +8532,10 @@ def _layer_one_route(
     text: str, first: ResolvedIntent, state: dict[str, Any]
 ) -> ResolvedIntent | None:
     """ADR-0224: the rule tables read layer 1's reading (``normalize.lemma_reading``) - every
-    polite form of a verb it knows as the bare imperative, a fused token as its two words -
-    through the very same rules, for every table at once. None when layer 1 changes nothing
-    or its reading is not taken; ``first`` is what the words as heard reached.
+    polite form of a verb it knows as the bare imperative, a fused token as its two words, a
+    word without the ending the STT invented - through the very same rules, for every table
+    at once. None when layer 1 changes nothing or its reading is not taken; ``first`` is what
+    the words as heard reached.
 
     * The surface form wins where a table lists it: "Raporu okuyun." and "Hesap makinesini
       açın." are exact closed forms and are not re-read.
@@ -8541,6 +8547,10 @@ def _layer_one_route(
       hatırla: ışıkları söndürün." is a memory, not a window closed). The one exception is
       a question read with no verb at all (:func:`_asks_with_no_verb_of_its_own`):
       "Kendi kendini geliştirmeyi duraklatın." is a pause, not a question about it.
+    * Except where a REPAIRED word lets another table claim the very words the table as
+      heard claimed (:func:`_claim_the_same_words`: "Şubug'ı kendin düzelt."): two claimants,
+      neither exact - the words-as-heard reading at the confusion's confidence, the other
+      named in ``route_repair`` ("contested:selfdev_fix"); the policy asks between them.
     * A split reading carries the slots: the surface ones were read off the fused token.
     * Never into a mail or calendar ACTION (deferred by the owner, B45/B46: "Gönderir
       misin?" is not newly a send); reading mail changes nothing the owner can see.
@@ -8551,33 +8561,49 @@ def _layer_one_route(
     if reading is None:
         return None
     owned = owned_by_a_table(first)
+    listed = _listed_verb_forms()
+    # Only listed polite forms and invented endings changed: the words as heard were read.
+    as_heard = not reading.splits and all(said in listed for said, _ in reading.dropped)
     if owned:
         if first.intent.value.startswith(_REPAIR_NEVER_PREFIXES):
             return None
-        listed = _listed_verb_forms()
-        if not reading.splits and all(said in listed for said, _ in reading.dropped):
+        if as_heard and not reading.invented:
             return None
     second = _resolve_intent_rules(reading.text, **state)
     if not owned_by_a_table(second):
         return None
     if second.intent.value.startswith(_REPAIR_NEVER_PREFIXES) and second.klass != KLASS_QUERY:
         return None
-    if (
-        owned
-        and second.intent is not first.intent
-        and not _asks_with_no_verb_of_its_own(text, first, reading)
-    ):
-        return None
+    repaired_word = bool(reading.splits or reading.invented)
     labels = [
         label
         for label, used in (
             (ROUTE_REPAIR_POLITE, reading.dropped),
             (ROUTE_REPAIR_FUSED, reading.splits),
+            (ROUTE_REPAIR_INVENTED, reading.invented),
         )
         if used
     ]
-    ceiling = _REPAIRED_WORD_CONFIDENCE if reading.splits else _SUFFIX_DROPPED_CONFIDENCE
-    keeps_slots = owned and not reading.splits and second.intent is first.intent
+    if owned and second.intent is first.intent and as_heard:
+        return None  # an invented ending the same table reads either way changes nothing
+    if (
+        owned
+        and second.intent is not first.intent
+        and not _asks_with_no_verb_of_its_own(text, first, reading)
+    ):
+        if repaired_word and _claim_the_same_words(text, first, second):
+            # Two claimants, neither exact: the looser rule took the words as heard only
+            # because the STT broke a word the other rule needed. MEDIUM at most, both named;
+            # the policy asks (ADR-0224 addendum 4, step 2).
+            contested = f"{ROUTE_REPAIR_CONTESTED}:{second.intent.value}"
+            return replace(
+                first,
+                route_repair="+".join([*labels, contested]),
+                confidence=min(first.confidence, _REPAIRED_WORD_CONFIDENCE),
+            )
+        return None
+    ceiling = _REPAIRED_WORD_CONFIDENCE if repaired_word else _SUFFIX_DROPPED_CONFIDENCE
+    keeps_slots = owned and not repaired_word and second.intent is first.intent
     chosen = first if keeps_slots else second
     return replace(
         chosen, route_repair="+".join(labels), confidence=min(chosen.confidence, ceiling)
@@ -8586,6 +8612,16 @@ def _layer_one_route(
 
 #: A clause ends inside the sentence: what stands beside it may be the owner's dictated words.
 _CLAUSE_BREAK_RE: Final[re.Pattern[str]] = re.compile(r"[,;:.!?…]\s+\S")
+
+
+def _claim_the_same_words(text: str, first: ResolvedIntent, second: ResolvedIntent) -> bool:
+    """The rule that read the words as heard and the rule that read layer 1's repair rest on
+    the same word ("düzelt" of "bug'ı düzelt", "yeniden" of "yeniden çiz"): two claimants of
+    one command. A table that owns the sentence for OTHER words - a second command, dictated
+    content after a clause break - is not contested by a repaired word."""
+    if _CLAUSE_BREAK_RE.search(text):
+        return False
+    return bool(set(first.matched.split()) & set(second.matched.split()))
 
 
 def _asks_with_no_verb_of_its_own(text: str, first: ResolvedIntent, reading: Any) -> bool:

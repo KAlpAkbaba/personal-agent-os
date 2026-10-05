@@ -10,8 +10,16 @@
     dependency must be ON MAIN) waited for a person. The scheduled task runs this after the
     cycle. For every integration branch that holds merged tasks and is ahead of main:
 
-      1. the team lock is taken (the file or the Cloud Core's, the cycle's own functions) as the
-         cycle 'integrate-<branch>', and released in `finally`;
+      1. in API mode the step's OWN lock is taken first - a machine-local file (pid and start
+         time; a dead holder's file is taken over and said), so two gates never overlap on one
+         machine - and released in `finally` on every path. Then the team lock (the file or the
+         Cloud Core's, the cycle's own functions) is taken as the cycle 'integrate-<branch>' and
+         released in `finally` - EXCEPT with -BesideCycle (API mode), where the cycle's lock is
+         never read, taken or released and the cycle runs while the gate does. A result is then
+         written onto a task only if the store, read again, still has it 'merged' on the same
+         integration branch with the same sha; otherwise it is dropped and named. The wiring
+         may grow scripts/quality-gate.ps1, never take a step, an Assert-ExitCode line or its
+         'QUALITY GATE: PASS' line out of it (the run is refused, like a disallowed file);
       2. in .claude/worktrees/gate/<branch> - never the main checkout, the owner works there -
          main is merged into the branch. A conflict stops the tasks ('main ile çakışma') and
          forces nothing;
@@ -117,7 +125,14 @@ param(
     [switch]$DryRun,
     [string]$QueueUrl = "",
     # A PATH to the file holding the owner-session token; a token is never a parameter.
-    [string]$QueueToken = ""
+    [string]$QueueToken = "",
+    # API mode only: the step runs beside a cycle of this machine and never reads, takes or
+    # releases the cycle's lock (its own lock still keeps two gates apart). Passed by the
+    # scheduled call only once the gate has a database of its own (card gate-own-database).
+    [switch]$BesideCycle,
+    # The step's own lock (API mode): a machine-local file, outside the repository. "" = under
+    # %LOCALAPPDATA%\PagentOS. The tests name one of their own.
+    [string]$StepLockPath = ""
 )
 
 Set-StrictMode -Version Latest
@@ -152,10 +167,25 @@ $useApi = [bool]$QueueUrl
 if ($useApi -and -not $QueueToken) { throw "-QueueUrl needs -QueueToken: the path of a file holding the token" }
 $apiStore = $null
 if ($useApi) { $apiStore = New-TeamApiStore -Url $QueueUrl -TokenFile $QueueToken }
+# In file mode the queue has ONE writer, the holder of the cycle's lock: the step takes it, as always.
+$runsBesideCycle = $useApi -and $BesideCycle
+if ($BesideCycle -and -not $useApi) { Write-Host "-BesideCycle has no effect in file mode: the cycle's lock is taken (the queue file has one writer)" }
+$localRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+$stepLockFile = if ($StepLockPath) { $StepLockPath } else { Join-Path $localRoot "PagentOS\integrate-step.lock" }
 
 function Save-Queue {
-    if ($useApi) { Save-TeamQueueApi -Store $apiStore -Queue $script:queue }
-    else { Write-TeamJson -Path $queuePath -Document $script:queue }
+    <#
+        Writes the results of one branch's tasks. In API mode the cycle may have moved a task
+        while the gate ran: each task is READ AGAIN from the store, and its result is written only
+        when it is still the task the step took (merged, the same integration branch, the same
+        sha), on top of what others changed. The tasks whose result was dropped are answered.
+    #>
+    param([object[]]$Tasks = @())
+    if (-not $useApi) { Write-TeamJson -Path $queuePath -Document $script:queue; return @() }
+    $fresh = Read-TeamQueueApi -Store $apiStore
+    $merged = Merge-TeamStepResults -Ours $script:queue -Fresh $fresh -Taken $script:taken -Ids @(@($Tasks) | ForEach-Object { [string]$_.id })
+    Save-TeamQueueApi -Store $apiStore -Queue $merged.Queue
+    return @($merged.Dropped)
 }
 
 # Resolved before anything is taken or written: an .exe or a .cmd, never a .ps1 (a given path
@@ -171,6 +201,9 @@ if (@($problems).Count -gt 0) {
     foreach ($problem in $problems) { Write-Host "  - $problem" }
     exit 2
 }
+# Each task as the step took it: a result is written only onto the task it was gated as (Save-Queue).
+$taken = @{}
+foreach ($task in @(Get-TeamTasks -Queue $queue)) { $taken[[string]$task.id] = (ConvertTo-Json -InputObject $task -Depth 12 -Compress) }
 
 # git never asks a question here: a push that wants a password fails instead of waiting for one.
 $env:GIT_TERMINAL_PROMPT = "0"
@@ -322,10 +355,13 @@ function Write-Skipped {
     catch { Write-Host "the line was not written to integrate-skipped.log: $($_.Exception.Message)" }
 }
 
-# ------------------------------------------------------------------ the lock (as the cycle takes it)
+# ------------------------------------------------------------------ the cycle's lock, as the cycle takes it
+# Beside the cycle (API mode, -BesideCycle) it is not even read: the cycle runs while the gate does,
+# and only the step's own lock (below) keeps two gates apart.
 
 $lock = $null
-if ($useApi) { $lock = Get-TeamLockApi -Store $apiStore }
+if ($runsBesideCycle) { }
+elseif ($useApi) { $lock = Get-TeamLockApi -Store $apiStore }
 elseif (Test-Path -LiteralPath $lockPath) { $lock = Read-TeamJson -Path $lockPath }
 $decision = Get-TeamLockDecision -Lock $lock -Machine $Machine -Now $started
 if ($decision.Kind -eq "ours") {
@@ -360,39 +396,6 @@ if ($DryRun) {
     }
     exit 0
 }
-
-if (-not $decision.MayRun) {
-    Write-Skipped -Sentence "kilit $($decision.Holder) makinesinde ($($decision.Since)); bu adım hiçbir şey çalıştırmadı"
-    Write-Host "the lock is held by $($decision.Holder) since $($decision.Since); nothing was done"
-    exit 3
-}
-if ($decision.Kind -eq "stale") { [void]$risks.Add("bayat kilit devralındı: $($decision.Holder), $($decision.Since)") }
-if ($decision.Kind -eq "dead") { [void]$risks.Add("bu makinenin ölmüş bir koşusunun kilidi devralındı ($($decision.Since))") }
-
-# ------------------------------------------------------------------ Docker (shared, and the gate needs it)
-
-if (@($pending | Where-Object { $_.Ahead -and $null -eq $_.Unapplied }).Count -gt 0) {
-    $dockerUp = $false
-    if ($dockerTool) {
-        try { $dockerUp = [bool](Invoke-NativeProcess -FilePath $dockerTool -Arguments @("info") -TimeoutSeconds 90).Success } catch { $dockerUp = $false }
-    }
-    if (-not $dockerUp) {
-        Write-Skipped -Sentence "Docker çalışmıyor; kapı koşmadı, hiçbir şey değişmedi (Docker Desktop açılınca bir sonraki adım dener)"
-        Write-Host "Docker is not running (Docker calismiyor); nothing was done"
-        exit 4
-    }
-}
-
-$lockCycle = "integrate-" + [string]$pending[0].Branch
-if ($useApi) {
-    $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $lockCycle -TakeoverDead ($decision.Kind -eq "dead")
-    if (-not [bool]$taken.acquired) {
-        Write-Skipped -Sentence "kilit $($taken.holder) makinesinde ($($taken.since)); bu adım hiçbir şey çalıştırmadı"
-        Write-Host "the lock was taken by $($taken.holder); nothing was done"
-        exit 3
-    }
-}
-else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $lockCycle -Now $started) }
 
 # ------------------------------------------------------------------ one branch
 
@@ -679,6 +682,7 @@ function Invoke-BranchIntegration {
         $named = @($notes | ForEach-Object { @($_.Named) } | Where-Object { $_ })
         $changed = @()
         $refused = @()
+        $shrunk = @()
         $headAfter = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
         if (-not (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $beforeLead -Of $headAfter)) { $refused = @("(HEAD dalın dışına taşındı)") }
         else {
@@ -689,12 +693,21 @@ function Invoke-BranchIntegration {
             $candidate = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
             $changed = @(Get-TeamCommittedFiles -Worktree $tree -From $beforeLead -To $candidate)
             $refused = @(Get-TeamLeadRefusedFiles -Changed $changed -NamedFiles $named)
+            # The gate script is the wiring's to GROW: a step, an exit-code check or the last word taken out of it
+            # would make the gate green on less. Judged from the committed texts, never by the model.
+            $gateFile = "scripts/quality-gate.ps1"
+            if (@($changed | Where-Object { ([string]$_ -replace '\\', '/') -eq $gateFile }).Count -gt 0) {
+                $shrunk = @(Get-TeamGateShrink -Before (Get-TeamFileAtCommit -RepoRoot $tree -Commit $beforeLead -Path $gateFile) -After (Get-TeamFileAtCommit -RepoRoot $tree -Commit $candidate -Path $gateFile))
+            }
         }
-        if (@($refused).Count -gt 0) {
+        if (@($refused).Count -gt 0 -or @($shrunk).Count -gt 0) {
             # The gate worktree is this step's own: what the run wrote is discarded, whole.
             [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $tip)
-            $reason = "lead koşusu izinsiz dosya değiştirdi: " + ((@($refused) | Select-Object -First 8) -join ", ") + "; koşu reddedildi, hiçbir şey birleştirilmedi"
-            $stopped = Add-Strike -Item $Item -Number $number -Result "lead_refused" -More @{ sha = $tip; files = @($refused) }
+            $said = @()
+            if (@($refused).Count -gt 0) { $said += "lead koşusu izinsiz dosya değiştirdi: " + ((@($refused) | Select-Object -First 8) -join ", ") }
+            if (@($shrunk).Count -gt 0) { $said += "lead koşusu kapıyı küçülttü ($gateFile): " + ((@($shrunk) | Select-Object -First 8) -join "; ") }
+            $reason = ($said -join "; ") + "; koşu reddedildi, hiçbir şey birleştirilmedi"
+            $stopped = Add-Strike -Item $Item -Number $number -Result "lead_refused" -More @{ sha = $tip; files = @($refused); gate_lines = @($shrunk) }
             if ($stopped) { $reason += " | " + $stopSentence; [void]$script:stops.Add("${integration}: $stopSentence") }
             foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
             $Outcome.Result = "lead koşusu reddedildi"
@@ -857,8 +870,62 @@ function Invoke-BranchIntegration {
     return $code
 }
 
+# ------------------------------------------------------------------ the step's own lock (API mode)
+# Two gates never run at once on one machine. In file mode the cycle's lock does that (one writer).
+
+$stepLock = $null
+if ($useApi) {
+    $stepLock = Enter-TeamStepLock -Path $stepLockFile -Machine $Machine
+    if (-not $stepLock.Taken) {
+        $whose = if ($stepLock.Holder -gt 0) { "pid $($stepLock.Holder), $($stepLock.Since)" } else { "kilit dosyası açılamadı: $stepLockFile" }
+        Write-Skipped -Sentence "kilit bu makinenin başka bir entegrasyon adımında ($whose); bu adım hiçbir şey çalıştırmadı"
+        Write-Host "the integration step's own lock is held ($whose); nothing was done"
+        exit 3
+    }
+    if ($stepLock.TookOver) { [void]$risks.Add("bu makinenin ölmüş bir entegrasyon adımının kilidi devralındı ($($stepLock.TookOver))") }
+}
+
 $exitCode = 0
+$cycleLockTaken = $false
+$lockCycle = "integrate-" + [string]$pending[0].Branch
 try {
+    if (-not $decision.MayRun) {
+        Write-Skipped -Sentence "kilit $($decision.Holder) makinesinde ($($decision.Since)); bu adım hiçbir şey çalıştırmadı"
+        Write-Host "the lock is held by $($decision.Holder) since $($decision.Since); nothing was done"
+        exit 3
+    }
+    if ($decision.Kind -eq "stale") { [void]$risks.Add("bayat kilit devralındı: $($decision.Holder), $($decision.Since)") }
+    if ($decision.Kind -eq "dead") { [void]$risks.Add("bu makinenin ölmüş bir koşusunun kilidi devralındı ($($decision.Since))") }
+
+    # ---- Docker (shared, and the gate needs it)
+    if (@($pending | Where-Object { $_.Ahead -and $null -eq $_.Unapplied }).Count -gt 0) {
+        $dockerUp = $false
+        if ($dockerTool) {
+            try { $dockerUp = [bool](Invoke-NativeProcess -FilePath $dockerTool -Arguments @("info") -TimeoutSeconds 90).Success } catch { $dockerUp = $false }
+        }
+        if (-not $dockerUp) {
+            Write-Skipped -Sentence "Docker çalışmıyor; kapı koşmadı, hiçbir şey değişmedi (Docker Desktop açılınca bir sonraki adım dener)"
+            Write-Host "Docker is not running (Docker calismiyor); nothing was done"
+            exit 4
+        }
+    }
+
+    # ---- the cycle's lock, held for the whole gate - unless the step runs beside the cycle
+    if ($runsBesideCycle) { Write-Host "beside the cycle (-BesideCycle): the cycle's lock is not taken; the step's own lock is held" }
+    elseif ($useApi) {
+        $acquired = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $lockCycle -TakeoverDead ($decision.Kind -eq "dead")
+        if (-not [bool]$acquired.acquired) {
+            Write-Skipped -Sentence "kilit $($acquired.holder) makinesinde ($($acquired.since)); bu adım hiçbir şey çalıştırmadı"
+            Write-Host "the lock was taken by $($acquired.holder); nothing was done"
+            exit 3
+        }
+        $cycleLockTaken = $true
+    }
+    else {
+        Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $lockCycle -Now $started)
+        $cycleLockTaken = $true
+    }
+
     foreach ($item in $pending) {
         $outcome = New-Outcome -Item $item
         $code = 12
@@ -882,7 +949,12 @@ try {
             }
         }
         try {
-            Save-Queue
+            foreach ($drop in @(Save-Queue -Tasks @($item.Tasks))) {
+                # The cycle moved this task while the gate ran: its word stands, this result is not written.
+                $line = "kapı koşarken döngü değiştirdi, sonucu YAZILMADI: $($drop.Id) ($($drop.Why))"
+                [void]$outcome.Lines.Add($line)
+                Write-Host "  $line"
+            }
             if ($item.Verdict -gt 0) {
                 # The queue has the red gate's verdict: the record says so, and no later run writes it again.
                 $record = Read-TeamJson -Path (Join-Path $item.Directory "gate-$($item.Verdict).json")
@@ -900,10 +972,15 @@ try {
     Save-Reports
 }
 finally {
-    if ($useApi) {
-        try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $lockCycle }
-        catch { Write-Host "the lock was not released in the queue store: $($_.Exception.Message)" }
+    if ($cycleLockTaken) {
+        if ($useApi) {
+            try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $lockCycle }
+            catch { Write-Host "the lock was not released in the queue store: $($_.Exception.Message)" }
+        }
+        else { Write-TeamJson -Path $lockPath -Document (New-TeamLockReleased) }
     }
-    else { Write-TeamJson -Path $lockPath -Document (New-TeamLockReleased) }
+    # On every path - green, red, a refused wiring, a moved ref, a limit, an error, an early stop.
+    try { Exit-TeamStepLock -Lock $stepLock }
+    catch { Write-Host "the step's own lock was not released ($stepLockFile): $($_.Exception.Message); the next step takes it over once this process is gone" }
 }
 exit $exitCode

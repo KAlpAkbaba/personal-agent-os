@@ -209,6 +209,116 @@ function Get-TeamLeadRefusedFiles {
             Where-Object { -not (Test-TeamLeadFileAllowed -Path ([string]$_) -NamedFiles $NamedFiles) })
 }
 
+function Get-TeamGateShrink {
+    <#
+    .SYNOPSIS
+        What a wiring run took OUT of the gate script it is then judged by: every line holding
+        `Invoke-Step` or `Assert-ExitCode` that the committed file has fewer of than before
+        (removed, or renamed - a renamed line is a removed one), and a `QUALITY GATE: PASS` line
+        that is no longer there. Empty when the gate only grew or was edited around those lines.
+
+    .DESCRIPTION
+        scripts/quality-gate.ps1 is on the wiring run's allow-list because adding a suite IS the
+        wiring; nothing else stopped a run from removing a step, and the gate would then be green
+        on less (ADR-0260, open decision 3, ruled (c)). Judged from the two committed texts, never
+        by the model. Lines are compared trimmed and case-sensitively, as a count: a line that
+        only moved is not removed. A comment line (`#`) is not a step.
+    #>
+    param([AllowEmptyString()][string]$Before = "", [AllowEmptyString()][string]$After = "")
+    $count = {
+        param([string]$Text)
+        $seen = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
+        foreach ($line in @($Text -split "`r?`n")) {
+            $key = $line.Trim()
+            if (-not $key) { continue }
+            if ($seen.ContainsKey($key)) { $seen[$key]++ } else { $seen[$key] = 1 }
+        }
+        return , $seen
+    }
+    $was = & $count $Before
+    $now = & $count $After
+    $problems = New-Object System.Collections.ArrayList
+    foreach ($key in @($was.Keys)) {
+        if ($key.StartsWith("#") -or $key -cnotmatch 'Invoke-Step|Assert-ExitCode') { continue }
+        $left = 0
+        if ($now.ContainsKey($key)) { $left = $now[$key] }
+        if ($left -lt $was[$key]) { [void]$problems.Add("silinen satır: $key") }
+    }
+    $pass = '(?m)^\s*Write-Host\s+"QUALITY GATE: PASS"'
+    if ($Before -match $pass -and $After -notmatch $pass) { [void]$problems.Add('"QUALITY GATE: PASS" satırı kalmadı') }
+    return @($problems.ToArray())
+}
+
+function Get-TeamStepResultConflict {
+    <#
+    .SYNOPSIS
+        Why a task's result may NOT be written: the store's copy is no longer the task the step
+        took - not in the state it was taken in, or naming another integration branch or another
+        sha. "" when it is still that task (another field changed by somebody else is no conflict).
+    #>
+    param([Parameter(Mandatory = $true)]$Was, $Now)
+    if ($null -eq $Now) { return "deposunda artık yok" }
+    foreach ($name in @("state", "integration_branch", "sha")) {
+        $before = [string](Get-TeamProperty -InputObject $Was -Name $name -Default "")
+        $after = [string](Get-TeamProperty -InputObject $Now -Name $name -Default "")
+        if ($before -cne $after) { return "$name '$before' -> '$after'" }
+    }
+    return ""
+}
+
+function Merge-TeamStepResults {
+    <#
+    .SYNOPSIS
+        The queue to write for a branch's tasks, built on the store's copy READ AGAIN just before
+        the write (the cycle runs beside the gate: ADR-0214 addendum 11's shape for this step).
+
+    .DESCRIPTION
+        -Ours is the step's working queue, -Taken each task as the step took it (id -> JSON),
+        -Fresh the store now, -Ids the branch's tasks. A task of -Ids that the step changed is
+        written only when Get-TeamStepResultConflict finds no conflict, and then as the store's
+        copy with the step's own changes (field by field) on top - what another writer changed
+        in other fields stays. A conflicting task keeps the store's copy and is answered in
+        Dropped (Id, Why). Every other task is the store's, untouched (so nothing is written for it).
+    #>
+    param([Parameter(Mandatory = $true)]$Ours, [Parameter(Mandatory = $true)]$Fresh, [Parameter(Mandatory = $true)][hashtable]$Taken, [string[]]$Ids = @())
+    $mine = @{}
+    foreach ($task in @(Get-TeamTasks -Queue $Ours)) { $mine[[string]$task.id] = $task }
+    $json = { param($Value) ConvertTo-Json -InputObject $Value -Depth 12 -Compress }
+    $tasks = New-Object System.Collections.ArrayList
+    $dropped = New-Object System.Collections.ArrayList
+    $seen = @{}
+    foreach ($stored in @(Get-TeamTasks -Queue $Fresh)) {
+        $id = [string]$stored.id
+        $seen[$id] = $true
+        $own = $mine[$id]
+        if (@($Ids) -notcontains $id -or $null -eq $own -or -not $Taken.ContainsKey($id) -or (& $json $own) -ceq [string]$Taken[$id]) {
+            [void]$tasks.Add($stored)
+            continue
+        }
+        $was = ConvertFrom-Json -InputObject ([string]$Taken[$id])
+        $why = Get-TeamStepResultConflict -Was $was -Now $stored
+        if ($why) {
+            [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = $why })
+            [void]$tasks.Add($stored)
+            continue
+        }
+        $copy = ConvertFrom-Json -InputObject (& $json $stored)
+        foreach ($property in @($own.PSObject.Properties)) {
+            if ((& $json $property.Value) -cne (& $json (Get-TeamProperty -InputObject $was -Name $property.Name -Default $null))) {
+                Set-TeamProperty -InputObject $copy -Name $property.Name -Value $property.Value
+            }
+        }
+        [void]$tasks.Add($copy)
+    }
+    foreach ($id in @($Ids)) {
+        $own = $mine[$id]
+        if ($seen.ContainsKey($id) -or $null -eq $own -or -not $Taken.ContainsKey($id) -or (& $json $own) -ceq [string]$Taken[$id]) { continue }
+        [void]$dropped.Add([pscustomobject]@{ Id = $id; Why = (Get-TeamStepResultConflict -Was (ConvertFrom-Json -InputObject ([string]$Taken[$id])) -Now $null) })
+    }
+    $version = Get-TeamProperty -InputObject $Fresh -Name "version" -Default 1
+    return [pscustomobject]@{ Queue = [pscustomobject]@{ version = $version; tasks = @($tasks.ToArray()) }; Dropped = @($dropped.ToArray()) }
+}
+
 function Get-TeamNewestReportText {
     <#
     .SYNOPSIS
@@ -1240,6 +1350,110 @@ function Invoke-TeamGate {
     $exitCode = if ($timedOut) { -1 } else { $process.ExitCode }
     $process.Dispose()
     return [pscustomobject]@{ ExitCode = $exitCode; TimedOut = $timedOut; Seconds = [int]([datetime]::UtcNow - $started).TotalSeconds }
+}
+
+function Get-TeamFileAtCommit {
+    <# A file's text as a commit has it; "" when the commit does not hold it. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string]$Commit, [Parameter(Mandatory = $true)][string]$Path)
+    $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("show", "${Commit}:$Path")
+    if (-not $result.Success) { return "" }
+    return [string]$result.StdOut
+}
+
+# ---------------------------------------------------------------------------- acting: the step's own lock
+
+function Read-TeamStepLock {
+    <#
+    .SYNOPSIS
+        Who holds the step's lock file: Pid, Started (the process's start time it wrote), Since.
+        Busy = $true when the file cannot be opened (its holder is writing it right now); $null
+        when there is no file, or nothing that can be read as a holder (a step that died while
+        it wrote it).
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $text = ""
+    try {
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try { $text = (New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)).ReadToEnd() } finally { $stream.Dispose() }
+    }
+    catch [System.IO.FileNotFoundException] { return $null }
+    catch [System.IO.IOException] { return [pscustomobject]@{ Busy = $true; Pid = 0; Started = ""; Since = "" } }
+    try { $document = ConvertFrom-Json -InputObject $text } catch { return $null }
+    if ($null -eq $document) { return $null }
+    return [pscustomobject]@{
+        Busy    = $false
+        Pid     = [int](Get-TeamProperty -InputObject $document -Name "pid" -Default 0)
+        Started = [string](Get-TeamProperty -InputObject $document -Name "process_started_at" -Default "")
+        Since   = [string](Get-TeamProperty -InputObject $document -Name "taken_at" -Default "")
+    }
+}
+
+function Test-TeamStepLockAlive {
+    <# Whether the holder a lock file names still runs: its pid lives AND started when the file says (a reused pid is not the holder). #>
+    param([Parameter(Mandatory = $true)]$Holder)
+    if ([bool]$Holder.Busy) { return $true }
+    if ([int]$Holder.Pid -le 0) { return $false }
+    $process = Get-Process -Id ([int]$Holder.Pid) -ErrorAction SilentlyContinue
+    if ($null -eq $process) { return $false }
+    $written = ConvertFrom-TeamTimestamp -Text ([string]$Holder.Started)
+    $actual = $null
+    try { $actual = $process.StartTime.ToUniversalTime() } catch { $actual = $null }
+    if ($null -eq $written -or $null -eq $actual) { return $true }
+    return ([Math]::Abs(($actual - $written).TotalSeconds) -lt 2)
+}
+
+function Enter-TeamStepLock {
+    <#
+    .SYNOPSIS
+        The integration step's OWN lock: a machine-local file, created exclusively, holding this
+        process's pid and start time, and kept open (read-only, not deletable) while the step
+        lives. Two gates never run at once on one machine; the cycle's lock is not involved.
+
+    .DESCRIPTION
+        Answers Taken. Not taken: Holder (pid) and Since of the live step that holds it. A file
+        whose holder is gone (its pid is dead, or is another process now) is deleted and taken,
+        and TookOver says whose it was. Released with Exit-TeamStepLock, in the caller's finally.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path, [string]$Machine = $env:COMPUTERNAME)
+    $folder = Split-Path -Parent $Path
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+    $tookOver = ""
+    for ($try = 0; $try -lt 3; $try++) {
+        $stream = $null
+        try { $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None) }
+        catch [System.IO.IOException] { $stream = $null }
+        if ($null -ne $stream) {
+            try {
+                $started = ""
+                try { $started = Get-TeamTimestamp -Now ((Get-Process -Id $PID).StartTime.ToUniversalTime()) } catch { $started = "" }
+                $document = [ordered]@{ pid = $PID; process_started_at = $started; machine = $Machine; taken_at = (Get-TeamTimestamp) }
+                $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes((ConvertTo-Json -InputObject ([pscustomobject]$document) -Compress))
+                $stream.Write($bytes, 0, $bytes.Length)
+                $stream.Flush()
+            }
+            finally { $stream.Dispose() }
+            # Held open from here: readable by the next step, deletable by nobody while this one lives.
+            $held = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+            return [pscustomobject]@{ Taken = $true; Path = $Path; Stream = $held; TookOver = $tookOver; Holder = 0; Since = "" }
+        }
+        $holder = Read-TeamStepLock -Path $Path
+        if ($null -ne $holder -and (Test-TeamStepLockAlive -Holder $holder)) {
+            return [pscustomobject]@{ Taken = $false; Path = $Path; Stream = $null; TookOver = ""; Holder = [int]$holder.Pid; Since = [string]$holder.Since }
+        }
+        try { if (Test-Path -LiteralPath $Path) { [System.IO.File]::Delete($Path) } }
+        catch { return [pscustomobject]@{ Taken = $false; Path = $Path; Stream = $null; TookOver = ""; Holder = 0; Since = "" } }
+        $tookOver = if ($null -ne $holder) { "pid $($holder.Pid), $($holder.Since)" } else { "okunamayan bir kilit dosyası" }
+    }
+    return [pscustomobject]@{ Taken = $false; Path = $Path; Stream = $null; TookOver = ""; Holder = 0; Since = "" }
+}
+
+function Exit-TeamStepLock {
+    <# Releases what Enter-TeamStepLock took: the handle is closed and the file deleted. #>
+    param($Lock)
+    if ($null -eq $Lock -or -not [bool]$Lock.Taken) { return }
+    if ($null -ne $Lock.Stream) { $Lock.Stream.Dispose() }
+    if (Test-Path -LiteralPath $Lock.Path) { [System.IO.File]::Delete($Lock.Path) }
 }
 
 # ---------------------------------------------------------------------------- the report

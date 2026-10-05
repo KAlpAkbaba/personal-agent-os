@@ -27,7 +27,8 @@ param(
     # Internal: serve a fake board on this port (the command cases start this file so).
     [int]$ServePort = 0,
     [string]$ServeReady = "",
-    [string]$ServeToken = ""
+    [string]$ServeToken = "",
+    [string]$ServeBranch = "main"
 )
 
 Set-StrictMode -Version Latest
@@ -40,6 +41,10 @@ if ($ServePort -gt 0) {
     # a 429. GET /__stop ends it.
     $notes = New-Object System.Collections.ArrayList
     $count = 0
+    $card = [ordered]@{
+        title = "Ekip panosunda konuşma"; goal = @("Ajanlar bağlamla danışır.", "A mı B mi?")
+        acceptance = @("Kabul: -To auto paylaşan koltuğa gider."); branch = $ServeBranch; area = @("scripts/lib/TeamBoard.ps1")
+    }
     $listener = New-Object System.Net.HttpListener
     $listener.Prefixes.Add("http://127.0.0.1:$ServePort/")
     $listener.Start()
@@ -56,20 +61,40 @@ if ($ServePort -gt 0) {
         elseif ($request.HttpMethod -eq "POST") {
             $body = ConvertFrom-Json -InputObject $raw
             $sameTask = @($notes | Where-Object { $_.task -eq $body.task }).Count
-            if ($body.text -eq "__500__") { $status = 500; $answer = @{ detail = "boom" } }
-            elseif ($body.text.Length -gt 280) { $status = 422; $answer = @{ detail = @{ code = "invalid"; message = "text is at most 280 characters" } } }
+            if ($body.PSObject.Properties["text"] -and $body.text -eq "__500__") { $status = 500; $answer = @{ detail = "boom" } }
+            elseif ($body.PSObject.Properties["text"] -and $body.text.Length -gt 280) { $status = 422; $answer = @{ detail = @{ code = "invalid"; message = "text is at most 280 characters" } } }
             elseif ($sameTask -ge 20) { $status = 429; $answer = @{ detail = @{ code = "rate_limited"; message = "20 notes in the last hour" } } }
             else {
                 $count++
                 $note = [ordered]@{
                     id = ("n-20261003T0900{0:00}000000Z-0000abcd" -f $count); at = ("2026-10-03T09:00:{0:00}Z" -f $count)
-                    seat = $body.seat; task = $body.task; kind = $body.kind; to = $body.to; reply_to = $body.reply_to; text = $body.text
+                    seat = $body.seat; task = $body.task; kind = $body.kind; to = $body.to; reply_to = $body.reply_to; text = ""
                 }
+                if ($body.kind -eq "danisma") {
+                    # the fake routes auto to worker-3, as the server does for a shared file
+                    $note.text = $body.situation
+                    foreach ($name in @("situation", "options", "my_lean", "files", "topic")) { $note[$name] = $body.$name }
+                    if ($body.to -eq "auto") { $note.to = "worker-3"; $note["route"] = "ortak dosya: scripts/lib/TeamBoard.ps1" }
+                }
+                else { $note.text = $body.text }
+                foreach ($name in @("choice", "slot")) { if ($body.PSObject.Properties[$name]) { $note[$name] = $body.$name } }
                 [void]$notes.Add([pscustomobject]$note)
                 $answer = @{ note = $note }
             }
         }
-        else { $answer = @{ notes = @($notes); now = "2026-10-03T09:10:00Z" } }
+        elseif ($request.Url.AbsolutePath -match '/notes/(n-[^/]+)/context$') {
+            $id = $Matches[1]
+            $found = @($notes | Where-Object { $_.id -eq $id })
+            if ($found.Count -eq 0) { $status = 404; $answer = @{ detail = @{ code = "not_found" } } }
+            else { $answer = @{ note = $found[0]; card = $card; answers = @($notes | Where-Object { $_.reply_to -eq $id }) } }
+        }
+        else {
+            $replyTo = [string]$request.QueryString["reply_to"]
+            $shown = @($notes | Where-Object { -not $replyTo -or $_.reply_to -eq $replyTo })
+            $cards = @{}
+            if (@($shown | Where-Object { $_.kind -eq "danisma" }).Count -gt 0) { $cards["team-board-talk"] = $card }
+            $answer = @{ notes = $shown; cards = $cards; now = "2026-10-03T09:10:00Z" }
+        }
         $bytes = $utf8.GetBytes((ConvertTo-Json -InputObject $answer -Depth 6 -Compress))
         $context.Response.StatusCode = $status
         $context.Response.ContentType = "application/json; charset=utf-8"
@@ -162,6 +187,71 @@ Test-Case "format: at most 30 notes, newest last, and the header counts the read
     Assert-Equal -Expected "Panoda yeni not yok." -Actual (@(Format-TeamBoardRead -Notes @())[0]) -Because "an empty board"
 }
 
+# ------------------------------------------------------------------ consult (danisma)
+
+function New-Consult {
+    param([int]$N = 50, [string]$To = "worker-3")
+    return [pscustomobject]@{
+        id = ("n-20261003T09{0:0000}000000Z-0000abcd" -f $N); at = "2026-10-03T09:50:00Z"
+        seat = "worker-1"; task = "team-board-talk"; kind = "danisma"; to = $To; reply_to = ""
+        text = "Seçenekleri nerede doğrulayayım?"; situation = "Seçenekleri nerede doğrulayayım?"
+        options = @("A: board.py içinde", "B: route'ta pydantic"); my_lean = "A: iki depo aynı kuralı kullanır"
+        files = @("services/api/app/team/board.py", "scripts/lib/TeamBoard.ps1"); topic = "kod"; route = "ortak dosya: scripts/lib/TeamBoard.ps1"
+    }
+}
+
+Test-Case "consult-body: a danisma carries the server's fields, 'auto' when no -To, files split on commas" {
+    $body = New-TeamBoardConsultBody -Seat "worker-1" -Task "team-board-talk" -Situation "Nerede doğrulayayım?" `
+        -Options @("A: board.py", "B: route") -Lean "A: tek kural" -Files @("a.py,b.py", " c.ps1 ")
+    Assert-Equal -Expected "seat,task,kind,to,reply_to,situation,options,my_lean,files,topic" -Actual (@($body.Keys) -join ",") -Because "the server's names"
+    Assert-Equal -Expected "danisma|auto|kod" -Actual ($body.kind + "|" + $body.to + "|" + $body.topic) -Because "kind, default to, default topic"
+    Assert-Equal -Expected "a.py|b.py|c.ps1" -Actual (@($body.files) -join "|") -Because "files split and trimmed"
+    $json = ConvertTo-Json -InputObject $body -Depth 4 -Compress
+    Assert-True -Condition ($json -match '"options":\["A: board.py","B: route"\]') -Because "options stay a list: $json"
+    $one = ConvertTo-Json -InputObject (New-TeamBoardConsultBody -Seat "worker-1" -Task "t-1x" -Situation "s" -Options @("A: x") -Lean "l") -Compress
+    Assert-True -Condition ($one -match '"options":\["A: x"\]' -and $one -match '"files":\[\]') -Because "one option is still a list (the server refuses it), no files an empty list: $one"
+    $answer = New-TeamBoardNoteBody -Seat "worker-3" -Task "x-task" -Kind "cevap" -Text "B: neden" -ReplyTo "n-1" -Choice "B"
+    Assert-Equal -Expected "B" -Actual $answer.choice -Because "a cevap names its choice"
+    Assert-True -Condition (-not (New-TeamBoardNoteBody -Seat "worker-3" -Task "x-task" -Kind "bilgi" -Text "t").Contains("choice")) -Because "no choice field unless given"
+}
+
+Test-Case "consult-format: a danisma shows its options, lean, files and the asker's card; a cevap its choice" {
+    $card = [pscustomobject]@{ title = "Ekip panosunda konuşma"; goal = @("Ajanlar danışır.", "Bağlamla."); acceptance = @("Kabul: auto yönlendirir.") }
+    $lines = @(Format-TeamBoardRead -Notes @((New-Consult)) -For "worker-3" -Cards ([pscustomobject]@{ "team-board-talk" = $card }))
+    $all = $lines -join "`n"
+    Assert-True -Condition ($lines[1].StartsWith(">> SANA ") -and $lines[1] -match "\[danisma\]") -Because $lines[1]
+    Assert-True -Condition ($all -match "A: board\.py içinde \| B: route'ta pydantic") -Because "options: $all"
+    Assert-True -Condition ($all -match "eğilimi: A: iki depo") -Because "lean: $all"
+    Assert-True -Condition ($all -match "dosyalar: services/api/app/team/board\.py, scripts/lib/TeamBoard\.ps1") -Because "files: $all"
+    Assert-True -Condition ($all -match "kart: Ekip panosunda konuşma") -Because "card title: $all"
+    Assert-True -Condition ($all -match "hedef: Ajanlar danışır\. / Bağlamla\.") -Because "goal lines: $all"
+    Assert-True -Condition ($all -match "kabul: Kabul: auto yönlendirir\.") -Because "acceptance: $all"
+    Assert-True -Condition ($all -match "cevap: board\.ps1 post .*-ReplyTo n-") -Because "how to answer: $all"
+    $answer = New-Note -N 51 -Seat "worker-3" -To "worker-1" -Kind "cevap" -Text "Tek kural daha iyi." -ReplyTo "n-x"
+    $answer | Add-Member -NotePropertyName choice -NotePropertyValue "A"
+    Assert-True -Condition ((Format-TeamBoardLine -Note $answer) -match "\[cevap\] team-board: seçim A - Tek kural") -Because (Format-TeamBoardLine -Note $answer)
+}
+
+Test-Case "consult-wait: the answer is returned within one poll; with none, 'no answer' at the bound; at most 15 minutes" {
+    $script:polls = 0; $script:slept = 0
+    $sleep = { param($s) $script:slept += $s }
+    $answer = [pscustomobject]@{ id = "n-a"; kind = "cevap"; seat = "worker-3"; choice = "B"; text = "B daha iyi" }
+    $got = Wait-TeamBoardAnswer -Fetch { $script:polls++; if ($script:polls -ge 2) { @($answer) } else { @() } } -Minutes 5 -PollSeconds 30 -Sleep $sleep
+    Assert-Equal -Expected "B" -Actual $got.choice -Because "the cevap comes back"
+    Assert-Equal -Expected 2 -Actual $script:polls -Because "found on the poll after it was written"
+    Assert-Equal -Expected 30 -Actual $script:slept -Because "one poll's sleep"
+    $script:polls = 0; $script:slept = 0
+    $none = Wait-TeamBoardAnswer -Fetch { $script:polls++; @() } -Minutes 2 -PollSeconds 30 -Sleep $sleep
+    Assert-True -Condition ($null -eq $none) -Because "no answer"
+    Assert-Equal -Expected 120 -Actual $script:slept -Because "it waited its bound, no longer"
+    Assert-Equal -Expected 5 -Actual $script:polls -Because "a poll at 0, 30, 60, 90 and 120 s"
+    $script:polls = 0; $script:slept = 0
+    [void](Wait-TeamBoardAnswer -Fetch { $script:polls++; @() } -Minutes 60 -PollSeconds 30 -Sleep $sleep)
+    Assert-Equal -Expected 900 -Actual $script:slept -Because "never more than 15 minutes"
+    $other = [pscustomobject]@{ id = "n-b"; kind = "fikir"; seat = "worker-2"; text = "bir fikir" }
+    Assert-True -Condition ($null -eq (Wait-TeamBoardAnswer -Fetch { @($other) } -Minutes 0.5 -PollSeconds 30 -Sleep $sleep)) -Because "only a cevap answers"
+}
+
 # ------------------------------------------------------------------ failure
 
 Test-Case "failure: 422 and 429 are the caller's note; 401, 404, 500 and no answer are 'no board now'" {
@@ -184,6 +274,8 @@ $tokenFile = Join-Path $work "token.txt"
 [System.IO.File]::WriteAllText($tokenFile, $token + "`n", $utf8)
 $server = $null
 $url = ""
+$branch = (& git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null | Select-Object -First 1)
+if (-not $branch) { $branch = "main" }
 
 function Invoke-Board {
     <# board.ps1 in its own 5.1 process, as a run calls it: stdout and the exit code. #>
@@ -212,7 +304,7 @@ try {
     $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
     $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
     $ready = Join-Path $work "ready"
-    $serveArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $PSCommandPath + '"'), "-ServePort", $port, "-ServeReady", ('"' + $ready + '"'), "-ServeToken", $token)
+    $serveArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $PSCommandPath + '"'), "-ServePort", $port, "-ServeReady", ('"' + $ready + '"'), "-ServeToken", $token, "-ServeBranch", $branch)
     $server = Start-Process -FilePath $powershell -ArgumentList $serveArgs -PassThru -WindowStyle Hidden
     $deadline = [datetime]::UtcNow.AddSeconds(40)
     while (-not (Test-Path -LiteralPath $ready)) {
@@ -272,6 +364,34 @@ try {
         $refusedToken = Invoke-Board -Arguments @("read", "-Url", $url, "-TokenFile", $wrongToken)
         Assert-Equal -Expected 0 -Actual $refusedToken.ExitCode -Because "a refused token: $($refusedToken.Out)"
         Assert-True -Condition ($refusedToken.Out -match "^UYARI:.*HTTP 401") -Because $refusedToken.Out
+    }
+
+    Test-Case "command-consult: a danisma to auto is routed; read shows the card; context prints the card and the branch diff; wait returns B or 'cevap gelmedi'" {
+        $asked = Invoke-Board -Arguments (@("post", "-Seat", "worker-1", "-Task", "team-board-talk", "-Kind", "danisma", "-Situation", "Seçenekleri nerede doğrulayayım?", "-OptionA", "board.py içinde", "-OptionB", "route'ta pydantic", "-Lean", "A: tek kural", "-Files", "services/api/app/team/board.py,scripts/lib/TeamBoard.ps1,scripts/team/board.ps1") + $common)
+        Assert-Equal -Expected 0 -Actual $asked.ExitCode -Because "$($asked.Out) $($asked.Err)"
+        Assert-True -Condition ($asked.Out -match "^Danışma panoya yazıldı: no (n-\S+), kime: worker-3 \(ortak dosya: scripts/lib/TeamBoard\.ps1\)") -Because $asked.Out
+        $id = [regex]::Match($asked.Out, "no (n-[^,]+),").Groups[1].Value
+        $read = Invoke-Board -Arguments (@("read", "-For", "worker-3") + $common)
+        Assert-True -Condition ($read.Out -match ">> SANA .*\[danisma\]" -and $read.Out -match "kart: Ekip panosunda konuşma") -Because $read.Out
+        $context = Invoke-Board -Arguments (@("context", "-Note", $id) + $common)
+        Assert-Equal -Expected 0 -Actual $context.ExitCode -Because $context.Out
+        Assert-True -Condition ($context.Out -match "Kart: Ekip panosunda konuşma" -and $context.Out -match "Hedef: Ajanlar bağlamla danışır\.") -Because $context.Out
+        Assert-True -Condition ($context.Out -match "B: route'ta pydantic" -and $context.Out -match "Alan: scripts/lib/TeamBoard\.ps1") -Because $context.Out
+        Assert-True -Condition ($context.Out -match ("Dal farkı \(main\.\.\." + [regex]::Escape($branch) + "\)")) -Because $context.Out
+        Assert-True -Condition ($context.Out -match "files? changed|fark yok|alınamadı") -Because "the diff stat: $($context.Out)"
+        $none = Invoke-Board -Arguments (@("wait", "-Note", $id, "-Minutes", "0.05", "-PollSeconds", "1") + $common)
+        Assert-Equal -Expected 0 -Actual $none.ExitCode -Because $none.Out
+        Assert-True -Condition ($none.Out -match "^cevap gelmedi") -Because $none.Out
+        $answered = Invoke-Board -Arguments (@("post", "-Seat", "worker-3", "-Task", "team-board-talk", "-Kind", "cevap", "-To", "worker-1", "-ReplyTo", $id, "-Choice", "B", "-Text", "Route'ta model 422'yi kendisi verir.") + $common)
+        Assert-Equal -Expected 0 -Actual $answered.ExitCode -Because $answered.Out
+        $got = Invoke-Board -Arguments (@("wait", "-Note", $id, "-Minutes", "1", "-PollSeconds", "1") + $common)
+        Assert-Equal -Expected 0 -Actual $got.ExitCode -Because $got.Out
+        Assert-True -Condition ($got.Out -match "^CEVAP worker-3: seçim B - Route'ta model") -Because $got.Out
+        $tooLong = Invoke-Board -Arguments (@("wait", "-Note", $id, "-Minutes", "16") + $common)
+        Assert-True -Condition ($tooLong.ExitCode -ne 0 -or $tooLong.Out -match "15") -Because "16 minutes is refused: $($tooLong.Out) $($tooLong.Err)"
+        $missing = Invoke-Board -Arguments (@("post", "-Seat", "worker-1", "-Task", "team-board-talk", "-Kind", "danisma", "-Situation", "x") + $common)
+        Assert-Equal -Expected 2 -Actual $missing.ExitCode -Because $missing.Out
+        Assert-True -Condition ($missing.Out -match "eksik: -OptionA, -OptionB, -Lean") -Because $missing.Out
     }
 
     Test-Case "command: the address and the token file come from the environment when not given" {

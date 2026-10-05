@@ -167,7 +167,7 @@ def test_on_the_database_store_an_idea_is_rejected_with_its_reason_while_a_cycle
     response = _decide(client, task_id="fikir-b", decision="reject", reason="şimdi değil")
     assert response.status_code == 200, response.text
     task = _tasks(store)["fikir-b"]
-    assert (task["state"], task["reason"]) == ("stopped", "şimdi değil")
+    assert (task["state"], task["reason"]) == ("stopped", "Sahip reddetti: şimdi değil")
 
 
 def test_on_the_database_store_a_release_is_approved_while_a_cycle_runs(db):

@@ -6,6 +6,7 @@
 import Link from "next/link";
 
 import OfficePanel, { type ChooseModel } from "./OfficePanel";
+import OfficeProgress from "./OfficeProgress";
 import OfficeScene from "./OfficeScene";
 import type { ModelSetting, OfficeView as Office } from "./officeApi";
 import { energyOf } from "./officeEnergy";
@@ -45,6 +46,11 @@ export default function OfficeView({
           Döngü: <strong>{bar.cycleId}</strong>
         </span>
         <span>Başlangıç: {bar.startedAt}</span>
+        {bar.account && (
+          <span className="office-account" data-office="account">
+            Hesap: <strong>{bar.account}</strong>
+          </span>
+        )}
         <span>{bar.runningAgents}</span>
         <span>{bar.estimated}</span>
         <span>Max limit: {bar.limit}</span>
@@ -72,6 +78,7 @@ export default function OfficeView({
           </span>
         )}
       </div>
+      <OfficeProgress progress={view.progress} />
       <div className="office-main">
         <OfficeScene
           seats={office.seats}

@@ -15,15 +15,16 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `a5e68d92d9271ececec51da01b713e43a394e28c` (2026-10-03 16:12 UTC = 19:12 yerel, api-green), LKG `e6682a61`,
-pin = RELEASE (Danışman pinledi), reconcile OK, şema `0065_misheard_utterances`. Kapı PASS (`7a6531ef`). QUALIFICATION Stage 50.
-Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK. SIRADAKİ entegrasyon: integrate/d20261003
-(döngünün onaylı işleri + branch-guards-runner + model-policy-office-ui).**
-**KAPIDA (Danışman, 2026-10-03 ~21:00 yerel): ONBİRİNCİ ENTEGRASYON, dal `gate/d20261003-6` (worktree `.claude/worktrees/gate14`) =
-lead dalı + integrate/d20261003 (döngünün onaylı 17 işi: ekip panosu, model seçici, koruyucu testler, ölçüm sayfası, Dene listesi,
-test sırası, ...) + `lead/board-wiring` (koşular panoya ulaşır, rol metni). Taslaklar ADR-0273..0282 + ek'ler. Ofis çakışmaları
-(model seçici ile canlı ofis) iki taraf korunarak çözüldü; ofis testleri 110/110; koruma seti 2031 + yeni birim dosyaları. Yeşilse
-hemen yayın + pin.**
+**ÜRETİM: main `321e43b04e1eb7f88f8d1afa4d3d1de1da305fa4` (2026-10-04 16:04 UTC = 19:04 yerel, api-blue), LKG `002c6292`,
+pin = RELEASE, reconcile OK, şema `0065_misheard_utterances`. QUALIFICATION Stage 53. Ana kopya `team/nightly/lead` (= main).
+PY nöbeti canlı (ADR-0283); 4000 karakter sınırı bir SONRAKİ döngü başlangıcında devreye girer - o zamana kadar 1200'ü aşan
+duty dosyası (team/plans/<döngü>-duty-N.json) reddedilir, Danışman elle uygular. Ekip hesap3'te. DİKKAT: işçilerin Postgres
+testleri ortak dev DB'yi kendi göçlerine taşıyabiliyor (kart dev-db-branch-migration-leak); kapı 'Can't locate revision' derse
+o dalın worktree'sinden `alembic downgrade 0065_misheard_utterances`. SIRADAKİ entegrasyon: integrate/d20261003.**
+**ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
+`team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
+yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**
+**ÇALIŞAN SINIRI: `team/cycle-settings.json` max_parallel 4 (bellek ölçüldü: kapının birim adımı 21,7 GB; o adımda 3'e indir).**
 **DEV KABUĞU: ev PC'sindeki `next dev` (:3000) ana kopyanın dal değişimlerinde bozulabiliyor (telefonda 'Oturum kontrol ediliyor'
 takılı, web.err.log'da 'Blocked cross-origin'). Yeniden başlatma: süreç ağacını durdur, `scripts/voice/start-web-voice.ps1 -PnpmPath
 C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd` Start-Process ile, çıktılar %LOCALAPPDATA%/PagentOS/web-shell. Kalıcı adres sunucudaki.**

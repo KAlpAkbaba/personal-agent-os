@@ -276,7 +276,7 @@ def test_reddet_moves_a_task_to_stopped_with_the_owners_reason(client, team_root
     assert response.status_code == 200, response.text
     task = _state(team_root, "fikir-a")
     assert task["state"] == "stopped"
-    assert task["reason"] == "Şimdi değil, maliyet yüksek"
+    assert task["reason"] == "Sahip reddetti: " + "Şimdi değil, maliyet yüksek"
 
 
 def test_reddet_without_a_reason_is_refused_and_the_queue_is_untouched(client, team_root):
@@ -442,7 +442,7 @@ def test_rejecting_a_release_stops_the_task_and_raises_no_flag(client, team_root
     _decide(client, task_id="yayin-b", decision="reject", reason="yanlış sürüm")
     task = _state(team_root, "yayin-b")
     assert task["state"] == "stopped"
-    assert task["reason"] == "yanlış sürüm"
+    assert task["reason"] == "Sahip reddetti: " + "yanlış sürüm"
     assert "release_approved" not in task
 
 
@@ -589,7 +589,7 @@ def test_a_rejection_needs_its_reason_and_keeps_it_on_both_stores(both):
         _decide(test_client, task_id="fikir-a", decision="reject", reason="gerek yok").status_code
         == 200
     )
-    assert _tasks(reader)["fikir-a"]["reason"] == "gerek yok"
+    assert _tasks(reader)["fikir-a"]["reason"] == "Sahip reddetti: " + "gerek yok"
 
 
 def test_a_decision_is_refused_while_a_cycle_holds_the_lock_on_the_file_store_only(both):

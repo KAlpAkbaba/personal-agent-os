@@ -404,8 +404,18 @@ def test_a_decision_is_taken_while_a_cycle_holds_the_lock_on_the_database_store(
     assert (lock["held"], lock["pid"]) == (True, 4242)
 
 
-def test_a_ledger_that_refuses_the_event_leaves_the_queue_untouched(engine, team_root):
-    client, store = _wired("db", engine, team_root)  # the vocabulary as it is today
+def test_a_ledger_that_refuses_the_event_leaves_the_queue_untouched(engine, team_root, monkeypatch):
+    # a ledger that does not know the trial events (the vocabulary before ADR-0258 addendum 1)
+    monkeypatch.setattr(
+        vocabulary,
+        "EVENT_TYPES",
+        tuple(
+            t
+            for t in vocabulary.EVENT_TYPES
+            if t not in (trials.EVENT_TRIAL_PASSED, trials.EVENT_TRIAL_FAILED)
+        ),
+    )
+    client, store = _wired("db", engine, team_root)
     refused = client.post(
         DECISION,
         json={"task_id": "uzak-hesap", "trial_id": "hesap", "verdict": "olmadi", "said": "yok"},

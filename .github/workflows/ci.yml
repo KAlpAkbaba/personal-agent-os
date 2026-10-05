@@ -236,6 +236,9 @@ jobs:
           powershell -NoProfile -File scripts\tests\team-area.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-integrate.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-board.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-release.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-resume.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\staging.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\maintenance-reboot.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\host-snapshot.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-test-slots.tests.ps1 && ^

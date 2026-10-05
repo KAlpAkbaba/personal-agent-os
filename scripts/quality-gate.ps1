@@ -838,6 +838,18 @@ if (-not $Fast) {
     Assert-ExitCode "team-test-slots tests"
   }
 
+  Invoke-Step "Agent team automatic release, resume after a limit, staging scripts (PS5.1, fakes)" {
+    # ADR-0287 (cycle-auto-release), ADR-0290 (limit-resume-session), ADR-0294 (staging-stack):
+    # fakes only - no release, no model and no container is started here.
+    # Not grouped: three suites in one step (a recorded step runs one script), and staging's fake
+    # health probes a free port and releases it before listening (the fake-team-api lane's race).
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    foreach ($name in @("team-release", "team-resume", "staging")) {
+      & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\tests\$name.tests.ps1")
+      Assert-ExitCode "$name tests"
+    }
+  }
+
   Invoke-Step "UTF-8 JSON decoding (PS5.1)" {
     # A real qualification record showed Turkish letters as mojibake: 5.1 decoded a
     # charset-less JSON body as Latin-1 while the database held correct UTF-8.

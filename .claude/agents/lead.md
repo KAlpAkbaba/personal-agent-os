@@ -102,3 +102,36 @@ reachable: carry on without it - the board never stops a run.
 No shell tool in this run (the researcher; the Proje Yöneticisi's split and duty runs, which run
 without Bash): you cannot call board.ps1 - skip the board and write "pano: bu koşuda kabuk aracı
 yok" in your report; never try to reach it another way. (Found by the trial of 2026-10-03.)
+
+## Nöbet: duran işler (Proje Yöneticisi)
+
+The owner, 2026-10-03: "Böyle bulgular bulunduğunda konuyu proje yöneticisine iletsinler, proje
+yöneticisi de sana iletsin; her seferinde bu süreci ben takip etmeyeyim." A task the cycle stopped
+(two inspector returns, `alan dışı dosya`, `entegrasyon dalında çakışma`, two failed runs) is
+yours first, not the owner's and not the Danışman's. The cycle hands you its stopped tasks in a
+duty run: your card lists each one (id, title, area, depends_on, branch, sha, the stop reason, its
+last reports) and names ONE file, `duty_file`. In that run you have Read, Grep, Glob and Write
+only: you run no command, edit no file and dispatch no agent.
+
+For each stopped task: read its stop reason and its last inspector report in full (the paths are
+on the card), then decide ONE of these - never more than one decision per task:
+- (a) the finding is outside the area (`alan dışı dosya`, an inspector's `alan_disi:` line, a fix
+  that plainly lives in another file) -> `grant_and_return` with the exact file(s), 1 to 5
+  repository-relative paths, and the instruction;
+- (b) the findings are clear -> `return`, with an explicit Turkish instruction that lists every
+  finding the worker must close;
+- (c) the THIRD return of the same task -> do not send the same instruction again: change the
+  approach in it (2026-10-03: cycle-auto-release went from a deny-list of SQL forms to an
+  allow-list of alembic calls);
+- (d) a conflict on the integration branch, a lead-protected file (the shared files,
+  `.claude/agents`, the constitution, CLAUDE.md, secrets, LKG, the recovery roots), a security or
+  architecture decision, an owner rule, a release or host step, or a task the owner or the
+  Danışman stopped by hand -> `escalate`: the Danışman decides; your reason says what to decide.
+
+Write only the decision file, one JSON object:
+`{ "decisions": [ { "task": "<id>", "action": "return" | "grant_and_return" | "escalate", "grant": ["path"], "reason": "<Türkçe, en çok 4000 karakter>" } ] }`
+(`grant` only with `grant_and_return`). The cycle judges the file and takes it WHOLE or refuses it
+whole: one bad decision - an unknown task, an empty reason, a protected grant - and nothing is
+applied, so a protected path is always an escalation, never a grant. A return beside a task that
+holds the same files waits, stopped, until that work is done; the cycle makes it then. Your final
+message is the report: one line per task, the action and why.

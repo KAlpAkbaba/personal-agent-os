@@ -407,6 +407,12 @@ class Settings(BaseSettings):
     research_execution_rule_enabled: bool = False
     #: The same for a routine's browser_action (ADR-0213 row 1); OFF = main's device choice.
     routines_execution_rule_enabled: bool = False
+    #: watch-engine: whether the watch runner reads due watches on the cloud worker. OFF by
+    #: default until browser-redirect-guard is released (the worker does not yet check a
+    #: redirect hop, and DNS rebinding also applies to our resolve-once check); off, watches
+    #: are kept and listed and nothing is read. Turning it off is the rollback.
+    watch_runner_enabled: bool = False
+    watch_runner_interval_s: float = 60.0
 
     #: Whether "bu hafta ne oldu" is told by the model narrator (ADR-0244 B: the voice
     #: tool hands the session's chat provider to the narrative). OFF by default: on, every
