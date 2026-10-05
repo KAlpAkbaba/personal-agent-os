@@ -8,7 +8,7 @@ variables or a .env file. No secrets live in this file.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: services/api — the identity root lives beside the service, outside the repo's
@@ -561,6 +561,23 @@ class Settings(BaseSettings):
     # unconfigured even with a key present, the same as a missing key.
     webpush_vapid_subject: str = ""
     webpush_request_timeout_s: float = 10.0
+
+    # jarvis-calls-owner (app.telephony): JARVIS phones the owner through Twilio. The Account
+    # SID and the auth token are SECRETS - the Cloud Core's env file only (installed with
+    # scripts/cloud/set-cloud-secret.ps1), never a default here, never returned by a route,
+    # never logged (SecretStr keeps them out of every repr). Empty = "bağlı değil".
+    telephony_twilio_account_sid: SecretStr = SecretStr("")
+    telephony_twilio_auth_token: SecretStr = SecretStr("")
+    # The ONLY number a call may go to (E.164, e.g. +90555...). Not a secret, but personal
+    # data: the env file, never this file.
+    telephony_owner_number: str = ""
+    # The Twilio number calls come from (E.164).
+    telephony_from_number: str = ""
+    # The https origin Twilio fetches the one-time call audio from (the Cloud Core as the
+    # internet reaches it). Empty or not https = Twilio's own tr-TR <Say> voice speaks.
+    telephony_public_base_url: str = ""
+    telephony_max_calls_per_hour: int = 3
+    telephony_loop_interval_s: float = 30.0
 
     @field_validator("weather_provider")
     @classmethod
