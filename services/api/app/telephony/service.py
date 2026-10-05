@@ -9,22 +9,27 @@ What a call says is synthesised by OUR TTS (the alarm greeting's provider, so th
 the owner hears every morning) into a short WAV that the Cloud Core serves once, from an
 unguessable url that dies after one fetch or ten minutes (``AUDIO_TTL``). When our TTS cannot
 speak - no key, the offline fake (a 110 Hz tone is never played to a person as speech), an
-error, or no public https origin for Twilio to fetch from - the TwiML falls back to Twilio's
-own ``<Say language="tr-TR">``.
+error, or no public https origin for Twilio to fetch from (a tailnet name or address is not
+one: ``is_public_https_origin``) - the TwiML falls back to Twilio's own
+``<Say language="tr-TR">``.
 
 Every call is a ledger row (subsystem ``telephony``) with its reason, Twilio's call SID and,
 once known, the status Twilio reports. Not answered (busy / no-answer / failed / canceled)
 means ONE retry five minutes after the first call, and when that one is not answered either,
-a notification - never a third call. The hourly cap is counted from the ledger, so a restart
-does not reset it. Pending retries are process state: a restart between a call and its
-five-minute check loses that one retry, and the ledger still says the call was placed.
+a notification - never a third call. The retry obeys the hourly cap and quiet hours like any
+call; a retry they stop is a ``call_skipped`` row and the notification follows at once. The
+hourly cap is counted from the ledger, so a restart does not reset it. Pending retries are
+process state: a restart between a call and its five-minute check loses that one retry, and
+the ledger still says the call was placed.
 """
 
 from __future__ import annotations
 
 import contextlib
 import dataclasses
+import ipaddress
 import re
+import urllib.parse
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -88,6 +93,24 @@ def normalize_number(value: str) -> str:
     if cleaned.startswith("00"):
         cleaned = "+" + cleaned[2:]
     return cleaned if _E164.match(cleaned) else ""
+
+
+def is_public_https_origin(base_url: str) -> bool:
+    """Whether Twilio, on the internet, could fetch from ``base_url``. The Cloud Core is
+    tailnet-only (``tailscale serve``, never Funnel): a ``*.ts.net`` name, a tailnet
+    (100.64/10), private, loopback or link-local address is not reachable from Twilio, and a
+    ``<Play>`` of it would be a call that says "an application error has occurred"."""
+    parsed = urllib.parse.urlsplit(base_url or "")
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return False
+    if host == "localhost" or host.endswith((".ts.net", ".local", ".internal", ".localhost")):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return "." in host
+    return address.is_global
 
 
 def mask_number(number: str) -> str:
@@ -168,7 +191,7 @@ class OwnerCaller:
         return "audio" if self._speak is not None and self._can_serve_audio() else "say"
 
     def _can_serve_audio(self) -> bool:
-        return self._base_url.startswith("https://")
+        return is_public_https_origin(self._base_url)
 
     @property
     def pending(self) -> int:
@@ -331,7 +354,7 @@ class OwnerCaller:
                 continue
             if status not in NOT_ANSWERED:
                 counts["unknown"] += 1
-            if pending.attempt == 1:
+            if pending.attempt == 1 and self._may_retry(pending, moment):
                 try:
                     self._place(
                         pending.kind, pending.message, attempt=2, moment=moment, origin=None
@@ -343,6 +366,29 @@ class OwnerCaller:
             self._notify_unanswered(pending, moment)
             counts["notified"] += 1
         return counts
+
+    def _may_retry(self, pending: _Pending, moment: datetime) -> bool:
+        """The retry is a call like any other: the hourly cap and quiet hours stop it too
+        (inspector, 2026-10-05: three unanswered calls retried at +5 min were six calls in
+        five minutes). A stopped retry is a ledger row, and the notification follows."""
+        decision = policy.decide(
+            pending.kind,
+            now=moment,
+            calls_in_last_hour=self._calls_in_last_hour(moment),
+            max_per_hour=self.max_per_hour,
+        )
+        if decision.call:
+            return True
+        self._ledger(
+            event_type=v.EVENT_TYPE_TELEPHONY_CALL_SKIPPED,
+            status=v.STATUS_SKIPPED,
+            summary=f"Tekrar araması yapılmadı ({decision.reason}).",
+            source_ref=f"call:{pending.sid}:retry_skipped",
+            moment=moment,
+            detail={"reason": pending.kind, "decision": decision.reason, "attempt": 2},
+        )
+        logger.info("telephony_retry_skipped", reason=pending.kind, decision=decision.reason)
+        return False
 
     def _notify_unanswered(self, pending: _Pending, moment: datetime) -> None:
         with self._session_scope() as db:

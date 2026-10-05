@@ -241,6 +241,40 @@ def test_with_our_tts_down_twilio_says_it_in_turkish(session_scope: Any) -> None
     assert "<Play>" not in twiml
 
 
+@pytest.mark.parametrize(
+    "base",
+    [
+        "https://pagentos-core.tail1234.ts.net",
+        "https://100.101.102.103",
+        "https://localhost:8000",
+        "https://192.168.1.20",
+    ],
+)
+def test_a_tailnet_or_private_origin_is_not_one_twilio_can_reach(
+    session_scope: Any, base: str
+) -> None:
+    """Return 4: the Cloud Core is tailnet-only (`tailscale serve`, never Funnel), so Twilio
+    on the internet cannot fetch from it. A base url that only the tailnet can reach would
+    give the owner a call that says "an application error has occurred" - so it counts as
+    no public origin, and Twilio's own Turkish voice speaks instead."""
+    provider = FakeTelephony()
+    caller = OwnerCaller(
+        provider=provider,
+        owner_number=OWNER,
+        from_number=TWILIO_NUMBER,
+        public_base_url=base,
+        audio_store=AudioStore(ttl_s=int(AUDIO_TTL.total_seconds())),
+        speak=lambda text: (WAV, "audio/wav"),
+        session_scope=session_scope,
+        clock=Clock(T0),
+    )
+
+    assert caller.speaks_with == "say"
+    outcome = caller.call(policy.KIND_RELEASE_FAILED, "Yeni sürüm açılamadı.")
+    assert outcome.spoken == "say"
+    assert "<Play>" not in provider.calls[0]["twiml"]
+
+
 # ------------------------------------------------------------------ the ledger and the retry
 
 
@@ -311,6 +345,56 @@ def test_not_answered_is_retried_once_after_five_minutes_then_a_notification(
         if row.event_type == "telephony.call_ended"
     ]
     assert ended == ["no-answer", "busy"]
+
+
+def test_the_retry_obeys_the_hourly_cap(session_scope: Any) -> None:
+    """Return 1 (inspector, 2026-10-05): three unanswered calls were each retried at +5 min
+    - six calls in five minutes with a cap of three. The retry is a call like any other: the
+    cap stops it, the ledger says so, and the owner gets the notification instead."""
+    provider = FakeTelephony()
+    clock = Clock(T0)
+    caller = _caller(session_scope, provider=provider, clock=clock)
+    for _ in range(3):
+        sid = caller.call(policy.KIND_SECURITY_CRITICAL, "Uyarı").call_sid
+        provider.status[sid] = "no-answer"
+
+    clock.now = T0 + timedelta(minutes=5)
+    counts = caller.sweep()
+
+    assert len(provider.calls) == 3, "a retry rang past the hourly cap"
+    assert counts["retried"] == 0
+    assert counts["notified"] == 3
+    skipped = [r for r in _ledger(session_scope) if r.event_type == "telephony.call_skipped"]
+    assert [r.detail_json["decision"] for r in skipped] == ["hourly_cap"] * 3
+    assert all(r.detail_json["attempt"] == 2 for r in skipped)
+
+
+def test_the_retry_of_a_non_critical_call_waits_out_quiet_hours(session_scope: Any) -> None:
+    """Return 2: a release failure at 22:57 Istanbul rang, went unanswered, and its retry
+    rang at 23:02 - inside quiet hours, for a kind that may not ring then. The retry is
+    skipped and becomes the notification; a critical one still rings."""
+    provider = FakeTelephony()
+    before_quiet = datetime(2026, 10, 5, 19, 57, tzinfo=UTC)  # 22:57 Istanbul
+    clock = Clock(before_quiet)
+    caller = _caller(session_scope, provider=provider, clock=clock)
+    routine = caller.call(policy.KIND_RELEASE_FAILED, "Yeni sürüm açılamadı.")
+    critical = caller.call(policy.KIND_SECURITY_CRITICAL, "Biri girmeye çalışıyor.")
+    provider.status[routine.call_sid] = "no-answer"
+    provider.status[critical.call_sid] = "no-answer"
+
+    clock.now = before_quiet + timedelta(minutes=5)  # 23:02 Istanbul
+    counts = caller.sweep()
+
+    assert len(provider.calls) == 3, "the routine retry rang in quiet hours"
+    assert "Biri girmeye çalışıyor." in caller.last_message
+    assert counts == {"answered": 0, "retried": 1, "notified": 1, "unknown": 0}
+    skipped = [r for r in _ledger(session_scope) if r.event_type == "telephony.call_skipped"]
+    assert [(r.detail_json["reason"], r.detail_json["decision"]) for r in skipped] == [
+        (policy.KIND_RELEASE_FAILED, "quiet_hours")
+    ]
+    with session_scope() as db:
+        notices = db.execute(select(NotificationRow)).scalars().all()
+    assert [n.body for n in notices] == ["Yeni sürüm açılamadı."]
 
 
 def test_the_hourly_cap_is_counted_from_the_ledger(session_scope: Any) -> None:

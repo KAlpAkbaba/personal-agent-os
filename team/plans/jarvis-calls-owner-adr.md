@@ -14,6 +14,24 @@ Tarih: 2026-10-05 · Görev: jarvis-calls-owner · Sahibin isteği 2026-10-05 (T
    Twilio'nun oturumu yok, belirteç yetkidir; alarmın `AudioStore`'u). TwiML `<Play>` bunu çeker. Bizim TTS
    yoksa / sahte ton sağlayıcısıysa / hata verirse / `PAGENTOS_TELEPHONY_PUBLIC_BASE_URL` https değilse
    `<Say language="tr-TR" voice="Polly.Filiz">`.
+
+   **Twilio ses bağlantısına nasıl ulaşır (Cloud Core yalnız tailnet'te).** Ulaşamaz, ve bu karar
+   onu açmaz. Cloud Core'un tek HTTPS kapısı `tailscale serve`'dir; Funnel (genel internet) ADR'si
+   gereği reddedilir (`scripts/cloud/enable-web-tailnet-https.sh` Funnel'ı açık bulursa durur).
+   Twilio internettedir, tailnet'e giremez. Bu yüzden:
+   - **Bugün varsayılan `<Say language="tr-TR">`'dir.** `PAGENTOS_TELEPHONY_PUBLIC_BASE_URL` boştur;
+     JARVIS Twilio'nun Türkçe sesiyle konuşur. Arama yine çalar, yine Türkçe anlatır; yalnız ses
+     bizim alarm sesimiz değil Twilio'nunkidir. Sayfa bunu "Twilio'nun Türkçe sesi" diye gösterir.
+   - **Tailnet adresi genel adres sayılmaz** (`is_public_https_origin`): `*.ts.net`, 100.64/10,
+     özel, loopback, link-local, `localhost`/`.local`/`.internal` verilirse yine `<Say>`. Yanlışlıkla
+     tailnet adı yazılsa Twilio'nun "an application error has occurred" demesi yerine JARVIS konuşur
+     (test + mutasyon RED).
+   - **`<Play>` yolu yalnız sahip internetten erişilebilir bir HTTPS kökü verdiğinde açılır**; o kök
+     yalnız `/v1/telephony/audio/{token}`'ı geçirmelidir (belirteç 256 bit, tek kullanım, 10 dk).
+     Bu bir genel açıklık kararıdır, sahibin (READY_FOR_OWNER), bu görev vermez.
+   - **Önerilen sonraki iş (ayrı kart):** WAV'ı Cloud Core'dan değil, mevcut S3-uyumlu nesne
+     deposundan 10 dakikalık imzalı (presigned) GET url'si ile vermek; arama bitince nesne silinir.
+     Cloud Core'a hiçbir gelen bağlantı açılmaz, bizim ses Twilio'ya ulaşır.
 4. **Ne önemli** (`app.telephony.policy`): `security.critical` (kritik), `release.failed` (bugünkü
    `recovery.alert` ve `release.rolled_back` bildirimleri buna eşlenir), `alarm.call_me` ('beni ara' alarmı),
    `spend.unanswered`, `aktivra.important`, ayar sayfasındaki test. Başka her tür: arama yok.
@@ -23,7 +41,11 @@ Tarih: 2026-10-05 · Görev: jarvis-calls-owner · Sahibin isteği 2026-10-05 (T
    (sabah aranmaz; bildirim merdiveni sabah ulaştırır).
 5. **Sonrası.** Arama + 5 dk: Twilio durumu okunur. `completed` = açıldı (sesli mesaj da olabilir; deneme
    hesabı ayırt ettirmez). `busy/no-answer/failed/canceled` = bir kez daha aranır; o da açılmazsa
-   `telephony.unanswered` bildirimi (kritikse urgent). Üçüncü arama yok. Bekleyen tekrar süreç
+   `telephony.unanswered` bildirimi (kritikse urgent). Üçüncü arama yok. **Tekrar da bir aramadır**
+   (denetleyici iadesi 2026-10-05: 3 cevapsız aramanın tekrarı 5 dakikada 6 arama ediyordu): saatlik
+   sınır ve sessiz saat tekrar için de sorulur; durdurulan tekrar `call_skipped` satırıdır
+   (`attempt: 2`, `source_ref call:<sid>:retry_skipped`) ve bildirim hemen gider. Sessiz saatte
+   kritik ve sahibin istediği tekrar yine çalar, diğerleri (sürüm hatası, harcama, Aktivra) çalmaz. Bekleyen tekrar süreç
    belleğindedir: arada yeniden başlatma o tek tekrarı kaybettirir, ledger yine aramanın yapıldığını söyler.
 6. **Ledger** alt sistemi `telephony`: `call_placed` (neden, call SID, deneme, ses türü, maskeli numara),
    `call_ended` (Twilio durumu), `call_skipped`, `call_refused`, `call_failed`. Bildirim kaynaklı kararın
@@ -42,7 +64,12 @@ Tarih: 2026-10-05 · Görev: jarvis-calls-owner · Sahibin isteği 2026-10-05 (T
 
 - Twilio'nun Türkiye'ye dakika ücreti, Türkiye arayan-kimliği kuralları, `Polly.Filiz` sesinin hesapta
   açık olduğu: NOT_RUN - entegratör/denetleyici doğrulamalı. Lisans: harici kütüphane eklenmedi (httpx mevcut).
-- Döngü (`telephony_loop`, 30 sn) kuruldu ama lifespan'de başlatılmadı: başlatmak sağlık koruma
-  testlerinin (test_bounded_delivery, test_health_endpoint) kümelerine `telephony_calls` eklemeyi ister.
-- Açık ses rotası test_identity_enforcement'ın bilinçli-açık uç listesine eklenmeli.
+- Döngü (`telephony_loop`, 30 sn) kuruldu ama lifespan'de başlatılmadı (ALAN_ISTEGI): başlatınca
+  `test_bounded_delivery.py` `reported` haritasına `"telephony_loop": "telephony_calls"`,
+  `test_health_endpoint.py` `ALL_CHECKS`'e (danışma) `"telephony_calls"` girmeli; lifespan'e
+  `await telephony_loop.start()` / `await telephony_loop.stop()` ve sağlık `checks`'ine
+  `telephony_calls` (main.py, alanda) aynı committe. Koruma dosyaları alan dışı olduğu için
+  iki koruma kırmızı kalmasın diye main.py'deki başlatma da onlarla birlikte yapılacak.
+- Açık ses rotası `test_identity_enforcement.py` `EXPECTED_OPEN`'a
+  `("GET", "/v1/telephony/audio/{token}")` olarak girmeli (alarm ses rotasının ikizi).
 - PROVEN_REAL: sahibin 'Test araması yap' denemesi - READY_FOR_OWNER.
