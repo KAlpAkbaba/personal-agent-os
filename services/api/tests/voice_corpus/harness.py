@@ -169,6 +169,7 @@ from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnou
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
+from app.watch.models import Watch, WatchReading
 from app.weather.models import WeatherQueryEvidenceRow
 from app.weather.providers import FakeWeatherProvider
 from app.weather.service import WeatherService
@@ -322,6 +323,9 @@ TABLES = (
     VoiceProfile.__table__,
     # ADR-0196: the router reads the stored macro names on EVERY utterance.
     VoiceMacroRow.__table__,
+    # watch-voice: the owner's watches and their readings.
+    Watch.__table__,
+    WatchReading.__table__,
     NarrationSession.__table__,
     PronunciationEntry.__table__,
     Artifact.__table__,

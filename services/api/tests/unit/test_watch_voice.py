@@ -101,9 +101,78 @@ def test_a_number_going_above_is_number_above() -> None:
     assert resolved.watch_condition == "number_above:45"
 
 
-def test_a_release_or_a_change_is_the_changed_condition() -> None:
-    assert resolve_intent(HA_SENTENCE).watch_condition == "changed"
-    assert resolve_intent("Bu sayfa değişince bana söyle.").watch_condition == "changed"
+def test_a_release_or_a_change_carries_no_condition_so_the_models_is_not_overridden() -> None:
+    # Return point 4: "changed" is the tool's default, never a condition the words "said".
+    assert resolve_intent(HA_SENTENCE).watch_condition is None
+    assert resolve_intent("Bu sayfa değişince bana söyle.").watch_condition is None
+
+
+def test_a_comma_decimal_is_read_whole() -> None:
+    # Return point 3: "40,5" -> "kırk virgül beş" was number_above:5.
+    resolved = resolve_intent("Dolar 40,5 lirayı geçerse haber ver.")
+    assert resolved.intent is Intent.WATCH_CREATE
+    assert resolved.watch_condition == "number_above:40.5"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Return point 1: the negative imperative ("do not delete") deletes nothing.
+        "Nöbetleri silme.",
+        "Nöbetlerimi silme.",
+        "Nöbetleri kaldırma.",
+        "Nöbeti kaldırma.",
+        "Fiyat nöbetini silme.",
+        "Fiyat nöbetini kaldırma.",
+        "Nöbetleri unutma.",
+        # Return point 2: the ablative ("from the watches") is one watch, not all of them.
+        "Nöbetlerden fiyatı kaldır.",
+        "Nöbetlerimden birini sil.",
+        "Nöbetlerimden fiyatı sil.",
+        # Not on the allowlist at all.
+        "Nöbetleri silmek istemiyorum.",
+        "Nöbetleri sildin mi?",
+        "Nöbetleri silersen kızarım.",
+    ],
+)
+def test_only_the_allowlisted_forms_delete(text: str) -> None:
+    resolved = resolve_intent(text)
+    assert resolved.intent not in (Intent.WATCH_FORGET_ALL, Intent.WATCH_REMOVE), resolved
+
+
+@pytest.mark.parametrize(
+    ("text", "intent_name"),
+    [
+        ("Nöbetleri unut.", "WATCH_FORGET_ALL"),
+        ("Nöbetlerimi sil.", "WATCH_FORGET_ALL"),
+        ("Tüm nöbetleri kaldır.", "WATCH_FORGET_ALL"),
+        ("Bütün nöbetlerimi sil.", "WATCH_FORGET_ALL"),
+        ("Nöbetleri unut lütfen.", "WATCH_FORGET_ALL"),
+        ("Fiyat nöbetini kaldır.", "WATCH_REMOVE"),
+        ("Nöbeti sil.", "WATCH_REMOVE"),
+        ("Fiyat nöbetini iptal et.", "WATCH_REMOVE"),
+        # One named watch forgotten is one removed, never all of them.
+        ("Fiyat nöbetini unut.", "WATCH_REMOVE"),
+    ],
+)
+def test_the_allowlisted_forms_delete(text: str, intent_name: str) -> None:
+    assert resolve_intent(text).intent is getattr(Intent, intent_name)
+
+
+@pytest.mark.parametrize(
+    ("text", "keeps"),
+    [
+        # Return point 5: a night shift to remember, and the clock, are not watches.
+        ("Bu gece nöbet tutacağım, bana hatırlat.", Intent.MEMORY_REMEMBER),
+        ("Saat beşi geçince bana söyle.", None),
+        ("Saat on ikiyi geçince uyar.", None),
+    ],
+)
+def test_a_shift_and_the_clock_are_not_watches(text: str, keeps: Intent | None) -> None:
+    resolved = resolve_intent(text)
+    assert resolved.intent not in _watch_intents(), resolved
+    if keeps is not None:
+        assert resolved.intent is keeps, resolved
 
 
 def test_the_interval_the_owner_said_travels_and_none_said_is_none() -> None:
@@ -300,6 +369,38 @@ def test_the_owners_number_wins_over_the_models_condition(wired) -> None:
     speech = answer["result"]["speech"]
     assert "shop.example.com" in speech and "20.000" in speech and "altına" in speech
     assert _one_sentence(speech), speech
+
+
+def test_the_models_contains_condition_stands_when_the_words_said_none(wired) -> None:
+    # Return point 4: the "changed" default never overrides the model's contains:.
+    client, factory = wired
+    sid = _session(client)
+    _say(client, sid, HA_SENTENCE)
+    answer = _tool(
+        client, sid, "watch.create", {"url": HA_URL, "condition": "contains:2026.11"}
+    )
+    assert answer["status"] == "succeeded", answer
+    assert [w.condition for w in _watches(factory)] == ["contains:2026.11"]
+
+
+def test_with_no_condition_anywhere_the_watch_is_changed(wired) -> None:
+    client, factory = wired
+    sid = _session(client)
+    _say(client, sid, HA_SENTENCE)
+    assert _tool(client, sid, "watch.create", {"url": HA_URL})["status"] == "succeeded"
+    assert [w.condition for w in _watches(factory)] == ["changed"]
+
+
+def test_a_spoken_comma_decimal_wins_whole(wired) -> None:
+    # Return point 3: "40,5" was number_above:5 and overrode the model's right 40.5.
+    client, factory = wired
+    sid = _session(client)
+    _say(client, sid, "Dolar 40,5 lirayı geçerse haber ver.")
+    answer = _tool(
+        client, sid, "watch.create", {"url": SHOP_URL, "condition": "number_above:40.5"}
+    )
+    assert answer["status"] == "succeeded", answer
+    assert [w.condition for w in _watches(factory)] == ["number_above:40.5"]
 
 
 def test_the_turn_record_carries_the_watch_fields(wired) -> None:

@@ -270,6 +270,10 @@ _TIERS: Final[dict[str, str]] = {
     "macro.cancel": TIER_SENSITIVE,
     "macro.run": TIER_SENSITIVE,
     "macro.delete": TIER_SENSITIVE,
+    # watch-voice: creating, removing and forgetting a watch change what the owner set up.
+    "watch.create": TIER_SENSITIVE,
+    "watch.remove": TIER_SENSITIVE,
+    "watch.forget_all": TIER_SENSITIVE,
     # ADR-0197: a tab in the owner's own browser, like media.play.
     "godseye.open": TIER_SENSITIVE,
     "scene.add": TIER_SENSITIVE,
@@ -342,6 +346,7 @@ _TIERS: Final[dict[str, str]] = {
     # gate is noise.
     "routine.list": TIER_OPEN,
     "macro.list": TIER_OPEN,
+    "watch.list": TIER_OPEN,
     "research.finding_detail": TIER_OPEN,
     "research.sources": TIER_OPEN,
     "scene.inspect": TIER_OPEN,
