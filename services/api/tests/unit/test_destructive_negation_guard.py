@@ -20,10 +20,12 @@ This guard closes the class instead of the instance:
   router the voice uses - under the state that made the positive sentence reach the tool,
   and must reach NO destructive intent (an answer or ``none`` is fine).
 * The ablative ("Nöbetlerimden birini sil.") never reaches a ``*_forget_all``.
-* The list watcher: a new intent whose name or tool says forget/remove/delete/cancel/clear
-  and that is in neither :data:`DESTRUCTIVE_TOOLS` nor :data:`NOT_DESTRUCTIVE` is red.
-* What is red on main today is in :data:`KNOWN_OPEN` (``xfail(strict=True)``): fixing the
-  router makes it XPASS, which is red, and the entry is then removed.
+* The list watcher: a new intent whose name or tool says forget/remove/delete/cancel/clear/
+  uninstall/discard and that is in neither :data:`DESTRUCTIVE_TOOLS` nor
+  :data:`NOT_DESTRUCTIVE` is red.
+* What is red on main today is in :data:`KNOWN_OPEN` (``xfail(strict=True,
+  raises=AssertionError)``): fixing the router makes it XPASS, which is red, and the entry
+  is then removed.
 
 ``destructive_negation_cases.md`` beside this file is the generated table, held equal to
 the generator's output so a wrong Turkish form is seen line by line. Regenerate it with
@@ -130,6 +132,29 @@ DESTRUCTIVE_TOOLS: Final[dict[str, Destructive]] = {
     "watch_forget_all": Destructive(
         (("w.forget.1", "Nöbetleri unut."), ("w.forget.2", "Bütün nöbetleri sil."))
     ),
+    "native_uninstall": Destructive(
+        (
+            ("nativeapps.uninstall.canonical", "Kurulumu kaldır."),
+            ("nativeapps.uninstall.app", "Uygulamayı kaldır."),
+        ),
+        state=(("native_build_focused", True),),
+    ),
+    "discard": Destructive((("mc.discard.mail.2", "Vazgeç."),), state=(("draft_pending", True),)),
+    # Not matched by the watcher's pattern; listed by decision (ADR): ending a process loses
+    # unsaved work, and a rollback swaps the live release.
+    "process_stop": Destructive(
+        (
+            ("op.process.stop.1", "Chrome'u sonlandır."),
+            ("op.process.stop.2", "Not Defteri'ni sonlandır."),
+        )
+    ),
+    "release_rollback": Destructive(
+        (
+            ("ev.rollback.1", "Önceki sürüme dön."),
+            ("ev.rollback.2", "Eski sürüme geri al."),
+            ("ev.rollback.3", "Bir önceki sürüme geri dön."),
+        )
+    ),
 }
 
 #: Names the watcher's pattern matches that do NOT delete anything, each with its reason.
@@ -158,7 +183,7 @@ def _open(
 
 _CANCEL_STEMS_WHY: Final = "_CANCEL_VERB_STEMS ('iptal','sil','kaldır') _has ile önek eşleşiyor"
 
-#: Red on main 2026-10-05 (45 cases): (intent, sentence) -> (why, the fixing card's name).
+#: Red on main 2026-10-05 (72 cases): (intent, sentence) -> (why, the fixing card's name).
 #: Each is an ``xfail(strict=True)``; the ADR carries every fixing card's full text.
 KNOWN_OPEN: Final[dict[tuple[str, str], tuple[str, str]]] = {
     **_open(
@@ -261,6 +286,60 @@ KNOWN_OPEN: Final[dict[tuple[str, str], tuple[str, str]]] = {
         "intents.py:7140 'iptal' tam eşleşiyor, olumsuz denetimi yok",
         "negation-fix-operator-exec-cancel",
     ),
+    **_open(
+        "exec_cancel",
+        ("Vazgeçme.", "Vazgeçmeyin.", "Vazgeçmeyiniz."),
+        "intents.py:4312 _DISCARD_STEMS _has ile önek: iş sürerken 'Vazgeçme.' -> discard",
+        "negation-fix-discard",
+    ),
+    **_open(
+        "discard",
+        ("Vazgeçme.", "Vazgeçmeyin.", "Vazgeçmeyiniz."),
+        "intents.py:4312 _DISCARD_STEMS ('vazgeç') _has ile önek, olumsuz denetimi yok",
+        "negation-fix-discard",
+    ),
+    **_open(
+        "native_uninstall",
+        (
+            "Kurulumu kaldırma.",
+            "Kurulumu kaldırmayın.",
+            "Kurulumu kaldırmayınız.",
+            "Uygulamayı kaldırma.",
+            "Uygulamayı kaldırmayın.",
+            "Uygulamayı kaldırmayınız.",
+        ),
+        "intents.py:6839 _NATIVE_UNINSTALL_VERB_STEMS ('kaldır') _has ile önek",
+        "negation-fix-native-uninstall",
+    ),
+    **_open(
+        "process_stop",
+        (
+            "Chrome'u sonlandırma.",
+            "Chrome'u sonlandırmayın.",
+            "Chrome'u sonlandırmayınız.",
+            "Not Defteri'ni sonlandırma.",
+            "Not Defteri'ni sonlandırmayın.",
+            "Not Defteri'ni sonlandırmayınız.",
+        ),
+        "intents.py:3049 _STOP_PROCESS_STEMS ('sonlandır') _has ile önek",
+        "negation-fix-process-stop",
+    ),
+    **_open(
+        "release_rollback",
+        (
+            "Önceki sürüme dönme.",
+            "Önceki sürüme dönmeyin.",
+            "Önceki sürüme dönmeyiniz.",
+            "Eski sürüme geri alma.",
+            "Eski sürüme geri almayın.",
+            "Eski sürüme geri almayınız.",
+            "Bir önceki sürüme geri dönme.",
+            "Bir önceki sürüme geri dönmeyin.",
+            "Bir önceki sürüme geri dönmeyiniz.",
+        ),
+        "intents.py:1624 _RETURN_VERB_STEMS ('dön','geri') _has ile önek, olumsuz denetimi yok",
+        "negation-fix-release-rollback",
+    ),
 }
 
 #: The watcher's pattern over intent values and their tool names.
@@ -284,6 +363,11 @@ IMPERATIVES: Final[frozenset[str]] = frozenset(
         "vazgeç",
         "vazgec",
         "dur",
+        "sonlandır",
+        "sonlandir",
+        "dön",
+        "don",
+        "al",
         "et",
         "yap",
     }
@@ -512,7 +596,11 @@ def _negative_params() -> list[Any]:
             continue
         marks = []
         if (known := KNOWN_OPEN.get(case.key)) is not None:
-            marks.append(pytest.mark.xfail(strict=True, reason=f"{known[0]} -> {known[1]}"))
+            marks.append(
+                pytest.mark.xfail(
+                    strict=True, raises=AssertionError, reason=f"{known[0]} -> {known[1]}"
+                )
+            )
         params.append(
             pytest.param(case, marks=marks, id=f"{case.kind}:{case.intent}:{case.negative}")
         )

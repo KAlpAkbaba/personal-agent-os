@@ -75,9 +75,9 @@ Beklenen her satırda aynıdır: cümle hiçbir silen/iptal eden niyete gitmez. 
 | exec_cancel | generated | exec.cancel.1 | Bunu iptal et. | Bunu iptal etme. | AÇIK: negation-fix-operator-exec-cancel |
 | exec_cancel | generated | exec.cancel.1 | Bunu iptal et. | Bunu iptal etmeyin. | AÇIK: negation-fix-operator-exec-cancel |
 | exec_cancel | generated | exec.cancel.1 | Bunu iptal et. | Bunu iptal etmeyiniz. | AÇIK: negation-fix-operator-exec-cancel |
-| exec_cancel | generated | exec.cancel.2 | Vazgeç. | Vazgeçme. | silen araca gitmez |
-| exec_cancel | generated | exec.cancel.2 | Vazgeç. | Vazgeçmeyin. | silen araca gitmez |
-| exec_cancel | generated | exec.cancel.2 | Vazgeç. | Vazgeçmeyiniz. | silen araca gitmez |
+| exec_cancel | generated | exec.cancel.2 | Vazgeç. | Vazgeçme. | AÇIK: negation-fix-discard |
+| exec_cancel | generated | exec.cancel.2 | Vazgeç. | Vazgeçmeyin. | AÇIK: negation-fix-discard |
+| exec_cancel | generated | exec.cancel.2 | Vazgeç. | Vazgeçmeyiniz. | AÇIK: negation-fix-discard |
 | exec_cancel | generated | b51.exec_cancel.1 | Bu işi iptal et. | Bu işi iptal etme. | AÇIK: negation-fix-operator-exec-cancel |
 | exec_cancel | generated | b51.exec_cancel.1 | Bu işi iptal et. | Bu işi iptal etmeyin. | AÇIK: negation-fix-operator-exec-cancel |
 | exec_cancel | generated | b51.exec_cancel.1 | Bu işi iptal et. | Bu işi iptal etmeyiniz. | AÇIK: negation-fix-operator-exec-cancel |
@@ -93,6 +93,30 @@ Beklenen her satırda aynıdır: cümle hiçbir silen/iptal eden niyete gitmez. 
 | watch_forget_all | generated | w.forget.2 | Bütün nöbetleri sil. | Bütün nöbetleri silme. | silen araca gitmez |
 | watch_forget_all | generated | w.forget.2 | Bütün nöbetleri sil. | Bütün nöbetleri silmeyin. | silen araca gitmez |
 | watch_forget_all | generated | w.forget.2 | Bütün nöbetleri sil. | Bütün nöbetleri silmeyiniz. | silen araca gitmez |
+| native_uninstall | generated | nativeapps.uninstall.canonical | Kurulumu kaldır. | Kurulumu kaldırma. | AÇIK: negation-fix-native-uninstall |
+| native_uninstall | generated | nativeapps.uninstall.canonical | Kurulumu kaldır. | Kurulumu kaldırmayın. | AÇIK: negation-fix-native-uninstall |
+| native_uninstall | generated | nativeapps.uninstall.canonical | Kurulumu kaldır. | Kurulumu kaldırmayınız. | AÇIK: negation-fix-native-uninstall |
+| native_uninstall | generated | nativeapps.uninstall.app | Uygulamayı kaldır. | Uygulamayı kaldırma. | AÇIK: negation-fix-native-uninstall |
+| native_uninstall | generated | nativeapps.uninstall.app | Uygulamayı kaldır. | Uygulamayı kaldırmayın. | AÇIK: negation-fix-native-uninstall |
+| native_uninstall | generated | nativeapps.uninstall.app | Uygulamayı kaldır. | Uygulamayı kaldırmayınız. | AÇIK: negation-fix-native-uninstall |
+| discard | generated | mc.discard.mail.2 | Vazgeç. | Vazgeçme. | AÇIK: negation-fix-discard |
+| discard | generated | mc.discard.mail.2 | Vazgeç. | Vazgeçmeyin. | AÇIK: negation-fix-discard |
+| discard | generated | mc.discard.mail.2 | Vazgeç. | Vazgeçmeyiniz. | AÇIK: negation-fix-discard |
+| process_stop | generated | op.process.stop.1 | Chrome'u sonlandır. | Chrome'u sonlandırma. | AÇIK: negation-fix-process-stop |
+| process_stop | generated | op.process.stop.1 | Chrome'u sonlandır. | Chrome'u sonlandırmayın. | AÇIK: negation-fix-process-stop |
+| process_stop | generated | op.process.stop.1 | Chrome'u sonlandır. | Chrome'u sonlandırmayınız. | AÇIK: negation-fix-process-stop |
+| process_stop | generated | op.process.stop.2 | Not Defteri'ni sonlandır. | Not Defteri'ni sonlandırma. | AÇIK: negation-fix-process-stop |
+| process_stop | generated | op.process.stop.2 | Not Defteri'ni sonlandır. | Not Defteri'ni sonlandırmayın. | AÇIK: negation-fix-process-stop |
+| process_stop | generated | op.process.stop.2 | Not Defteri'ni sonlandır. | Not Defteri'ni sonlandırmayınız. | AÇIK: negation-fix-process-stop |
+| release_rollback | generated | ev.rollback.1 | Önceki sürüme dön. | Önceki sürüme dönme. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.1 | Önceki sürüme dön. | Önceki sürüme dönmeyin. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.1 | Önceki sürüme dön. | Önceki sürüme dönmeyiniz. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.2 | Eski sürüme geri al. | Eski sürüme geri alma. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.2 | Eski sürüme geri al. | Eski sürüme geri almayın. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.2 | Eski sürüme geri al. | Eski sürüme geri almayınız. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.3 | Bir önceki sürüme geri dön. | Bir önceki sürüme geri dönme. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.3 | Bir önceki sürüme geri dön. | Bir önceki sürüme geri dönmeyin. | AÇIK: negation-fix-release-rollback |
+| release_rollback | generated | ev.rollback.3 | Bir önceki sürüme geri dön. | Bir önceki sürüme geri dönmeyiniz. | AÇIK: negation-fix-release-rollback |
 | memory_forget | incident | B16 2026-09-13 |  | Bunu unutma. | silen araca gitmez |
 | memory_forget | incident | öneri 2026-10-05 gerçek cihaz cümlesi |  | Hafızadan bunu unutma. | silen araca gitmez |
 | research_cancel | incident | B27 2026-09-14 |  | Araştırmayı iptal etme. | silen araca gitmez |
