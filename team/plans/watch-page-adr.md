@@ -27,8 +27,17 @@ the rule that web stays fully usable beside voice.
    condition is shown as it is, never guessed.
 5. A failed list is one line ("Nöbetler okunamadı: <server sentence>") inside the section;
    the routines panel and the policy list render regardless. A request never throws.
-6. Kaldır removes the row only after the Cloud Core says it did; 'Hepsini unut' is ONE
-   DELETE and says the server's count.
+6. Kaldır removes the row only after the Cloud Core says it is gone: deleted now, or
+   `not_found` (forgotten by voice, removed in another tab - the row would otherwise stay to
+   be pressed again); 'Hepsini unut' is ONE DELETE and says the server's count.
+7. What the buttons do is `watchHandlers(get, set)` in `WatchList.tsx`, a plain function over
+   any store; the component only gives it React state (a copy made once per mount, since the
+   handlers read the latest state across their awaits). Tests drive the handlers with a
+   mocked `apiFetch`, so the button -> DELETE `/{id}` chain is proven, not two halves.
+8. A list that could not be read stays `null`: a refused add never turns it into "Henüz
+   nöbet yok", and a successful add reads the list again instead of showing the one new row
+   as if it were the whole list (if the re-read fails, the one line stays and the add is
+   still said).
 
 ## Consequences / open
 

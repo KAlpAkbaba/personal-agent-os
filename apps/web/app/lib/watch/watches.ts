@@ -147,12 +147,18 @@ export async function addOne(
   };
 }
 
-/** Kaldır: DELETE /v1/watches/{id}; the row leaves only when the Cloud Core says it did. */
+/**
+ * Kaldır: DELETE /v1/watches/{id}; the row leaves only when the Cloud Core says it is gone -
+ * deleted now, or `not_found` (forgotten by voice, removed in another tab).
+ */
 export async function removeOne(
   items: Watch[],
   id: string,
 ): Promise<{ items: Watch[]; notice: string }> {
   const result = await send(watchPath(id), { method: "DELETE" });
+  if (!result.ok && result.code === "not_found") {
+    return { items: items.filter((row) => row.id !== id), notice: result.message };
+  }
   if (!result.ok) return { items, notice: result.message };
   const gone = items.find((row) => row.id === id);
   return {

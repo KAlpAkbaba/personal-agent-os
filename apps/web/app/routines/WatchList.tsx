@@ -5,12 +5,12 @@
  * runs (not the Onay Merkezi or the Ofis - those are the team's pages).
  *
  * `WatchListView` is markup only, a pure function of its props, so the tests render it with
- * fixtures and press its buttons through the element tree; `WatchList` holds the state and
- * calls `lib/watch/watches.ts`. Every rule is the Cloud Core's: a refusal stands beside the
+ * fixtures and press its buttons through the element tree; `watchHandlers` is what the buttons
+ * do (tested over a plain store), and `WatchList` only gives it React state. Every rule is the Cloud Core's: a refusal stands beside the
  * form in its own words, and a failed list is one line while the rest of the page renders.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   CONDITION_KINDS,
@@ -159,65 +159,82 @@ export function WatchListView({
   );
 }
 
-export default function WatchList() {
-  const [items, setItems] = useState<Watch[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [refusal, setRefusal] = useState<string | null>(null);
-  const [draft, setDraft] = useState<WatchDraft>(EMPTY_DRAFT);
-  const [busy, setBusy] = useState(false);
+export type WatchState = Pick<WatchListViewProps, "items" | "error" | "notice" | "refusal" | "busy" | "draft">;
 
-  const refresh = useCallback(async () => {
+export const INITIAL_WATCH_STATE: WatchState = {
+  items: null,
+  error: null,
+  notice: null,
+  refusal: null,
+  busy: false,
+  draft: EMPTY_DRAFT,
+};
+
+/**
+ * What the buttons do, over any store: `WatchList` hands it React state, the tests a plain
+ * object. A list that could not be read stays `null` - never "Henüz nöbet yok", never the one
+ * row just added shown as if it were the whole list; after an add it is read again.
+ */
+export function watchHandlers(get: () => WatchState, set: (patch: Partial<WatchState>) => void) {
+  const refresh = async () => {
     const result = await fetchWatches();
-    if (result.ok) {
-      setItems(result.items);
-      setError(null);
-    } else {
-      setError(loadFailedSentence(result));
-    }
-  }, []);
+    if (result.ok) set({ items: result.items, error: null });
+    else set({ error: loadFailedSentence(result) });
+  };
+  return {
+    refresh,
+    onDraft: (draft: WatchDraft) => set({ draft }),
+    onAdd: async () => {
+      const { items, draft } = get();
+      set({ busy: true });
+      const next = await addOne(items ?? [], draft);
+      if (next.refusal !== null) {
+        set({ busy: false, notice: null, refusal: next.refusal });
+        return;
+      }
+      if (items === null) await refresh();
+      else set({ items: next.items });
+      set({ busy: false, notice: next.notice, refusal: null, draft: EMPTY_DRAFT });
+    },
+    onRemove: async (id: string) => {
+      set({ busy: true });
+      const next = await removeOne(get().items ?? [], id);
+      set({ busy: false, items: next.items, notice: next.notice });
+    },
+    onForgetAll: async () => {
+      set({ busy: true });
+      const next = await forgetEverything(get().items ?? []);
+      set({ busy: false, items: next.items, notice: next.notice });
+    },
+  };
+}
+
+export default function WatchList() {
+  const [state, setState] = useState<WatchState>(INITIAL_WATCH_STATE);
+  // The handlers read the latest state across their awaits, so they keep their own copy, made
+  // once per mount; React state only mirrors it for rendering.
+  const [handlers] = useState(() => {
+    let current = INITIAL_WATCH_STATE;
+    return watchHandlers(
+      () => current,
+      (patch) => {
+        current = { ...current, ...patch };
+        setState(current);
+      },
+    );
+  });
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const current = items ?? [];
+    void handlers.refresh();
+  }, [handlers]);
 
   return (
     <WatchListView
-      items={items}
-      error={error}
-      notice={notice}
-      refusal={refusal}
-      busy={busy}
-      draft={draft}
-      onDraft={setDraft}
-      onAdd={() => {
-        setBusy(true);
-        void addOne(current, draft).then((next) => {
-          setBusy(false);
-          setItems(next.items);
-          setNotice(next.notice);
-          setRefusal(next.refusal);
-          if (next.refusal === null) setDraft(EMPTY_DRAFT);
-        });
-      }}
-      onRemove={(id) => {
-        setBusy(true);
-        void removeOne(current, id).then((next) => {
-          setBusy(false);
-          setItems(next.items);
-          setNotice(next.notice);
-        });
-      }}
-      onForgetAll={() => {
-        setBusy(true);
-        void forgetEverything(current).then((next) => {
-          setBusy(false);
-          setItems(next.items);
-          setNotice(next.notice);
-        });
-      }}
+      {...state}
+      onDraft={handlers.onDraft}
+      onAdd={() => void handlers.onAdd()}
+      onRemove={(id) => void handlers.onRemove(id)}
+      onForgetAll={() => void handlers.onForgetAll()}
     />
   );
 }
