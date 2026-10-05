@@ -444,7 +444,6 @@ not rediscovered.
 | Always-listening natural conversation, interruptible, in the owner's language | Realtime voice (OpenAI) + the free local mode (Chrome Web Speech + the ONE router + Haiku), barge-in, the Arbor voice target | **HAVE** — quality work remains (Turkish TTS gap, K66 noise, ADR-0043/0080) |
 | Knows the owner completely, remembers everything that matters | Memory (M5, B16–B19) — SEMANTIC with ADR-0200 (local embedder, potion in production, 22/22 rows embedded); extraction in every mode (ADR-0201); rerank built and kept off by decision (ADR-0206); ledger + experience engine | **HAVE** (2026-09-29) — ADR-0201 is PROVEN_AUTOMATED; the owner's live local-mode sentence is pending |
 | Researches anything, reads the world's data | Research in the owner's own Chrome (ADR-0183), Latest News Mode, God's Eye | **HAVE** |
-| Runs the workshop by voice: machines, files, fabrication | Digital Operator (M19), documents (M20), artifact/app/native/3D factories (M22–M28) | **HAVE** |
 | The same JARVIS in the house, the car, the suit, the phone | Multi-device (M29): a second device, GMKADIRAKBABA, is enrolled (ADR-0203, aliases `ofis` / `iş`); browser worker and owner-Chrome research proven in the office 2026-09-29; session→device affinity, launch without the Operator and the spoken device name are on main (ADR-0208/0209/0212), not yet released | **PARTIAL** (2026-09-29) — two PCs; no phone, no handoff of a running task |
 | Runs the house: lights, doors, climate | Home Assistant behind a `smart_home` provider (research 2026-09-26) | **MISSING** — adopt |
 | Secretary: mail, calendar, answers calls on his behalf | Mail/calendar built (M21) but no account; calendar → Radicale (own CalDAV); calls → a telephony bridge (Twilio/Telnyx) into the realtime voice path, with the KVKK announcement | **MISSING** — accounts and the bridge |
@@ -455,10 +454,8 @@ not rediscovered.
 | **Writes down his conversations, and knows who is speaking** - text like Wispr Flow, never the audio (the owner, 2026-10-05: "sesleri kaydetmesindense konuşmaları kaydetmesi yeter ... sesin farkını anlasın, bu kim diye sorarsa ya da ben söylersem o sesi her duyduğunda tanısın ve o isim altında yazsın") | Speech to text (local and cloud), owner speaker verification on a derived voice profile, never raw audio (`app/voice/speaker.py`), the listen-only mode that keeps others' speech until "unut" | **MISSING** — a running transcript of the conversation, split by voice; JARVIS asks "bu kim?" or the owner names a voice, and a voice profile under that name labels it from then on. Audio is dropped after transcription (a few KB of text a day). Legal: another person's voice profile is biometric data under KVKK (explicit consent) and recording a private conversation without consent is a crime (TCK 133) - named profiles only for people who agreed, others stay "Konuşmacı 2"; outside the house the owner starts and stops it |
 | **Records everything and tells him, whenever he asks** — "her şeyi kaydeden ve istediğim zaman bana anlatan" | Activity ledger (M16), memory (M5/ADR-0200–0206), activity briefing, research reports, audit trails. Missing: ONE narrative over all of it — "bu hafta ne oldu", "ofiste ne yaptın", "ne başarısız oldu" — spoken on demand, with failures included | **PARTIAL** — its own line under order item 2c |
 | Proactive: warns, briefs, watches over him | Alarms, routines, morning briefing, presence, notifications; briefings still pull-only for a web session (queue item 1) | **PARTIAL** |
-| Holograms and hands in the air | Holographic/Living Core (M18), hand gestures stage 1+2 (ADR-0198/0199, branch), God's Eye | **PARTIAL** — on a screen; volumetric holograms do not exist, AR glasses are the nearest real thing |
 | Repairs and improves itself | Self-healing (M6), evolution (M7/M18.4), self-dev (B35), recovery supervisor (B08) | **HAVE** — controlled, and staying controlled |
 | Personality, dry wit | The persona instructions | **PARTIAL** — tune, never at the cost of truthful speech (ADR-0063) |
-| Breaks into any system; flies the suit; drives the car | — | **NEVER / HARDWARE** — see the limits |
 
 ### The limits, stated once
 
@@ -485,27 +482,32 @@ not rediscovered.
 
 ### The order (binding until the owner changes it)
 
+The owner, 2026-10-05: "analizi yüksek, hafızası güçlü, araştırmacı, her yerde yanımda olan yapay
+zekâ modeli JARVIS ilk proje; roadmap'te buna uymayan her şeyi kaldır. Boşuna zaman ve token
+harcamayalım." Every task the team takes serves one of these, or it is not started.
+
 1. **Memory** — DONE 2026-09-29: PR-1 in production (ADR-0200), PR-2 automated
    (ADR-0201), PR-3 built and off (ADR-0206).
-2. **browser-use, anywhere** — the JARVIS that does anything on the web:
-   - 2a. **In the owner's own Chrome** (ADR-0113/0183/0207): the task loop's PR-A and PR-B
-     landed; PR-C (real Chrome, the six binding risks closed) and PR-D (voice + shell)
-     remain. Reversible actions free, irreversible ones behind read-back + the owner's word.
-   - 2b. **Execution in the cloud (ADR-0213)** — owner decision 2026-09-29: "işlemleri
-     LLM'in koştuğu makine üzerinde yapsak daha stabil olmaz mı?". A headless-Chromium
-     browser worker on the Cloud Core registered as a virtual device (`device_kind=cloud`,
-     alias "bulut"); an `execution_target` rule (cloud | owner_chrome | device) with
-     fallbacks and events; a network-less `compute.run` sandbox for calculation and data
-     work; scheduled jobs always run in the cloud. Capacity: measure on CPX32, plan CPX41.
-   - 2c. **The narrative** — the table's new row: one spoken account of what happened, on
-     demand, failures included.
-3. **Secretary** — Radicale (own calendar/contacts), a mail account, then the telephony
-   bridge into the realtime voice path (announce the assistant, KVKK).
-4. **The house** — Home Assistant as the `smart_home` provider; "salonun ışığını kapat".
-5. **Everywhere** — reopened: the office PC is the second device; next: session→device
-   affinity in production (ADR-0208), device-to-device handoff of a running task, the phone.
-6. **Voice and character** — close the Turkish TTS gap, then give the persona its wit.
-7. **Sight** — gesture stage 2 merged after the owner's trial; AR as a later surface.
+2. **Research and analysis** — research in the owner's Chrome and in the cloud reader
+   (ADR-0183/0213), the watch (ADR-0297), and the **"doğrula" mode**: a claim, a verdict, the
+   sources and the counter-argument, kept to recall later. The narrative (2c of the old order):
+   one spoken account of what happened, on demand, failures included.
+3. **His conversations and his people** — conversation transcripts as text with speaker names
+   (consent rules in the table), follow-ups taken from them (people, promises, dates), mail and
+   calendar on his own accounts (Radicale, a mail account).
+4. **With him everywhere** — the iPhone app (notifications at once, start/stop capture), JARVIS
+   calls him when something important happens (the telephony bridge, outbound to the owner
+   first), the second PC already enrolled.
+5. **The house** — the home's stock and shopping list ("tuvalet kağıdı azaldı"); Home Assistant
+   when the device inventory exists.
+6. **Voice and character** — close the Turkish TTS gap, then the persona's wit.
+
+**Removed from the target (the owner, 2026-10-05).** No new work goes into: the artifact, app,
+native and 3D factories and fabrication (M22–M28); holograms, the Living Core, hand gestures and
+God's Eye as a surface; the authorized security agent (M8); the old order's "Sight" step. What is
+built stays as it is and is kept green by the gate - it is not extended. The agent team's own
+tooling gets only what makes building JARVIS cheaper or safer (the test team, model choice, the
+account pool, safe memory, the stuck-run check).
 
 ### Approved ideas (the researcher's, written here by the lead when the owner approves)
 
