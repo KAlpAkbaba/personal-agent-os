@@ -2821,9 +2821,11 @@ try {
             Assert-Equal -Expected "" -Actual ([string]$call.team_url) -Because "no queue URL, no board address"
             Assert-True -Condition ([bool][string]$call.team_seat) -Because "the seat is set: $($call.role)"
         }
-        # the status the cycle writes carries no seat field (the status route refuses unknown run fields)
-        $state = Get-FakeApiState -Api $api
-        Assert-True -Condition ((ConvertTo-Json -InputObject $state.status -Depth 8 -Compress) -notmatch '"seat"') -Because "no seat in the status document"
+        # the status carries the board's seat only as a worker run's number (office-stable-seats):
+        # `seat: 1` for worker-1, nothing for the inspector - never the board's "worker-1" / "inspector"
+        $statuses = @((Get-FakeApiState -Api $api).statuses)
+        $line = (@($statuses | ForEach-Object { @($_.runs) | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.role)@$(if ($null -ne $_.PSObject.Properties['seat']) { $_.seat } else { '-' })" } }) -join ",")
+        Assert-True -Condition ($line -match "worker@1" -and $line -match "inspector@-" -and $line -notmatch "worker@worker|@inspector") -Because "a worker's number, no seat for the inspector: $line"
     }
 
     Test-Case "duty in API mode: the Proje Yöneticisi's decision is written to the store, through the cycle's own writes" {
