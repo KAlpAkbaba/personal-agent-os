@@ -109,9 +109,21 @@ function Invoke-Step {
   # -OnlyStep through -File arrives as ONE comma-joined string; a test that lifts this function
   # under StrictMode has no such variable at all (both: 2026-10-04).
   $only = @(Get-Variable -Name OnlyStep -ValueOnly -ErrorAction SilentlyContinue | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-  if ($only.Count -gt 0 -and -not @($only | Where-Object { $Name -like $_ }).Count) {
-    [void]$script:results.Add([pscustomobject]@{ Step = $Name; Result = "SKIPPED"; Seconds = 0; WaitSeconds = 0 })
-    return
+  if ($only.Count -gt 0) {
+    # A pattern that matches no step is named in the summary: a step name with a comma in it is
+    # split by the list, so its pattern must stop before the comma ("Agent team cycle*").
+    if ($null -eq (Get-Variable -Name OnlyStepUnmatched -Scope Script -ErrorAction SilentlyContinue)) {
+      $script:OnlyStepUnmatched = New-Object System.Collections.ArrayList
+      foreach ($p in $only) { [void]$script:OnlyStepUnmatched.Add($p) }
+    }
+    $hits = @($only | Where-Object { $Name -like $_ })
+    foreach ($p in $hits) { $script:OnlyStepUnmatched.Remove($p) }
+    if (-not $hits.Count) {
+      # Inside the group a skipped step keeps its LISTED place among the group's rows.
+      if ($null -ne $script:GateGroup) { [void]$script:GateGroup.Add([pscustomobject]@{ Name = $Name; Skipped = $true }); return }
+      [void]$script:results.Add([pscustomobject]@{ Step = $Name; Result = "SKIPPED"; Seconds = 0; WaitSeconds = 0 })
+      return
+    }
   }
   if ($null -ne $script:GateGroup) {
     # Between Start-GateGroup and Complete-GateGroup a step is RECORDED, not run: its
@@ -205,8 +217,9 @@ function Complete-GateGroup {
   $script:GateGroup = $null
   if (@($entries).Count -eq 0) { return }
   # A step that failed while it was recorded is not run; it keeps its place in the table.
+  # A step -OnlyStep left out is not run either; it keeps its place as SKIPPED.
   $refused = @($entries | Where-Object { $_.PSObject.Properties["Failure"] })
-  $steps = @($entries | Where-Object { -not $_.PSObject.Properties["Failure"] })
+  $steps = @($entries | Where-Object { -not $_.PSObject.Properties["Failure"] -and -not $_.PSObject.Properties["Skipped"] })
   foreach ($f in $refused) {
     Write-Host ""
     Write-Host "=== $($f.Name) ===" -ForegroundColor Cyan
@@ -214,7 +227,7 @@ function Complete-GateGroup {
     $script:failed = $true
   }
   if (@($steps).Count -eq 0) {
-    foreach ($f in $refused) { [void]$script:results.Add([pscustomobject]@{ Step = $f.Name; Result = "FAIL"; Seconds = 0; WaitSeconds = 0 }) }
+    foreach ($e in $entries) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = $(if ($e.PSObject.Properties["Skipped"]) { "SKIPPED" } else { "FAIL" }); Seconds = 0; WaitSeconds = 0 }) }
     return
   }
   # The test queue: the kinds of every grouped step, asked for once and held for the group; the
@@ -240,7 +253,10 @@ function Complete-GateGroup {
       Write-Host "=== $($s.Name) ===" -ForegroundColor Cyan
       Write-Host "FAILED: $($s.What): the suite group did not run: $groupError" -ForegroundColor Red
     }
-    foreach ($e in $entries) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0; WaitSeconds = $waitRow }); $waitRow = 0 }
+    foreach ($e in $entries) {
+      if ($e.PSObject.Properties["Skipped"]) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "SKIPPED"; Seconds = 0; WaitSeconds = 0 }); continue }
+      [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0; WaitSeconds = $waitRow }); $waitRow = 0
+    }
     $script:failed = $true
     Remove-Item -LiteralPath $logRoot -Recurse -Force -ErrorAction SilentlyContinue
     return
@@ -263,6 +279,7 @@ function Complete-GateGroup {
   # The table in the LISTED order: the run results come back in the order of $steps.
   $next = 0
   foreach ($e in $entries) {
+    if ($e.PSObject.Properties["Skipped"]) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "SKIPPED"; Seconds = 0; WaitSeconds = 0 }); continue }
     if ($e.PSObject.Properties["Failure"]) { [void]$script:results.Add([pscustomobject]@{ Step = $e.Name; Result = "FAIL"; Seconds = 0; WaitSeconds = $waitRow }); $waitRow = 0; continue }
     $r = $ran[$next]; $next++
     [void]$script:results.Add([pscustomobject]@{ Step = $r.Name; Result = $(if ($r.Outcome -eq "PASS") { "PASS" } else { "FAIL" }); Seconds = $r.Seconds; WaitSeconds = $waitRow })
@@ -282,6 +299,8 @@ function Write-GateSummary {
   $totalWait = 0
   foreach ($r in $script:results) { $totalWait += $r.WaitSeconds }
   Write-Host "Test queue wait, total: $totalWait s"
+  $unmatched = Get-Variable -Name OnlyStepUnmatched -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+  foreach ($p in @($unmatched | Where-Object { $_ })) { Write-Host "OnlyStep: no step matched '$p'" -ForegroundColor Yellow }
   Write-Host "gate wall time: $([math]::Round($WallSeconds)) s"
 }
 

@@ -477,6 +477,27 @@ Test-Case "12. -OnlyStep runs only the matching steps, grouped or not; every oth
     Assert-Equal "KeptA|KeptC" ($ran -join "|") "a comma list through -File runs each pattern's steps"
 }
 
+Test-Case "13. a slice keeps a skipped grouped step in its LISTED place, and names a pattern that matched no step" {
+    # 2026-10-05, the branch's own slice: the skipped grouped rows printed above the group's run
+    # rows, and seven patterns cut at a comma inside a step name matched nothing, silently.
+    $dir = New-CaseDir
+    $suite = Join-Path $dir "suite-pass.ps1"
+    [System.IO.File]::WriteAllText($suite, "exit 0`r`n", (New-Object System.Text.ASCIIEncoding))
+    $lines = @("Start-GateGroup")
+    foreach ($n in @("Dropped first", "Kept second", "Dropped third", "Kept fourth")) {
+        $lines += "Invoke-Step `"Grp $n`" { `$script = '$suite'; Invoke-GateSuite `$script; Assert-ExitCode `"grp $n`" }"
+    }
+    $lines += "Complete-GateGroup"
+    $stepsFile = Join-Path $dir "steps.ps1"
+    [System.IO.File]::WriteAllText($stepsFile, (($lines -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
+    $out = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File $gatePath -StepList $stepsFile -NoTestSlots -OnlyStep "Grp Kept*,Nothing (has, a comma)" 2>&1 | ForEach-Object { [string]$_ })
+    Assert-Equal 0 $LASTEXITCODE "the slice passed ($($out -join ' / '))"
+    $rows = @($out | Where-Object { $_ -match '^\s*Grp (Dropped|Kept) \w+\s+(PASS|SKIPPED)' } | ForEach-Object { ($_ -replace '^\s*Grp (\w+ \w+)\s+(\w+).*$', '$1=$2') })
+    Assert-Equal "Dropped first=SKIPPED|Kept second=PASS|Dropped third=SKIPPED|Kept fourth=PASS" ($rows -join "|") "the table keeps the listed order"
+    $named = @($out | Where-Object { $_ -match '^OnlyStep: no step matched ' })
+    Assert-Equal "OnlyStep: no step matched 'Nothing (has'|OnlyStep: no step matched 'a comma)'" ($named -join "|") "only the two patterns that matched nothing are named"
+}
+
 foreach ($p in @($script:Leftovers)) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
 Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 

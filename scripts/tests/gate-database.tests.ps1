@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     The gate's own database (scripts/lib/GateDatabase.ps1, team/plans/gate-faster-adr.md): the
     gate and the inspectors no longer reset the one dev database `pagentos` under each other.
