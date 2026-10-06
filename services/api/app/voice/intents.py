@@ -1827,95 +1827,104 @@ _ALARM_WORD_FORMS: Final[tuple[str, ...]] = (
     "alarmini",
 )
 #: "uyandır" (wake me) in the forms an owner says it, plus the polite request form.
-_WAKE_VERB_STEMS: Final[tuple[str, ...]] = ("uyandır", "uyandir", "kaldır", "kaldir")
+_WAKE_VERB_STEMS: Final[tuple[str, ...]] = ("uyandır", "uyandir")
+#: "kaldır" lifts or removes ("Takibi kaldır.", "Onu kaldır."); it is the wake only with the
+#: sleeper for its object ("Beni kaldır."), so the object is read, not the verb alone.
+_LIFT_VERB_STEMS: Final[tuple[str, ...]] = ("kaldır", "kaldir")
+#: The sleeper "kaldır" wakes: the first person, the one closed class an alarm is for.
+_SLEEPER_OBJECTS: Final[tuple[str, ...]] = ("beni", "bizi")
 #: "kur" (set), "kurar mısın" — a bare "kur" plus an alarm noun is the create imperative.
 _SET_VERB_FORMS: Final[tuple[str, ...]] = ("kur", "kursana", "kurar", "kurabilir")
 _CANCEL_VERB_STEMS: Final[tuple[str, ...]] = ("iptal", "sil", "kaldır", "kaldir")
-#: "kaldır" with a thing for its object removes it ("Onu kaldır."); it wakes the sleeper
-#: only ("Beni kaldır.", "Yarın yedide kaldır.").
-_KALDIR_THING_OBJECTS: Final[tuple[str, ...]] = (
-    "onu",
-    "bunu",
-    "şunu",
-    "sunu",
-    "onları",
-    "onlari",
-    "bunları",
-    "bunlari",
-    "şunları",
-    "sunlari",
-)
 
 # ---------------------------------------------------------------- the negated verb
 #
 # A stem table matches by prefix, so "silme" (don't delete) passed as "sil" and the owner's
 # "alarmı silme" cancelled the alarm (test team t-manual-20261006e). The owner's rule
 # (2026-09-19, 2026-10-06): a negated sentence never deletes or cancels. The grammar, not a
-# list of forms: the negative suffix stands right after the verb stem in every person and
-# politeness form, so what follows the stem says it - layer 1's negative forms first
-# (``normalize.is_negative``), then the suffix itself for the stems layer 1 does not hold
-# ("iptal et", the ASCII "kaldir").
+# list of forms: the negative suffix -ma/-me follows the verb stem, after its voice suffixes
+# and the "can" vowel, in every person, tense and politeness form; and a finite verb in the
+# negative elsewhere ("silmek istemem", "sil demedim") takes the request back.
 
-#: After the stem: -ma/-me (silme, silmeyin, silmeyiniz, silmeden, silmez) or the narrowed
-#: -mı/-mi before -yor (silmiyor). The infinitive -mak/-mek is no negation ("silmek
-#: istiyorum"); the verbal noun -mayı/-meyi is read by :data:`_VERBAL_NOUN_RE`.
-_NEGATIVE_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(r"m(?:[ae](?!k)|[ıiuü]yor)")
+#: The voice suffixes between a stem and its negation: passive/reflexive -(ı)l / -(ı)n
+#: ("silinmesin", "iptal edilmesin"), causative -dır / -t ("sildirme", "iptal ettirme").
+_VOICE: Final = r"(?:[ıiuü]?[ln]|[dt][ıiuü]r|t)*"
+#: After the stem and its voice: -ma/-me (silme, silmeyin, silmeden, silmez, silmesin) or the
+#: narrowed -mı/-mi before -yor (silmiyor). The infinitive -mak/-mek is no negation ("silmek
+#: istiyorum"); the verbal noun is :data:`_VERBAL_NOUN_RE`; the "cannot" of "silemem" is a
+#: finite negative (:data:`_NEGATIVE_FINITE_RE`).
+_NEGATIVE_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(_VOICE + r"m(?:[ae](?!k)|[ıiuü]yor)")
 #: The verbal noun as an object, the whole rest of the token: "silmeyi", "uyandırmayı".
-_VERBAL_NOUN_RE: Final[re.Pattern[str]] = re.compile(r"m[ae]y[ıi]")
-#: A finite verb in the negative present elsewhere in the sentence: "silmek istemiyorum".
-_NEGATIVE_FINITE_RE: Final[re.Pattern[str]] = re.compile(r"[^\W\d_]{2,}m[ıiuü]yor[^\W\d_]*")
+_VERBAL_NOUN_RE: Final[re.Pattern[str]] = re.compile(_VOICE + r"m[ae]y[ıi]")
+#: A finite verb in the negative anywhere in the sentence: present "istemiyorum", past
+#: "demedim", aorist "istemez" / "istemeyiz" / "istemem", future "istemeyeceğim", reported
+#: "istememiş", necessitative "silmemeli". The 1sg aorist wants a three-letter head, so the
+#: "tamam" (okay) of "Tamam, alarmı sil." is no "-mam".
+_NEGATIVE_FINITE_RE: Final[re.Pattern[str]] = re.compile(
+    r"[^\W\d_]{2,}m(?:[ıiuü]yor|[ae]d[ıiuü]|[ae]y[ae]c[ae][kğ]|[ae]m[ıiuü]ş|[ae]m[ae]l[ıi])"
+    r"[^\W\d_]*"
+    r"|[^\W\d_]{2,}m[ae](?:z|y[ıi]z)(?:[dsl][^\W\d_]*|m[ıi])?"
+    r"|[^\W\d_]{3,}m[ae]m"
+)
 #: "Sakın" forbids whatever verb it stands beside ("alarmımı sakın silme"). Not the ASCII
 #: "sakin": that is "calm" ("Sakin ol, alarmı sil.").
 _DONT_PARTICLES: Final[tuple[str, ...]] = ("sakın",)
 #: "forget", whose negative over a verbal noun asks for the act: "uyandırmayı unutma".
 _FORGET_STEM: Final = "unut"
-#: A noun before the auxiliary "et": its negation is on the auxiliary ("iptal etme").
+#: A noun before the auxiliary "et" (softened "ed" before a vowel): its negation is on the
+#: auxiliary ("iptal etme", "iptal edilmesin").
 _AUXILIARY_NOUNS: Final[tuple[str, ...]] = ("iptal",)
+_AUXILIARY_STEMS: Final[tuple[str, ...]] = ("et", "ed")
 
 
 def _says_dont(tokens: tuple[str, ...]) -> bool:
-    """The sentence forbids rather than asks: "sakın", or a negative present ("istemiyorum")."""
+    """The sentence forbids rather than asks: "sakın", or a finite negative ("istemem")."""
     return bool(_has_exact(tokens, *_DONT_PARTICLES)) or any(
         _NEGATIVE_FINITE_RE.fullmatch(asr_fold(tok) if _FOLD_MATCHING.get() else tok)
         for tok in tokens
     )
 
 
+def _is_verbal_noun(token: str) -> bool:
+    """The token is an act as an object ("uyandırmayı", "silmeyi") - of any verb."""
+    return any(_VERBAL_NOUN_RE.fullmatch(token, cut) for cut in range(2, len(token) - 3))
+
+
 def _is_negated(tokens: tuple[str, ...], index: int, stem: str) -> bool:
     """``tokens[index]`` begins with ``stem`` and is its negative form (or, for "iptal", the
     auxiliary after it is)."""
-    from app.voice.understanding import normalize as layer_one  # it imports this module
-
     if stem in _AUXILIARY_NOUNS:
-        index, stem = index + 1, "et"
-        if index >= len(tokens) or not tokens[index].startswith(stem):
-            return False  # "iptal edin", "iptal eder misin": the softened stem is positive
+        index += 1
+        if index >= len(tokens) or not tokens[index].startswith(_AUXILIARY_STEMS):
+            return False  # "Alarmı iptal." - the noun alone asks
+        stem = tokens[index][:2]
     token = tokens[index]
     if _VERBAL_NOUN_RE.fullmatch(token, len(stem)):
         # The act as an object: asked for only under "don't forget" ("uyandırmayı unutma");
         # "silmeyi unut" / "silmeyi düşün" ask for no act.
         forget = _has(tokens[index + 1 : index + 2], _FORGET_STEM)
         return forget is None or not _NEGATIVE_SUFFIX_RE.match(forget, len(_FORGET_STEM))
-    if layer_one.is_negative(token):
-        return True
     return bool(_NEGATIVE_SUFFIX_RE.match(token, len(stem)))
 
 
 def _positive_verb(tokens: tuple[str, ...], *stems: str) -> str | None:
-    """:func:`_has` for a verb: the first token beginning with one of ``stems`` that is not
-    its negative form, and None when the sentence forbids (:func:`_says_dont`). A negated
-    verb is not the positive verb - the sentence goes on to the other families and the
-    model, which can ask."""
-    found = _has(tokens, *stems)
-    if found is None or _says_dont(tokens):
+    """:func:`_has` for a verb: the first token beginning with one of ``stems``, and None
+    when any of them is its negative form ("Alarmı sil, hayır silme." takes it back) or the
+    sentence forbids (:func:`_says_dont`). A negated verb is not the positive verb - the
+    sentence goes on to the other families and the model, which can ask."""
+    if _has(tokens, *stems) is None or _says_dont(tokens):
         return None
     fold = _FOLD_MATCHING.get()
+    found: str | None = None
     for index, tok in enumerate(tokens):
         probe = asr_fold(tok) if fold else tok
         stem = next((s for s in stems if probe.startswith(asr_fold(s) if fold else s)), None)
-        if stem is not None and not _is_negated(tokens, index, stem):
-            return tok
-    return None
+        if stem is None:
+            continue
+        if _is_negated(tokens, index, stem):
+            return None
+        found = found or tok
+    return found
 
 
 #: "kapat" is shared with the eye and the display, so an alarm noun must be present.
@@ -2784,6 +2793,10 @@ def _memory_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     if recall := _has(tokens, *_MEMORY_RECALL_STEMS):
         return Intent.MEMORY_SEARCH, recall
     if forget := _has_exact(tokens, *_MEMORY_FORGET_FORMS):
+        # "Beni uyandırmayı unut." - forgetting an act is no memory to delete.
+        at = tokens.index(forget)
+        if at and _is_verbal_noun(tokens[at - 1]):
+            return None
         return Intent.MEMORY_FORGET, forget
     if pin := _has(tokens, *_MEMORY_PIN_STEMS):
         return Intent.MEMORY_PIN, pin
@@ -2840,15 +2853,10 @@ def _alarm_match(
 
     noun = _alarm_noun(tokens)
     wake = _positive_verb(tokens, *_WAKE_VERB_STEMS)
-    # "kaldır" with no alarm noun and a thing for its object ("Onu kaldır.") removes
-    # something, and that is no alarm; "Beni kaldır." stays the wake.
-    if (
-        noun is None
-        and wake
-        and wake.startswith(("kaldır", "kaldir"))
-        and _has_exact(tokens, *_KALDIR_THING_OBJECTS)
-    ):
-        wake = None
+    # "kaldır" wakes only the sleeper ("Beni kaldır."); with a thing for its object it
+    # removes ("Takibi kaldır.", "Onu kaldır."), and beside an alarm noun it cancels below.
+    if wake is None and _has_exact(tokens, *_SLEEPER_OBJECTS):
+        wake = _positive_verb(tokens, *_LIFT_VERB_STEMS)
     # "Ekranı uyandır." wakes the DISPLAY: a screen noun with the wake verb and no alarm
     # noun is never an alarm (corpus d.wake.3 misrouted here to alarm.create).
     if noun is None and wake and _screen_noun(tokens) is not None:

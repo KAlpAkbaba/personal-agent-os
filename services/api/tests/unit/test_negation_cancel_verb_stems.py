@@ -38,6 +38,7 @@ NEGATED = [
     "Rutini iptal etmek istemem.",
     "Bunu hafızandan silmek istemem.",
     "Alarmı sil demedim.",
+    "Alarmı silmek istemeyiz.",  # the negative aorist of the other persons
     # the negation after a voice suffix (passive, causative) and after "can" (-e-me)
     "alarm silinmesin",
     "alarmı sildirme",
@@ -59,7 +60,8 @@ def test_a_negated_cancel_never_cancels(said: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "said", ["kaldırma", "onu kaldır", "Kaldırma.", "Onu kaldır.", "takibi kaldır", "Takibi kaldır."]
+    "said",
+    ["kaldırma", "onu kaldır", "Kaldırma.", "Onu kaldır.", "takibi kaldır", "Takibi kaldır."],
 )
 def test_a_bare_kaldir_with_nothing_before_it_is_no_alarm(said: str) -> None:
     resolved = resolve_intent(said)
@@ -97,7 +99,7 @@ def test_the_positive_forms_still_act(said: str, intent: Intent) -> None:
 
 @pytest.mark.parametrize("said", ["beni yedide uyandırmayı unut", "beni kaldırmayı unut"])
 def test_forgetting_an_act_is_no_memory_forget(said: str) -> None:
-    """"Forget waking me" names an act, not a memory: never the memory deletion (inspector,
+    """ "Forget waking me" names an act, not a memory: never the memory deletion (inspector,
     return 1 - the first pass sent it to memory_forget; base gave alarm_create)."""
     resolved = resolve_intent(said)
     assert resolved.intent not in _CANCELS, f"{said!r} -> {resolved.intent.value}"
