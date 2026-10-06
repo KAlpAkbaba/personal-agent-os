@@ -296,6 +296,60 @@ def verdict_tr(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+GRANITE_FP32 = "ibm-granite/granite-embedding-311m-multilingual-r2"
+GRANITE_INT8 = GRANITE_FP32 + "-int8"
+CORPUS_INT8_THRESHOLD = 0.01
+
+
+def corpus_choice_tr(report: dict[str, Any]) -> dict[str, Any]:
+    """The Granite name the ADR-0224 corpus runs with: INT8 when each of its pair scores is
+    within 0.01 of FP32's, else FP32 - with the largest gap and the pair that made it."""
+    rows = {r["model_name"]: r for r in report.get("models", [])}
+    fp32, int8 = rows.get(GRANITE_FP32), rows.get(GRANITE_INT8)
+    base = {"threshold": CORPUS_INT8_THRESHOLD, "max_diff": None, "pair": None}
+    loaded = [r for r in (fp32, int8) if r is not None and r.get("refused") is None]
+    if len(loaded) < 2:
+        if not loaded:
+            return {
+                **base,
+                "chosen": None,
+                "text": "Korpus için Granite adı yok: ikisi de ölçülemedi.",
+            }
+        other = int8 if loaded[0] is fp32 else fp32
+        missing = "ölçülmedi" if other is None else "REDDEDİLDİ"
+        name = loaded[0]["model_name"]
+        return {
+            **base,
+            "chosen": name,
+            "text": f"`{name}`: diğer Granite adı {missing}, karşılaştırma yok.",
+        }
+    int8_scores = {(p["a"], p["b"]): p["cosine"] for p in int8.get("pairs", [])}
+    gaps = [
+        (abs(p["cosine"] - int8_scores[(p["a"], p["b"])]), (p["a"], p["b"]))
+        for p in fp32.get("pairs", [])
+        if (p["a"], p["b"]) in int8_scores
+    ]
+    max_diff, pair = max(gaps) if gaps else (None, None)
+    within = max_diff is not None and max_diff <= CORPUS_INT8_THRESHOLD
+    chosen = GRANITE_INT8 if within else GRANITE_FP32
+    if max_diff is None:
+        reason = "ortak çift yok"
+    else:
+        relation = "içinde" if within else "aşıyor"
+        reason = (
+            f"{len(gaps)} çiftte en büyük FP32–INT8 farkı {max_diff:.4f} "
+            f"('{pair[0]}' ~ '{pair[1]}'), eşik {CORPUS_INT8_THRESHOLD:g}: eşiği {relation}"
+        )
+    return {
+        **base,
+        "chosen": chosen,
+        "max_diff": max_diff,
+        "pair": list(pair) if pair else None,
+        "text": f"`{chosen}`: {reason} "
+        "(kural: INT8, 14 çiftin hepsi FP32'ye 0.01 içindeyse; değilse FP32).",
+    }
+
+
 def _fmt(value: Any, unit: str = "", digits: int = 2) -> str:
     if value is None:
         return "ölçülmedi"
@@ -398,6 +452,10 @@ def render_tr(report: dict[str, Any]) -> str:
                 )
     lines += [
         "",
+        "## Korpus için seçilen Granite adı (ADR-0224 katman 2)",
+        "",
+        corpus_choice_tr(report)["text"],
+        "",
         "## Hüküm",
         "",
         f"**({verdict['letter']})** {verdict['text'].split(') ', 1)[-1]}"
@@ -452,6 +510,7 @@ def main(argv: list[str]) -> int:
     report["cache"] = cache_label(cache_dir)
     report["cost"] = [json.loads(path.read_text(encoding="utf-8")) for path in args.cost]
     report["verdict"] = verdict_tr(report)
+    report["corpus_choice"] = corpus_choice_tr(report)
     _print_table(report["deterministic"])
     for row in report["models"]:
         _print_table(row)

@@ -68,3 +68,7 @@ taşınınca"; (c) dar → ölçüldü, alınmadı. Bu kart hiçbir durumda beni
 **Açık iş.** Hüküm (a) çıkarsa: benimseme kartı — `DEFAULT_LOCAL_MODEL` / üretim ortam değişkeni,
 Cloud Core önbellek ön-yüklemesi (yayın betiği), `lifecycle.reindex` ile yeniden indeksleme ve ADR-0224
 katman-2 örneklerinin yeniden gömülmesi; Windows'ta UTF-8 sorunu fastembed'e bildirilir ya da yedek yol kalır.
+O kartın maliyeti ölçüldü: Granite FP32 ile ADR-0224 katman-2 indeksi (1502 örnek) her API açılışında
+~380 s'de kuruluyor (potion 0.6 s; `docs/evidence/stt-corpus-layer2-granite.md`), yani benimseme bir
+örnek-vektör önbelleği ya da yayında bir kez yeniden gömme ister. Korpus FP32 ile koştu: 14 çiftte en
+büyük FP32–INT8 farkı 0.0152 > 0.01 (kart kuralı; bench .md'si "Korpus için seçilen Granite adı").
