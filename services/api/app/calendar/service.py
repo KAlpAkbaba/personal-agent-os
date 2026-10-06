@@ -298,6 +298,12 @@ class CalendarService:
         #: (which depends on the host flag) — the same account_missing/send_disabled split.
         self._account_configured = provider is not None
 
+    @property
+    def configured(self) -> bool:
+        """Whether the owner has a calendar at all (conversation-followups asks before it
+        proposes into one)."""
+        return self._account_configured
+
     # ------------------------------------------------------------------ plumbing
 
     def _receipt(
@@ -950,10 +956,18 @@ class CalendarService:
         *,
         session_id: str | None = None,
         turn: int | None = None,
+        proposal_id: str | None = None,
     ) -> dict[str, Any]:
         """The EXPLICIT read-back act (H1) — see ``app.mail.service.MailService.
-        read_draft``'s docstring; the same session/turn binding, mirrored here."""
-        row = self._current_proposal(db)
+        read_draft``'s docstring; the same session/turn binding, mirrored here.
+
+        ``proposal_id`` names the proposal instead of the focus: conversation-followups
+        reads back several at once, in the one question the owner answered 'tamam' to."""
+        row = (
+            db.get(CalendarProposalRow, uuid.UUID(proposal_id))
+            if proposal_id
+            else self._current_proposal(db)
+        )
         if row is None or row.state not in (PROPOSAL_STATE_PREPARED, PROPOSAL_STATE_READ_BACK):
             return {"status": "needs_clarification", "speech": SPEECH_NO_PROPOSAL, "candidates": []}
         now = _now()

@@ -181,8 +181,9 @@ def test_extraction_writes_cards_and_promises_with_their_segment(factory) -> Non
         ]
         segment_text = {
             s.seq: s.text
-            for s in db.execute(select(SegmentRow).where(SegmentRow.conversation_id == cid))
-            .scalars()
+            for s in db.execute(
+                select(SegmentRow).where(SegmentRow.conversation_id == cid)
+            ).scalars()
         }
         for row in rows:
             assert row.quote in segment_text[row.segment_seq]
@@ -196,6 +197,16 @@ def test_a_quote_must_be_in_the_line_it_cites(factory) -> None:
         batch = _process(db, cid, moved)
         assert batch.dropped == 1
         assert db.execute(select(func.count(FollowupRow.id))).scalar_one() == 0
+        assert db.execute(select(func.count(PersonCardRow.id))).scalar_one() == 0
+
+
+def test_a_person_nobody_named_gets_no_card(factory) -> None:
+    # The quote is real, the name is not: nobody in the conversation said 'Zeynep'.
+    guessed = [dict(SCRIPTED[1], person="Zeynep")]
+    with factory() as db:
+        cid = _conversation(db)
+        batch = _process(db, cid, guessed)
+        assert (batch.created, batch.dropped) == (0, 1)
         assert db.execute(select(func.count(PersonCardRow.id))).scalar_one() == 0
 
 
@@ -385,7 +396,7 @@ def test_no_key_extracts_nothing_and_says_so(factory) -> None:
 
 
 def test_routes_through_the_application(factory) -> None:
-    settings = Settings(_env_file=None)
+    settings = Settings(_env_file=None, calendar_write_enabled=True)
     app = create_app(settings)
     install_identity(app, settings=settings)
     artifacts = ArtifactRuntime(settings)
