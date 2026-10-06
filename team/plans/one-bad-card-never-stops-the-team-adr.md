@@ -31,7 +31,9 @@ for over an hour until the Danışman moved the seven back.
    returned) without an area is refused, `alan yok: önce dosya alanı`. The cycle's
    approved -> assigned move stops such a task with that reason (it becomes the Proje
    Yöneticisi's duty, whose `grant_and_return` can give it an area); the duty's return path
-   refuses with the same sentence.
+   refuses with the same sentence. The integrator's completion path (plan written ->
+   `assigned`) asks the same refusal: an area-less card back from its integrator keeps its
+   plan and is stopped with the reason, never handed to a worker (inspector of 11365bac).
 5. test-round's forwarded cards carry a first area from the family's known code paths
    (`Get-TestTeamFamilyArea`: nobet, ev-stoku, alarm, dil-dayanikliligi, yanlis-duyulan, saglik);
    an unknown family carries none. The Proje Yöneticisi widens rather than invents.

@@ -2002,8 +2002,14 @@ try {
                 if (Test-Path -LiteralPath (Join-Path $repoRoot ($plan -replace '/', '\'))) {
                     Set-TeamProperty -InputObject $task -Name "plan" -Value $plan
                     # With its plan an approved task is the refill's to move into work - beside
-                    # nobody that holds its files (the same rule as every other approved task).
-                    if (@(Get-TeamAreaHolders -Task $task -Queue $script:queue).Count -eq 0) { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
+                    # nobody that holds its files (the same rule as every other approved task),
+                    # and never without an area (the inspector of 11365bac: this path did not ask).
+                    $refusal = Get-TeamMoveRefusal -Task $task -State "assigned"
+                    if ($refusal) {
+                        Stop-Task -Task $task -Reason "$refusal (Proje Yöneticisi dosya alanını yazınca döner)"
+                        Add-CycleNote -List "risks" -Text "Danışman'a iletildi: kenara alındı: ${id}: $refusal"
+                    }
+                    elseif (@(Get-TeamAreaHolders -Task $task -Queue $script:queue).Count -eq 0) { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
                 }
                 else { Stop-Task -Task $task -Reason "entegratör plan dosyasını yazmadı ($plan)" }
             }

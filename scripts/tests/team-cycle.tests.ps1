@@ -204,6 +204,19 @@ Test-Case "one task's problem is that task's: it is set aside, once; only the qu
     }
 }
 
+Test-Case "a run in flight is the cycle's copy: -Skip keeps it from being set aside, the others are" {
+    # The inspector of 11365bac (M-D): the store's copy of an in-flight task turned bad meanwhile;
+    # the cycle's copy, which a run is working on, is not stopped under it.
+    $flying = New-Task -Id "task-flying" -State "in_progress" -Area @()
+    $idle = New-Task -Id "task-idle" -State "assigned" -Area @()
+    $queue = New-Queue -Tasks @($flying, $idle)
+    $aside = @(Set-TeamTasksAside -Queue $queue -Problems (Get-TeamQueueProblems -Queue $queue) -Skip @("task-flying"))
+    Assert-Equal -Expected "task-idle" -Actual (@($aside | ForEach-Object { $_.Id }) -join ",") -Because "only the task not in flight is set aside"
+    Assert-Equal -Expected "in_progress" -Actual $flying.state -Because "the run's copy is not stopped under it"
+    Assert-Equal -Expected "" -Actual ([string](Get-TeamProperty -InputObject $flying -Name "reason" -Default "")) -Because "nor given a reason"
+    Assert-Equal -Expected "stopped" -Actual $idle.state -Because "the other is"
+}
+
 Test-Case "a move into work without an area is refused, in Turkish" {
     $bare = New-Task -Id "test-fail-alarm-1" -State "approved" -Area @()
     foreach ($state in @("assigned", "in_progress", "returned")) {
@@ -2363,6 +2376,24 @@ try {
         $bare = Get-TaskById -Queue $run.Queue -Id "test-fail-alarm-1"
         Assert-Equal -Expected "stopped" -Actual $bare.state -Because "never 'assigned' without an area"
         Assert-True -Condition ([string]$bare.reason -like "alan yok: önce dosya alanı*") -Because $bare.reason
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the rest ran"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue it left keeps the protocol"
+    }
+
+    Test-Case "a task back from its integrator with a plan but no area is not moved into work: it stops with 'alan yok: önce dosya alanı'" {
+        # The inspector of 11365bac: the integrator's completion path set 'assigned' without asking,
+        # and the area-less card went to a worker.
+        $study = New-Task -Id "test-fail-nobet-2" -Area @()
+        $study | Add-Member -NotePropertyName "needs_integration" -NotePropertyValue $true
+        $root = New-Sandbox -Tasks @($study, (New-Task -Id "task-two"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "integrator" -Actual (@($run.Calls | Where-Object { [string]$_.task -eq "test-fail-nobet-2" } | ForEach-Object { [string]$_.role }) -join ",") -Because "its integrator ran, nobody else for it"
+        $back = Get-TaskById -Queue $run.Queue -Id "test-fail-nobet-2"
+        Assert-Equal -Expected "stopped" -Actual $back.state -Because "never 'assigned' without an area"
+        Assert-True -Condition ([string]$back.reason -like "alan yok: önce dosya alanı*") -Because $back.reason
+        Assert-Equal -Expected "team/plans/test-fail-nobet-2-integration.md" -Actual ([string]$back.plan) -Because "the plan is kept for when the area comes"
+        Assert-True -Condition ($run.Report -match "Danışman'a iletildi: kenara alındı: test-fail-nobet-2: alan yok") -Because "the Danışman's line: $($run.Report)"
         Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the rest ran"
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue it left keeps the protocol"
     }
