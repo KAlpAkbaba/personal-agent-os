@@ -114,16 +114,68 @@ def _local_today():
 
 
 @pytest.mark.parametrize("field", ["label", "greeting_text"])
-@pytest.mark.parametrize("char", ["\x00", "\x07", "\x7f"])
+@pytest.mark.parametrize("char", ["\x00", "\x07", "\x7f", "\x85", "\x9f"])
 def test_an_alarm_text_with_a_control_character_is_a_turkish_422(
     client: TestClient, field: str, char: str
 ) -> None:
+    """C0, DEL and the C1 block (U+0080-U+009F, e.g. NEL) are all Unicode category Cc."""
     response = client.post(
         "/v1/alarms", json={"when": {"relative_seconds": 600}, field: f"sabah{char}koşusu"}
     )
     assert response.status_code == 422, response.text
     assert "okunamayan" in _message(response)
     assert client.get("/v1/alarms").json()["alarms"] == []
+
+
+_SONG_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
+@pytest.mark.parametrize("field", ["url", "title", "remembered"])
+def test_an_alarm_media_field_with_a_nul_is_a_turkish_422(client: TestClient, field: str) -> None:
+    media = {"url": _SONG_URL, "title": "Sabah şarkısı", "remembered": "her sabahki"}
+    media[field] = media[field][:3] + "\x00" + media[field][3:]
+    response = client.post("/v1/alarms", json={"when": {"relative_seconds": 600}, "media": media})
+    assert response.status_code == 422, response.text
+    assert "okunamayan" in _message(response)
+    assert client.get("/v1/alarms").json()["alarms"] == []
+
+
+def test_a_clean_alarm_media_is_still_kept(client: TestClient) -> None:
+    media = {"url": _SONG_URL, "title": "Sabah şarkısı", "remembered": "her sabahki"}
+    response = client.post("/v1/alarms", json={"when": {"relative_seconds": 600}, "media": media})
+    assert response.status_code == 201, response.text
+
+
+@pytest.mark.parametrize(("field", "char"), [("title", "\x00"), ("title", "\x85"), ("url", "\x00")])
+def test_a_wake_song_with_a_control_character_is_a_turkish_422(
+    client: TestClient, field: str, char: str
+) -> None:
+    body = {"url": _SONG_URL, "title": "Sabah şarkısı"}
+    body[field] = body[field][:3] + char + body[field][3:]
+    response = client.put("/v1/alarms/wake-song", json=body)
+    assert response.status_code == 422, response.text
+    assert "okunamayan" in _message(response)
+    assert client.get("/v1/alarms/wake-song").json()["wake_song"] is None
+
+
+def test_a_clean_wake_song_is_still_kept(client: TestClient) -> None:
+    response = client.put(
+        "/v1/alarms/wake-song", json={"url": _SONG_URL, "title": "Sabah şarkısı"}
+    )
+    assert response.status_code == 200, response.text
+    assert client.get("/v1/alarms/wake-song").json()["wake_song"]["title"] == "Sabah şarkısı"
+
+
+def test_a_cancel_reason_with_a_nul_is_a_turkish_422_and_the_alarm_stays(
+    client: TestClient,
+) -> None:
+    alarm_id = client.post("/v1/alarms", json={"when": {"relative_seconds": 600}}).json()["id"]
+    response = client.post(f"/v1/alarms/{alarm_id}/cancel", json={"reason": "uy\x00andım"})
+    assert response.status_code == 422, response.text
+    assert "okunamayan" in _message(response)
+    assert client.get(f"/v1/alarms/{alarm_id}").json()["state"] == "SCHEDULED"
+    clean = client.post(f"/v1/alarms/{alarm_id}/cancel", json={"reason": "uyandım"})
+    assert clean.status_code == 200, clean.text
 
 
 def test_an_ordinary_alarm_label_is_still_kept(client: TestClient) -> None:
