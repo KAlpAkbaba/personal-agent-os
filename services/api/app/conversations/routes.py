@@ -208,18 +208,35 @@ async def list_conversations(request: Request, q: str | None = None) -> dict[str
     )
 
 
+#: The partial unique index that lets one conversation be open (migration
+#: ``conversation_one_open``). Two devices starting at once both pass the service's check; the
+#: loser's insert fails on this index and is the same 'already open' as the check's refusal.
+ONE_OPEN_INDEX = "uq_conversations_one_open"
+
+
+def _violates_one_open(error: IntegrityError) -> bool:
+    diag = getattr(error.orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == ONE_OPEN_INDEX
+
+
 @router.post("/v1/conversations", status_code=201)
 async def start_conversation(request: Request) -> dict[str, Any]:
     payload = await _payload(request)
-    return await _run(
-        request,
-        lambda db, live, cipher: _conversation(
-            service.start_conversation(
+
+    def start(db, live, cipher):  # noqa: ANN001, ANN202
+        try:
+            view = service.start_conversation(
                 db, live, mode=str(payload.get("mode") or "manual"), title=payload.get("title")
-            ),
-            segments=False,
-        ),
-    )
+            )
+        except IntegrityError as error:
+            if not _violates_one_open(error):
+                raise
+            raise service.ConversationRefused(
+                "already_open", "Zaten yazdığım bir konuşma var; önce onu bitir."
+            ) from None
+        return _conversation(view, segments=False)
+
+    return await _run(request, start)
 
 
 @router.get("/v1/conversations/people")
