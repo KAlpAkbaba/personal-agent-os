@@ -1,0 +1,34 @@
+# compute.run sandbox (Bulutta yürütme PR 3). DOCUMENTATION ONLY: the runner starts one
+# `docker run --rm` per request (app/compute/runner.py), it is never a long-lived service.
+# This fragment writes the same ceilings in compose words so a release reviewer can compare
+# them with the argv in app/compute/policy.py; wiring anything into the production compose
+# is a release decision (team/plans/compute-run-sandbox-adr.md), not this file's.
+#
+# The `tools` profile keeps `docker compose up` from ever starting it.
+services:
+  compute-sandbox:
+    image: python@sha256:ddb0207ae1f0356c2b724d740769b0c5f5f51cc54a0525178f721825f78fe74c
+    profiles: ["tools"]
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 64
+        hard: 64
+    init: true
+    user: "65534:65534"
+    logging:
+      driver: none
+    stdin_open: true
+    command: ["python3", "-"]
+    # No volumes, no environment, no secrets: on purpose.
