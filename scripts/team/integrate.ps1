@@ -46,6 +46,13 @@
          and the remote's main are read before and after it: one that MOVED refuses the run,
          is named with both shas, and stops the branch at once (it is not put back here). When
          the wiring changed a file the environment is built from, it is built again;
+      4b. THE FAST GUARDS (card guards-after-every-merge, the owner 2026-10-06): before the gate,
+         the gate tree's team/guards.json and `ruff check .` run on the integration branch's new
+         tip (scripts/team/guards.ps1 -AfterMerge, minutes). Green: said, and the gate runs.
+         RED: the gate is NOT started; the merge stays; the task merged LAST is named with the
+         guard and goes back ('returned'), the others stay 'merged' - a red attempt as a red gate
+         is (the branch waits for that task's fix). No list, or a runner that could not run:
+         said, and the gate - which judges everything anyway - runs;
       5. the FULL gate runs there, its log kept as team/reports/<cycle>/gate-<n>.log;
       6. GREEN (exit code 0 AND the gate's last word): main gets a --no-ff merge naming the
          gated sha, is pushed, and the tasks become 'awaiting_release' with main's sha.
@@ -139,7 +146,12 @@ param(
     [switch]$BesideCycle,
     # The step's own lock (API mode): a machine-local file, outside the repository. "" = under
     # %LOCALAPPDATA%\PagentOS. The tests name one of their own.
-    [string]$StepLockPath = ""
+    [string]$StepLockPath = "",
+    # The fast guards after the wiring, before the gate (card guards-after-every-merge): the
+    # runner ("" = this checkout's scripts\team\guards.ps1) and its cap. A hang guard, never a
+    # measure: the whole list takes about two minutes on this machine.
+    [string]$GuardsScript = "",
+    [double]$GuardMinutes = 20
 )
 
 Set-StrictMode -Version Latest
@@ -164,6 +176,7 @@ $movedSentence = "lead koşusu sırasında bir dal YER DEĞİŞTİRDİ; lead bak
 
 $capProblem = Test-TeamCapMinutes -GateMinutes $GateMinutes -LeadMinutes $LeadMinutes
 if ($capProblem) { throw $capProblem }
+if ($GuardMinutes -le 0) { throw "-GuardMinutes must be above 0: the guards' cap is never off" }
 # As in the cycle: a value that is not one of the three model ids never reaches a command line.
 if ($Model -and -not (Test-TeamModelId -Model $Model)) {
     Write-Host "-Model '$Model' is not a model; nothing was done. One of: $((Get-TeamModelChain) -join ', ')"
@@ -463,6 +476,67 @@ function Invoke-TreeGit {
     return $result.StdOut.Trim()
 }
 
+function Invoke-MergeGuards {
+    <#
+        4b: the gate tree's guard list and ruff, run on what will be gated by scripts/team/guards.ps1
+        -AfterMerge in a process of its own. $null when nothing stops the gate - green, no list, or
+        a runner that could not run (each said in the report) - else the red: Reason (the guards and
+        the card merged last), Blamed (that card's id, when it is one of -Tasks), Steps, First.
+    #>
+    param([string]$Tree, $Outcome, [object[]]$Tasks)
+    if (-not (Test-Path -LiteralPath (Join-Path $Tree "team\guards.json") -PathType Leaf)) {
+        [void]$Outcome.Lines.Add("koruyucular: bu ağaçta koruyucu listesi yok (team/guards.json); koşmadı, kapı koşar")
+        return $null
+    }
+    $runner = if ($GuardsScript) { $GuardsScript } else { Join-Path $repoRoot "scripts\team\guards.ps1" }
+    $out = Join-Path $env:TEMP ("pagentos-merge-guards-" + [guid]::NewGuid().ToString("N").Substring(0, 12) + ".json")
+    $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $runner, "-Worktree", $Tree, "-AfterMerge", "-OutFile", $out)
+    # The gate tree has its own environment (step 3); without one the runner takes the main checkout's.
+    $treePython = Join-Path $Tree "services\api\.venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath $treePython -PathType Leaf) { $arguments += @("-Python", $treePython) }
+    $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $ran = $null
+    $result = $null
+    try {
+        $ran = Invoke-NativeProcess -FilePath $powershellExe -Arguments $arguments -WorkingDirectory $Tree -SuccessExitCodes @(0, 1, 2) -TimeoutSeconds ([int][Math]::Ceiling($GuardMinutes * 60))
+        if (Test-Path -LiteralPath $out) { $result = Read-TeamJson -Path $out }
+    }
+    catch {
+        [void]$Outcome.Lines.Add("koruyucular koşamadı ($($_.Exception.Message)); kapı koşar")
+        [void]$script:risks.Add("birleştirme sonrası koruyucular koşamadı: $($_.Exception.Message)")
+        return $null
+    }
+    finally { Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }
+    # The runner's own words come from its UTF-8 file; its console output is read in another code page.
+    $said = if ($null -ne $result) { [string](Get-TeamProperty -InputObject $result -Name "reason" -Default "") } else { "" }
+    if (-not $said) { $said = (@(([string]$ran.StdOut) -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join "; ") }
+    if ($null -eq $result -or $ran.ExitCode -eq 2 -or [string](Get-TeamProperty -InputObject $result -Name "status" -Default "") -notin @("green", "red")) {
+        [void]$Outcome.Lines.Add("koruyucular koşamadı (çıkış kodu $($ran.ExitCode): $said); kapı koşar")
+        [void]$script:risks.Add("birleştirme sonrası koruyucular koşamadı: $said")
+        return $null
+    }
+    $lastMerge = Get-TeamProperty -InputObject $result -Name "last_merge" -Default $null
+    $lastBranch = if ($null -ne $lastMerge) { [string](Get-TeamProperty -InputObject $lastMerge -Name "branch" -Default "") } else { "" }
+    $lastTip = if ($null -ne $lastMerge) { [string](Get-TeamProperty -InputObject $lastMerge -Name "tip" -Default "") } else { "" }
+    $card = @(@($Tasks) | Where-Object { ($lastBranch -and [string](Get-TeamProperty -InputObject $_ -Name "branch" -Default "") -eq $lastBranch) -or
+            ($lastTip -and [string](Get-TeamProperty -InputObject $_ -Name "sha" -Default "") -eq $lastTip) } | Select-Object -First 1)
+    $who = if (@($card).Count -gt 0) { "$($card[0].id) ($lastBranch)" } elseif ($lastBranch) { $lastBranch } else { "bilinmiyor" }
+    $rows = @($result.rows)
+    if ([string]$result.status -eq "green") {
+        [void]$Outcome.Lines.Add("koruyucular yeşil: $(@($rows).Count) koruyucu, $($result.seconds) sn (birleştirmeden sonra, kapıdan önce; son birleşen: $who)")
+        return $null
+    }
+    $notGreen = @($rows | Where-Object { [string]$_.outcome -ne "green" })
+    $named = @($notGreen | ForEach-Object { "$($_.label) [$($_.id), $($_.outcome)]" })
+    $first = @($notGreen | ForEach-Object { [string]$_.detail } | Where-Object { $_ } | Select-Object -First 1)
+    return [pscustomobject]@{
+        Reason = "koruyucu kırmızı (birleştirmeden sonra, kapıdan önce): " + ($named -join "; ") + "; son birleşen iş: $who"
+        Blamed = @(@($card) | ForEach-Object { [string]$_.id })
+        Steps  = @($notGreen | ForEach-Object { "koruyucu: $($_.id)" })
+        First  = $(if (@($first).Count -gt 0) { $first[0] } else { "" })
+    }
+}
+
 function Invoke-BranchIntegration {
     param($Item, $Outcome)
     $integration = [string]$Item.Branch
@@ -759,6 +833,26 @@ function Invoke-BranchIntegration {
                 [void]$Outcome.Lines.Add($reason)
                 return 11
             }
+        }
+
+        # ---- 4b. the fast guards on what will be gated: minutes, not the gate's hour and a half
+        $guardRed = Invoke-MergeGuards -Tree $tree -Outcome $Outcome -Tasks $tasks
+        if ($null -ne $guardRed) {
+            $blamed = @($guardRed.Blamed)
+            $waitsFor = if (@($blamed).Count -gt 0) { "kapı koşmadı; dal $Base'e bütün olarak girer: " + ($blamed -join ", ") + " düzeltilip yeniden birleşene kadar kapıya girmez" }
+            else { "kapı koşmadı; aynı commit yeniden denenmez: yeni bir commit ya da lead'in -ClearGateStop'u beklenir" }
+            $stopped = Add-Strike -Item $Item -Number $number -Result "red" -More @{
+                sha = $candidate; by = "guards"; steps = @($guardRed.Steps); first = [string]$guardRed.First; log = ""
+                applied = $false; blamed = @($blamed); reason = [string]$guardRed.Reason; waits = $waitsFor
+            }
+            Set-GateVerdict -Tasks $tasks -Reason $guardRed.Reason -WaitsFor $waitsFor -Blamed $blamed -Stopped $stopped
+            $Item.Verdict = $number
+            $Outcome.Result = "koruyucu kırmızı"
+            [void]$Outcome.Lines.Add([string]$guardRed.Reason)
+            [void]$Outcome.Lines.Add("geri verilen: " + $(if (@($blamed).Count -gt 0) { $blamed -join ", " } else { "yok (son birleşen iş bu dalın işlerinden biri değil)" }) + "; $Base değişmedi, birleştirme dalda kaldı")
+            [void]$Outcome.Lines.Add($waitsFor)
+            if ($stopped) { [void]$script:stops.Add("${integration}: $stopSentence. Baktıktan sonra: scripts\team\integrate.ps1 -ClearGateStop"); return 8 }
+            return 6
         }
 
         # ---- 5. the full gate, in the environment built above
