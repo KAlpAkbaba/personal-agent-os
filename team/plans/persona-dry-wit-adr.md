@@ -32,20 +32,20 @@ yapılan şaka, hiç kişilik olmamasından kötüdür.
    OKUR (`load_preferences` satır yaratıp commit eder; tur işlemi içindeki bir araç bunu yapmamalı),
    hiç yükseltmez, okuyamazsa `'dry'`. `tools_assistant.py`'de tek satır: `humor` yalnız `'off'`
    iken geçirilir — `'dry'` her sağlayıcının varsayılanı, böylece `humor` parametresini henüz
-   almayan sahte sağlayıcılar (ör. `test_assistant_chat.py`) kırılmaz.
+   almayan sahte sağlayıcılar (ör. `test_assistant_chat.py`) kırılmaz. `owner_humor` okuma
+   hatasında `db.rollback()` yapar (Postgres'te başarısız SELECT işlemi iptal bırakır); rollback
+   hatası yutulur.
+6. **Tercih API'si:** `app/voice/routes.py` `PreferencesUpdate` (`extra="forbid"`) `humor`
+   alanını taşır (`str | None`, desen `^(dry|off)$`); `PATCH /voice/preferences {"humor":"off"}`
+   sahibin anahtarı kapatma yoludur, bilinmeyen değer 422. Rota başka değişiklik istemedi
+   (`updates` sözlüğü `update_preferences`'a gider).
+7. **Belge:** `docs/VOICE_SPEC.md` §12 varsayılan tercih listesinde `humor: dry` ve `off` anahtarı.
+8. **Eski test:** `test_assistant_chat.py` istek testi `system == SYSTEM_PROMPT_TR` yerine
+   `startswith(SYSTEM_PROMPT_TR)` bekler — varsayılan açık nükte system'e WIT_TR ekler, bilerek.
 
 ## Sonraki kart
 - Sesle "espri yapma / mizahı kapat / mizahı aç" niyeti (`intents.py`, hub; money-ledger kartında
   dokunuluyor) — bu kartta YOK.
-- Tercih API'si: `app/voice/routes.py` `PreferencesUpdate` `extra="forbid"`; `humor` alanı
-  (`str | None`, desen `^(dry|off)$`) eklenmeden `PATCH /voice/preferences {"humor":"off"}` 422
-  döner, yani sahip anahtara bugün hiçbir yoldan ulaşamaz. Alan isteği; kırmızı test
-  `test_voice_preferences.py::test_the_preferences_route_accepts_the_humor_switch` bunu bekliyor.
-  Alan eklenince rota başka değişiklik istemez (`updates` sözlüğü `update_preferences`'a gider).
-- `docs/VOICE_SPEC.md` §12 varsayılan tercih listesine `humor: dry` (alan isteği).
-- `owner_humor` okuma hatasında `db.rollback()` yapar (Postgres'te başarısız SELECT işlemi iptal bırakır).
-- `test_assistant_chat.py:56` `system == SYSTEM_PROMPT_TR` tam eşitliğini bekliyor; varsayılan
-  açık nükte bunu bilerek değiştirir — `startswith` ya da `humor="off"` ile güncellenmeli (alan isteği).
 
 ## Ölçülemeyen (dürüstçe)
 Bir dil modelinin nükteyi gerçekten yerinde yapıp yapmadığı yalnız sahibin dinlemesiyle bilinir:
