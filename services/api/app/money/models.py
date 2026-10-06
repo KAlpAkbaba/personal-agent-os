@@ -1,6 +1,6 @@
 """The money ledger's tables (money-ledger).
 
-Canonical schema: ``alembic/versions/20261006_0071_money_ledger.py``.
+Canonical schema: ``alembic/versions/money_ledger.py``.
 
 * ``money_entries`` - one row per spend or income JARVIS knows of: the amount in kuruş, the
   status (tentative / confirmed / cancelled), where it came from (a conversation, a bank mail,
