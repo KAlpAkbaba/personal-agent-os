@@ -64,6 +64,77 @@ describe("how far a working run has got", () => {
   });
 });
 
+// The owner, 2026-10-06: "Çalışan 2 ve denetleyicinin son değişiklik süreleri neden bu kadar uzun?"
+// last_change_at is the newest COMMIT; the real sign of work is the cycle's last_activity_at.
+describe("the last movement, apart from the last commit", () => {
+  const MOVED = "2026-10-05T16:08:00Z"; // 2 min before NOW
+  const COMMITTED = "2026-10-05T13:10:00Z"; // 3 h before NOW
+
+  function seat(name: string, extra: Record<string, unknown>) {
+    const view = twoWorkers();
+    view.agents = view.agents.map((a) =>
+      a.seat === name
+        ? ({
+            ...a,
+            state: "working",
+            task_id: "t-one",
+            task_title: "Birinci iş",
+            since: "2026-10-05T12:00:00Z",
+            progress: { ...PROGRESS, last_change_at: COMMITTED },
+            ...extra,
+          } as typeof a)
+        : a,
+    );
+    return view;
+  }
+
+  function html(view: ReturnType<typeof twoWorkers>, name: string): string {
+    return renderToStaticMarkup(<OfficePanel panel={buildPanel(view, name, NOW)!} />);
+  }
+
+  it("a worker shows 'Son hareket: 2 dk önce' first and the commit, smaller, as 'Son kayıt'", () => {
+    const view = seat("worker-1", { last_activity_at: MOVED, idle_minutes: 2, stuck: false });
+    const p = buildPanel(view, "worker-1", NOW)!.progress!;
+    expect(p.movement).toBe("2 dk önce");
+    expect(p.changeLabel).toBe("Son kayıt");
+    expect(p.lastChange).toBe("180 dk önce");
+    const page = html(view, "worker-1");
+    expect(page).toContain("Son hareket: 2 dk önce");
+    expect(page).toContain("Son kayıt: 180 dk önce");
+    expect(page.indexOf("Son hareket")).toBeLessThan(page.indexOf("Son kayıt"));
+    expect(page).not.toContain("Son değişiklik");
+    expect(page).not.toContain("Denetliyor");
+  });
+
+  it("an inspector says 'Denetliyor' and never presents the worker's commit as its own", () => {
+    const view = seat("inspector", { last_activity_at: MOVED, idle_minutes: 2, stuck: false });
+    const p = buildPanel(view, "inspector", NOW)!.progress!;
+    expect(p.inspecting).toBe(true);
+    expect(p.changeLabel).toBe("Çalışanın son kaydı");
+    const page = html(view, "inspector");
+    expect(page).toContain("Denetliyor");
+    expect(page).toContain("Son hareket: 2 dk önce");
+    expect(page).toContain("Çalışanın son kaydı: 180 dk önce");
+    expect(page).not.toMatch(/>Son kayıt:/);
+  });
+
+  it("a run without last_activity_at shows '—' for the movement", () => {
+    const view = seat("worker-1", {});
+    expect(buildPanel(view, "worker-1", NOW)!.progress!.movement).toBe("—");
+    expect(html(view, "worker-1")).toContain("Son hareket: —");
+    const broken = seat("worker-1", { last_activity_at: "dün" });
+    expect(buildPanel(broken, "worker-1", NOW)!.progress!.movement).toBe("—");
+  });
+
+  it("a run at the stuck bound keeps 'takılmış olabilir'", () => {
+    const view = seat("worker-1", { last_activity_at: "2026-10-05T15:36:00Z", idle_minutes: 34, stuck: true });
+    expect(buildPanel(view, "worker-1", NOW)!.progress!.stuck).toBe("takılmış olabilir - 34 dk iz yok");
+    expect(html(view, "worker-1")).toContain("takılmış olabilir - 34 dk iz yok");
+    const fresh = seat("worker-1", { last_activity_at: MOVED, idle_minutes: 2, stuck: false });
+    expect(buildPanel(fresh, "worker-1", NOW)!.progress!.stuck).toBeNull();
+  });
+});
+
 // The owner, 2026-10-05: "işin durumu aslında Proje Yöneticisi değil, Çalışan 2'nin bitirmesini
 // beklediği için bunları bu şekilde güncelleyelim".
 describe("a stopped task names what it waits for", () => {
