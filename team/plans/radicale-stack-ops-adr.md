@@ -69,12 +69,43 @@ Sahip, takvimin kendi sunucusunda durmasını onayladı (yeni konteyner + dış 
 - id: radicale-prod-wire
 - title: Takvim sahibin kendi sunucusunda, 2b: Radicale'i prod compose'a bağla (parça birebir, api ortamı, yayın adımı)
 - roadmap_row: Secretary: mail, calendar, answers calls on his behalf (The order madde 3)
-- ön koşul (READY_FOR_OWNER, bu kart bundan ÖNCE yayınlanmaz): (a) sahip
-  `scripts/cloud/set-cloud-secret.ps1` ile `PAGENTOS_CALDAV_PASSWORD`'ü .env'e koydu (≤ 72 bayt;
-  set-cloud-secret'in ad listesi bu kartla genişler); (b) host'ta root olarak
-  `scripts/cloud/install-radicale.sh` 0 çıktı. NEDEN: aşağıdaki `:?` biçimi .env'de değer yokken
-  compose'un TÜM komutlarını reddettirir; değer yokken yayın, api'nin kendisini de başlatamaz
-  ("an alarm that blocks its own remedy" desenine düşmemek için ön kontrol madde 4'te).
+- ön koşul ve SIRA (READY_FOR_OWNER; denetimde bulundu, 2026-10-06): iki kilit birbirini tutar.
+  (i) install-env-secret.sh (set-cloud-secret.ps1'in host yarısı) adı `HostRepoRoot` ağacının
+  compose'u bağlamıyorsa **çıkış 67** verir ("release first"); bugün sunan ağaç
+  `/opt/pagentos/app` bağlamaz, bağlayan ağaç host'a ancak yayınla gelir. `-SkipRestart` bu
+  kontrolü atlamaz. (ii) Bağlayan compose'taki `${PAGENTOS_CALDAV_PASSWORD:?}` .env'de değer
+  yokken compose'un TÜM komutlarını reddeder: yayının `config -q` adımı 71 ile, madde 4'ün ön
+  kontrolü ondan da önce durur. Yani "önce sır, sonra yayın" 67'de, "önce yayın" `:?`'de kalır.
+  Not: 67 dönse de değer .env'e YAZILMIŞ olur (betik bağlantıyı yazmadan sonra sınar;
+  test_backup_radicale.py ölçer) - ama 67'yi "başarı" saymak kırılgan; kart bu yolu kullanmaz.
+  ÇÖZÜM (yeni kod gerekmez; mevcut `-StageOnly` ve `-HostRepoRoot` ile), sahibin ev PC'sinde,
+  depo bu kartın birleştiği main'de iken:
+  ```
+  .\scripts\cloud\release-cloud-core.ps1 -BlueGreen -StageOnly
+  .\scripts\secret-store.ps1 -Set PAGENTOS_CALDAV_PASSWORD
+  .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_CALDAV_PASSWORD -HostRepoRoot /opt/pagentos/app.next -ExpectProvider "" -SkipVerify
+  ```
+  1. `-StageOnly`: bağlayan ağaç `/opt/pagentos/app.next`'e çıkarılır, host'ta başka hiçbir şey
+     değişmez (sunan renk, pin, .env aynı).
+  2. set-cloud-secret, app.next'in install-env-secret.sh'ını app.next ağacına karşı koşar:
+     .env yazılır (0600 root), bağlayan compose `:?` artık değeri bulduğu için `config -q`
+     geçer, ad bağlı (67 yok). Host blue/green olduğundan betik hiçbir şeyi yeniden yaratmadan
+     **çıkış 73** ile biter: "IS installed ..., finish with release -BlueGreen -Force". Bu
+     sırada 73 BEKLENEN sonuçtur (madde 5 onu başarı olarak raporlatır).
+     `-ExpectProvider ""` ve `-SkipVerify` ŞART: varsayılan `openai-realtime` sağlık kontrolü
+     (69) ve sağlayıcı öz-testi (70) bu sır için anlamsızdır.
+  3. Host'ta root: `bash /opt/pagentos/app.next/scripts/cloud/install-radicale.sh` - imajı
+     app.next'ten kurar, .env'deki parolayla bcrypt users dosyasını yazar, çıkış 0. Aynı
+     oturumda `bash /opt/pagentos/app.next/scripts/cloud/install-backup.sh` (yedeğin radicale
+     kapsamı host'un sabitlenmiş kopyasına geçsin).
+  4. `.\scripts\cloud\release-cloud-core.ps1 -BlueGreen -Force` - app.next'i aynı SHA ile
+     yeniden çıkarır; madde 4'ün ön kontrolü ve `config -q` geçer; radicale idle renkten önce kalkar.
+  PAROLA KURALI (sahibe Onay Merkezi'nde aynen söylenir): yalnız `A-Za-z0-9` (ve isterse `-`
+  `_`), 20-64 karakter, Türkçe harf YOK. Boşluk, `#`, `"`, `'`, `$`, `\` içeren değeri
+  set-cloud-secret.ps1 yerelde reddeder, install-env-secret.sh **65** ile reddeder, hiçbir şey
+  yazılmaz. 72 bayttan uzunsa install-radicale.sh 70 verir (bcrypt 72 bayttan ötesini okumaz;
+  Türkçe harf 2 bayttır). install-radicale.sh tırnaklı değeri soyabilir ama env yolu tırnağı
+  zaten kabul etmez.
 - goal:
   1. infra/docker/docker-compose.prod.yml'e `services.radicale` = infra/docker/radicale/
      compose.fragment.yml'deki `services.radicale` BİREBİR (YAML olarak eşit; build context yolu
@@ -101,16 +132,23 @@ Sahip, takvimin kendi sunucusunda durmasını onayladı (yeni konteyner + dış 
      çıkış. reconcile/rollback yolları (satır ~617/644/738/767) aynı ön adımı alır.
   4. Ön kontrol: aynı betik, compose'a dokunmadan önce `.env`'de `PAGENTOS_CALDAV_PASSWORD=`
      satırı boş değil mi bakar; yoksa ayrı çıkış kodu ve "set-cloud-secret.ps1 ile koy" (değer
-     yazılmaz). Bu sayede eksik sır yayını yarıda değil BAŞTA durdurur.
-  5. scripts/cloud/set-cloud-secret.ps1 izinli adlar listesine `PAGENTOS_CALDAV_PASSWORD`
-     (betik compose'un adı bağlamadığı bir host'u reddeder; bu kartla bağlanır).
+     yazılmaz; mesaj yukarıdaki SIRA'nın dört komutunu verir). Bu sayede eksik sır yayını
+     yarıda değil BAŞTA durdurur.
+  5. scripts/cloud/set-cloud-secret.ps1: bir ad listesi YOK (kapı install-env-secret.sh'ın 67
+     bağlantı kontrolüdür; düzeltildi). Değişiklik: `-HostRepoRoot` `/app.next` ile bitiyorsa
+     çıkış 73 hata değil, "installed into .env against the staged tree; finish with
+     release-cloud-core.ps1 -BlueGreen -Force" ile 0 döner (başka her 73 bugünkü gibi hata).
+     cloud-secret.tests.ps1: bu iki dal + DryRun'da ssh komutunun `app.next` betiğini koştuğu.
   6. services/api/tests/unit/test_radicale_stack.py: "henüz bağlanmadı" vakası artık bağlı
      vakaya düşer ve birebir eşitlik ister; ek vakalar: üç renkte de dört PAGENTOS_CALDAV_* /
      CALENDAR_WRITE anahtarı, api depends_on radicale service_healthy, prod'da radicale için
      `ports` yok, betikte radicale adımı idle renkten önce.
   7. docs/CLOUD_INFRASTRUCTURE.md §5: Radicale "bağlı".
 - acceptance: 1) test_radicale_stack.py, test_release_exit_codes.py, test_compose_images.py,
-  test_staging_isolation.py, cloud-release-bluegreen.tests.ps1 yeşil. 2) Mutasyon RED:
+  test_staging_isolation.py, cloud-release-bluegreen.tests.ps1, cloud-secret.tests.ps1 ve
+  test_backup_radicale.py (ADR'deki set-cloud-secret satırını gerçek install-env-secret.sh ile
+  koşturan iki vaka: sunan ağaçta 67, app.next'te 73 + .env'de değer; `$` içeren değer 65)
+  yeşil; bu vakalar artık BAĞLI prod compose'u app.next olarak kullanır. 2) Mutasyon RED:
   parçada mem_limit değişince eşitlik vakası kırmızı; betikte radicale adımı silinince sıra
   vakası kırmızı; .env'de parola yokken ön kontrol çıkış kodu (sahte host). 3) `docker compose
   -f docker-compose.prod.yml config` sahte .env ile 0 çıkar, `ports` altında radicale yok.

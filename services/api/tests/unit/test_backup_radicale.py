@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -426,6 +427,156 @@ def test_install_builds_the_image_when_it_is_not_there(sandbox: Sandbox) -> None
     assert result.returncode == 0, result.output
     build = [line for line in sandbox.log("docker.log").splitlines() if line.startswith("build")]
     assert build and build[0].endswith("infra/docker/radicale"), build
+
+
+# ---- the wiring card's secret order (ADR "BAĞLAMA KARTININ TAM METNİ") -----------------------
+#
+# install-env-secret.sh (the host half of set-cloud-secret.ps1) refuses with 67 a tree whose
+# compose does not wire the name, and the wired compose's `${PAGENTOS_CALDAV_PASSWORD:?}` refuses
+# every compose command while .env lacks it. The ADR names the way out: stage the wired tree,
+# install the secret against THAT tree, then release. This runs the ADR's own command line
+# through the real install-env-secret.sh (the contract halves read each other).
+
+ADR = REPO / "team" / "plans" / "radicale-stack-ops-adr.md"
+SET_SECRET_LINE = r".\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_CALDAV_PASSWORD"
+
+FAKE_COMPOSE_DOCKER = r"""#!/usr/bin/env bash
+# `docker compose -f FILE --env-file ENV config [-q]` as compose answers it: a `${NAME:?...}`
+# with no value in ENV fails; without -q the (here: raw) definition is printed.
+case "$1" in
+  compose)
+    shift; file=""; envf=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) file=$2; shift 2;;
+        --env-file) envf=$2; shift 2;;
+        --profile) shift 2;;
+        *) break;;
+      esac
+    done
+    [ "$1" = config ] || exit 0
+    for name in $(grep -o '\${[A-Z_]*:?' "$file" | sed 's/^\${//; s/:?$//'); do
+      grep -q "^$name=." "$envf" || { echo "required variable $name has no value" >&2; exit 15; }
+    done
+    [ "${2:-}" = -q ] || cat "$file";;
+  ps) case "$*" in *pagentos-prod-api-green*) echo pagentos-prod-api-green;; esac;;
+  *) exit 0;;
+esac
+"""
+
+
+def _adr_secret_command() -> str:
+    lines = [
+        line.strip()
+        for line in ADR.read_text("utf-8").splitlines()
+        if line.strip().startswith(SET_SECRET_LINE)
+    ]
+    assert len(lines) == 1, f"the ADR must name one set-cloud-secret line for it: {lines}"
+    return lines[0]
+
+
+def _adr_wired_password_line() -> str:
+    lines = [
+        line.strip()
+        for line in ADR.read_text("utf-8").splitlines()
+        if line.strip().startswith("PAGENTOS_CALDAV_PASSWORD: ${PAGENTOS_CALDAV_PASSWORD:?")
+    ]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def _install_secret(
+    box: Sandbox, repo_root: str, value: str, command: str
+) -> subprocess.CompletedProcess[str]:
+    """What New-RemoteSecretInstallCommand sends for this command line, run on the sandbox."""
+    fake_bin = box.root / "secret-bin"
+    _write(fake_bin / "docker", FAKE_COMPOSE_DOCKER)
+    skip_verify = "-SkipVerify" in command
+    expect = "" if skip_verify else "openai-realtime"
+    recreate = "0" if "-SkipRestart" in command else "1"
+    host_repo = _posix(box.base) + repo_root.removeprefix("/opt/pagentos")
+    env = box.env()
+    env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+    env["PAGENTOS_ALLOW_NONROOT_ENV"] = "1"
+    result = subprocess.run(
+        [
+            str(BASH),
+            f"{host_repo}/scripts/cloud/install-env-secret.sh",
+            "PAGENTOS_CALDAV_PASSWORD",
+            _posix(box.base / ".env"),
+            host_repo,
+            expect,
+            recreate,
+            "",
+        ],
+        env=env,
+        input=value + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+    result.output = result.stdout + result.stderr  # type: ignore[attr-defined]
+    return result
+
+
+def _host_trees(box: Sandbox) -> None:
+    """app = the tree serving today (no radicale wiring); app.next = the wiring card's tree,
+    staged by `release-cloud-core.ps1 -BlueGreen -StageOnly`."""
+    prod = (REPO / "infra" / "docker" / "docker-compose.prod.yml").read_text("utf-8")
+    script = (CLOUD / "install-env-secret.sh").read_text("utf-8")
+    # The host's .env already carries every secret the serving compose requires.
+    required = sorted(set(re.findall(r"\$\{([A-Z_][A-Z0-9_]*):\?", prod)))
+    _write(box.base / ".env", "".join(f"{name}=present\n" for name in required))
+    for tree, compose in (
+        ("app", prod),
+        ("app.next", prod + "\n# wiring card\n      " + _adr_wired_password_line() + "\n"),
+    ):
+        _write(box.base / tree / "infra" / "docker" / "docker-compose.prod.yml", compose)
+        _write(box.base / tree / "scripts" / "cloud" / "install-env-secret.sh", script)
+
+
+def test_the_adr_s_secret_order_installs_through_the_staged_tree(sandbox: Sandbox) -> None:
+    command = _adr_secret_command()
+    assert '-ExpectProvider ""' in command and "-SkipVerify" in command, command
+    match = re.search(r"-HostRepoRoot (\S+)", command)
+    assert match, f"the ADR's command must name the staged tree: {command}"
+    _host_trees(sandbox)
+
+    # The default tree (the one serving) refuses: 67, "release first".
+    unstaged = command.replace(match.group(0), "")
+    serving = _install_secret(sandbox, "/opt/pagentos/app", PASSWORD, unstaged)
+    assert serving.returncode == 67, serving.output
+    # ...but the value was already written before the wiring check (the ADR says so; the
+    # owner must not read 67 as "nothing changed").
+    assert f"PAGENTOS_CALDAV_PASSWORD={PASSWORD}\n" in (sandbox.base / ".env").read_text("utf-8")
+    _host_trees(sandbox)  # back to a .env without the password
+
+    # The ADR's line: against the staged, wired tree it is installed and compose is valid;
+    # 73 is install-env-secret's "installed; finish with release -BlueGreen -Force".
+    staged = _install_secret(sandbox, match.group(1), PASSWORD, command)
+    assert staged.returncode == 73, staged.output
+    assert "PAGENTOS_CALDAV_PASSWORD is wired" in staged.output
+    assert f"PAGENTOS_CALDAV_PASSWORD={PASSWORD}\n" in (sandbox.base / ".env").read_text("utf-8")
+    assert PASSWORD not in serving.output + staged.output
+
+
+def test_the_adr_names_the_characters_the_env_file_refuses(sandbox: Sandbox) -> None:
+    """A '$' (or space, #, quotes, backslash) is refused with 65 and nothing is written - the
+    ADR tells the owner so before he chooses the password."""
+    _host_trees(sandbox)
+    command = _adr_secret_command()
+    match = re.search(r"-HostRepoRoot (\S+)", command)
+    assert match, command
+
+    refused = _install_secret(sandbox, match.group(1), "Takvim$Parola", command)
+
+    assert refused.returncode == 65, refused.output
+    assert "PAGENTOS_CALDAV_PASSWORD" not in (sandbox.base / ".env").read_text("utf-8")
+    text = ADR.read_text("utf-8")
+    assert "65" in text and "A-Za-z0-9" in text, "the ADR must give the owner the character rule"
 
 
 def test_the_sandbox_is_not_the_host() -> None:
