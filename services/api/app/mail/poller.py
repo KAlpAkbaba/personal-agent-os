@@ -5,10 +5,15 @@ its own throttle, so the index and the morning briefing know what arrived withou
 sentence being spoken first. Polling an unconfigured account is a quiet no-op - an absent
 account is not a failure to report every few minutes - and the poll never sends, marks,
 moves or deletes anything: it lists and indexes.
+
+money-ledger: ``after_poll`` - when given - is handed the session after every poll that ran
+(the money ledger reads the bank's notification mails the poll just indexed). A failing hook
+is logged by its error's class and never fails the poll.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,8 +30,16 @@ MIN_POLL_INTERVAL_S = 60.0
 class MailPoller:
     """Throttles ``MailService.poll`` to ``interval_s`` on a clock that ticks far faster."""
 
-    def __init__(self, service: Any, *, enabled: bool, interval_s: float) -> None:
+    def __init__(
+        self,
+        service: Any,
+        *,
+        enabled: bool,
+        interval_s: float,
+        after_poll: Callable[[Session, datetime], Any] | None = None,
+    ) -> None:
         self._service = service
+        self._after_poll = after_poll
         self._enabled = enabled
         self._interval_s = max(MIN_POLL_INTERVAL_S, float(interval_s))
         self._last_polled_at: datetime | None = None
@@ -55,6 +68,12 @@ class MailPoller:
         except Exception as exc:  # noqa: BLE001 - one failed poll is logged, never fatal to the clock
             logger.warning("mail_poll_failed", error_class=type(exc).__name__)
             result = {"status": "failed", "error_class": type(exc).__name__}
+        if self._after_poll is not None and result.get("status") == "polled":
+            try:
+                self._after_poll(session, now)
+            except Exception as exc:  # noqa: BLE001 - the hook never fails the poll
+                session.rollback()
+                logger.warning("mail_after_poll_failed", error_class=type(exc).__name__)
         self._last_result = result
         return result
 

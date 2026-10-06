@@ -35,6 +35,7 @@ from app.devices.aliases import strip_device_phrases
 from app.household import parse as household_parse
 from app.macros.naming import match_stored_name
 from app.macros.naming import spoken_name as macro_spoken_name
+from app.money import parse as money_parse
 from app.narration import commands
 from app.narration.commands import Command, NarrationState, ParsedCommand, State
 from app.narration.engine import PARAGRAPH_HEADING, PARAGRAPH_LIST, Cursor, NarrationPlan
@@ -372,6 +373,13 @@ class Intent(StrEnum):
     HOUSEHOLD_LIST_ADD = "household_list_add"  # Listeye süt ekle.
     HOUSEHOLD_LIST_REMOVE = "household_list_remove"  # Listeden sütü çıkar.
     HOUSEHOLD_LIST_READ = "household_list_read"  # Ne almam lazım? / Markete gidiyorum.
+    # money-ledger: JARVIS's own money ledger (app.money.parse); nothing here moves money.
+    MONEY_BALANCE = "money_balance"  # Hesabımda ne kadar var?
+    MONEY_SPENT = "money_spent"  # Bu ay markete ne harcadım?
+    MONEY_SPEND_YES = "money_spend_yes"  # (750 liralık bir harcama yaptınız mı?) Evet ama 700.
+    MONEY_SPEND_NO = "money_spend_no"  # Hayır harcamadım.
+    MONEY_UNDO = "money_undo"  # Harcamayı geri al.
+    MONEY_CASH = "money_cash"  # Markete iki yüz lira nakit verdim.
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode. Two distinct
     # operations, deterministic — NEWS_OPEN plays the latest eligible video (a real
     # mutation: a browser opens, a video plays), NEWS_SUMMARIZE routes a current-events
@@ -667,6 +675,11 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.HOUSEHOLD_LEVEL: "household.level",
     Intent.HOUSEHOLD_LIST_ADD: "household.list_add",
     Intent.HOUSEHOLD_LIST_REMOVE: "household.list_remove",
+    # money-ledger: a ledger row the owner booked, answered or took back.
+    Intent.MONEY_SPEND_YES: "money.spend_yes",
+    Intent.MONEY_SPEND_NO: "money.spend_no",
+    Intent.MONEY_UNDO: "money.undo",
+    Intent.MONEY_CASH: "money.cash",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -790,6 +803,9 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.SERVICE_QUERY: "operator.service",
     # home-stock-list: the shopping list read out changes nothing.
     Intent.HOUSEHOLD_LIST_READ: "household.list_read",
+    # money-ledger: the ledger read out changes nothing.
+    Intent.MONEY_BALANCE: "money.balance",
+    Intent.MONEY_SPENT: "money.spent",
 }
 
 
@@ -1113,6 +1129,10 @@ class ResolvedIntent:
     household_item: str | None = None
     household_level: str | None = None
     household_quantity: str | None = None
+    #: money-ledger: for the MONEY_* intents, the amount the owner's WORDS said, in kuruş
+    #: ("evet ama 750" -> 75000), and the category ("markete" -> "market") - or None.
+    money_amount_kurus: int | None = None
+    money_category: str | None = None
     #: M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): for NEWS_OPEN/NEWS_SUMMARIZE/
     #: NEWS_QUERY_LATEST, a channel-name HINT the owner's WORDS carried ("Show'un son
     #: haberini aç" -> "show'un"), matched by the tool against configured sources'
@@ -5135,6 +5155,16 @@ _HOUSEHOLD_INTENTS: Final[dict[str, Intent]] = {
     household_parse.ACTION_ADD: Intent.HOUSEHOLD_LIST_ADD,
     household_parse.ACTION_REMOVE: Intent.HOUSEHOLD_LIST_REMOVE,
     household_parse.ACTION_READ: Intent.HOUSEHOLD_LIST_READ,
+}
+
+#: money-ledger: app.money.parse's six actions -> the router's six intents.
+_MONEY_INTENTS: Final[dict[str, Intent]] = {
+    money_parse.ACTION_BALANCE: Intent.MONEY_BALANCE,
+    money_parse.ACTION_SPENT: Intent.MONEY_SPENT,
+    money_parse.ACTION_YES: Intent.MONEY_SPEND_YES,
+    money_parse.ACTION_NO: Intent.MONEY_SPEND_NO,
+    money_parse.ACTION_UNDO: Intent.MONEY_UNDO,
+    money_parse.ACTION_CASH: Intent.MONEY_CASH,
 }
 
 
@@ -10028,6 +10058,28 @@ def _resolve_intent_rules(
             household_item=household.item,
             household_level=household.level,
             household_quantity=household.quantity,
+            **base,
+        )
+
+    # 0c-money. money-ledger: the owner's own ledger (app.money.parse). A bare "evet" /
+    #           "hayır" is ours only while JARVIS's spend question is open and nothing else
+    #           waits for a yes; a bare "geri al" only right after a booking, nothing in focus.
+    if money := money_parse.parse_tokens(
+        tokens,
+        busy=draft_pending
+        or mutation_pending
+        or proposal_pending
+        or genesis_awaiting_approval
+        or macro_awaiting_name
+        or alarm_ringing,
+        focused=document_focused or creative_focused or artifact_focused,
+    ):
+        return ResolvedIntent(
+            _MONEY_INTENTS[money.action],
+            scope=SCOPE_CONVERSATION,
+            matched=money.matched,
+            money_amount_kurus=money.amount_kurus,
+            money_category=money.category,
             **base,
         )
 
