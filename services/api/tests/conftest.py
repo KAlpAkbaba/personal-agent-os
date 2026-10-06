@@ -1,6 +1,7 @@
 """Shared pytest fixtures."""
 
 import os
+import re
 import zlib
 from collections.abc import Callable
 
@@ -45,6 +46,30 @@ def shard_keys(nodeids: list[str]) -> list[str]:
         seen[base] = position + 1
         keys.append(f"{base}#{position}")
     return keys
+
+
+#: The gate runs the unit suite under pytest-xdist (team/plans/gate-unit-parallel-adr.md), and
+#: xdist refuses a run whose workers collected different test ids. Two things made the ids
+#: differ between processes (measured 2026-10-06 by collecting twice): route-guard tables put a
+#: fresh uuid4 into their paths, and parameter tables built from sets come out in the process's
+#: string-hash order. A uuid in a parameter's id is written as ``<uuid>``, and the workers xdist
+#: starts share one hash seed.
+_UUID_IN_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+XDIST_HASH_SEED = "20261006"
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    if isinstance(val, str) and _UUID_IN_ID.search(val):
+        return _UUID_IN_ID.sub("<uuid>", val)
+    return None
+
+
+def pytest_configure(config):
+    # In the xdist controller, before it starts the workers (they inherit its environment); a
+    # seed the caller set already is kept. A serial run is left as it was.
+    if os.environ.get("PYTEST_XDIST_WORKER") or not getattr(config.option, "numprocesses", None):
+        return
+    os.environ.setdefault("PYTHONHASHSEED", XDIST_HASH_SEED)
 
 
 def pytest_collection_modifyitems(config, items):

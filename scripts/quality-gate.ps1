@@ -429,11 +429,48 @@ Invoke-Step "Other services lint (ruff)" {
   }
 }
 
+# gate-unit-parallel (team/plans/gate-unit-parallel-adr.md): the unit suite ran 17,000 tests in
+# one process for 30-50 minutes (2026-10-06), the longest step of the gate. It runs under
+# pytest-xdist now, with a worker count from the machine; every test still runs and a failure
+# is still a failure. Without xdist (or on a small or full machine) it runs serially as before.
+# PAGENTOS_GATE_UNIT_WORKERS sets the count by hand (1 = serial).
+function Get-GateUnitWorkerCount {
+  # 0 = serial. min(8, cores - 2), lowered to what the free memory above the floor holds: the
+  # floor is what the machine keeps for everything else (cycle-settings test_memory_floor_gb),
+  # 2 GB what one worker may grow to over its share of the suite.
+  param([int]$Cores, [int64]$FreeBytes, [bool]$XdistPresent, [string]$Override = "")
+  if (-not $XdistPresent) { return 0 }
+  if ($Override -match '^\s*\d+\s*$') {
+    $n = [int]$Override
+    if ($n -lt 2) { return 0 }
+    return $n
+  }
+  $max = 8; $floorGb = 8; $workerGb = 2
+  $n = [Math]::Min($max, $Cores - 2)
+  $byMemory = [int][Math]::Floor(($FreeBytes - [int64]$floorGb * 1GB) / ([int64]$workerGb * 1GB))
+  $n = [Math]::Min($n, $byMemory)
+  if ($n -lt 2) { return 0 }
+  return [int]$n
+}
+
 Invoke-Step "API unit tests" -Kinds heavy {
   if (-not $uv) { throw "uv not found" }
   Push-Location $apiRoot
   try {
-    & $uv run pytest tests/unit -q
+    & $uv run python -c "import xdist" 2>$null | Out-Null
+    $xdist = ($LASTEXITCODE -eq 0)
+    $freeBytes = [int64]0
+    try { $freeBytes = [int64](Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory * 1KB } catch { $freeBytes = [int64]0 }
+    $workers = Get-GateUnitWorkerCount -Cores ([Environment]::ProcessorCount) -FreeBytes $freeBytes -XdistPresent $xdist -Override ([string]$env:PAGENTOS_GATE_UNIT_WORKERS)
+    $machine = "{0} cores, {1:0.0} GB free" -f [Environment]::ProcessorCount, ($freeBytes / 1GB)
+    if ($workers -ge 2) {
+      Write-Host "API unit tests: $workers xdist workers ($machine)"
+      & $uv run pytest tests/unit -q -n $workers --dist load
+    } else {
+      $why = if (-not $xdist) { "pytest-xdist is not installed" } else { "the machine has room for fewer than two xdist workers, or PAGENTOS_GATE_UNIT_WORKERS says so" }
+      Write-Host "API unit tests: serial ($why; $machine)"
+      & $uv run pytest tests/unit -q
+    }
     Assert-ExitCode "pytest (unit)"
   } finally { Pop-Location }
 }
