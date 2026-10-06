@@ -382,6 +382,21 @@ Test-Case "(6) no job object: the tick still runs the cycle, waits only for its 
 }
 
 Write-Host ""
+
+Test-Case "(11) a machine service the cycle started is never a leftover: Docker Desktop and WSL stay, a stray child does not (2026-10-06 06:46 and 14:58)" {
+    . (Join-Path $repoRoot "scripts\lib\TeamTickKeep.ps1")
+    foreach ($kept in @(
+            @("Docker Desktop.exe", ""), @("com.docker.backend.exe", ""), @("com.docker.build.exe", ""), @("wsl.exe", "wsl.exe -d docker-desktop -e /usr/bin/vpnkit-bridge"),
+            @("wslhost.exe", ""), @("vmmemWSL", ""), @("DOCKER DESKTOP.EXE", ""), @("node.exe", "C:\Program Files\Docker\Docker\resources\x.js"))) {
+        if (-not (Test-TeamTickKeep -Name $kept[0] -CommandLine $kept[1])) { throw "'$($kept[0])' would be stopped" }
+    }
+    foreach ($stopped in @(@("tail.exe", "tail -f x.log"), @("python.exe", "python -m pytest"), @("powershell.exe", "powershell -File cycle.ps1"), @("wsl-like.exe", ""))) {
+        if (Test-TeamTickKeep -Name $stopped[0] -CommandLine $stopped[1]) { throw "'$($stopped[0])' would be kept" }
+    }
+    $source = [System.IO.File]::ReadAllText($tick)
+    if ($source -notmatch 'Test-TeamTickKeep -Name') { throw "Stop-JobLeftovers does not ask Test-TeamTickKeep" }
+    if ($source -notmatch 'if \(-not \$keeping\) \{ \[void\]\[PagentOS\.Team\.TickJob\]::TerminateJobObject') { throw "the job is ended even when a kept service is in it" }
+}
 Write-Host "team-tick: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }
 exit 0

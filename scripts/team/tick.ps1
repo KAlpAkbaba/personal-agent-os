@@ -45,6 +45,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $repoRoot "scripts\lib\TeamTickKeep.ps1")
 $feedScript = if ($FeedPath) { $FeedPath } else { Join-Path $PSScriptRoot "feed.ps1" }
 $cycleScript = if ($CyclePath) { $CyclePath } else { Join-Path $PSScriptRoot "cycle.ps1" }
 if (-not $LogPath) { $LogPath = Join-Path $repoRoot "team\logs\tick.log" }
@@ -169,6 +170,7 @@ function Get-JobProcessIds {
 function Stop-JobLeftovers {
     # Called only after the script's own process has exited: what is still in its job is named, then the job is ended.
     param([IntPtr]$Job, [string]$Label, [int]$OwnId)
+    $listed = New-Object System.Collections.ArrayList
     foreach ($id in @(Get-JobProcessIds -Job $Job)) {
         if ($id -eq $OwnId) { continue }
         $name = "?"; $line = ""
@@ -177,12 +179,24 @@ function Stop-JobLeftovers {
             if ($null -ne $found) { $name = [string]$found.Name; $line = [string]$found.CommandLine }
         }
         catch { }
+        [void]$listed.Add([pscustomobject]@{ Id = $id; Name = $name; Line = $line; Keep = (Test-TeamTickKeep -Name $name -CommandLine $line) })
+    }
+    $keeping = @($listed | Where-Object { $_.Keep }).Count -gt 0
+    foreach ($process in $listed) {
+        $line = $process.Line
         if ($line.Length -gt 200) { $line = $line.Substring(0, 200) }
-        $entry = "pid $id $name (left by the $Label): $line"
+        # A console host beside a kept service may be that service's own console.
+        if ($process.Keep -or ($keeping -and $process.Name -eq "conhost.exe")) {
+            Write-TickLog "keeping pid $($process.Id) $($process.Name) (a machine service the $Label started; never stopped): $line"
+            continue
+        }
+        $entry = "pid $($process.Id) $($process.Name) (left by the $Label): $line"
         [void]$script:leftovers.Add($entry)
         Write-TickLog "stopping $entry"
+        # With a kept service in the job the job is not ended: each leftover is stopped alone.
+        if ($keeping) { try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch { } }
     }
-    [void][PagentOS.Team.TickJob]::TerminateJobObject($Job, 1)
+    if (-not $keeping) { [void][PagentOS.Team.TickJob]::TerminateJobObject($Job, 1) }
 }
 
 function Invoke-ScriptWithoutJob {
