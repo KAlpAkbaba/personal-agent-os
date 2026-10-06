@@ -9,7 +9,8 @@
  *   `deleteSubscription`) — plain `apiFetch` calls, owner-session-gated like every other
  *   client in this shell, fully testable against a mocked `apiFetch`;
  * - **the browser Push API** (`registerAndSubscribe`, `unsubscribeBrowser`,
- *   `currentBrowserSubscription`, `pushSupport`, `notificationPermission`) — the parts that
+ *   `currentBrowserSubscription`, `pushSupport`, `notificationPermission`,
+ *   `readHomeScreenInput` feeding the pure `homeScreenState`) — the parts that
  *   touch `navigator`/`Notification`/`ServiceWorkerRegistration`, guarded so this module
  *   never throws just from being imported in an environment without them (SSR, or a test
  *   that has not stubbed them).
@@ -155,6 +156,60 @@ export function pushSupport(): PushSupport {
   if (!("serviceWorker" in navigator)) return "unsupported";
   if (!("PushManager" in window)) return "unsupported";
   return "supported";
+}
+
+/**
+ * iOS gives web push only to a web app added to the Home Screen and opened from there,
+ * and only from iOS 16.4. A Safari TAB has no `PushManager` at all - so on an iPhone its
+ * absence means "not added yet", not "unsupported", and the settings card must say which.
+ */
+export type HomeScreenState = "not_ios" | "ios_needs_home_screen" | "ios_too_old" | "ios_home_screen";
+
+export type HomeScreenInput = {
+  userAgent: string;
+  /** Safari's own `navigator.standalone` - true only when opened from the Home Screen. */
+  standalone: boolean;
+  /** `matchMedia("(display-mode: standalone)").matches` - the manifest's `display`. */
+  displayModeStandalone: boolean;
+  maxTouchPoints: number;
+};
+
+/** The first iOS version with web push for Home Screen web apps. */
+export const IOS_WEB_PUSH_MIN_VERSION: readonly [major: number, minor: number] = [16, 4];
+
+/** Pure and DOM-free: every browser read lives in `readHomeScreenInput`. */
+export function homeScreenState(input: HomeScreenInput): HomeScreenState {
+  const ua = input.userAgent;
+  const iosDevice = /iPhone|iPad|iPod/.test(ua);
+  // iPadOS Safari sends a desktop Mac UA by default; a Mac has no touch points.
+  const ipadDesktopUa = !iosDevice && /Macintosh/.test(ua) && input.maxTouchPoints > 1;
+  if (!iosDevice && !ipadDesktopUa) return "not_ios";
+  // "CPU iPhone OS 16_3 like Mac OS X"; the iPadOS desktop UA carries no iOS version, and
+  // an unknown version is NOT counted as too old - the Home Screen rule still applies.
+  const version = /\bOS (\d+)_(\d+)/.exec(ua);
+  if (version) {
+    const [minMajor, minMinor] = IOS_WEB_PUSH_MIN_VERSION;
+    const major = Number(version[1]);
+    const minor = Number(version[2]);
+    if (major < minMajor || (major === minMajor && minor < minMinor)) return "ios_too_old";
+  }
+  if (input.standalone || input.displayModeStandalone) return "ios_home_screen";
+  return "ios_needs_home_screen";
+}
+
+/** The ONE place the Home Screen inputs are read from the browser; safe without one (SSR). */
+export function readHomeScreenInput(): HomeScreenInput {
+  const nav = typeof navigator === "undefined" ? undefined : (navigator as Navigator & { standalone?: boolean });
+  const displayModeStandalone =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(display-mode: standalone)").matches === true;
+  return {
+    userAgent: typeof nav?.userAgent === "string" ? nav.userAgent : "",
+    standalone: nav?.standalone === true,
+    displayModeStandalone,
+    maxTouchPoints: typeof nav?.maxTouchPoints === "number" ? nav.maxTouchPoints : 0,
+  };
 }
 
 export type NotificationPermissionState = NotificationPermission | "unsupported";

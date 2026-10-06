@@ -11,6 +11,7 @@
 #   MinIO Console             127.0.0.1:19001 -> 9001
 #   Temporal frontend (gRPC)  127.0.0.1:17233 -> 7233
 #   Temporal Web UI           127.0.0.1:18233 -> 8080
+#   Radicale (CalDAV)         127.0.0.1:15232 -> 5232
 #
 # Credentials below are DEV-ONLY defaults for the local loopback compose stack.
 # They are not secrets and must never be reused outside local development.
@@ -135,7 +136,45 @@ services:
       - "127.0.0.1:18233:8080"
     restart: unless-stopped
 
+  # The owner's own CalDAV server (radicale-stack-ops): the same image and hardening as
+  # infra/docker/radicale/compose.fragment.yml. The api's dev address is
+  # http://127.0.0.1:15232/owner/takvim/ (owner / dev-takvim). No users file in the
+  # repository: /etc/radicale is a tmpfs and the entrypoint hashes the dev password into it.
+  radicale:
+    build:
+      context: ./radicale
+    image: pagentos/radicale:local
+    container_name: pagentos-radicale
+    environment:
+      PAGENTOS_RADICALE_DEV_PASSWORD: dev-takvim # dev-only, not a secret
+    ports:
+      - "127.0.0.1:15232:5232"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /etc/radicale:uid=10002,gid=10002,mode=0700
+    mem_limit: 256m
+    pids_limit: 256
+    volumes:
+      - pagentos-radicale-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request as r, urllib.error as e\ntry: r.urlopen('http://127.0.0.1:5232/', timeout=4)\nexcept e.HTTPError as x: sys.exit(0 if x.code == 401 else 1)\nexcept Exception: sys.exit(1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
   pagentos-postgres-data:
   pagentos-redis-data:
   pagentos-minio-data:
+  pagentos-radicale-data:

@@ -36,11 +36,12 @@ from app.conversations.service import LiveConversations
 from app.db import build_engine, build_session_factory
 from app.voice.crypto import ProfileCipher
 from tests.integration.conftest import owner_client
+from tests.integration.migration_ids import parent_of, revision_named
 
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-BEFORE = "0068_mail_accounts"
+BEFORE = parent_of(revision_named("conversation_transcripts"))
 NOON = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 CIPHER = ProfileCipher("integration-secret")
 VOICE_A = [1.0, 0.1, 0.0, 0.0]

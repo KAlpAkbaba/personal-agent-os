@@ -16,6 +16,10 @@
 #   config/opt-pagentos/...               .env (secrets: the repository is encrypted),
 #                                         RELEASE, LAST_KNOWN_GOOD, LAST_RECONCILE, markers
 #   config/pagentos-data/{identity,edge}  the owner-credential root and the edge state
+#   config/pagentos-data/radicale-auth    the calendar's users file (a bcrypt line)
+#   radicale/...                          the owner's calendar (Radicale's data folder),
+#                                         copied under Radicale's own lock; absent until
+#                                         install-radicale.sh ran ("radicale: not installed")
 #   config/opt-pagentos-recovery/...      the pinned recovery bundle, when installed
 #   config/systemd/pagentos-*             the host's own unit files
 #   MANIFEST.json                         size + sha256 of every file above
@@ -29,7 +33,7 @@
 # Exit: 0 ok; 1 not root; 2 usage; 90 another backup holds the lock; 91 the repository
 # password is missing or not root-only; 92 a database dump failed; 93 the object mirror
 # failed; 94 restic failed (init/backup/forget/check); 95 the local snapshot is good but
-# the off-host copy failed.
+# the off-host copy failed; 96 the calendar (Radicale) folder could not be copied.
 
 set -Eeuo pipefail
 
@@ -176,9 +180,33 @@ say "objects: $object_count file(s) from $bucket_count bucket(s)"
 for name in .env RELEASE LAST_KNOWN_GOOD LAST_RECONCILE RECOVERY_BUNDLE_STALE; do
     [ -f "$base/$name" ] && cp -p "$base/$name" "$staging/config/opt-pagentos/"
 done
-for name in identity edge; do
+for name in identity edge radicale-auth; do
     [ -d "$data/$name" ] && cp -a "$data/$name" "$staging/config/pagentos-data/"
 done
+
+# ---- the owner's calendar (Radicale; radicale-stack-ops) ---------------------------------
+# Radicale's writers hold /data/.Radicale.lock exclusively; holding it SHARED for the copy
+# keeps every write out of the middle of it (readers are not held up). A lock that cannot be
+# had within a minute is not worth a red night: Radicale writes each item by atomic rename,
+# so a copy without it holds whole files, and it says so.
+radicale_items=0
+radicale_state="not installed"
+if [ -d "$data/radicale" ]; then
+    radicale_lock="$data/radicale/.Radicale.lock"
+    if [ -f "$radicale_lock" ]; then
+        exec 7<"$radicale_lock"
+        "$flock_bin" -s -w 60 7 || say "radicale: copying without the lock (it was not free within 60s)"
+    fi
+    cp -a "$data/radicale" "$staging/radicale" || fail 96 "the calendar folder $data/radicale could not be copied"
+    if [ -f "$radicale_lock" ]; then exec 7<&-; fi
+    # Radicale's cache names its files <href>.ics too; they are not calendar items.
+    radicale_items=$(find "$staging/radicale" -name .Radicale.cache -prune -o -type f -name '*.ics' -print \
+        | wc -l | tr -d ' ')
+    radicale_state="ok"
+    say "radicale: $radicale_items item(s)"
+else
+    say "radicale: not installed"
+fi
 [ -d "$recovery_root" ] && cp -a "$recovery_root" "$staging/config/opt-pagentos-recovery"
 for unit in "$systemd_dir"/pagentos-*; do
     [ -f "$unit" ] && cp -p "$unit" "$staging/config/systemd/"
@@ -250,9 +278,9 @@ fi
 finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 seconds=$(( $(date +%s) - started_s ))
 record="$backup_root/LAST_BACKUP.json"
-printf '{"snapshot":"%s","kind":"%s","label":"%s","started_at":"%s","finished_at":"%s","seconds":%s,"release":"%s","alembic":"%s","offhost":"%s","buckets":%s,"objects":%s}\n' \
+printf '{"snapshot":"%s","kind":"%s","label":"%s","started_at":"%s","finished_at":"%s","seconds":%s,"release":"%s","alembic":"%s","offhost":"%s","buckets":%s,"objects":%s,"radicale_items":%s,"radicale":"%s"}\n' \
     "$snapshot" "$kind" "$label" "$started" "$finished" "$seconds" "${release:-unknown}" "${alembic:-unknown}" "$offhost" \
-    "$bucket_count" "$object_count" \
+    "$bucket_count" "$object_count" "$radicale_items" "$radicale_state" \
     > "$record.next"
 mv "$record.next" "$record"
 

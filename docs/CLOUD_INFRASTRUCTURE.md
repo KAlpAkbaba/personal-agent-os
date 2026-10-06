@@ -101,7 +101,25 @@ prometheus
 grafana
 loki
 recovery-supervisor (prefer host/systemd boundary)
+radicale (the owner's own CalDAV server; see below)
 ```
+
+**Radicale (radicale-stack-ops, 2026-10-06).** The owner's calendar lives on the Cloud Core
+itself, in Radicale 3.8.1 (GPL-3.0, unmodified, its own container built from
+`infra/docker/radicale/Dockerfile`, base pinned by digest). It publishes **no port** - not on
+the tailnet, not on loopback: the api is its only client, over the compose network at
+`http://radicale:5232/owner/takvim/` (user `owner`, password `PAGENTOS_CALDAV_PASSWORD` in
+`/opt/pagentos/.env`). Hardened: `cap_drop: ALL`, no-new-privileges, read-only root, 256m,
+uid 10002, htpasswd + bcrypt, `owner_only` rights, web UI off. Data is the bind
+`/mnt/pagentos-data/radicale`, the users file `/mnt/pagentos-data/radicale-auth/users`
+(read-only in the container). The service is defined in
+`infra/docker/radicale/compose.fragment.yml`; wiring it into `docker-compose.prod.yml` is a
+separate card (radicale-prod-wire, full text in the ADR). Host step before that, as root:
+put the password in `.env` with `scripts/cloud/set-cloud-secret.ps1` (72 bytes at most), then
+run `scripts/cloud/install-radicale.sh` (folders, bcrypt users file; the password goes to
+bcrypt on stdin and is never printed). Dev stack: `127.0.0.1:15232`, `owner` / `dev-takvim`.
+A CalDAV client on the owner's phone (edge or `tailscale serve`) is a separate, deferred
+decision.
 
 Some services may initially share a process/package to reduce operational complexity. Service boundaries are logical; do not create unnecessary microservices before load or failure isolation justifies them.
 
@@ -153,6 +171,19 @@ sha256 and per-table row fingerprints computed from the dumps. Both release path
 rows and objects; `--apply` is the guarded real restore. The repository password lives on
 the host and, escrowed, on the owner's PC (`scripts/cloud/escrow-backup-key.ps1`) - without
 it no copy of any backup can be opened.
+
+**The calendar (radicale-stack-ops, 2026-10-06).** Every snapshot also holds the owner's
+calendar: `radicale/` (Radicale's data folder, copied while holding Radicale's own
+`.Radicale.lock` shared, so no write lands mid-copy) and `config/pagentos-data/radicale-auth`
+(the bcrypt users file; the repository is encrypted). `LAST_BACKUP.json` carries
+`radicale_items` (the `.ics` items, Radicale's `.Radicale.cache` excluded) and `radicale`
+(`ok` / `not installed`); a night before `install-radicale.sh` ran says
+`radicale: not installed` and is still `BACKUP OK`. The drill counts the items into its report
+(`radicale_items`) and verifies the files against the manifest like every other file.
+`--apply` stops `pagentos-prod-radicale`, replaces `/mnt/pagentos-data/radicale` with the
+snapshot's (the replaced folder stays beside it as `radicale.pre-restore`), gives it to uid
+10002 and starts the container again; with no Radicale container yet it verifies and leaves
+the folder alone, and says so. Install step: `scripts/cloud/install-radicale.sh` (root, once).
 
 Claude should adapt after actual storage growth is known.
 

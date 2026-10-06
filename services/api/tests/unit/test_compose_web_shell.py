@@ -30,6 +30,7 @@ DOCKERFILE = REPO / "infra" / "docker" / "web" / "Dockerfile"
 DOCKERIGNORE = REPO / "infra" / "docker" / "web" / "Dockerfile.dockerignore"
 RELEASE = REPO / "scripts" / "cloud" / "release-cloud-core-bluegreen.sh"
 TAILNET = REPO / "scripts" / "cloud" / "enable-web-tailnet-https.sh"
+TELEPHONY_FUNNEL = REPO / "scripts" / "cloud" / "enable-telephony-funnel.sh"
 NGINX = REPO / "infra" / "docker" / "edge" / "nginx.conf"
 
 SECRET_WORDS = re.compile(r"secret|token|passw|credential|api[_-]?key|private", re.IGNORECASE)
@@ -141,6 +142,30 @@ def test_the_tailnet_script_serves_the_port_the_compose_service_publishes() -> N
     )
     assert default is not None and default.group(1) == port.group(1)
     assert 'target="http://127.0.0.1:$port"' in TAILNET.read_text("utf-8")
+
+
+def test_the_tailnet_script_still_refuses_to_run_funnel() -> None:
+    """It may READ a telephony Funnel on 8443; it never runs `tailscale funnel` itself."""
+    code = "\n".join(_script_lines(TAILNET))
+    wrapper = re.search(r"^ts\(\) \{.*?^\}", code, re.DOTALL | re.MULTILINE)
+    assert wrapper is not None, "the tailscale wrapper is gone"
+    assert re.search(r"funnel\|--funnel\|--funnel=\*\|funnel=\*\)[^\n]*REFUSED", wrapper.group(0))
+    assert re.search(r"serve\|status\) ;;", wrapper.group(0)), "it allows more than serve/status"
+    assert not re.search(r"\bts\s+funnel\b|\"\$ts_bin\"\s+funnel", code)
+
+
+def _telephony_roots(path: Path) -> str:
+    found = re.findall(r'^telephony_mounts="([^"]*)"$', path.read_text("utf-8"), re.MULTILINE)
+    assert len(found) == 1, f"{path.name}: expected one telephony_mounts line, found {found}"
+    return found[0]
+
+
+def test_both_scripts_carry_the_same_telephony_roots() -> None:
+    """The public path's contract lives in two scripts: the one that opens the Funnel and the one
+    that tolerates it beside the web shell. One text, read from both - change one and this fails."""
+    funnel = _telephony_roots(TELEPHONY_FUNNEL)
+    assert funnel == _telephony_roots(TAILNET)
+    assert funnel.split() == ["/telephony/inbound", "/v1/telephony/audio"]
 
 
 def test_web_holds_no_secret_in_the_compose_file() -> None:

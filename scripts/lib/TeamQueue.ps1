@@ -727,7 +727,7 @@ $script:TeamOwnerRejected = "Sahip reddetti: "
 # that the Danışman decides. The ledger outlives a cycle, so a tick does not hand the same stop
 # again and again (review 2026-10-04: one paid lead run per tick, for ever).
 $script:TeamDutyMaxHandovers = 3
-$script:TeamDutyActions = @("return", "grant_and_return", "escalate")
+$script:TeamDutyActions = @("return", "grant_and_return", "escalate", "resolve_integration")
 $script:TeamDutyMaxGrants = 5
 $script:TeamDutyMaxReason = 4000
 $script:TeamDutyMaxTasks = 8
@@ -798,7 +798,9 @@ function Test-TeamDuty {
     .DESCRIPTION
         Each decision is an object { task, action, grant, reason }:
           * task    one of -Listed (the stopped tasks this run was handed), once;
-          * action  return | grant_and_return | escalate (as written, lower case);
+          * action  return | grant_and_return | escalate | resolve_integration (as written,
+                    lower case; resolve_integration: an integration-branch conflict the Proje
+                    Yöneticisi resolves itself, scripts/team/resolve-integration.ps1);
           * grant   only with grant_and_return: a list of 1 to 5 plainly written
                     repository-relative paths (ConvertTo-TeamAreaPath: no '..', no drive, no
                     leading slash, no empty or dotted segment), none lead-protected
@@ -830,7 +832,7 @@ function Test-TeamDuty {
         $seen[$id] = $true
         $actionValue = Get-TeamProperty -InputObject $item -Name "action" -Default ""
         $action = if ($actionValue -is [string]) { $actionValue } else { "" }
-        if ($script:TeamDutyActions -cnotcontains $action) { [void]$problems.Add("${label}: '$actionValue' is not an action (return, grant_and_return, escalate)") }
+        if ($script:TeamDutyActions -cnotcontains $action) { [void]$problems.Add("${label}: '$actionValue' is not an action (return, grant_and_return, escalate, resolve_integration)") }
         $reasonValue = Get-TeamProperty -InputObject $item -Name "reason" -Default ""
         if ($reasonValue -isnot [string] -or -not $reasonValue.Trim()) { [void]$problems.Add("${label}: the reason is empty") }
         elseif ($reasonValue.Trim().Length -gt $script:TeamDutyMaxReason) { [void]$problems.Add("${label}: the reason is $($reasonValue.Trim().Length) characters; at most $script:TeamDutyMaxReason") }

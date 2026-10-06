@@ -182,6 +182,20 @@ Test-Case "9 the real Git Bash mount text is read (this machine)" {
     Assert-True ($null -ne $path -and $path -match '^[A-Za-z]:\\') "the real mount names /tmp as a Windows folder; got <$path>"
 }
 
+Test-Case "a native tool that exits while a process it started holds its output: the call throws within the grace, never waits for ever (the cycle froze on it three times, 2026-10-06)" {
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $threw = $null
+    # cmd exits at once; the ping it started in the background keeps cmd's stdout open for ~25 s.
+    try { [void](Invoke-NativeProcess -FilePath (Join-Path $env:SystemRoot "System32\cmd.exe") -Arguments @("/c", "start", "/b", "ping", "-n", "25", "127.0.0.1") -TimeoutSeconds 20 -OutputGraceSeconds 3) }
+    catch { $threw = [string]$_.Exception.Message }
+    $seconds = $watch.Elapsed.TotalSeconds
+    Get-CimInstance Win32_Process -Filter "Name='PING.EXE'" | Where-Object { ([string]$_.CommandLine) -match '-n 25 127\.0\.0\.1' } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch { } }
+    if ($null -eq $threw) { throw "the call returned instead of saying its output stayed open" }
+    if ($threw -notmatch "output stayed open") { throw "a different error: $threw" }
+    # A hang guard, not the claim: the claim is the throw above.
+    if ($seconds -gt 20) { throw "it waited $([Math]::Round($seconds)) s" }
+}
+
 try { Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction Stop } catch { Write-Host "  (temp folder left: $script:TempRoot)" }
 
 Write-Host ""
