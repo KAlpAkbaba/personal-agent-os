@@ -23,7 +23,8 @@
 
     The Danışman decides (the reason line names which case it was):
       * korunan dosya     - a lead-protected path (Get-TeamAreaProtection) is in the conflict;
-      * ekleme değil      - a resolution would delete or rewrite the other side's lines;
+      * ekleme değil      - a resolution would delete or rewrite the other side's lines, or both
+                            sides added the same new file with different text (add/add);
       * koruyucu kırmızı  - a guard or the task's own test is red on the merged tree;
       * iki çözüm denemesi başarısız - the resolution failed (git, an unparsable JSON, a chain
                             that cannot be renumbered) twice in a row; the first failure is
@@ -370,6 +371,10 @@ function Resolve-TeamDutyIntegrationTask {
         foreach ($file in $conflicted) {
             $stages = @(Get-TeamDutyLines -Text (Invoke-TeamDutyGit -Tree $scratch -Arguments @("ls-files", "-u", "--", $file)) | ForEach-Object { ($_ -split '\s+')[2] })
             if (@($stages) -notcontains "2" -or @($stages) -notcontains "3") { [void]$notAdditive.Add("$file (bir taraf siliyor)"); continue }
+            # add/add: both sides wrote the same NEW file (no base, no stage 1). With an empty
+            # base every pair of texts "inserts at the same place", and the union glued the two
+            # whole files together - two plans or two tests under one name are not a union.
+            if (@($stages) -notcontains "1") { [void]$notAdditive.Add("$file (iki taraf aynı yeni dosyayı farklı yazmış)"); continue }
             $full = Join-Path $scratch ($file -replace '/', '\')
             $bytes = [System.IO.File]::ReadAllBytes($full)
             if ([Array]::IndexOf($bytes, [byte]0) -ge 0) { [void]$notAdditive.Add("$file (ikili dosya)"); continue }

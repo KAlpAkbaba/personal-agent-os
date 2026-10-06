@@ -36,8 +36,11 @@ A new duty action `resolve_integration`, carried out by a deterministic script
    task set `merged`.
 
 Escalation to the Danışman (reason `Danışman'a iletildi: entegrasyon çakışması, <case>: ...`)
-only for: `korunan dosya` (Get-TeamAreaProtection on a conflicted path), `ekleme değil`,
-`koruyucu kırmızı`, `iki çözüm denemesi başarısız`. A first mechanical failure is counted in the
+only for: `korunan dosya` (Get-TeamAreaProtection on a conflicted path), `ekleme değil` (a base
+line deleted or rewritten, a modify/delete, or an add/add - both sides wrote the same NEW file
+with different text: with no base every pair of texts looks like two insertions, and the first
+draft glued the two whole files together and merged them), `koruyucu kırmızı` (a guard of
+team/guards.json, or the task's own test, red on the merged tree), `iki çözüm denemesi başarısız`. A first mechanical failure is counted in the
 reason (`... (1/2): ...`) and the task stays the PM's. In every outcome but merged the
 integration branch is byte-identical to before. While working, the task's reason starts
 `Proje Yöneticisi çözüyor: ` (the Ofis label).
@@ -48,7 +51,14 @@ integration branch is byte-identical to before. While working, the task's reason
   `resolve_integration` (scripts/lib/TeamQueue.ps1 `$script:TeamDutyActions`), cycle.ps1 must
   call Invoke-TeamDutyResolveIntegration for that decision, the Ofis model
   (apps/web/app/core/office/officeModel.ts) must map `Proje Yöneticisi çözüyor:` to its label,
-  and the new suite needs its line in scripts/quality-gate.ps1 (test_ci_covers_every_suite).
+  and the new suite needs its line in `.github/workflows/ci.yml` (the ci-covers-every-suite
+  guard reads ci.yml) and in scripts/quality-gate.ps1. Merged without that wiring, the suite's
+  Test-TeamDuty case and the ci-covers-every-suite guard are red on the integration tree - and
+  that guard is in team/guards.json, so every resolution would escalate `koruyucu kırmızı`.
+  The branch and its wiring must land together.
+- Follow-up card: `migration-rechain-on-merge` (same cycle) adds TeamMigrationChain.ps1 to
+  Merge-TeamBranch for clean merges; once both are in, Update-TeamDutyMigrationChain should call
+  that plan instead of keeping its own renumbering.
 - `.claude/agents/lead.md` could not be written from the worker run (the harness refused the
   write to `.claude/agents`); the text below replaces rule (d) and is the lead's to apply.
 - A semantic conflict that is textually additive (two functions of the same name appended) is
@@ -66,7 +76,7 @@ integration branch is byte-identical to before. While working, the task's reason
   the guards of `team/guards.json` and the task's own tests, and only when all are green moves
   `integrate/<cycle>` and sets the task merged. The Ofis shows it as "Proje Yöneticisi çözüyor".
   It goes to the Danışman by itself ONLY when: a resolution would delete or rewrite the other
-  side's lines (`ekleme değil`), a protected file (`.claude/agents`, the constitution, CLAUDE.md,
+  side's lines or both sides wrote the same new file (`ekleme değil`), a protected file (`.claude/agents`, the constitution, CLAUDE.md,
   secrets, LKG, the recovery roots) is in the conflict (`korunan dosya`), a guard stays red on
   the merged tree (`koruyucu kırmızı`), or two resolutions in a row failed (`iki çözüm denemesi
   başarısız`); the reason line names which. In each of these the integration branch is unchanged;

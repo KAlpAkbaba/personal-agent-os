@@ -16,7 +16,9 @@
       3. a conflict inside .claude/agents: escalated, reason "korunan dosya";
       4. a guard red after the merge: escalated, reason "koruyucu", integrate/<cycle> unchanged;
       5. a rewrite of the other side's line: escalated, reason "ekleme değil";
-      6. two failed resolutions in a row: the first is counted, the second escalated.
+      6. two failed resolutions in a row: the first is counted, the second escalated;
+      7. both sides adding the same new file (add/add, no base): escalated, reason "ekleme değil";
+      8. the task's own test red with the guards green: escalated, the reason names that test.
 
     Run: powershell -NoProfile -File scripts\tests\team-duty-integration.tests.ps1 [-Filter <regex>]
 #>
@@ -308,6 +310,37 @@ try {
         [void](Invoke-Resolve -Root $root -Api $api)
         $second = Get-StoredTask -Api $api
         Assert-True -Condition (([string]$second.reason).StartsWith("Danışman'a iletildi: ") -and ([string]$second.reason).Contains("iki çözüm denemesi")) -Because "the second goes to the Danışman: $([string]$second.reason)"
+        Assert-Equal -Expected $before -Actual (Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId")) -Because "the integration branch is unchanged"
+    }
+
+    Test-Case "(7) both sides adding the same new file with different text (add/add, no base) is escalated as not additive, never glued together" {
+        $root = New-Sandbox
+        Edit-Branch -Root $root -Branch "integrate/$cycleId" -Files @{ "team/plans/x.md" = "# plan`nöteki işin metni`n" } -Message "the other task"
+        Edit-Branch -Root $root -Branch "team/$cycleId/worker-the-task" -Files @{ "team/plans/x.md" = "# plan`nbu işin metni`n" } -Message "the task"
+        $before = Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId")
+        $api = Start-FakeApi -Tasks @((New-StoppedTask))
+        [void](Invoke-Resolve -Root $root -Api $api)
+        $stored = Get-StoredTask -Api $api
+        Assert-Equal -Expected "stopped" -Actual ([string]$stored.state) -Because "the task stays stopped ($([string]$stored.reason))"
+        Assert-True -Condition (([string]$stored.reason).StartsWith("Danışman'a iletildi: ") -and ([string]$stored.reason).Contains("ekleme değil") -and ([string]$stored.reason).Contains("team/plans/x.md")) -Because "escalated as not additive, naming the file: $([string]$stored.reason)"
+        Assert-Equal -Expected $before -Actual (Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId")) -Because "the integration branch is unchanged"
+    }
+
+    Test-Case "(8) the task's own test red on the merged tree, guards green: escalated naming that test; the integration branch is unchanged" {
+        $root = New-Sandbox
+        Edit-Branch -Root $root -Branch "integrate/$cycleId" -Files @{ "src/notes.txt" = "bir`niki`nöteki işin satırı`n" } -Message "the other task"
+        Edit-Branch -Root $root -Branch "team/$cycleId/worker-the-task" -Files @{
+            "src/notes.txt" = "bir`niki`nbu işin satırı`n"
+            "scripts/tests/own.tests.ps1" = "Write-Host 'FAIL own test'`nexit 1`n"
+        } -Message "the task with its own test"
+        $before = Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId")
+        $api = Start-FakeApi -Tasks @((New-StoppedTask))
+        [void](Invoke-Resolve -Root $root -Api $api)
+        $stored = Get-StoredTask -Api $api
+        Assert-Equal -Expected "stopped" -Actual ([string]$stored.state) -Because "the task stays stopped ($([string]$stored.reason))"
+        Assert-True -Condition (([string]$stored.reason).StartsWith("Danışman'a iletildi: ") -and ([string]$stored.reason).Contains("koruyucu kırmızı")) -Because "escalated as a red guard: $([string]$stored.reason)"
+        Assert-True -Condition (([string]$stored.reason).Contains("işin kendi testi kırmızı (scripts/tests/own.tests.ps1)")) -Because "the reason names the task's own test: $([string]$stored.reason)"
+        Assert-True -Condition (-not ([string]$stored.reason).Contains("notlar bozuk")) -Because "the guard of guards.json was green: $([string]$stored.reason)"
         Assert-Equal -Expected $before -Actual (Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId")) -Because "the integration branch is unchanged"
     }
 
