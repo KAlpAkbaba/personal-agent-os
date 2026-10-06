@@ -58,30 +58,35 @@ function Read-TeamRunIdleMinutes {
     return [int]$value
 }
 
-if (-not ("PagentOS.Team.NewestWrite" -as [type])) {
+if (-not ("PagentOS.Team.NewestWrite2" -as [type])) {
     Add-Type -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 namespace PagentOS.Team {
-    public static class NewestWrite {
+    public static class NewestWrite2 {
         // The walk runs on a pool thread and is waited for at most `millis`: on 2026-10-06 the
         // cycle froze three times inside one directory enumeration (a worktree's __pycache__),
         // which no PowerShell timeout can interrupt. A walk past its time is abandoned; its
         // answer so far is not used (TimedOut is said instead).
         public static DateTime Find(string path, string[] skip, int millis, out bool timedOut) {
+            return Find(path, skip, millis, 0, out timedOut);
+        }
+        // slowDirectoryMillis: a pause per directory, for the suite only (a deterministic slow walk).
+        public static DateTime Find(string path, string[] skip, int millis, int slowDirectoryMillis, out bool timedOut) {
             var skipSet = new HashSet<string>(skip ?? new string[0], StringComparer.OrdinalIgnoreCase);
-            var walk = Task.Run(() => Walk(new DirectoryInfo(path), skipSet));
+            var walk = Task.Run(() => Walk(new DirectoryInfo(path), skipSet, slowDirectoryMillis));
             timedOut = !walk.Wait(millis);
             return timedOut ? DateTime.MinValue : walk.Result;
         }
-        static DateTime Walk(DirectoryInfo root, HashSet<string> skip) {
+        static DateTime Walk(DirectoryInfo root, HashSet<string> skip, int slow) {
             var newest = DateTime.MinValue;
             var pending = new Stack<DirectoryInfo>();
             pending.Push(root);
             while (pending.Count > 0) {
                 var dir = pending.Pop();
+                if (slow > 0) System.Threading.Thread.Sleep(slow);
                 try { if (dir.LastWriteTimeUtc > newest) newest = dir.LastWriteTimeUtc; } catch { }
                 FileSystemInfo[] entries;
                 try { entries = dir.GetFileSystemInfos(); } catch { continue; }
@@ -117,11 +122,13 @@ function Get-TeamNewestWrite {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [string[]]$Skip = $script:TeamLivenessSkipDirectories,
-        [int]$TimeoutMilliseconds = 5000
+        [int]$TimeoutMilliseconds = 5000,
+        # The suite's only: a pause per directory, so a walk past its budget is certain.
+        [int]$SlowDirectoryMilliseconds = 0
     )
     if (-not $Path -or -not [System.IO.Directory]::Exists($Path)) { return $null }
     $timedOut = $false
-    $newest = [PagentOS.Team.NewestWrite]::Find($Path, [string[]]@($Skip), $TimeoutMilliseconds, [ref]$timedOut)
+    $newest = [PagentOS.Team.NewestWrite2]::Find($Path, [string[]]@($Skip), $TimeoutMilliseconds, $SlowDirectoryMilliseconds, [ref]$timedOut)
     if ($timedOut -or $newest -eq [datetime]::MinValue) { return $null }
     return [datetime]::SpecifyKind($newest, [System.DateTimeKind]::Utc)
 }

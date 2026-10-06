@@ -62,6 +62,7 @@ from app.calendar.models import (
     CalendarProposalRow,
 )
 from app.calendar.providers import (
+    CalendarApiError,
     CalendarProvider,
     CalendarWriter,
     ProposalInput,
@@ -85,6 +86,7 @@ from app.uistate import publish as publish_ui_state
 logger = get_logger("app.calendar.service")
 
 SPEECH_ACCOUNT_MISSING = "Tanımlı bir takvim yok efendim."
+SPEECH_CALENDAR_API_ERROR = "Takvim sunucusu isteği kabul etmedi efendim."
 SPEECH_NO_EVENT = "Hangi etkinlik?"
 #: B27 req 731. Spec §1's own boundary - "no delete, no move, no mass action" - said out
 #: loud instead of a sentence that reaches nothing. A refusal with a receipt is evidence;
@@ -350,6 +352,25 @@ class CalendarService:
             session_id=session_id,
         )
 
+    def _provider_refused(
+        self, exc: CalendarApiError, *, capability: str, session_id: str | None, db: Session
+    ) -> dict[str, Any]:
+        """Card radicale-caldav-live: a read the calendar server refused (a wrong password
+        is ``account_invalid``) is the provider's honest receipt, never ``internal_bug``.
+        Only the class's own sentence is said - never the server's text or a credential."""
+        error_class = getattr(exc, "error_class", "calendar_api_error")
+        return self._receipt(
+            capability=capability,
+            requested_state="read",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": error_class, "status": exc.status},
+            speech=getattr(exc, "speech", SPEECH_CALENDAR_API_ERROR),
+            db=db,
+            error_class=error_class,
+            session_id=session_id,
+        )
+
     def _ledger(
         self,
         db: Session | None,
@@ -425,7 +446,12 @@ class CalendarService:
     ) -> dict[str, Any]:
         if self._provider is None:
             return self._account_missing(capability="calendar.agenda", session_id=session_id, db=db)
-        occs = self._provider.events(start, end)
+        try:
+            occs = self._provider.events(start, end)
+        except CalendarApiError as exc:
+            return self._provider_refused(
+                exc, capability="calendar.agenda", session_id=session_id, db=db
+            )
         clamped, truncated = self._window_notes()
         # B46 (req 359): what the owner heard is indexed - the table M21 declared and
         # nothing ever wrote.
@@ -476,7 +502,12 @@ class CalendarService:
             return self._account_missing(
                 capability="calendar.find_slot", session_id=session_id, db=db
             )
-        slots = self._provider.free_slots(start, end, duration_minutes)
+        try:
+            slots = self._provider.free_slots(start, end, duration_minutes)
+        except CalendarApiError as exc:
+            return self._provider_refused(
+                exc, capability="calendar.find_slot", session_id=session_id, db=db
+            )
         clamped, truncated = self._window_notes()
         self._ledger(
             db,

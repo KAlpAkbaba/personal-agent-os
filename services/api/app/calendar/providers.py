@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
+from xml.etree import ElementTree
 
 import httpx
 
@@ -124,10 +126,69 @@ def find_conflicts(
 # ---------------------------------------------------------------------------- CalDAV
 
 
+_DAV_NS = "{DAV:}"
+_CALDAV_NS = "{urn:ietf:params:xml:ns:caldav}"
+
+#: MKCALENDAR body: only a display name. No calendar-timezone - every event this
+#: provider writes carries UTC times, and a read resolves TZIDs through zoneinfo.
+_MKCALENDAR_BODY = (
+    '<?xml version="1.0" encoding="utf-8" ?>'
+    '<C:mkcalendar xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
+    "<D:set><D:prop><D:displayname>Takvim</D:displayname></D:prop></D:set>"
+    "</C:mkcalendar>"
+)
+
+
+def _check(response: httpx.Response) -> None:
+    """401/403 is the account's own fault and is said so; anything else non-2xx stays
+    the ``httpx`` error it always was."""
+    if response.status_code in (401, 403):
+        raise CalDavAuthError(response.status_code)
+    response.raise_for_status()
+
+
+def _multistatus_items(content: bytes) -> list[tuple[str, str]]:
+    """``[(href, calendar-data text)]`` of a REPORT's 207 multistatus (RFC 4791 §7.8).
+    The text comes out XML-unescaped (Radicale sends ``&amp;``/``&lt;`` inside it). A
+    document with a DTD is refused outright: a calendar answer never needs one, and
+    entity expansion is the one thing an XML parser of a server answer must not do."""
+    if b"<!DOCTYPE" in content or b"<!ENTITY" in content:
+        raise CalDavError(207)
+    try:
+        root = ElementTree.fromstring(content)
+    except ElementTree.ParseError as exc:
+        raise CalDavError(207) from exc
+    items: list[tuple[str, str]] = []
+    for node in root.iter(f"{_DAV_NS}response"):
+        href = (node.findtext(f"{_DAV_NS}href") or "").strip()
+        for data in node.iter(f"{_CALDAV_NS}calendar-data"):
+            if data.text and data.text.strip():
+                items.append((href, data.text))
+    return items
+
+
+def _local(occurrences: list[Occurrence]) -> list[Occurrence]:
+    """The owner's wall clock: ``create`` writes UTC (``DTSTART:...Z``), and "yarın saat
+    10'da" must read back as 10:00, not 07:00. A TZID event is already local (no-op)."""
+    from dataclasses import replace
+
+    zone = start_timezone()
+    return [
+        o if o.all_day else replace(o, start=o.start.astimezone(zone), end=o.end.astimezone(zone))
+        for o in occurrences
+    ]
+
+
 class CalDavCalendarProvider:
-    """``httpx``: PROPFIND the calendar collection, REPORT ``calendar-query`` for a
-    window, PUT a VEVENT for :class:`CalendarWriter`. iCalendar bytes are parsed by
-    ``app.calendar.ics`` — no second parser."""
+    """``httpx``: PROPFIND the calendar collection (MKCALENDAR it when missing), REPORT
+    ``calendar-query`` for a window, PUT a VEVENT for :class:`CalendarWriter`. iCalendar
+    bytes are parsed by ``app.calendar.ics`` — no second parser.
+
+    Card radicale-caldav-live: shaped by the real dev-stack Radicale (tests/fixtures/
+    mail_calendar/radicale_report.xml is its captured answer) - REPORT answers 207
+    multistatus XML with one ``calendar-data`` per resource, a missing collection is
+    PROPFIND 404, a new event's PUT carries ``If-None-Match: *`` (412 = that uid exists).
+    """
 
     def __init__(
         self, *, base_url: str, username: str, password: str, timeout: float = 15.0
@@ -141,9 +202,41 @@ class CalDavCalendarProvider:
         #: call and folded into the receipt (``window_clamped``/``truncated``).
         self.last_window_clamped = False
         self.last_truncated = False
+        #: The collection was seen (or made) once: no PROPFIND on every later call.
+        self._collection_ready = False
+        #: uid -> the resource href the server named it under in a REPORT (an event the
+        #: iPhone wrote is not necessarily ``<uid>.ics``); update/delete/get go there.
+        self._hrefs: dict[str, str] = {}
 
     def _client(self) -> httpx.Client:
         return httpx.Client(base_url=self._base_url, auth=self._auth, timeout=self._timeout)
+
+    def _item_url(self, uid: str) -> str:
+        href = self._hrefs.get(uid)
+        if href:
+            return str(httpx.URL(self._base_url + "/").join(href))
+        return f"{self._base_url}/{quote(uid, safe='@')}.ics"
+
+    def ensure_collection(self) -> None:
+        """PROPFIND Depth 0 on the collection; 404 -> MKCALENDAR it. Once per provider:
+        the api finds (or makes) its own calendar after any reinstall, no setup script."""
+        if self._collection_ready:
+            return
+        with self._client() as client:
+            response = client.request("PROPFIND", "/", headers={"Depth": "0"})
+            if response.status_code == 404:
+                made = client.request(
+                    "MKCALENDAR",
+                    "/",
+                    content=_MKCALENDAR_BODY,
+                    headers={"Content-Type": "application/xml; charset=utf-8"},
+                )
+                # 405: another caller made it between our PROPFIND and MKCALENDAR.
+                if made.status_code != 405:
+                    _check(made)
+            else:
+                _check(response)
+        self._collection_ready = True
 
     def calendars(self) -> list[str]:
         with self._client() as client:
@@ -152,13 +245,30 @@ class CalDavCalendarProvider:
                 "/",
                 headers={"Depth": "1", "Content-Type": "application/xml"},
             )
-            response.raise_for_status()
+            _check(response)
             return [self._base_url]
+
+    def _parse_report(self, response: httpx.Response) -> list:
+        """One function, two shapes: a 207 multistatus (every real CalDAV server) whose
+        ``calendar-data`` nodes are each one VCALENDAR, or a plain ``text/calendar`` body
+        (the legacy fake, a server that answers with the calendar itself)."""
+        content_type = response.headers.get("content-type", "").lower()
+        if response.status_code != 207 and "xml" not in content_type:
+            return parse_calendar(response.text)
+        events: list = []
+        for href, data in _multistatus_items(response.content):
+            parsed = parse_calendar(data)
+            for event in parsed:
+                if href:
+                    self._hrefs[event.uid] = href
+            events.extend(parsed)
+        return events
 
     def _report(self, start: datetime, end: datetime) -> list[Occurrence]:
         """The raw fetch+expand — NOT window-clamped itself (``get_event`` below needs a
         wide internal lookup window regardless of the spec §2 agenda/free_slots bound);
         clamping happens in the PUBLIC ``events``/``free_slots`` entry points instead."""
+        self.ensure_collection()
         body = (
             '<?xml version="1.0" encoding="utf-8" ?>'
             '<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
@@ -176,11 +286,11 @@ class CalDavCalendarProvider:
                 content=body,
                 headers={"Depth": "1", "Content-Type": "application/xml"},
             )
-            response.raise_for_status()
-            events = parse_calendar(response.text)
+            _check(response)
+            events = self._parse_report(response)
             occurrences, truncated = expand_events_report(events, start=start, end=end)
             self.last_truncated = truncated
-            return occurrences
+            return _local(occurrences)
 
     def events(self, start: datetime, end: datetime) -> list[Occurrence]:
         clamped_start, clamped_end, clamped = clamp_window(start, end)
@@ -188,11 +298,21 @@ class CalDavCalendarProvider:
         return self._report(clamped_start, clamped_end)
 
     def get_event(self, uid: str) -> Occurrence | None:
+        """GET the item by name first (this provider PUTs ``<uid>.ics``; a REPORT-seen
+        event by its href); only a 404 falls back to the wide REPORT."""
         from datetime import timedelta
 
         now = datetime.now(start_timezone())
-        occs = self._report(now - timedelta(days=365), now + timedelta(days=365))
-        for occ in occs:
+        lo, hi = now - timedelta(days=365), now + timedelta(days=365)
+        self.ensure_collection()
+        with self._client() as client:
+            response = client.get(self._item_url(uid))
+        if response.status_code != 404:
+            _check(response)
+            events = [e for e in parse_calendar(response.text) if e.uid == uid]
+            occs, _truncated = expand_events_report(events, start=lo, end=hi)
+            return _local(occs)[0] if occs else None
+        for occ in self._report(lo, hi):
             if occ.uid == uid:
                 return occ
         return None
@@ -218,11 +338,17 @@ class CalDavCalendarProvider:
             rrule=proposal.rrule,
             reminder_minutes=proposal.reminder_minutes,
         )
+        self.ensure_collection()
         with self._client() as client:
+            # If-None-Match: * - a new event never silently overwrites one with its uid.
             response = client.put(
-                f"/{event_uid}.ics", content=body, headers={"Content-Type": "text/calendar"}
+                self._item_url(event_uid),
+                content=body.encode("utf-8"),
+                headers={"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"},
             )
-            response.raise_for_status()
+            if response.status_code == 412:
+                raise CalDavConflictError(412)
+            _check(response)
         return event_uid
 
     def update(self, event_uid: str, changes: ProposalInput) -> str:
@@ -235,21 +361,28 @@ class CalDavCalendarProvider:
             rrule=changes.rrule,
             reminder_minutes=changes.reminder_minutes,
         )
+        self.ensure_collection()
         with self._client() as client:
+            # No If-Match: the owner's confirmed reschedule overwrites his own event.
             response = client.put(
-                f"/{event_uid}.ics", content=body, headers={"Content-Type": "text/calendar"}
+                self._item_url(event_uid),
+                content=body.encode("utf-8"),
+                headers={"Content-Type": "text/calendar; charset=utf-8"},
             )
-            response.raise_for_status()
+            _check(response)
         return event_uid
 
     def delete(self, event_uid: str) -> None:
         """B46 (req 354): a confirmed cancel. An event already gone (404) is the
         outcome the owner asked for."""
+        self.ensure_collection()
         with self._client() as client:
-            response = client.delete(f"/{event_uid}.ics")
+            response = client.delete(self._item_url(event_uid))
             if response.status_code == 404:
+                self._hrefs.pop(event_uid, None)
                 return
-            response.raise_for_status()
+            _check(response)
+        self._hrefs.pop(event_uid, None)
 
 
 def start_timezone():
@@ -337,6 +470,29 @@ class CalendarApiError(RuntimeError):
     def __init__(self, status: int) -> None:
         super().__init__(f"calendar api answered HTTP {status}")
         self.status = status
+
+
+class CalDavError(CalendarApiError):
+    """A CalDAV answer this provider will not act on - the receipt's ``error_class``
+    and a Turkish sentence travel with it (card radicale-caldav-live)."""
+
+    error_class = "caldav_error"
+    speech = "Takvim sunucusu beklenmedik bir cevap verdi efendim."
+
+
+class CalDavAuthError(CalDavError):
+    """401/403: the configured user/password was refused - not a missing account but a
+    wrong one, said as honestly as ``account_missing`` is."""
+
+    error_class = "account_invalid"
+    speech = "Takvim sunucusu kullanıcı adını ya da şifreyi kabul etmedi efendim."
+
+
+class CalDavConflictError(CalDavError):
+    """412 on a new event's PUT (``If-None-Match: *``): that uid already exists."""
+
+    error_class = "uid_conflict"
+    speech = "Takvimde aynı kimlikle bir etkinlik zaten var efendim; üzerine yazmadım."
 
 
 def _api_get(
@@ -743,7 +899,10 @@ def build_calendar_writer(settings: Any) -> CalendarWriter | None:
 __all__ = [
     "MAX_WINDOW_DAYS",
     "AccountOccurrence",
+    "CalDavAuthError",
     "CalDavCalendarProvider",
+    "CalDavConflictError",
+    "CalDavError",
     "CalendarApiError",
     "GoogleCalendarProvider",
     "GraphCalendarProvider",

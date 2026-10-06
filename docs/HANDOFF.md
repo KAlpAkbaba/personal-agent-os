@@ -15,17 +15,11 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `72884b718546727cd68a8b3709b0f2afaef586ce` (2026-10-06 08:40 UTC = 11:40 yerel, api-blue), LKG `2568bfc5`,
-pin = RELEASE, reconcile OK, şema `0070_household_stock`. QUALIFICATION Stage 56 (posta hesapları, konuşma dökümü, ev stoku,
-JARVIS arar, acil uyarı, takılan iş kontrolü, test ekibi aynı ofiste). Ana kopya `team/nightly/lead` (= main). Sıradaki:
-integrate/d20261006'nın geri kalanı (test-team-in-the-tick = test ekibi otomatik başlasın, migration-revision-from-tree, ...).
-SAHİP KURALI 2026-10-06: entegrasyon çakışmasını Proje Yöneticisi çözer (kart pm-resolves-integration-conflicts); besleyici
-döngünün yanında 30 dk'da bir ("PagentOS Team Feeder", %USERPROFILE%\.pagentos-team\team-feed-wrapper.ps1). Kapıyı ana kopyada
-DEĞİL `.claude/worktrees/int-catchup`'ta koş (ana kopyada izlenmeyen öneri dosyaları var); oradaki node_modules artık
-kendisinin (bağlantı/junction değil). Kapı kendi DB'sinde: `pagentos_gate` + PAGENTOS_DATABASE_URL. Git Bash "/tmp yok" derse:
-`mount | grep tmp`, gösterilen klasörü oluştur (kart run-temp-keeps-git-bash-tmp). Ekip varsayilan (1.) hesapta; hesap geçişi için tek seferlik görev
-`PagentOS Team Account Switch` + `%USERPROFILE%\.pagentos-team\switch-account.ps1 -Account .claude-hesapN`. Ön kontrole ekle:
-`uv run ruff check .`, test_multi_device_invariant.py, installer-strictmode.tests.ps1, provision.tests.ps1.**
+**ÜRETİM: main `fba299af49fe59c40952efd9516615fb70205da1` (2026-10-06 16:35 UTC = 19:35 yerel, api-green), LKG `72884b71`,
+pin = RELEASE, reconcile OK, şema `0070_household_stock`. QUALIFICATION Stage 57 (test ekibi döngüyle başlar, PM entegrasyon
+çakışmasını çözer, döngü donmaz). SIRADAKİ (sahip kararı 2026-10-06): projeyi tamamen K:'ye (Samsung 990 PRO NVMe) taşı - E:
+USB HDD, günün bütün takılmalarının kökü (memory project-lives-on-usb-hdd). verify-mode integrate/d20261006'da (448d4f05,
+göç 0071_claim_verifications) yayın bekliyor. Geçici nöbetçi %USERPROFILE%\.pagentos-team\team-feed-wrapper.ps1 içinde.**
 **ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
 `team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
 yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**

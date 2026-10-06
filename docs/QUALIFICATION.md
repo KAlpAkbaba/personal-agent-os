@@ -1480,3 +1480,26 @@ alembic, integration 232/232) PASS.
 | 56.3 | The integration suite stays inside the server's connections | `PROVEN_AUTOMATED` | `services/api/tests/integration/conftest.py` `release_idle_pools`: peak 82 (was 275), 232/232 |
 | 56.4 | The test team sits on the Ofis floor | `PROVEN_AUTOMATED` | `apps/web/tests/office/test-room.test.tsx` (the five seats inside `.office-floor`, once each; RED when drawn outside) |
 | 56.5 | The cross-cutting guards | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_bounded_delivery.py`, `test_capability_list.py`, `test_destructive_negation_guard.py`, `test_owner_error_language.py`, `test_staging_isolation.py`, `test_understanding_rules_read_lemmas.py`, `test_ci_covers_every_suite.py` |
+
+## Stage 57 — the 2026-10-06 afternoon: the test team starts with the cycle, the PM resolves integration conflicts, the cycle no longer freezes
+
+Released 2026-10-06 16:35 UTC (19:35 local) as main `fba299af49fe59c40952efd9516615fb70205da1` (api-green; previous
+`72884b71…` kept as last known good; no migration, schema `0070_household_stock`). Six cards released (test-team-in-the-tick,
+pm-resolves-integration-conflicts, migration-revision-from-tree, radicale-stack-ops, phone-push-home-screen-hint,
+inbound-calls-public-path) plus the Danışman's fixes found that day: the tick never stops Docker/WSL a cycle started
+(`scripts/lib/TeamTickKeep.ps1`); `Invoke-NativeProcess` waits for an exited tool's output at most 30 s; the liveness walk runs
+on a pool thread with a 5 s budget (the cycle froze three times inside it - found from the frozen cycle's own call stack); the
+test team's script and reports read hand-written improvised results; the resolver wired as the duty action
+`resolve_integration`; the JARVIS rows at 53%. Full gate on `2751c76b`: every step green but two - a 300 s import timeout in
+`services/api/tests/unit/test_protocol_bundle.py` on the USB disk (12/12 alone) and a timing-dependent case of
+`scripts/tests/team-liveness.tests.ps1` (made deterministic in `b49cd2a9`); `b49cd2a9`'s rerun of the team-cycle and team
+release/liveness steps PASS. Root cause of the day's slowness recorded: E: is a USB HDD (memory: project-lives-on-usb-hdd);
+the owner chose to move the project to K: (NVMe).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 57.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: fba299af…`, `api-green schema at 0070_household_stock`; recovery supervisor pinned to the full sha, `RECONCILE OK: api-green is canonical (release fba299af…)` |
+| 57.2 | The tick keeps Docker and WSL | `PROVEN_AUTOMATED` | `scripts/tests/team-tick.tests.ps1` case (11), RED under a mutation |
+| 57.3 | An exited tool's open output cannot freeze a caller | `PROVEN_AUTOMATED` | `scripts/tests/team-run-temp.tests.ps1` (the native-process case), RED without the fix |
+| 57.4 | The liveness walk has a budget | `PROVEN_AUTOMATED` | `scripts/tests/team-liveness.tests.ps1` 16/16, the budget case RED under a mutation |
+| 57.5 | The PM resolves integration conflicts | `PROVEN_AUTOMATED` | `scripts/tests/team-duty-integration.tests.ps1` 11/11; `scripts/tests/team-cycle.tests.ps1` 267/267 |

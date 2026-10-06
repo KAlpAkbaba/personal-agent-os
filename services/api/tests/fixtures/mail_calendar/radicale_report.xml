@@ -1,0 +1,175 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Captured 2026-10-06 17:03 UTC from the REAL dev-stack Radicale 3.8.1 (127.0.0.1:15232): the 7 VEVENTs of calendar.ics plus ev-butce@fixture.example (SUMMARY 'Ali & Ayşe <bütçe> toplantısı', 2026-09-12 10:00-11:00 Europe/Istanbul - the XML-escaping case) PUT one per resource into a scratch collection /owner/fixture-capture/ (MKCALENDAR, DELETEd afterwards), then: curl -u owner:dev-takvim -X REPORT -H 'Depth: 1' -H 'Content-Type: application/xml' [data-binary] '<the CalDavCalendarProvider._report calendar-query body, time-range 20260901T000000Z..20261015T000000Z>' http://127.0.0.1:15232/owner/fixture-capture/ -> HTTP/1.0 207 Multi-Status, Content-Type text/xml. Only this comment was added; git stores the calendar-data CRLFs as LF (.gitattributes eol=lf), which an XML parser normalises the same way. -->
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><response><href>/owner/fixture-capture/ev-doktor%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20160907T000000
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-doktor@fixture.example
+DTSTART;TZID=Europe/Istanbul:20260911T143000
+DTEND;TZID=Europe/Istanbul:20260911T153000
+DTSTAMP:20260901T080000Z
+SUMMARY:Doktor kontrolü
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/owner/fixture-capture/ev-ogle%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20160907T000000
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-ogle@fixture.example
+DTSTART;TZID=Europe/Istanbul:20260909T123000
+DTEND;TZID=Europe/Istanbul:20260909T133000
+DTSTAMP:20260901T080000Z
+SUMMARY:Öğle yemeği (Zeynep)
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/owner/fixture-capture/ev-bayram%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20160907T000000
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-bayram@fixture.example
+DTSTART;VALUE=DATE:20260914
+DTEND;VALUE=DATE:20260915
+DTSTAMP:20260901T080000Z
+SUMMARY:Bayram (ofis kapalı)
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/owner/fixture-capture/ev-spor%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20160907T000000
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-spor@fixture.example
+DTSTART;TZID=Europe/Istanbul:20260908T070000
+DTEND;TZID=Europe/Istanbul:20260908T080000
+DTSTAMP:20260901T080000Z
+RRULE:FREQ=DAILY;COUNT=5
+SUMMARY:Spor
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/owner/fixture-capture/ev-musteri%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20160907T000000
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-musteri@fixture.example
+DTSTART;TZID=Europe/Istanbul:20260911T140000
+DTEND;TZID=Europe/Istanbul:20260911T150000
+DTSTAMP:20260901T080000Z
+SUMMARY:Müşteri görüşmesi
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/owner/fixture-capture/ev-ekip%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20160907T000000
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-ekip@fixture.example
+DTSTART;TZID=Europe/Istanbul:20260908T100000
+DTEND;TZID=Europe/Istanbul:20260908T110000
+DTSTAMP:20260901T080000Z
+EXDATE;TZID=Europe/Istanbul:20260922T100000
+RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=10
+SUMMARY:Haftalık ekip toplantısı
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/owner/fixture-capture/ev-butce%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20000101T000000
+RRULE:FREQ=YEARLY;BYMONTH=1
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-butce@fixture.example
+DTSTART;TZID=Europe/Istanbul:20260912T100000
+DTEND;TZID=Europe/Istanbul:20260912T110000
+DTSTAMP:20260901T080000Z
+SUMMARY:Ali &amp; Ayşe &lt;bütçe&gt; toplantısı
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/owner/fixture-capture/ev-dis%40fixture.example.ics</href><propstat><prop><C:calendar-data>BEGIN:VCALENDAR
+VERSION:2.0
+CALSCALE:GREGORIAN
+PRODID:-//PagentOS fixtures//M21//TR
+BEGIN:VTIMEZONE
+TZID:Europe/Istanbul
+BEGIN:STANDARD
+DTSTART:20160907T000000
+TZNAME:+03
+TZOFFSETFROM:+0300
+TZOFFSETTO:+0300
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ev-dis@fixture.example
+DTSTART;TZID=Europe/Istanbul:20260910T150000
+DTEND;TZID=Europe/Istanbul:20260910T160000
+DTSTAMP:20260901T080000Z
+LOCATION:Kadıköy
+SUMMARY:Diş hekimi
+END:VEVENT
+END:VCALENDAR
+</C:calendar-data></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>
