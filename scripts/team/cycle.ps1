@@ -1416,10 +1416,31 @@ try {
         Set-DutyReturned -Task $task -Area $newArea -Reason $returned
     }
 
+    function Import-DutyWaits {
+        <# The held returns as the store says them (duty-waits-survive-restart): $dutyWaits lived
+           only in the cycle's memory, the cycle restarted at 15:00 on 2026-10-06 and nothing
+           reopened conversation-followups when money-ledger merged. A stopped task whose reason is
+           the Proje Yöneticisi's return followed by Get-DutyReturnBlock's hold is one: its area
+           the task's, its reason the text before the hold. Who holds the files is asked again when
+           it is resolved, so a holder merged or gone meanwhile frees it at once. #>
+        $pattern = "(?s)\A(?<reason>" + [regex]::Escape((Get-TeamDutyPrefix -Kind "returned")) + ".*) \(alan çakışması: (?<holders>[^;()]+); o iş bitince\)\z"
+        foreach ($task in @(Get-TeamTasks -Queue $script:queue)) {
+            if ([string]$task.state -ne "stopped") { continue }
+            $id = [string]$task.id
+            $stamp = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
+            if ($script:dutyWaits.ContainsKey($id) -and [string]$script:dutyWaits[$id].Updated -ceq $stamp) { continue }
+            $match = [regex]::Match([string](Get-TeamProperty -InputObject $task -Name "reason" -Default ""), $pattern)
+            if (-not $match.Success) { continue }
+            $area = [string[]]@(@(Get-TeamProperty -InputObject $task -Name "area" -Default @()) | ForEach-Object { [string]$_ })
+            $script:dutyWaits[$id] = [pscustomobject]@{ Updated = $stamp; Area = $area; Reason = $match.Groups["reason"].Value }
+        }
+    }
+
     function Resolve-DutyWaits {
         <# The returns the protocol refused beside a task holding the same files: made now when
            nobody holds them any more. One that somebody else moved meanwhile is theirs. $true
-           when a task moved. #>
+           when a task moved. The store's held returns are read first: a hold outlives the cycle. #>
+        Import-DutyWaits
         $moved = $false
         foreach ($id in @($script:dutyWaits.Keys)) {
             $wait = $script:dutyWaits[$id]
