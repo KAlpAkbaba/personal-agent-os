@@ -302,9 +302,9 @@ function Format-TestTeamBreakingReport {
         $breaking = Get-TeamProperty -InputObject $result -Name "breaking"
         if ($null -eq $breaking) { continue }
         $what = [string](Get-TeamProperty -InputObject $breaking -Name "what" -Default "")
-        $tried = @(Get-TeamProperty -InputObject $breaking -Name "tried" -Default @())
+        $tried = @(@(Get-TeamProperty -InputObject $breaking -Name "tried" -Default @()) | ForEach-Object { ConvertTo-TestTeamLadderStep -Step $_ })
         $ladder = (@($tried) | ForEach-Object { "{0}:{1}/{2}" -f $_.load, $_.ok, ([int]$_.ok + [int]$_.errors) }) -join ", "
-        $first = Get-TeamProperty -InputObject $breaking -Name "first_failure"
+        $first = ConvertTo-TestTeamLadderStep -Step (Get-TeamProperty -InputObject $breaking -Name "first_failure")
         # StrictMode: a result a tester wrote by hand (an improvised run) may carry no tester or card
         # (2026-10-06: the first real round died here, after every tester had finished).
         $who = "{0} ({1}, {2})" -f [string](Get-TeamProperty -InputObject $result -Name "family" -Default "?"), [string](Get-TeamProperty -InputObject $result -Name "tester" -Default "?"), [string](Get-TeamProperty -InputObject $result -Name "card" -Default "?")
@@ -315,7 +315,7 @@ function Format-TestTeamBreakingReport {
         }
         if ($null -ne $first) {
             [void]$broke.Add([pscustomobject]@{ Who = $who; What = $what; First = $first })
-            $again = Get-TeamProperty -InputObject $first -Name "repeat"
+            $again = ConvertTo-TestTeamLadderStep -Step $first.repeat
             $confirmed = if ($null -ne $again) { "; yinelendi: {0} hata, p95 {1} ms" -f $again.errors, $again.p95_ms } else { "" }
             [void]$lines.Add(("- KIRILDI {0}: {1} - ilk kırılan yük {2}, {3} hata / {4} istek, istek başına p95 {5} ms{6} (merdiven: {7})" -f $who, $what, $first.load, $first.errors, ([int]$first.ok + [int]$first.errors), $first.p95_ms, $confirmed, $ladder))
         }
@@ -337,6 +337,24 @@ function Format-TestTeamBreakingReport {
     return [pscustomobject]@{ Markdown = (($lines.ToArray()) -join "`n") + "`n"; Note = $note; To = $script:TestTeamAdvisorSeat }
 }
 
+function ConvertTo-TestTeamLadderStep {
+    <# One rung of a breaking ladder with every field the reports read; a field a hand-written
+       result left out is "?" (p95) or 0 (counts). 2026-10-06: two rounds died on a missing
+       'tester' and then a missing 'p95_ms' after every tester had finished. #>
+    param($Step)
+    if ($null -eq $Step) { return $null }
+    $load = Get-TeamProperty -InputObject $Step -Name "load" -Default "?"
+    $ok = 0; [void][int]::TryParse([string](Get-TeamProperty -InputObject $Step -Name "ok" -Default 0), [ref]$ok)
+    $errors = 0; [void][int]::TryParse([string](Get-TeamProperty -InputObject $Step -Name "errors" -Default 0), [ref]$errors)
+    return [pscustomobject]@{
+        load   = $load
+        ok     = $ok
+        errors = $errors
+        p95_ms = Get-TeamProperty -InputObject $Step -Name "p95_ms" -Default "?"
+        repeat = Get-TeamProperty -InputObject $Step -Name "repeat"
+    }
+}
+
 function Format-TestTeamSeatNote {
     <#
     .SYNOPSIS
@@ -350,7 +368,7 @@ function Format-TestTeamSeatNote {
     $text = "sonuç: $($Card.state) - $job"
     if ([string]$Card.state -eq "broke" -and $null -ne $Result) {
         $breaking = Get-TeamProperty -InputObject $Result -Name "breaking"
-        $first = if ($null -ne $breaking) { Get-TeamProperty -InputObject $breaking -Name "first_failure" } else { $null }
+        $first = if ($null -ne $breaking) { ConvertTo-TestTeamLadderStep -Step (Get-TeamProperty -InputObject $breaking -Name "first_failure") } else { $null }
         if ($null -ne $first) { $text += (" - kopma: yük {0}, {1} hata / {2}, p95 {3} ms" -f $first.load, $first.errors, ([int]$first.ok + [int]$first.errors), $first.p95_ms) }
     }
     if ($text.Length -gt $script:TestTeamNoteMax) { $text = $text.Substring(0, $script:TestTeamNoteMax - 1) + "…" }
