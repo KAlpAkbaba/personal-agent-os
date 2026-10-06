@@ -28,6 +28,8 @@ export type ProgressProof = {
   percent_real: number | null;
   release: string | null;
   rows: ProofRow[];
+  /** Tasks and round rows that name no JARVIS row: left out of the share, counted here. */
+  outside?: { count: number; unknown: string[] };
   rule: string;
 };
 
@@ -81,7 +83,8 @@ export function buildProgress(progress: ProgressWithProof | null | undefined): P
     : `${v1Name} okunamadı`;
   const proofText = proof
     ? `staging'de kanıtlı ${pct(proof.percent_staging) ?? "okunamadı"} · ` +
-      `gerçekte kanıtlı ${pct(proof.percent_real) ?? "okunamadı"}`
+      `gerçekte kanıtlı ${pct(proof.percent_real) ?? "okunamadı"}` +
+      (proof.outside ? ` · satır dışı: ${proof.outside.count}` : "")
     : "kanıt okunamadı";
   const jarvisText = withProof
     ? `JARVIS hedefi: yapıldı ${jarvisPct ?? "okunamadı"} · ${proofText}`

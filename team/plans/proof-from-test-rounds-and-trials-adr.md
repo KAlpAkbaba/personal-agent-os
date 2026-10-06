@@ -17,39 +17,55 @@ team now works from the JARVIS roadmap, so that share never moves.
      has none), the latest (`at`, then round id) that ran the row has no failed scenario;
    - **gerçekte kanıtlı**: the row's latest decided owner trial (`owner_trials` verdict
      oldu/olmadı, by `at`) is "oldu". A later "olmadı" takes it back; an open trial is no proof.
-   - A round row or a task's `roadmap_row` names a JARVIS row when the words are the same, or
-     one is the other's leading words ending at a word boundary (case-insensitive, `**` dropped):
-     "Runs the house" names "Runs the house: lights, doors"; "Talk" never names "Talks".
-2. A test round posts, per row its plan's jobs name (`roadmap_row` on a job of plan.json), the
-   passed and failed scenario counts and the round's ONE staging sha:
-   `POST /v1/team/queue/proof {round, staging_sha, at, rows:[{row, passed, failed, families}]}`.
-   A card that never ran or wrote no result proves nothing; failed and broke are failures; a
-   round whose results name no sha or two shas is not posted (said). The post never stops the
-   round; `proof.json` is written beside the cards; `test-round.ps1 -PostProof -Round <r>`
-   posts a finished round again. `progress.round_problems` is the one validation rule.
-3. The strip reads, when the answer carries `proof`: "JARVIS hedefi: yapıldı %X · staging'de
-   kanıtlı %Y · gerçekte kanıtlı %Z · Sıralı plan … · eski v1.0 listesi …", two more meters, and
-   the panel lists the rows of each proof. An answer without `proof` keeps the old line; `proof:
-   null` says "kanıt okunamadı".
+   - A round row or a task's `roadmap_row` names a JARVIS row (`progress.resolve_row`, one row
+     at most, case-insensitive, `**` and trailing "(...)" notes dropped) when: the words are the
+     same; the names before a remark agree ("Everywhere - the second PC", "Runs the house:
+     lights" - split at " - ", " — ", ": "); or one is the other's leading words, AT LEAST THREE
+     of them, ending at a word boundary (`PREFIX_MIN_WORDS`; "The", "Records", "Runs the" name
+     no row - the return of 2026-10-06, d). A direct name wins over the table below.
+   - The lead's table (`ROW_ALIASES` in progress.py; cards are never edited by hand):
+     "browser-use, anywhere" -> "Researches anything, reads the world's data"; "Records
+     everything" -> "Records everything and tells him, whenever he asks"; "Repairs" -> "Repairs
+     and improves itself". `NOT_A_ROW`: "How it is built from here", "TEAM_PROTOCOL", "Runs the
+     workshop", and an empty row. Their tasks and round rows are left out of the share and
+     counted: `proof.outside = {count, unknown}`; `unknown` names a wording no rule knows. A test
+     holds every distinct `roadmap_row` of `team/queue.json` to "names a row or is NOT_A_ROW".
+2. A test round posts the passed and failed scenario counts per row and the round's ONE staging
+   sha: `POST /v1/team/queue/proof {round, staging_sha, at, rows:[{row, passed, failed,
+   families}]}`. A job's row is its `roadmap_row` when it has one, else its `why`, else its
+   family, sent as written (300 chars at most): the Core resolves it, so the test-lead's role
+   file needs no change. A card that never ran or wrote no result proves nothing; failed and
+   broke are failures; a round whose results name no sha or two is not posted (said). The post
+   never stops the round; `proof.json` is written beside the cards; `test-round.ps1 -PostProof
+   -Round <r>` posts a finished round again. `progress.round_problems` is the one shape rule.
+3. Storage: a `team_state` row of kind `proof` (no new table, no migration, as `status` and
+   `models`), key = the round id (≤ 41 chars), `updated_at` = the round's `at`, doc = the round;
+   a second post of a round replaces it. `DbStore` and `FileStore` (`team/proofs/<round>.json`)
+   both refuse what either cannot keep (U+0000 in a row or family name, a Windows device name as
+   round id) with 422. `read_proofs()` gives the newest 200 by `at`. The route sits under the
+   owner session as every queue route; a non-object body is FastAPI's 422.
+4. `GET /v1/team/office` feeds the strip the stored rounds and the queue it already read (the
+   owner's trials); a store without `read_proofs` or one that fails leaves the strip without
+   staging proof, never the office without an answer.
+5. The strip reads, when the answer carries `proof`: "JARVIS hedefi: yapıldı %X · staging'de
+   kanıtlı %Y · gerçekte kanıtlı %Z · satır dışı: N · Sıralı plan … · eski v1.0 listesi …", two
+   more meters, and the rows of each proof. An answer without `proof` keeps the old line; `proof:
+   null` says "kanıt okunamadı"; one without `outside` leaves "satır dışı" out.
 
 ## Left for the lead (outside the card's area - ALAN_ISTEGI)
 
-- `services/api/app/team/store.py`: a `team_state` row kind `proof` (String(16) - no new table,
-  no migration, as `status`/`models`), key = the round id (≤ 41 chars < VARCHAR(80)),
-  doc = the round; `put_proof(doc)` (validated by `progress.round_problems`, a second put of
-  one round replaces it) and `read_proofs()` (all, or the newest N by `at`) on BOTH stores
-  (FileStore: `team/proof/<round>.json`).
-- `services/api/app/team/routes.py`: `POST /v1/team/queue/proof` (the queue token's auth, 422
-  with the problems on a bad doc) and `_progress(request)` passing
-  `rounds=store.read_proofs(), queue=<the queue read_office already holds>`.
-- `scripts/testteam/roles/test-lead.md` (+ the installed `.claude/agents/test-lead.md`): every
-  job carries `roadmap_row`, the JARVIS row (its first column's words) the family exercises.
-- `apps/web/app/core/office/officeApi.ts`: may move `ProgressProof` there and add
-  `proof?: ProgressProof | null` to `OfficeProgress` (typed in OfficeProgress.tsx meanwhile).
+- `services/api/tests/unit/test_team_state.py::test_every_route_and_body_field_the_powershell_
+  client_uses_is_one_the_server_has` is RED: the new route is called by test-round.ps1, not by
+  TeamQueue.ps1. One line in its `read_by_others`: `("POST", "/v1/team/queue/proof"):
+  "scripts/testteam/test-round.ps1 posts a test round's proof (proof-from-test-rounds-and-trials)"`.
+- `apps/web/app/core/office/officeApi.ts`: may move `ProgressProof` there (typed in
+  OfficeProgress.tsx meanwhile).
 
 ## Consequences
 
 - The share moves with every round on the current release and with every "oldu"; a release
   resets "staging'de kanıtlı" to the rounds run on it (honest: the old release's proof is not
   this one's). "gerçekte kanıtlı" outlives releases until a later "olmadı".
+- A new card wording that is no row and not in the table shows in `outside.unknown` and turns
+  the queue test RED when queue.json carries it; the lead adds it to the table.
 - A `-Retest` pass is not posted yet (its cards carry their own retested sha); a follow-up.

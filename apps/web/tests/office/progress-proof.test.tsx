@@ -64,6 +64,7 @@ function sample(): ProgressWithProof {
         },
         { name: "Evi yönetir", state: "missing", staging: null, staging_proven: false, trial: null, real_proven: false },
       ],
+      outside: { count: 4, unknown: [] },
       rule: "Staging'de kanıtlı: son tur geçti.",
     },
     rule: "Var 1, Yarım 0,5, Yok 0",
@@ -76,8 +77,11 @@ describe("the proof in the progress model", () => {
     const model = buildProgress(sample());
     expect(model?.line).toBe(
       "JARVIS hedefi: yapıldı %50 · staging'de kanıtlı %67 · gerçekte kanıtlı %33 · " +
-        "Sıralı plan %50 · eski v1.0 listesi %95 yapıldı, %20 gerçekte kanıtlı",
+        "satır dışı: 4 · Sıralı plan %50 · eski v1.0 listesi %95 yapıldı, %20 gerçekte kanıtlı",
     );
+    // A server before the "satır dışı" count keeps the three numbers alone.
+    const { outside: _o, ...proof } = sample().proof!;
+    expect(buildProgress({ ...sample(), proof })?.line).toContain("gerçekte kanıtlı %33 · Sıralı plan");
     expect(model?.bars.map((b) => [b.key, b.percent])).toEqual([
       ["jarvis", 50],
       ["staging", 67],
@@ -115,6 +119,7 @@ describe("the strip with the proof", () => {
     expect(html).toContain('aria-valuenow="67"');
     expect(html).toContain('aria-valuenow="33"');
     expect(html).toContain("staging&#x27;de kanıtlı %67");
+    expect(html).toContain("satır dışı: 4");
     expect(html).toContain("eski v1.0 listesi");
     expect(html).toContain("Her &lt;i&gt;yerde&lt;/i&gt;");
     expect(html).not.toContain("<i>yerde</i>");

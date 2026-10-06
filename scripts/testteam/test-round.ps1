@@ -160,17 +160,22 @@ function Read-Queue {
 # ------------------------------------------------------------------------------ the proof
 
 function Get-RoundProof {
-    <# The round's proof per JARVIS roadmap row (proof-from-test-rounds-and-trials): each plan job
-       names its row ('roadmap_row'); a card that passed is a passed scenario of that row, one
-       that failed or broke a failed one. A card with no result file (the tester wrote none) or
-       one that never ran proves nothing; a job with no row proves no row. $null, said, when the
-       round's results do not name ONE staging sha. #>
+    <# The round's proof per JARVIS roadmap row (proof-from-test-rounds-and-trials): a plan job
+       names its row ('roadmap_row') when it has one, otherwise its 'why' (or, with neither, its
+       family) is sent as written and the Cloud Core resolves the row (app.team.progress
+       resolve_row: a wording that names no row is counted 'satır dışı', never a row). A card
+       that passed is a passed scenario of that row, one that failed or broke a failed one. A
+       card with no result file (the tester wrote none) or one that never ran proves nothing.
+       $null, said, when the round's results do not name ONE staging sha. #>
     param($Document, [string]$Plan)
     $rowOf = @{}
     if ($Plan -and (Test-Path -LiteralPath $Plan)) {
         foreach ($job in @((Read-TeamJson -Path $Plan).jobs)) {
-            $row = [string](Get-TeamProperty -InputObject $job -Name "roadmap_row" -Default "")
-            if ($row.Trim()) { $rowOf[[string]$job.family] = $row.Trim() }
+            $row = ([string](Get-TeamProperty -InputObject $job -Name "roadmap_row" -Default "")).Trim()
+            if (-not $row) { $row = ([string](Get-TeamProperty -InputObject $job -Name "why" -Default "")).Trim() }
+            if (-not $row) { $row = ([string]$job.family).Trim() }
+            if ($row.Length -gt 300) { $row = $row.Substring(0, 300).Trim() }  # the Core's ROW_NAME_MAX
+            if ($row) { $rowOf[[string]$job.family] = $row }
         }
     }
     $rows = [ordered]@{}

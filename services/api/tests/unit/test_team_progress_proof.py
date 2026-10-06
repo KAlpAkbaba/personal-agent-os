@@ -80,6 +80,15 @@ def _row(answer, name):
     return next(r for r in answer["rows"] if r["name"] == name)
 
 
+def _real_jarvis():
+    return progress.parse_jarvis((REPO / "docs" / "ROADMAP.md").read_bytes().decode("utf-8"))
+
+
+def _real_name(leading):
+    """The repository roadmap's JARVIS row that starts with ``leading``."""
+    return next(r["name"] for r in _real_jarvis()["rows"] if r["name"].startswith(leading))
+
+
 # ------------------------------------------------------------------ the computation
 
 
@@ -133,6 +142,69 @@ def test_a_round_reaches_its_row_by_the_row_name_or_its_leading_words():
     assert _row(answer, "Runs the house: lights, doors")["staging_proven"] is True
     # "Talk" is not a word of "Talks": no row is proven by half a word.
     assert _row(answer, "Talks")["staging_proven"] is False
+
+
+def test_one_or_two_leading_words_name_no_row_three_do():
+    """The return of 2026-10-06 (d): "The" or "Records" is the start of many sentences."""
+    names = [r["name"] for r in _real_jarvis()["rows"] if r["state"] != "never"]
+    for ref in ("The", "Records", "Records everything and", "Runs", "Runs the", "Knows"):
+        if ref == "Records everything and":
+            assert progress.resolve_row(ref, names) == _real_name("Records everything and tells")
+        else:
+            assert progress.resolve_row(ref, names) is None, ref
+    rounds = [_round("t1", SHA, "2026-10-06T20:00:00Z", [("The", 1, 0), ("Runs", 1, 0)])]
+    answer = progress.proof(_real_jarvis(), rounds, {"tasks": []}, release=SHA)
+    assert answer["staging_proven"] == 0
+    assert answer["outside"] == {"count": 2, "unknown": ["Runs", "The"]}
+
+
+@pytest.mark.parametrize(
+    ("ref", "leading"),
+    [
+        ("browser-use, anywhere (order 2b, ADR-0213)", "Researches anything"),
+        ("Records everything and tells him, whenever he asks (order 2c)", "Records everything"),
+        ("Records everything (order 2c)", "Records everything"),
+        ("Repairs and improves itself (kept controlled)", "Repairs and improves itself"),
+        ("Always-listening natural conversation, interruptible, in the owner's language", "Always"),
+        ("The same JARVIS in the house, the car, the suit, the phone", "The same JARVIS"),
+    ],
+)
+def test_the_queues_wordings_reach_their_jarvis_row_through_the_table(ref, leading):
+    names = [r["name"] for r in _real_jarvis()["rows"] if r["state"] != "never"]
+    assert progress.resolve_row(ref, names) == _real_name(leading)
+    assert not progress.is_outside(ref)
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "",
+        "How it is built from here",
+        "How it is built from here (TEAM_PROTOCOL 3a)",
+        "How it is built from here (TEAM_PROTOCOL 3a.5)",
+        "TEAM_PROTOCOL 3a",
+        "Runs the workshop by voice: machines, files, fabrication",
+    ],
+)
+def test_a_wording_that_is_no_jarvis_row_is_left_out_and_counted(ref):
+    names = [r["name"] for r in _real_jarvis()["rows"] if r["state"] != "never"]
+    assert progress.resolve_row(ref, names) is None
+    assert progress.is_outside(ref)
+    queue = {"tasks": [_trial_task(ref, "oldu", "2026-10-06T18:00:00Z")]}
+    answer = progress.proof(_real_jarvis(), [], queue, release=SHA)
+    assert answer["real_proven"] == 0
+    assert answer["outside"] == {"count": 1, "unknown": []}
+
+
+def test_every_roadmap_row_in_the_queue_names_a_row_or_is_declared_outside():
+    """A card's wording the table does not know would fall out of the proof unseen."""
+    names = [r["name"] for r in _real_jarvis()["rows"] if r["state"] != "never"]
+    queue = json.loads((REPO / "team" / "queue.json").read_bytes().decode("utf-8"))
+    wordings = {str(t.get("roadmap_row", "")) for t in queue["tasks"]}
+    unknown = sorted(
+        w for w in wordings if progress.resolve_row(w, names) is None and not progress.is_outside(w)
+    )
+    assert unknown == []
 
 
 def test_an_owner_trial_that_passed_makes_its_row_real_proven():
@@ -255,6 +327,7 @@ def test_the_round_posts_each_rows_passed_and_failed_scenarios_to_the_api(tmp_pa
                 {"family": "saglik", "scenario": "s/health.json", "roadmap_row": "Talks"},
                 {"family": "ev", "scenario": "s/house.json", "roadmap_row": "Runs the house"},
                 {"family": "serbest", "scenario": "s/free.json"},
+                {"family": "neden", "scenario": "s/why.json", "why": "Repairs and improves itself"},
                 {"family": "bekleyen", "scenario": "s/wait.json", "roadmap_row": "Everywhere"},
             ]
         },
@@ -265,11 +338,12 @@ def test_the_round_posts_each_rows_passed_and_failed_scenarios_to_the_api(tmp_pa
         {"id": "c3", "family": "ev", "state": "broke"},
         {"id": "c4", "family": "serbest", "state": "passed"},
         {"id": "c5", "family": "bekleyen", "state": "planned"},
+        {"id": "c6", "family": "neden", "state": "failed"},
     ]
     _write_json(
         round_dir / "cards.json", {"round": "t202610062130", "plan": str(plan), "cards": cards}
     )
-    for card in cards[:4]:
+    for card in cards[:4] + cards[5:]:
         _write_json(
             round_dir / f"{card['id']}.result.json", {"state": card["state"], "staging_sha": SHA}
         )
@@ -315,8 +389,14 @@ def test_the_round_posts_each_rows_passed_and_failed_scenarios_to_the_api(tmp_pa
     assert body["staging_sha"] == SHA
     assert progress.round_problems(body) == []
     rows = {r["row"]: (r["passed"], r["failed"]) for r in body["rows"]}
-    # A job with no row proves no row; a card that never ran is neither passed nor failed.
-    assert rows == {"Talks": (2, 0), "Runs the house": (0, 1)}
+    # A job with no row sends its why (or its family) for the Core to resolve; a card that
+    # never ran is neither passed nor failed.
+    assert rows == {
+        "Talks": (2, 0),
+        "Runs the house": (0, 1),
+        "serbest": (1, 0),
+        "Repairs and improves itself": (0, 1),
+    }
 
 
 # ------------------------------------------------------------------ the office answer
@@ -347,3 +427,62 @@ def test_a_posted_round_reaches_the_office_strip(owner):
     assert _row(proof, "Repairs and improves itself")["staging_proven"] is True
     refused = owner.post("/v1/team/queue/proof", json=doc | {"staging_sha": "x"})
     assert refused.status_code == 422
+    assert refused.json()["detail"]["code"] == "invalid"
+    assert owner.post("/v1/team/queue/proof", json=[doc]).status_code == 422
+
+
+def test_the_office_strip_reads_the_queues_trials_and_counts_the_wordings_left_out(owner):
+    task = _trial_task(
+        "Repairs and improves itself (kept controlled)", "oldu", "2026-10-06T18:00:00Z"
+    )
+    task |= {"title": "t", "state": "done", "updated_at": "2026-10-06T18:00:00Z"}
+    queue = owner.app.state.team_store.read_queue()
+    queue["tasks"] = [
+        task,
+        _trial_task("How it is built from here (TEAM_PROTOCOL 3a)", None, None, n=2),
+    ]
+    owner.app.state.team_store._write(owner.app.state.team_store.root / "queue.json", queue)
+    proof = owner.get("/v1/team/office").json()["progress"]["proof"]
+    assert _row(proof, "Repairs and improves itself")["real_proven"] is True
+    assert proof["outside"] == {"count": 1, "unknown": []}
+
+
+def test_a_proof_without_the_store_method_leaves_the_office_open(owner):
+    class _Older(team_store.FileStore):
+        read_proofs = None
+
+    owner.app.state.team_store = _Older(owner.app.state.team_store.root)
+    answer = owner.get("/v1/team/office")
+    assert answer.status_code == 200
+    assert answer.json()["progress"]["proof"]["staging_proven"] == 0
+
+
+# ------------------------------------------------------------------ the file store
+
+
+def test_the_file_store_keeps_a_round_replaces_it_and_reads_the_newest_first(tmp_path):
+    store = team_store.FileStore(tmp_path)
+    assert store.read_proofs() == []
+    first = _round("t1", SHA, "2026-10-06T20:00:00Z", [("Talks", 1, 0)])
+    store.put_proof(first)
+    store.put_proof(_round("t2", SHA, "2026-10-06T21:00:00Z", [("Talks", 0, 1)]))
+    store.put_proof(first | {"rows": [{"row": "Talks", "passed": 4, "failed": 0}]})
+    proofs = store.read_proofs()
+    assert [p["round"] for p in proofs] == ["t2", "t1"]
+    assert proofs[1]["rows"][0]["passed"] == 4
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"round": "con"},
+        {"rows": [{"row": "Talks\x00", "passed": 1, "failed": 0}]},
+        {"rows": [{"row": "Talks", "passed": 1, "failed": 0, "families": ["a\x00"]}]},
+        {"staging_sha": "x"},
+    ],
+)
+def test_the_file_store_refuses_what_a_store_cannot_keep(tmp_path, change):
+    store = team_store.FileStore(tmp_path)
+    with pytest.raises(team_store.Invalid):
+        store.put_proof(_round("t1", SHA, "2026-10-06T20:00:00Z", [("Talks", 1, 0)]) | change)
+    assert store.read_proofs() == []

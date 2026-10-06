@@ -176,7 +176,8 @@ def parse_matrix(text: str) -> dict[str, Any] | None:
 PROOF_RULE = (
     "Staging'de kanıtlı: satırın şu anki yayında koşan son test turu geçti (kalan senaryo yok). "
     "Gerçekte kanıtlı: satırın sahip tarafından karara bağlanan son denemesi 'oldu'. "
-    "'Asla / donanım' satırı sayılmaz."
+    "'Asla / donanım' satırı sayılmaz; JARVIS satırı adlandırmayan iş ve tur satırı oranın "
+    "dışındadır ('satır dışı')."
 )
 ROUND_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")  # test-round.ps1's -Round
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
@@ -226,18 +227,92 @@ def round_problems(doc: Any) -> list[str]:
     return problems
 
 
+#: A shorter name stands for a longer one only by at least this many leading words: "The" or
+#: "Records" is the start of many sentences and names no row.
+PREFIX_MIN_WORDS = 3
+_TRAILING_NOTE = re.compile(r"\s*\([^()]*\)\s*$")
+_HEAD = re.compile(r"\s+[-—–:]\s+|:\s+")
+
+#: The queue's roadmap_row wordings that name a JARVIS row in other words (the lead's decision,
+#: 2026-10-06): kept here, so a card is never edited by hand. Key and value are compared as
+#: ``_norm`` makes them, the key after its trailing "(...)" note is dropped.
+ROW_ALIASES = {
+    "browser-use, anywhere": "Researches anything, reads the world's data",
+    "records everything": "Records everything and tells him, whenever he asks",
+    "repairs": "Repairs and improves itself",
+}
+#: Wordings that are not a JARVIS row at all: their tasks and rounds are left out of the proof
+#: and counted on the strip as "satır dışı". "" is a task with no row.
+NOT_A_ROW = (
+    "",
+    "how it is built from here",
+    "team_protocol",
+    "runs the workshop",
+)
+
+
 def _norm(text: Any) -> str:
     return _plain(str(text)).casefold().strip(" .:;-—")
 
 
+def _base(ref: Any) -> str:
+    """``ref`` without its trailing "(order 2b, ADR-0213)"-style notes."""
+    text = _plain(str(ref))
+    while True:
+        shorter = _TRAILING_NOTE.sub("", text)
+        if shorter == text:
+            return _norm(text)
+        text = shorter
+
+
+def _head(text: str) -> str:
+    """The words before the first " - " / " — " / ": " (a row's name before its remark)."""
+    return _HEAD.split(text, maxsplit=1)[0].strip(" .:;-—")
+
+
+def _starts(long_: str, short: str) -> bool:
+    if long_ == short:
+        return True
+    return (
+        len(short.split()) >= PREFIX_MIN_WORDS
+        and long_.startswith(short)
+        and not long_[len(short)].isalnum()
+    )
+
+
 def _names_row(row: str, ref: Any) -> bool:
     """``ref`` (a round's row, a task's roadmap_row) names the JARVIS row ``row``: the same
-    words, or one is the other's leading words ending at a word boundary - never half a word."""
-    a, b = _norm(row), _norm(ref)
+    words; the same name before a remark ("Everywhere - the second PC"); or one is the other's
+    leading words, at least ``PREFIX_MIN_WORDS`` of them, ending at a word boundary."""
+    a, b = _norm(row), _base(ref)
     if not a or not b:
         return False
     short, long_ = (a, b) if len(a) <= len(b) else (b, a)
-    return long_ == short or (long_.startswith(short) and not long_[len(short)].isalnum())
+    return _starts(long_, short) or _head(a) == _head(b)
+
+
+def resolve_row(ref: Any, names: list[str]) -> str | None:
+    """The JARVIS row (one of ``names``) that ``ref`` names - itself, or else through
+    ``ROW_ALIASES``; ``None`` when it names none (``is_outside`` tells one known to be no row)."""
+    direct = next((name for name in names if _names_row(name, ref)), None)
+    if direct is not None:
+        return direct
+    base = _base(ref)
+    target = next((t for key, t in ROW_ALIASES.items() if _listed(base, key)), None)
+    return next((name for name in names if _names_row(name, target)), None) if target else None
+
+
+def _listed(base: str, key: str) -> bool:
+    """A curated key (``ROW_ALIASES``, ``NOT_A_ROW``) is the whole wording or its leading words."""
+    return base == key or (
+        bool(key) and base.startswith(key) and not base[len(key) :][:1].isalnum()
+    )
+
+
+def is_outside(ref: Any) -> bool:
+    """``ref`` is a wording the lead declared no JARVIS row (``NOT_A_ROW``)."""
+    base = _base(ref)
+    return any(_listed(base, word) for word in NOT_A_ROW)
 
 
 def _same_release(sha: Any, release: str | None) -> bool:
@@ -247,13 +322,16 @@ def _same_release(sha: Any, release: str | None) -> bool:
     return len(min(a, b, key=len)) >= 7 and (a.startswith(b) or b.startswith(a))
 
 
-def _latest_round(name: str, rounds: list[Any], release: str | None) -> dict[str, Any] | None:
+def _latest_round(
+    name: str, rounds: list[Any], release: str | None, names: list[str]
+) -> dict[str, Any] | None:
     found: list[tuple[str, str, dict[str, Any]]] = []
     for doc in rounds:
         if round_problems(doc) or not _same_release(doc["staging_sha"], release):
             continue
-        passed = sum(r["passed"] for r in doc["rows"] if _names_row(name, r["row"]))
-        failed = sum(r["failed"] for r in doc["rows"] if _names_row(name, r["row"]))
+        mine = [r for r in doc["rows"] if resolve_row(r["row"], names) == name]
+        passed = sum(r["passed"] for r in mine)
+        failed = sum(r["failed"] for r in mine)
         if passed + failed:
             found.append(
                 (
@@ -271,10 +349,15 @@ def _latest_round(name: str, rounds: list[Any], release: str | None) -> dict[str
     return max(found, key=lambda f: (f[0], f[1]))[2] if found else None
 
 
-def _latest_trial(name: str, queue: dict[str, Any]) -> dict[str, Any] | None:
+def _tasks(queue: Any) -> list[dict[str, Any]]:
+    tasks = queue.get("tasks", []) if isinstance(queue, dict) else []
+    return [task for task in tasks if isinstance(task, dict)]
+
+
+def _latest_trial(name: str, queue: dict[str, Any], names: list[str]) -> dict[str, Any] | None:
     found: list[tuple[str, dict[str, Any]]] = []
-    for task in queue.get("tasks", []) if isinstance(queue, dict) else []:
-        if not isinstance(task, dict) or not _names_row(name, task.get("roadmap_row", "")):
+    for task in _tasks(queue):
+        if resolve_row(task.get("roadmap_row", ""), names) != name:
             continue
         for trial in task.get("owner_trials") or []:
             if not isinstance(trial, dict) or trial.get("verdict") not in _TRIAL_DECIDED:
@@ -294,6 +377,17 @@ def _latest_trial(name: str, queue: dict[str, Any]) -> dict[str, Any] | None:
     return max(found, key=lambda f: f[0])[1] if found else None
 
 
+def _outside(rounds: list[Any], queue: dict[str, Any], names: list[str]) -> dict[str, Any]:
+    """The wordings the proof leaves out: declared no row (``NOT_A_ROW``) or naming none.
+    ``count`` is how many tasks and round rows carry one; ``unknown`` names the wordings no
+    rule knows (the lead adds them to ``ROW_ALIASES`` or ``NOT_A_ROW``)."""
+    refs = [task.get("roadmap_row", "") for task in _tasks(queue)]
+    refs += [r["row"] for doc in rounds if not round_problems(doc) for r in doc["rows"]]
+    left = [ref for ref in refs if resolve_row(ref, names) is None]
+    unknown = sorted({str(ref) for ref in left if not is_outside(ref)})
+    return {"count": len(left), "unknown": unknown}
+
+
 def proof(
     jarvis: dict[str, Any] | None,
     rounds: list[Any],
@@ -306,12 +400,13 @@ def proof(
     row's latest decided owner trial is "oldu". ``None`` when the table could not be read."""
     if jarvis is None:
         return None
+    names = [row["name"] for row in jarvis["rows"] if row["state"] != "never"]
     rows = []
     for row in jarvis["rows"]:
         if row["state"] == "never":
             continue
-        staging = _latest_round(row["name"], rounds, release)
-        trial = _latest_trial(row["name"], queue)
+        staging = _latest_round(row["name"], rounds, release, names)
+        trial = _latest_trial(row["name"], queue, names)
         rows.append(
             {
                 "name": row["name"],
@@ -332,6 +427,7 @@ def proof(
         "percent_real": percent(real_proven, len(rows)),
         "release": release,
         "rows": rows,
+        "outside": _outside(rounds, queue, names),
         "rule": PROOF_RULE,
     }
 
@@ -367,14 +463,18 @@ def progress(
 
 __all__ = [
     "MATRIX",
+    "NOT_A_ROW",
     "PROOF_RULE",
     "ROADMAP",
+    "ROW_ALIASES",
     "RULE",
+    "is_outside",
     "parse_jarvis",
     "parse_matrix",
     "parse_order",
     "percent",
     "progress",
     "proof",
+    "resolve_row",
     "round_problems",
 ]
