@@ -117,6 +117,65 @@ pytest tests/narrative
 **Anlatıyı önce ledger odaklı yapalım mı?**
 `;
 
+/**
+ * The owner item the roadmap feeder writes (scripts/lib/TeamFeed.ps1 ConvertTo-TeamFeedTasks),
+ * byte for byte. scripts/tests/team-feed.tests.ps1 reads this constant and compares it, line by
+ * line, with what the script writes for: id "radicale-calendar-server", title "Radicale takvim
+ * sunucusu", needs_owner "Radicale'yi ev PC'sine kuralım mı?", roadmap_row "Ev takvimi kendi
+ * sunucumuzda", goal "Takvim verisi evde durur.", acceptance "Telefon ve web aynı takvimi
+ * gösterir.", date 2026-10-06. Change one side and the other side's test goes red.
+ */
+export const FEED_SHAPE = `# Radicale takvim sunucusu
+
+Kaynak: lead koşusu (roadmap beslemesi), 2026-10-06. Bu bir iş kartı DEĞİL: sahibin kararını bekleyen bir fikir.
+
+## Ne
+
+Radicale'yi ev PC'sine kuralım mı?
+
+## Roadmap satırı
+
+Roadmap'te yok; önerilen yeni satır: Ev takvimi kendi sunucumuzda
+
+## Hedef
+
+Takvim verisi evde durur.
+
+## Kabul
+
+Telefon ve web aynı takvimi gösterir.
+
+## Karar
+
+Sahip: evet / hayır / ertele.
+`;
+
+/**
+ * The shape the feeder wrote before d20261006 (team/proposals/2026-10-06-feed-*.md in the main
+ * checkout): no "Ne" section, so the approvals detail view has nothing to show first and the
+ * gate went red. It must stay refused by the rule.
+ */
+export const OLD_FEED_SHAPE = `# Radicale takvim sunucusu
+
+Kaynak: lead koşusu (roadmap beslemesi), 2026-10-06. Bu bir iş kartı DEĞİL: sahibin kararını bekleyen bir fikir.
+
+## Sahibe sorulan
+
+Radicale'yi ev PC'sine kuralım mı?
+
+## Roadmap satırı
+
+Roadmap'te yok; önerilen yeni satır: Ev takvimi kendi sunucumuzda
+
+## Hedef
+
+Takvim verisi evde durur.
+
+## Kabul
+
+Telefon ve web aynı takvimi gösterir.
+`;
+
 /** Each example on ONE line - the form the rule's own summary quotes. */
 export const ONE_LINE_PAIRS = `## Faydası — örneklerle
 1. Bugün: fiyata elle bakıyorum. / Bununla: ölçümle birlikte gelir.

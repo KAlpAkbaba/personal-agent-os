@@ -69,6 +69,19 @@ configured preference list. Selection is a pure function with tests.
 5. `POST .../sessions/{id}/events` — the client reports timing events for the benchmark
    (§8) and state transitions (barge-in, end-of-turn, intents) so Cloud Core's session
    record and audit stay authoritative.
+5a. `GET .../sessions/{id}/sideband` — the pull for a client with no push channel. A
+   web session is not device-bound, so its frames wait in the session's
+   `pending_sideband` buffer; they used to leave only with an `/events` answer or an
+   attach, i.e. a briefing waited for the owner's next sentence. The browser shell (paid
+   controller and local mode alike) now pulls every `SIDEBAND_PULL_MS` = 15 s while its
+   leg is live, at most one request on the wire, and skips a tick while it has events
+   queued (their answer carries the frames). The answer is `{session_id, pending_sideband}`
+   with frames in the `/events` shape; a `say` frame's `briefing_ids` are stamped
+   delivered (`voice`) by the pull that takes it. An empty pull writes nothing - no
+   context, no `updated_at`, no audit row - so a forgotten tab never keeps an idle session
+   alive past the idle sweep. Same identity rule as `/events`: 409 for a stale leg, 410
+   once closed or expired (terminal for the client: no reconnect). SSE is the next step
+   if 15 s ever proves too slow.
 6. Close/expire; the transcript summary and open plan are persisted for continuity
    (§7). Every step writes `voice_*` audit rows (no audio content, no credentials).
 

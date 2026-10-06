@@ -441,7 +441,14 @@ class CalendarService:
         if not occs:
             speech = "Bu aralıkta bir etkinliğiniz yok efendim."
         else:
-            names = ", ".join(f"{o.summary} ({o.start.strftime('%H:%M')})" for o in occs)
+            # Card mail-accounts-connect: an event from one of the owner's connected
+            # accounts says which ("Diş hekimi (10:00, Kişisel)").
+            names = ", ".join(
+                f"{o.summary} ({o.start.strftime('%H:%M')}, {o.account})"
+                if getattr(o, "account", "")
+                else f"{o.summary} ({o.start.strftime('%H:%M')})"
+                for o in occs
+            )
             speech = f"{len(occs)} etkinliğiniz var efendim: {names}."
         speech += self._window_suffix(clamped=clamped, truncated=truncated)
         return self._receipt(

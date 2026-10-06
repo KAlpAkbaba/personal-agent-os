@@ -4,8 +4,9 @@
  * selection and motion preference come in as props. The characters are in officeRobots.tsx.
  */
 
-import type { DrawnSeat } from "./officeModel";
+import { QUEUED_TR, type DrawnSeat } from "./officeModel";
 import { Figure, RoomDecor } from "./officeRobots";
+import { TestSeatCells, type TestSeat } from "./officeTestRoom";
 
 export default function OfficeScene({
   seats,
@@ -13,6 +14,8 @@ export default function OfficeScene({
   reducedMotion,
   onSelect,
   arriving = [],
+  testSeats,
+  now,
 }: {
   seats: DrawnSeat[];
   selected: string | null;
@@ -20,6 +23,10 @@ export default function OfficeScene({
   onSelect: (seat: string) => void;
   /** Seats that just took a new task: their characters walk in (officeMood.arrivals). */
   arriving?: string[];
+  /** The test team's five seats, seated on this same floor after the software seats. */
+  testSeats?: TestSeat[];
+  /** The clock the test seats' moods are read against (defaults to now). */
+  now?: Date;
 }) {
   return (
     <div className="office-scroll" data-office="scene">
@@ -39,8 +46,13 @@ export default function OfficeScene({
             onClick={() => onSelect(seat.seat)}
           >
             {/* cut with an ellipsis at the cell's width; the title attribute keeps it whole */}
-            <span className="office-label" title={seat.label ?? undefined} aria-hidden="true">
-              {seat.label ?? " "}
+            <span
+              className="office-label"
+              title={seat.label ?? undefined}
+              aria-hidden="true"
+              {...(seat.queued ? { style: { color: "var(--muted)" } } : {})}
+            >
+              {seat.label ?? " "}
             </span>
             <Figure
               seat={seat.seat}
@@ -68,8 +80,16 @@ export default function OfficeScene({
                 )}
               </span>
             )}
+            {seat.queued && (
+              <span className="office-badge-static" aria-hidden="true">
+                {QUEUED_TR}
+              </span>
+            )}
           </button>
         ))}
+        {testSeats && testSeats.length > 0 && (
+          <TestSeatCells seats={testSeats} now={now ?? new Date()} animated={!reducedMotion} />
+        )}
         <RoomDecor />
       </div>
     </div>

@@ -284,6 +284,10 @@ def test_every_background_loop_the_app_starts_can_be_seen_in_health() -> None:
         # watch-engine: the watch runner and the readings' 30-day purge.
         "watch_runner": "watch_runner",
         "watch_purge": "watch_purge",
+        # jarvis-calls-owner: the no-answer retry and the important-event calls.
+        "telephony_loop": "telephony_calls",
+        # home-stock-list: the hourly reminder pass.
+        "household_reminders": "household_reminders",
     }
     started = _started_loops()
 
@@ -307,6 +311,7 @@ def test_the_health_map_actually_carries_those_keys() -> None:
         "misheard_purge",
         "watch_runner",
         "watch_purge",
+        "telephony_calls",
     ):
         assert key in ALL_CHECKS
 

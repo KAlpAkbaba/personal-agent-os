@@ -385,8 +385,16 @@ function Test-TeamFeed {
         if ($id) { $seen[$id] = $true }
         if (-not $title) { [void]$problems.Add("${label}: the field 'title' is missing") }
         $sentence = $item.PSObject.Properties["needs_owner"].Value
-        if ($sentence -isnot [string] -or $sentence.Trim() -match "[`r`n]" -or $sentence.Trim().Length -gt $script:TeamFeedOwnerSentenceMax) {
-            [void]$problems.Add("${label}: needs_owner is one sentence (a string on one line, at most $script:TeamFeedOwnerSentenceMax characters)")
+        # The refusal says what it measured, so the lead's report and the next run know what to fix.
+        $rule = "${label}: needs_owner is one sentence (a string on one line, at most $script:TeamFeedOwnerSentenceMax characters)"
+        if ($sentence -isnot [string]) {
+            [void]$problems.Add("$rule; this one is not a string")
+        }
+        elseif ($sentence.Trim() -match "[`r`n]") {
+            [void]$problems.Add("$rule; this one spans $(@($sentence.Trim() -split '\r\n|\r|\n').Count) lines")
+        }
+        elseif ($sentence.Trim().Length -gt $script:TeamFeedOwnerSentenceMax) {
+            [void]$problems.Add("$rule; this one has $($sentence.Trim().Length) characters")
         }
     }
     return @($problems.ToArray())
@@ -449,7 +457,10 @@ function ConvertTo-TeamFeedTasks {
         [void]$lines.Add("")
         [void]$lines.Add("Kaynak: lead koşusu (roadmap beslemesi), $Date. Bu bir iş kartı DEĞİL: sahibin kararını bekleyen bir fikir.")
         [void]$lines.Add("")
-        [void]$lines.Add("## Sahibe sorulan")
+        # The researcher's shape (apps/web/tests/approvals/proposal-shapes.test.ts reads every
+        # file under team/proposals): "## Ne" holds what the owner is asked, every section is
+        # written even when empty, and the fixture FEED_SHAPE there is this text byte for byte.
+        [void]$lines.Add("## Ne")
         [void]$lines.Add("")
         [void]$lines.Add($sentence)
         [void]$lines.Add("")
@@ -458,8 +469,12 @@ function ConvertTo-TeamFeedTasks {
         if ($isRow) { [void]$lines.Add($row) }
         elseif ($row) { [void]$lines.Add("Roadmap'te yok; önerilen yeni satır: $row") }
         else { [void]$lines.Add("Belirtilmedi.") }
-        if ($goal) { [void]$lines.Add(""); [void]$lines.Add("## Hedef"); [void]$lines.Add(""); [void]$lines.Add($goal) }
-        if ($acceptance) { [void]$lines.Add(""); [void]$lines.Add("## Kabul"); [void]$lines.Add(""); [void]$lines.Add($acceptance) }
+        [void]$lines.Add(""); [void]$lines.Add("## Hedef"); [void]$lines.Add("")
+        [void]$lines.Add($(if ($goal) { $goal } else { "Belirtilmedi." }))
+        [void]$lines.Add(""); [void]$lines.Add("## Kabul"); [void]$lines.Add("")
+        [void]$lines.Add($(if ($acceptance) { $acceptance } else { "Belirtilmedi." }))
+        [void]$lines.Add(""); [void]$lines.Add("## Karar"); [void]$lines.Add("")
+        [void]$lines.Add("Sahip: evet / hayır / ertele.")
         [void]$made.Add([pscustomobject]@{
                 Task = [pscustomobject]$task; Kind = "owner"; ProposalPath = $path
                 ProposalText = ((@($lines.ToArray()) -join "`n") + "`n")
@@ -506,10 +521,11 @@ function New-TeamFeedCard {
     [void]$lines.Add("docs/TEAM_PROTOCOL.md (sections 3a and 4), and the code of every area you are about to name.")
     [void]$lines.Add("")
     [void]$lines.Add("## What to write")
-    [void]$lines.Add("feed_file is a JSON list of at most max_new items, in the order they should be worked on. An empty list")
-    [void]$lines.Add("[] is an honest answer when the next item cannot be cut. An item is a task card: id (a-z, 0-9, '-'; 3-64;")
-    [void]$lines.Add("not in the queue), title, roadmap_row (one of the rows listed below, quoted exactly; one short note in")
-    [void]$lines.Add("brackets may follow it), area (a list of repository-relative paths, at most 25), goal, acceptance,")
+    [void]$lines.Add("feed_file is a JSON list of at most max_new cards and at most max_new owner items, in the order they should")
+    [void]$lines.Add("be worked on. An empty list [] is an honest answer when the next item cannot be cut. An item is a task card:")
+    [void]$lines.Add("id (a-z, 0-9, '-'; 3-64; not in the queue), title, roadmap_row (one of the rows listed below, quoted exactly;")
+    [void]$lines.Add("one short note in brackets may follow it, with no brackets inside the note), area (a list of")
+    [void]$lines.Add("repository-relative paths, at most $script:TeamMaxAreaEntries entries), goal, acceptance,")
     [void]$lines.Add("evidence_expected; optionally depends_on (ids) and needs_integration (true when existing code or a library")
     [void]$lines.Add("may already solve it). The area passes your role file's checklist: the directory that package's TESTS live")
     [void]$lines.Add("in, a new Python package's __init__.py, every file the goal or the acceptance names, the file an inspector")
@@ -520,16 +536,21 @@ function New-TeamFeedCard {
     [void]$lines.Add("## What needs the owner is not a card")
     [void]$lines.Add("An item that needs a new external dependency or account, a paid service, an irreversible or production")
     [void]$lines.Add("action (a release, a change on the live host, a deletion), or a roadmap row that does not exist, is NOT a")
-    [void]$lines.Add("card. Write it as an item with id, title and needs_owner: ONE sentence saying what the owner must decide")
-    [void]$lines.Add("(roadmap_row, goal and acceptance if you have them; no area). The script queues it as an idea awaiting")
-    [void]$lines.Add("the owner, never as work.")
+    [void]$lines.Add("card. Write it as an item with id, title and needs_owner: ONE sentence on ONE line, at most")
+    [void]$lines.Add("$script:TeamFeedOwnerSentenceMax characters, saying what the owner must decide (put the detail in goal; roadmap_row,")
+    [void]$lines.Add("goal and acceptance if you have them; no area). A longer needs_owner, or one with a line break, refuses")
+    [void]$lines.Add("the whole file. The script queues it as an idea awaiting the owner, never as work.")
     [void]$lines.Add("")
     [void]$lines.Add("## The script judges, not you")
     [void]$lines.Add("The file is taken WHOLE or refused whole. Each of these refuses everything: a missing field; an id or a")
     [void]$lines.Add("title the queue already has; a roadmap_row that is not one of the rows below; an area inside the area of a")
     [void]$lines.Add("task in work (listed below); a shared file (docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json,")
     [void]$lines.Add("docs/THIRD_PARTY_COMPONENTS.md, team/queue.json) or a directory holding one; an area outside the")
-    [void]$lines.Add("repository; main or hand-gestures; more than max_new cards. Two cards of yours may share an area only when")
+    [void]$lines.Add("repository; main or hand-gestures; more than max_new cards; more than max_new owner items (the two are")
+    [void]$lines.Add("counted apart); a title that is already in the queue or in this file, even one that")
+    [void]$lines.Add("differs only in upper or lower case; a roadmap_row note that has brackets inside it; an area of more than $script:TeamMaxAreaEntries entries; a")
+    [void]$lines.Add("needs_owner that is not one line of at most $script:TeamFeedOwnerSentenceMax characters; a depends_on id that does not exist -")
+    [void]$lines.Add("every id in depends_on is in the queue or in this file. Two cards of yours may share an area only when")
     [void]$lines.Add("one lists the other in depends_on.")
     [void]$lines.Add("")
     [void]$lines.Add("## The roadmap's rows (roadmap_row is one of these)")

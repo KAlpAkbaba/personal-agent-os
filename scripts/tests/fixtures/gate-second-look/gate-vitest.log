@@ -1,0 +1,59 @@
+
+=== Required files ===
+
+=== Web shell build ===
+TEST SIRASI: ONAY ts-2b3c4d5e6f70 (heavy) after 0 s
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+
+=== Web shell lint, unit tests and types (oxlint, vitest, tsc) ===
+TEST SIRASI: ONAY ts-3c4d5e6f7081 (heavy) after 12 s
+Found 0 warnings and 0 errors.
+
+> pagentos-web@0.1.0 test E:\gate\apps\web
+> vitest run
+
+
+ RUN  v3.2.4 E:/gate/apps/web
+
+ ✓ tests/watch/watch-list.test.tsx (9 tests) 412ms
+ ❯ tests/voice/session-storm.test.ts (4 tests | 1 failed) 2210ms
+   ✓ session storm > opens one session 18ms
+   × session storm > survives fifty reconnects 2101ms
+     → expected 3 to be 4
+ ✓ tests/family/family-pages.test.tsx (21 tests) 655ms
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/voice/session-storm.test.ts > session storm > survives fifty reconnects
+AssertionError: expected 3 to be 4 // Object.is equality
+
+- Expected
++ Received
+
+- 4
++ 3
+
+ ❯ tests/voice/session-storm.test.ts:88:31
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 33 passed (34)
+   Start at  01:24:11
+   Duration  6.12s
+
+ ELIFECYCLE  Test failed. See above for more details.
+FAILED: vitest (apps/web) exited with code 1
+
+=== Quality gate summary ===
+
+Step                                                          Result Seconds WaitSeconds
+----                                                          ------ ------- -----------
+Required files                                                PASS       0.1           0
+Web shell build                                               PASS      88.0           0
+Web shell lint, unit tests and types (oxlint, vitest, tsc)    FAIL      40.2          12
+
+
+Test queue wait, total: 12 s
+QUALITY GATE: FAIL

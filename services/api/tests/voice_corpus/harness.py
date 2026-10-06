@@ -96,6 +96,7 @@ from app.genesis.catalogue import GenesisInterfaceCatalogue, set_catalogue
 from app.genesis.models import GenesisCatalogueRow, GenesisRun
 from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
+from app.household.models import HouseholdEvent, HouseholdItem
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -169,6 +170,7 @@ from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnou
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
+from app.watch.models import Watch, WatchReading
 from app.weather.models import WeatherQueryEvidenceRow
 from app.weather.providers import FakeWeatherProvider
 from app.weather.service import WeatherService
@@ -322,6 +324,9 @@ TABLES = (
     VoiceProfile.__table__,
     # ADR-0196: the router reads the stored macro names on EVERY utterance.
     VoiceMacroRow.__table__,
+    # watch-voice: the owner's watches and their readings.
+    Watch.__table__,
+    WatchReading.__table__,
     NarrationSession.__table__,
     PronunciationEntry.__table__,
     Artifact.__table__,
@@ -379,6 +384,9 @@ TABLES = (
     MemoryAuditEvent.__table__,
     Entity.__table__,
     EntityEdge.__table__,
+    # home-stock-list: a level or a list edit writes a real row through the real service.
+    HouseholdItem.__table__,
+    HouseholdEvent.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at

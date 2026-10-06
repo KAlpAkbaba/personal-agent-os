@@ -2025,6 +2025,102 @@ try {
         return (@($Run.Calls | ForEach-Object { [string]$_.role }) -join ",")
     }
 
+    # pm-stuck-run-check (the owner, 2026-10-04: "arada gerçekten işte çalışıp çalışmadıklarını da
+    # kontrol etsin, iş takılmış olmasın"). Two workers sleep ("slow"); one of them is kept alive by
+    # writes into its own temp folder every two seconds, as a long test suite writes. With
+    # run_idle_minutes 1 the silent one is flagged, handed to the duty, and the duty's 'restart'
+    # starts it again; the writing one is never flagged, however long it runs.
+    Test-Case "liveness: a run that leaves no trace for run_idle_minutes is flagged in the status and handed to the duty, whose 'restart' starts it again; a long run that writes is never flagged" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "hung-one" -Area @("src/area")), (New-Task -Id "live-one" -Area @("src/area2")))
+        Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\TeamLiveness.ps1") -Destination (Join-Path $root "scripts\lib\TeamLiveness.ps1")
+        $temps = Join-Path $root "run-temps"
+        Write-TeamJson -Path (Join-Path $root "team\cycle-settings.json") -Document ([ordered]@{ run_idle_minutes = 1; run_temp_root = $temps })
+        $snapshots = Join-Path $root "snapshots"
+        $cards = Join-Path $root "duty-cards.txt"
+        $decision = '{"decisions":[],"stuck":[{"run":"hung-one/worker","action":"restart","reason":"bir dakikadır iz yok; yeniden başlat"}]}'
+        $hooks = @{
+            PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json")
+            PAGENTOS_FAKE_CLAUDE_DUTY_CARD = $cards; PAGENTOS_FAKE_CLAUDE_DUTY_JSON = $decision; PAGENTOS_CYCLE_LIVENESS_SECONDS = "10"
+            # Each worker run sits 100 s without a sound before it answers (and commits) as "approve".
+            PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:*=100"
+        }
+        # The live run's work: a write into its own temp folder every two seconds, for as long as the
+        # cycle runs - and the hung run's too once it was started again (the restart cured it).
+        $writer = Start-Job -ArgumentList $temps, (Join-Path $root "fake.log") -ScriptBlock {
+            param($Temps, $Log)
+            for ($i = 0; $i -lt 200; $i++) {
+                $working = @("live-one-worker-*")
+                $hungRuns = @(Get-Content -LiteralPath $Log -ErrorAction SilentlyContinue | Where-Object { $_ -match '"role":"worker","task":"hung-one"' }).Count
+                if ($hungRuns -ge 2) { $working += "hung-one-worker-*" }
+                foreach ($folder in @($working | ForEach-Object { Get-ChildItem -LiteralPath $Temps -Directory -Filter $_ -ErrorAction SilentlyContinue })) {
+                    Set-Content -LiteralPath (Join-Path $folder.FullName "progress.txt") -Value $i -Encoding ASCII -ErrorAction SilentlyContinue
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
+        try {
+            Use-FakeHooks -Environment $hooks -Body { $script:livenessRun = Invoke-Cycle -Root $root -Scenario "approve" -Duty -RunMinutes 3.6 -ExtraArguments "-CycleMinutes 3" }
+        }
+        finally { Stop-Job -Job $writer -ErrorAction SilentlyContinue; Remove-Job -Job $writer -Force -ErrorAction SilentlyContinue }
+        $run = $script:livenessRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $card = if (Test-Path -LiteralPath $cards) { [System.IO.File]::ReadAllText($cards, [System.Text.Encoding]::UTF8) } else { "" }
+        # (The fake reads its card in the console's code page: only the ASCII parts are compared.)
+        Assert-True -Condition ($card -match '(?m)^## Tak\S* olabilecek ' -and $card -match '(?m)^- hung-one/worker: \d+ dk iz yok') -Because "the silent run is handed to the duty:`n$card`n$($run.Report)"
+        Assert-True -Condition (-not $card.Contains("live-one/worker")) -Because "the run that writes is never handed:`n$card"
+        $workers = @($run.Calls | Where-Object { $_.role -eq "worker" } | ForEach-Object { [string]$_.task })
+        Assert-Equal -Expected 2 -Actual @($workers | Where-Object { $_ -eq "hung-one" }).Count -Because "the duty's restart started it again: $($workers -join ',')`n$($run.Report)"
+        Assert-Equal -Expected 1 -Actual @($workers | Where-Object { $_ -eq "live-one" }).Count -Because "the sibling was never restarted: $($workers -join ',')"
+        Assert-True -Condition ($run.Report.Contains("takılmış olabilir: hung-one/worker") -and -not $run.Report.Contains("takılmış olabilir: live-one/worker")) -Because $run.Report
+        # The status a reader saw while the duty ran: both runs measured, only the silent one idle.
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "lead-.json")
+        Assert-Equal -Expected 1 -Actual ([int]$seen.run_idle_minutes) -Because "the cycle's bound is in the status"
+        $hung = @($seen.runs | Where-Object { $_.task -eq "hung-one" })[0]
+        $live = @($seen.runs | Where-Object { $_.task -eq "live-one" })[0]
+        Assert-True -Condition ([int]$hung.idle_minutes -ge 1 -and [string]$hung.last_activity_at) -Because "the silent run: $($hung | ConvertTo-Json -Compress)"
+        Assert-Equal -Expected 0 -Actual ([int]$live.idle_minutes) -Because "the writing run: $($live | ConvertTo-Json -Compress)"
+    }
+
+    # The inspector's probe (return 3): the PM decides on the card's minutes, but the silent run
+    # starts writing every two seconds while the duty runs. Its 'restart' is NOT applied - the run
+    # is looked at again first - and the report says it came back to life.
+    Test-Case "liveness: a run that writes again while the duty decides is not restarted - the PM's 'restart' is turned into a wait ('yeniden canlandı')" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "hung-one" -Area @("src/area")))
+        Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\TeamLiveness.ps1") -Destination (Join-Path $root "scripts\lib\TeamLiveness.ps1")
+        $temps = Join-Path $root "run-temps"
+        Write-TeamJson -Path (Join-Path $root "team\cycle-settings.json") -Document ([ordered]@{ run_idle_minutes = 1; run_temp_root = $temps })
+        $cards = Join-Path $root "duty-cards.txt"
+        $decision = '{"decisions":[],"stuck":[{"run":"hung-one/worker","action":"restart","reason":"bir dakikadır iz yok; yeniden başlat"}]}'
+        $hooks = @{
+            PAGENTOS_FAKE_CLAUDE_DUTY_CARD = $cards; PAGENTOS_FAKE_CLAUDE_DUTY_JSON = $decision; PAGENTOS_CYCLE_LIVENESS_SECONDS = "10"
+            PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:*=170,lead:*=30"
+        }
+        # Silent until the duty run starts (its line in the fake's log); from then on a write every
+        # two seconds - while the PM is still deciding on the card's minutes.
+        $writer = Start-Job -ArgumentList $temps, (Join-Path $root "fake.log") -ScriptBlock {
+            param($Temps, $Log)
+            for ($i = 0; $i -lt 200; $i++) {
+                if (@(Get-Content -LiteralPath $Log -ErrorAction SilentlyContinue | Where-Object { $_ -match '"role":"lead"' }).Count -gt 0) {
+                    foreach ($folder in @(Get-ChildItem -LiteralPath $Temps -Directory -Filter "hung-one-worker-*" -ErrorAction SilentlyContinue)) {
+                        Set-Content -LiteralPath (Join-Path $folder.FullName "progress.txt") -Value $i -Encoding ASCII -ErrorAction SilentlyContinue
+                    }
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
+        try {
+            Use-FakeHooks -Environment $hooks -Body { $script:revivedRun = Invoke-Cycle -Root $root -Scenario "approve" -Duty -RunMinutes 4.5 -ExtraArguments "-CycleMinutes 4" }
+        }
+        finally { Stop-Job -Job $writer -ErrorAction SilentlyContinue; Remove-Job -Job $writer -Force -ErrorAction SilentlyContinue }
+        $run = $script:revivedRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $card = if (Test-Path -LiteralPath $cards) { [System.IO.File]::ReadAllText($cards, [System.Text.Encoding]::UTF8) } else { "" }
+        Assert-True -Condition ($card -match '(?m)^- hung-one/worker: \d+ dk iz yok') -Because "it was silent when handed:`n$card`n$($run.Report)"
+        $workers = @($run.Calls | Where-Object { $_.role -eq "worker" -and [string]$_.task -eq "hung-one" })
+        Assert-Equal -Expected 1 -Actual @($workers).Count -Because "a run that writes again is never restarted:`n$($run.Report)"
+        Assert-True -Condition ($run.Report.Contains("hung-one/worker: yeniden canland") -and -not $run.Report.Contains("yeniden başlatıldı")) -Because $run.Report
+    }
+
     Test-Case "duty: a stopped task starts exactly one Proje Yöneticisi run (no Bash, no Edit); its card lists the task and its reason; 'return' sends it back with the prefixed reason" {
         $root = New-Sandbox -Tasks @((New-Stopped -Reason "ayni is iki kez geri verildi"))
         $run = Invoke-DutyCycle -Root $root -Decisions @((New-Decision -Reason "Eksik testi ekle; çağrıyı düzelt"))
@@ -2274,7 +2370,8 @@ try {
     Test-Case "each run gets its own temp folder under run_temp_root, removed when the run ends (owner, 2026-10-03)" {
         # C: filled to zero at 12:00 on 2026-10-03 and the day before %TEMP% held 2.67 million leaked
         # folders: the tests a run starts write their temp folders into the run's own folder on the
-        # data drive, and the cycle removes it when the run is over.
+        # data drive, and the cycle empties it when the run is over. The folder itself is kept: Git
+        # Bash may hold it as the machine's /tmp (2026-10-06 01:50, card run-temp-keeps-git-bash-tmp).
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $tempRoot = Join-Path $root "run-temp"
         $json = '{"max_parallel": 3, "run_temp_root": ' + (ConvertTo-Json -InputObject $tempRoot) + '}'
@@ -2287,7 +2384,7 @@ try {
             Assert-True -Condition ($temp.StartsWith($tempRoot + "\", [System.StringComparison]::OrdinalIgnoreCase)) -Because "the $($call.role)'s TEMP is under run_temp_root: '$temp'"
             Assert-Equal -Expected $temp -Actual ([string]$call.tmp_env) -Because "TMP is the same folder"
             Assert-True -Condition ($temp -match "task-one-$([string]$call.role)-[0-9a-f]{8}$") -Because "named by task and role: '$temp'"
-            Assert-True -Condition (-not (Test-Path -LiteralPath $temp)) -Because "the run's folder (with what the run left in it) is gone after the run: '$temp'"
+            Assert-True -Condition ((Test-Path -LiteralPath $temp -PathType Container) -and (@(Get-ChildItem -LiteralPath $temp -Force).Count -eq 0)) -Because "the run's folder is kept (Git Bash may hold it as /tmp) and emptied when the run ends: '$temp'"
             $folders += $temp
         }
         Assert-Equal -Expected 2 -Actual @($folders | Sort-Object -Unique).Count -Because "each run has its own folder"
@@ -2879,9 +2976,11 @@ try {
             Assert-Equal -Expected "" -Actual ([string]$call.team_url) -Because "no queue URL, no board address"
             Assert-True -Condition ([bool][string]$call.team_seat) -Because "the seat is set: $($call.role)"
         }
-        # the status the cycle writes carries no seat field (the status route refuses unknown run fields)
-        $state = Get-FakeApiState -Api $api
-        Assert-True -Condition ((ConvertTo-Json -InputObject $state.status -Depth 8 -Compress) -notmatch '"seat"') -Because "no seat in the status document"
+        # the status carries the board's seat only as a worker run's number (office-stable-seats):
+        # `seat: 1` for worker-1, nothing for the inspector - never the board's "worker-1" / "inspector"
+        $statuses = @((Get-FakeApiState -Api $api).statuses)
+        $line = (@($statuses | ForEach-Object { @($_.runs) | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.role)@$(if ($null -ne $_.PSObject.Properties['seat']) { $_.seat } else { '-' })" } }) -join ",")
+        Assert-True -Condition ($line -match "worker@1" -and $line -match "inspector@-" -and $line -notmatch "worker@worker|@inspector") -Because "a worker's number, no seat for the inspector: $line"
     }
 
     Test-Case "duty in API mode: the Proje Yöneticisi's decision is written to the store, through the cycle's own writes" {
@@ -3608,6 +3707,8 @@ try {
         $history = @($state.statuses)
         Assert-True -Condition (@($history | Where-Object { @($_.runs).Count -ge 1 }).Count -ge 2) -Because "the Ofis page still sees the runs in flight: $(@(Get-FakeApiRequests -Api $api) -join '; ')"
         Assert-Equal -Expected 0 -Actual @($history | Where-Object { $null -ne $_.PSObject.Properties["limits"] }).Count -Because "in the form that Cloud Core accepts"
+        # office-stable-seats: the legacy form is the one a Cloud Core without `seat` accepts too.
+        Assert-Equal -Expected 0 -Actual @($history | ForEach-Object { @($_.runs) } | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["seat"] }).Count -Because "and no run of it carries a seat: $($history | ConvertTo-Json -Depth 6 -Compress)"
         Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/status 422" }).Count -Because "the new form is tried once, not at every write"
         Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "model ve limit alanlarını henüz tanımıyor")).Count -Because "one line under the risks: $($run.Report)"
     }
@@ -3998,6 +4099,78 @@ try {
         Assert-Equal -Expected 1 -Actual @($ideas).Count -Because "the researcher's proposal is queued for the owner: $($run.Report)"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt")) -Because "and its finished run is recorded"
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    # ------------------------------------------------------------------ stable seats (office-stable-seats)
+    function Get-RunSeat {
+        <# A run entry's `seat`, or $null when it carries none. #>
+        param($Run)
+        $property = $Run.PSObject.Properties["seat"]
+        if ($null -eq $property) { return $null }
+        return $property.Value
+    }
+    function Get-SeatLine {
+        <# "task:role@seat" for every run of a status, sorted - what an assertion prints. #>
+        param($Status)
+        return ((@(@($Status.runs) | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.task):$($_.role)@$(Get-RunSeat -Run $_)" } | Sort-Object)) -join ",")
+    }
+
+    Test-Case "stable seats: four worker runs sit on seats 1-4; when the run on seat 1 ends the next status keeps the others on 2, 3 and 4; the next worker takes seat 1 (the lowest free); no seat is ever held twice" {
+        # 2026-10-02 15:50, the owner at the Ofis page: the run on Çalışan 1 ended and the
+        # page drew Çalışan 2's task on Çalışan 1 - the seats were the list's positions.
+        $tasks = @("task-one", "task-two", "task-three", "task-four", "task-five" | ForEach-Object { New-Task -Id $_ -Area @("src/$_") })
+        $api = Start-FakeApi -Tasks $tasks
+        $root = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:task-one=10,worker:task-two=25,worker:task-three=25,worker:task-four=25" } -Body {
+            $script:seatsRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 4 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        Assert-Equal -Expected 0 -Actual $script:seatsRun.ExitCode -Because ($script:seatsRun.StdOut + $script:seatsRun.StdErr)
+        $history = @((Get-FakeApiState -Api $api).statuses)
+        $all = (@($history | ForEach-Object { Get-SeatLine -Status $_ }) -join " | ")
+        $seatOf = @{}
+        foreach ($document in $history) {
+            $held = @()
+            foreach ($live in @(@($document.runs) | Where-Object { $null -ne $_ -and $_.role -eq "worker" })) {
+                $seat = Get-RunSeat -Run $live
+                Assert-True -Condition ($seat -is [int] -and $seat -ge 1) -Because "every worker run carries a seat, an integer from 1: $(Get-SeatLine -Status $document)"
+                $held += $seat
+                $task = [string]$live.task
+                if ($seatOf.ContainsKey($task)) { Assert-Equal -Expected $seatOf[$task] -Actual $seat -Because "a run keeps its seat for its whole life ($task): $all" }
+                else { $seatOf[$task] = $seat }
+            }
+            Assert-Equal -Expected @($held).Count -Actual @($held | Sort-Object -Unique).Count -Because "no two live worker runs on one seat: $(Get-SeatLine -Status $document)"
+        }
+        Assert-Equal -Expected "1/2/3/4/1" -Actual (@("task-one", "task-two", "task-three", "task-four", "task-five" | ForEach-Object { $seatOf[$_] }) -join "/") -Because "four starts take 1-4 (the fourth gets 4), the fifth the seat task-one left: $all"
+        $wasLive = $false; $next = $null
+        foreach ($document in $history) {
+            $line = Get-SeatLine -Status $document
+            if ($line -match "task-one:worker@") { $wasLive = $true; continue }
+            if ($wasLive) { $next = $line; break }
+        }
+        Assert-True -Condition ($null -ne $next -and $next -match "task-two:worker@2" -and $next -match "task-three:worker@3" -and $next -match "task-four:worker@4") -Because "the NEXT status after seat 1's run ended keeps the others where they sat: <$next> in $all"
+        $fifth = @($history | ForEach-Object { Get-SeatLine -Status $_ } | Where-Object { $_ -match "task-five:worker@" })[0]
+        Assert-True -Condition ($fifth -match "task-five:worker@1" -and $fifth -match "task-two:worker@2" -and $fifth -match "task-three:worker@3") -Because "a run started while 2 and 3 are held and 1 is free gets 1: $fifth"
+        Assert-Equal -Expected "merged,merged,merged,merged,merged" -Actual (@((Get-FakeApiState -Api $api).tasks | ForEach-Object { $_.state }) -join ",") -Because "and the work was done: $($script:seatsRun.Report)"
+    }
+
+    Test-Case "stable seats: a run of the lead, the researcher, the integrator or the inspector carries no seat; every worker run does" {
+        $study = New-Task -Id "task-study" -Area @("src/study")
+        $study | Add-Member -NotePropertyName "needs_integration" -NotePropertyValue $true
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"), $study)
+        $hooks = Get-PoolHooks -Root $root -Seconds "researcher:*=3"
+        Use-FakeHooks -Environment $hooks -Body { $script:rolesRun = Invoke-Cycle -Root $root -Scenario "split" -NoCaps -Research -MaxParallel 3 }
+        Assert-Equal -Expected 0 -Actual $script:rolesRun.ExitCode -Because ($script:rolesRun.StdOut + $script:rolesRun.StdErr)
+        $seen = @{}
+        foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $root "snapshots") -Filter *.json)) {
+            $document = Read-TeamJson -Path $file.FullName
+            foreach ($live in @(@($document.runs) | Where-Object { $null -ne $_ })) {
+                $seen[[string]$live.role] = $true
+                $seat = Get-RunSeat -Run $live
+                if ($live.role -eq "worker") { Assert-True -Condition ($seat -is [int] -and $seat -ge 1) -Because "a worker run has its seat ($($file.Name)): $(Get-SeatLine -Status $document)" }
+                else { Assert-True -Condition ($null -eq $live.PSObject.Properties["seat"]) -Because "a $($live.role) run carries no seat ($($file.Name)): $(Get-SeatLine -Status $document)" }
+            }
+        }
+        Assert-Equal -Expected "inspector,integrator,lead,researcher,worker" -Actual (@($seen.Keys | Sort-Object) -join ",") -Because "every role was seen in flight: $($script:rolesRun.Report)"
     }
 
     Test-Case "research is on by default: a cycle started with no research flag runs the researcher, even with an empty queue, and its idea waits for the owner" {

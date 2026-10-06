@@ -217,6 +217,48 @@
   font-weight: 700;
 }
 
+/* The test team sits on the same floor (the owner, 2026-10-06: "Aynı ofiste olsunlar"),
+ * behind a quiet full-row divider. A test seat has no panel yet: no pointer, no hover. */
+.office-floor-divider {
+  position: relative;
+  z-index: 1;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--office-label);
+}
+
+.office-floor-divider::before,
+.office-floor-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--office-grid);
+  border-top: 1px dashed var(--office-wall-edge);
+  opacity: 0.45;
+}
+
+.office-test-seat {
+  cursor: default;
+}
+
+.office-test-seat:hover {
+  background: transparent;
+}
+
+.office-test-breaking {
+  max-width: 100%;
+  font-size: 0.7rem;
+  color: var(--office-warn);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 .office-runs {
   margin: 0;
   padding-left: 1.25rem;

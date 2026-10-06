@@ -10,8 +10,9 @@ import OfficeProgress from "./OfficeProgress";
 import OfficeScene from "./OfficeScene";
 import type { ModelSetting, OfficeView as Office } from "./officeApi";
 import { energyOf } from "./officeEnergy";
+import { livenessLines } from "./officeLiveness";
 import { buildOffice, buildPanel } from "./officeModel";
-import { TestRoom, type TestSeat } from "./officeTestRoom";
+import type { TestSeat } from "./officeTestRoom";
 
 export default function OfficeView({
   view,
@@ -36,13 +37,14 @@ export default function OfficeView({
   onChooseModel?: ChooseModel;
   /** Called with the whole setting, its fallback flipped. */
   onToggleFallback?: (next: ModelSetting) => void;
-  /** The test team's five seats (officeTestRoom.tsx), drawn as the Test odası. */
+  /** The test team's five seats (officeTestRoom.tsx), seated on the same office floor as the software team. */
   testSeats?: TestSeat[];
 }) {
   const office = buildOffice(view);
   const bar = office.topBar;
   const energy = energyOf(view);
   const panel = selected ? buildPanel(view, selected) : null;
+  const liveness = livenessLines(view.agents, view.tasks);
   return (
     <div className="office" data-office="root">
       <div className="office-topbar" data-office="topbar">
@@ -90,6 +92,7 @@ export default function OfficeView({
           reducedMotion={reducedMotion}
           onSelect={onSelect}
           arriving={arriving}
+          testSeats={testSeats}
         />
         <OfficePanel
           panel={panel}
@@ -97,7 +100,15 @@ export default function OfficeView({
           onChooseModel={onChooseModel}
         />
       </div>
-      {testSeats && <TestRoom seats={testSeats} now={new Date()} animated={!reducedMotion} />}
+      {liveness.length > 0 && (
+        <ul className="office-liveness" data-office="liveness">
+          {liveness.map(({ seat, liveness: l }) => (
+            <li key={seat} data-kind={l.kind}>
+              <strong>{seat}</strong>: {l.label}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="office-energy" data-office="energy" data-level={energy.level}>
         <div className="office-energy-meter">
           <span className="office-energy-text">{energy.text}</span>

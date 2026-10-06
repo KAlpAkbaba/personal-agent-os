@@ -762,7 +762,8 @@ def _stamp_delivered_briefings(
 
     This is the other half of ``queue_sideband_frame``. Queueing is not delivery -- a web
     session is pull-only, and the frame sits in ``context_json`` until the owner next
-    speaks or the leg re-attaches. THIS is the moment it leaves for a client that will
+    speaks, the shell's 15 s pull takes it (``pull_pending_sideband``) or the leg
+    re-attaches. THIS is the moment it leaves for a client that will
     say it out loud, so this is where ``pending_briefings`` is stamped. The spec's rule
     ("the row marked delivered by the thing that actually delivered it") is the reason
     the stamp is here and not at the queue site: a row marked delivered on the way IN
@@ -794,6 +795,34 @@ def drain_pending_sideband(row: RealtimeSessionRow) -> list[dict[str, Any]]:
     ctx["pending_sideband"] = []
     _set_context(row, ctx)
     return pending
+
+
+def pull_pending_sideband(
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    owner: SessionContext,
+    now: datetime | None = None,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    """The web shell's timer pull (GET .../sideband): what is waiting for this leg, once.
+
+    Same identity rule as ``record_client_events`` (live session, current leg). A frame is
+    handed over and the briefings it carries are stamped HERE, by the request that takes
+    it -- a queue is not a delivery. An empty pull writes nothing: no context, no
+    ``updated_at``, no audit row, no commit. The shell asks every 15 s, and a pull that
+    touched the row would keep a forgotten tab's session alive past ``sweep_idle_sessions``.
+    """
+    now = now or utcnow()
+    require_live(db, row, now=now, trace_id=trace_id)
+    require_leg(row, owner)
+    pending: list[dict[str, Any]] = []
+    if (row.context_json or {}).get("pending_sideband"):
+        pending = drain_pending_sideband(row)
+        _touch(row, now)
+        _stamp_delivered_briefings(db, pending, now=now)
+        db.commit()
+    return {"session_id": str(row.id), "pending_sideband": pending}
 
 
 # -------------------------------------------------------------- tool calls
@@ -2233,6 +2262,12 @@ def record_client_events(
                 # macro the owner NAMED. Both for the same reason as every line here.
                 "repeat_count": intent.repeat_count,
                 "macro_name": intent.macro_name,
+                # watch-voice: the page, the condition, the interval and the name the
+                # owner's WORDS carried ("20 bin liranın altına" wins over the model's).
+                "watch_url": intent.watch_url,
+                "watch_condition": intent.watch_condition,
+                "watch_every_hours": intent.watch_every_hours,
+                "watch_label": intent.watch_label,
                 # B29 req 100/102: the button or control the owner NAMED.
                 "ui_target": intent.ui_target,
                 # B30 req 119-122: the process and the service the owner NAMED.
@@ -2340,6 +2375,12 @@ def record_client_events(
                 # and the mission word the router heard.
                 "mission_request": intent.mission_request,
                 "mission_action": intent.mission_action,
+                # home-stock-list: the item, the level and the quantity the owner SAID. The
+                # local mode has no model to fill the argument; without these "Tuvalet kağıdı
+                # azaldı" was answered "Hangi ürün efendim?".
+                "household_item": intent.household_item,
+                "household_level": intent.household_level,
+                "household_quantity": intent.household_quantity,
                 # ADR-0212: the device(s) the owner NAMED in this sentence ("ofis
                 # bilgisayarımda ..."), as the canonical alias WORDS - never the sentence.
                 # Kept here, where the words are, because a tool call arrives without them;
@@ -3452,6 +3493,7 @@ __all__ = [
     "complete_tool_call_system",
     "create_session",
     "drain_pending_sideband",
+    "pull_pending_sideband",
     "find_running_tool_call_by_task_id",
     "get_session",
     "get_tool_call",

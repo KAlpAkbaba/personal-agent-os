@@ -254,6 +254,11 @@ _TIERS: Final[dict[str, str]] = {
     # something which will act on the owner's behalf UNATTENDED, every morning, until they
     # say otherwise - a mis-heard routine is not a mis-heard command, it is a mis-heard
     # command that repeats.
+    # home-stock-list: a level and a list edit write the owner's household record, the same
+    # kind of durable write as `memory.remember`; small and undoable, but still a write.
+    "household.level": TIER_SENSITIVE,
+    "household.list_add": TIER_SENSITIVE,
+    "household.list_remove": TIER_SENSITIVE,
     "routine.cancel": TIER_SENSITIVE,
     "routine.create": TIER_SENSITIVE,
     "routine.pause": TIER_SENSITIVE,
@@ -270,6 +275,10 @@ _TIERS: Final[dict[str, str]] = {
     "macro.cancel": TIER_SENSITIVE,
     "macro.run": TIER_SENSITIVE,
     "macro.delete": TIER_SENSITIVE,
+    # watch-voice: creating, removing and forgetting a watch change what the owner set up.
+    "watch.create": TIER_SENSITIVE,
+    "watch.remove": TIER_SENSITIVE,
+    "watch.forget_all": TIER_SENSITIVE,
     # ADR-0197: a tab in the owner's own browser, like media.play.
     "godseye.open": TIER_SENSITIVE,
     "scene.add": TIER_SENSITIVE,
@@ -341,7 +350,10 @@ _TIERS: Final[dict[str, str]] = {
     # is: refusing to say what is scheduled protects nothing and teaches the owner that the
     # gate is noise.
     "routine.list": TIER_OPEN,
+    # home-stock-list: "Ne almam lazım?" at the market door must never ask for a voice check.
+    "household.list_read": TIER_OPEN,
     "macro.list": TIER_OPEN,
+    "watch.list": TIER_OPEN,
     "research.finding_detail": TIER_OPEN,
     "research.sources": TIER_OPEN,
     "scene.inspect": TIER_OPEN,

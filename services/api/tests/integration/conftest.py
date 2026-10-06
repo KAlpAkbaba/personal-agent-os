@@ -5,6 +5,7 @@
 Every test in this package is marked `integration`.
 """
 
+import gc
 import socket
 import time
 import warnings
@@ -15,7 +16,8 @@ import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import make_url, text
+from sqlalchemy.engine import Engine
 
 from app.config import Settings
 from app.db import build_engine
@@ -94,13 +96,117 @@ def pytest_collection_modifyitems(items) -> None:
             item.add_marker(pytest.mark.integration)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def release_idle_pools() -> Iterator[None]:
+    """Close the idle pooled connections of every engine once a test module is done.
+
+    `owner_client` builds a whole app per test without its lifespan, and every app keeps its
+    own pools; nothing closed them, so the suite's connections only grew - 275 by the end on
+    2026-10-06 and `too many clients already` on the dev server's 300 for the last modules
+    (13 tests red in two gates, alone on the server). `dispose()` closes only checked-in
+    connections and leaves every engine usable, so a module- or session-scoped engine still
+    in use reconnects on its next checkout.
+    """
+    yield
+    for obj in gc.get_objects():
+        if isinstance(obj, Engine):
+            try:
+                obj.dispose()
+            except Exception:  # noqa: BLE001, S112 - one engine that will not close is no reason to fail a module
+                continue
+
+
 #: Arbitrary fixed key; any value works as long as every runner uses the same one.
 _SUITE_LOCK_KEY = 0x5041_474E  # "PAGN"
 _SUITE_LOCK_TIMEOUT_S = 900.0
 
+#: Client connections one run of this suite may hold at its peak. Measured 2026-10-04: one run
+#: alone peaked at 231 (every app the suite builds keeps its own pools); two runs on two gate
+#: databases together died on `too many clients already` on the dev server's 300.
+_RUN_CONNECTION_BUDGET = 240
+#: Connections left for what else uses the server (Temporal held 22 on 2026-10-04) and psql.
+_SERVER_HEADROOM_CONNECTIONS = 40
+#: Slot n is the advisory lock _SERVER_SLOT_KEY + n in the server-wide `postgres` database.
+_SERVER_SLOT_KEY = 0x5041_4700  # "PAG\0"
+#: A waiting run may wait for a whole other run (about 4-7 minutes, more under load).
+_SERVER_SLOT_TIMEOUT_S = 1800.0
+
+
+def server_run_slots(max_connections: int, reserved: int) -> int:
+    """How many runs of this suite fit on the server at once; at least one."""
+    room = max_connections - reserved - _SERVER_HEADROOM_CONNECTIONS
+    return max(1, room // _RUN_CONNECTION_BUDGET)
+
+
+def server_lock_url(database_url: str) -> str:
+    """The same server and role, in the `postgres` maintenance database: an advisory lock is
+    per database, so a lock in a run's own (gate) database would never meet another run's."""
+    return make_url(database_url).set(database="postgres").render_as_string(hide_password=False)
+
 
 @pytest.fixture(scope="session", autouse=True)
-def exclusive_database() -> Iterator[None]:
+def server_run_slot(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Take one of the server's run slots before anything else connects.
+
+    The gate runs this suite on a database of its own (team/plans/gate-faster-adr.md), so a gate
+    and an inspector no longer reset one database under each other - but they still share the
+    server's connections, and two runs together are more than it has. The second run waits
+    here for a slot instead of failing half its tests on `too many clients already`.
+    """
+    engine = build_engine(server_lock_url(Settings().database_url))
+    connection = engine.connect()
+    limits = connection.execute(
+        text(
+            "SELECT current_setting('max_connections')::int, "
+            "current_setting('superuser_reserved_connections')::int"
+        )
+    ).one()
+    slots = server_run_slots(max_connections=limits[0], reserved=limits[1])
+    deadline = time.monotonic() + _SERVER_SLOT_TIMEOUT_S
+    held: int | None = None
+    said_waiting = False
+    while held is None:
+        for slot in range(slots):
+            acquired = connection.execute(
+                text("SELECT pg_try_advisory_lock(:key)"), {"key": _SERVER_SLOT_KEY + slot}
+            ).scalar()
+            connection.commit()
+            if acquired:
+                held = slot
+                break
+        if held is not None:
+            break
+        if not said_waiting:
+            # Past the capture, so a gate's log shows why its step is quiet.
+            capture = request.config.pluginmanager.getplugin("capturemanager")
+            with capture.global_and_fixture_disabled():
+                print(
+                    f"\nintegration: all {slots} run slot(s) of the database server are taken "
+                    "by other runs; waiting for one",
+                    flush=True,
+                )
+            said_waiting = True
+        if time.monotonic() > deadline:
+            connection.close()
+            engine.dispose()
+            pytest.fail(
+                f"no run slot of the database server came free in {_SERVER_SLOT_TIMEOUT_S:.0f}s "
+                f"({slots} slot(s), {_RUN_CONNECTION_BUDGET} connections each)"
+            )
+        time.sleep(1.0)
+    try:
+        yield
+    finally:
+        connection.execute(
+            text("SELECT pg_advisory_unlock(:key)"), {"key": _SERVER_SLOT_KEY + held}
+        )
+        connection.commit()
+        connection.close()
+        engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def exclusive_database(server_run_slot: None) -> Iterator[None]:
     """Serialize concurrent runs of this suite against the one dev database.
 
     These tests share a database *and* a schema — there is one `tasks` table and

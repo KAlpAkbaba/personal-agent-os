@@ -79,6 +79,7 @@ class PreferencesUpdate(BaseModel):
     read_urls: bool | None = None
     read_footnotes: bool | None = None
     barge_in: bool | None = None
+    humor: str | None = Field(default=None, pattern="^(dry|off)$")
     source: str = Field(default="owner", pattern="^(owner|inferred)$")
 
 

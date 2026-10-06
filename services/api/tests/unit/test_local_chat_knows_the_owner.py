@@ -21,9 +21,16 @@ class _RecordingProvider:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def answer(self, question: str, *, history, now_tr: str, about_owner: str = "") -> ChatAnswer:
+    def answer(
+        self, question: str, *, history, now_tr: str, about_owner: str = "", humor: str = "dry"
+    ) -> ChatAnswer:
         self.calls.append(
-            {"question": question, "history": list(history), "about_owner": about_owner}
+            {
+                "question": question,
+                "history": list(history),
+                "about_owner": about_owner,
+                "humor": humor,
+            }
         )
         return ChatAnswer(speech="Peki efendim.", ok=True, model="fake")
 
@@ -92,3 +99,95 @@ def test_the_provider_puts_it_in_the_system_prompt_not_in_the_question() -> None
 
     assert "Sahip Kadir" in sent["body"]["system"]
     assert "Sahip Kadir" not in str(sent["body"]["messages"])
+
+
+# ------------------------------------------------------------ humor (persona-dry-wit)
+
+
+def test_the_owners_humor_off_reaches_the_local_chat(monkeypatch) -> None:
+    from app import assistant_chat as chat
+    from app.voice.realtime_sessions.tools_assistant import assistant_chat
+
+    provider = _RecordingProvider()
+    ctx = _ctx(monkeypatch, provider, memory_block="")
+    monkeypatch.setattr(chat, "owner_humor", lambda _db: "off")
+
+    assistant_chat(ctx, {})
+
+    assert provider.calls[0]["humor"] == "off"
+
+
+def test_the_local_chat_is_dry_when_the_preference_says_so(monkeypatch) -> None:
+    from app import assistant_chat as chat
+    from app.voice.realtime_sessions.tools_assistant import assistant_chat
+
+    provider = _RecordingProvider()
+    ctx = _ctx(monkeypatch, provider, memory_block="")
+    monkeypatch.setattr(chat, "owner_humor", lambda _db: "dry")
+
+    assistant_chat(ctx, {})
+
+    assert provider.calls[0]["humor"] == "dry"
+
+
+class _Rows:
+    def __init__(self, value) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _Db:
+    def __init__(self, value=None, *, fails: bool = False) -> None:
+        self._value, self._fails = value, fails
+        self.writes = 0
+
+    def execute(self, _statement):
+        if self._fails:
+            raise RuntimeError("database gone")
+        return _Rows(self._value)
+
+    def add(self, *_a) -> None:
+        self.writes += 1
+
+    def commit(self) -> None:
+        self.writes += 1
+
+
+def test_owner_humor_reads_the_saved_switch_without_writing() -> None:
+    from app.assistant_chat import owner_humor
+
+    db = _Db({"humor": "off", "owner_set": ["humor"]})
+    assert owner_humor(db) == "off"
+    assert db.writes == 0
+
+
+def test_owner_humor_falls_back_to_dry() -> None:
+    from app.assistant_chat import owner_humor
+
+    assert owner_humor(None) == "dry"
+    assert owner_humor(_Db(None)) == "dry"  # no profile row yet
+    assert owner_humor(_Db({})) == "dry"  # a row written before the switch existed
+    assert owner_humor(_Db({"humor": "kahkaha"})) == "dry"
+    assert owner_humor(_Db(fails=True)) == "dry"  # never raising into the conversation
+
+
+def test_owner_humor_reads_the_real_profile_row() -> None:
+    """The real query against the real table: what the preferences route saves is what the
+    local chat reads."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.assistant_chat import owner_humor
+    from app.voice.models import VoiceProfile
+    from app.voice.preferences import VoicePreferences
+
+    engine = create_engine("sqlite://")
+    VoiceProfile.__table__.create(engine)
+    with Session(engine) as db:
+        assert owner_humor(db) == "dry"
+        prefs = VoicePreferences().apply_update({"humor": "off"}, source="owner")
+        db.add(VoiceProfile(label="owner", narration_settings_json=prefs.to_narration_settings()))
+        db.commit()
+        assert owner_humor(db) == "off"

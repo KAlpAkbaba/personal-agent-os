@@ -266,9 +266,12 @@ function New-TeamDutyCard {
         No line starts with "- id:" - the run is about several tasks, not one.
     #>
     param(
-        [Parameter(Mandatory = $true)][object[]]$Tasks,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Tasks,
         [Parameter(Mandatory = $true)][string]$CycleId,
-        [Parameter(Mandatory = $true)][string]$DutyFile
+        [Parameter(Mandatory = $true)][string]$DutyFile,
+        # Runs in flight with no sign of life (TeamLiveness.ps1): run ("<task>/<role>"),
+        # idle_minutes, last_activity_at, restarts, child (a stuck tool process, or empty).
+        [object[]]$StuckRuns = @()
     )
     $flat = { param($Value) return ((([string]$Value) -replace '\s+', ' ').Trim()) }
     $lines = New-Object System.Collections.ArrayList
@@ -315,6 +318,29 @@ function New-TeamDutyCard {
                 $cycle = [string](Get-TeamProperty -InputObject $entry -Name "cycle" -Default "?")
                 [void]$lines.Add("    - $(if ($file) { $file } else { '(no file)' }) ($role, cycle $cycle)")
             }
+        }
+    }
+    $stuck = @($StuckRuns | Where-Object { $null -ne $_ })
+    if (@($stuck).Count -gt 0) {
+        [void]$lines.Add("")
+        [void]$lines.Add("## Takılmış olabilecek koşular")
+        [void]$lines.Add("")
+        [void]$lines.Add("These runs (or a tool process of theirs) showed no sign of life - no write in their temp folder or")
+        [void]$lines.Add("worktree, no output, no CPU - for the minutes named. Decide each in the same file, under `"stuck`": [ { `"run`":")
+        [void]$lines.Add("`"<task>/<role>`", `"action`": `"wait`" | `"restart`" | `"escalate`", `"reason`": `"<Türkçe, en çok 1200 karakter>`" } ].")
+        [void]$lines.Add("wait: it is working (say what you saw); restart: the cycle stops that run's process tree and starts it again")
+        [void]$lines.Add("from its worktree (its commits stay); escalate: the Danışman's. A run idle 90 minutes is restarted once")
+        [void]$lines.Add("without you, the second time escalated.")
+        foreach ($entry in $stuck) {
+            $run = [string](Get-TeamProperty -InputObject $entry -Name "run" -Default "?")
+            $idle = [int](Get-TeamProperty -InputObject $entry -Name "idle_minutes" -Default 0)
+            $line = "- ${run}: $idle dk iz yok"
+            $last = [string](Get-TeamProperty -InputObject $entry -Name "last_activity_at" -Default "")
+            if ($last) { $line += " (son iz $last)" }
+            $line += "; yeniden başlatma: $([int](Get-TeamProperty -InputObject $entry -Name 'restarts' -Default 0))"
+            $child = [string](Get-TeamProperty -InputObject $entry -Name "child" -Default "")
+            if ($child) { $line += "; takılı çocuk süreç: " + (& $flat $child) }
+            [void]$lines.Add($line)
         }
     }
     [void]$lines.Add("")
@@ -404,8 +430,9 @@ function Start-TeamRun {
     # finished with this limit). An hour; a longer suite runs in slices.
     $psi.EnvironmentVariables["BASH_MAX_TIMEOUT_MS"] = "3600000"
     # The run's own temp folder (team/cycle-settings.json 'run_temp_root', owner 2026-10-03): the
-    # tests a run starts write their temp folders there, on the data drive, and the folder goes
-    # when the run ends (Remove-TeamRunTemp) - C: filled to zero at 12:00 that day, and %TEMP%
+    # tests a run starts write their temp folders there, on the data drive, and the folder is
+    # emptied when the run ends (Remove-TeamRunTemp; the folder itself stays, it may be Git Bash's
+    # /tmp for the whole machine) - C: filled to zero at 12:00 that day, and %TEMP%
     # held 2.67 million leaked folders the day before. Unset: the machine's TEMP, as before.
     if ($TempDirectory) {
         [void](New-Item -ItemType Directory -Force -Path $TempDirectory)
@@ -428,20 +455,152 @@ function Start-TeamRun {
         StdOut  = $stdout
         StdErr  = $stderr
         Started = [datetime]::UtcNow
+        # What it was started with: Restart-TeamRun starts the same run again from it.
+        Launch  = @{
+            FilePath = $FilePath; Arguments = $Arguments; Prompt = $Prompt; WorkingDirectory = $WorkingDirectory
+            TempDirectory = $TempDirectory; Environment = $Environment
+        }
     }
+}
+
+function Get-TeamGitBash {
+    <# Git for Windows' own bash.exe, found beside git.exe - never System32's bash (WSL). #>
+    $git = Get-TeamGit
+    $dir = Split-Path -Parent $git
+    for ($up = 0; $up -lt 3 -and $dir; $up++) {
+        $candidate = Join-Path $dir "bin\bash.exe"
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+        $dir = Split-Path -Parent $dir
+    }
+    throw "Git's bash.exe was not found beside $git"
+}
+
+function Read-TeamGitBashMount {
+    <# What Git Bash's `mount` prints, or $null when bash cannot be asked. #>
+    try {
+        $result = Invoke-NativeProcess -FilePath (Get-TeamGitBash) -Arguments @("-c", "mount") -TimeoutSeconds 30
+        if ($result.ExitCode -ne 0) { return $null }
+        return [string]$result.StdOut
+    }
+    catch { return $null }
+}
+
+function ConvertFrom-TeamGitBashMount {
+    <# The Windows folder `mount` text names as /tmp, or $null when it names none. #>
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $m = [regex]::Match($line, '^(?<source>.+?) on /tmp type ')
+        if ($m.Success) { return ($m.Groups["source"].Value -replace '/', '\').TrimEnd('\') }
+    }
+    return $null
+}
+
+function Invoke-TeamRunTempSweep {
+    <#
+    .SYNOPSIS
+        Remove the run folders under the run temp root that are empty, older than a day and
+        not Git Bash's /tmp.
+
+    .DESCRIPTION
+        Git for Windows mounts /tmp as 'usertemp': the TEMP of the first msys process of the
+        logon session, shared by every msys process until the last one exits. A run's bash can
+        be that first process, so its folder may be the whole machine's /tmp long after the run
+        (2026-10-06 01:50: the folder was deleted and every bash lost /tmp; mktemp failed in the
+        gate). When `mount` cannot be read, nothing is removed.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [double]$MaxAgeHours = 24,
+        [scriptblock]$ReadMount = { Read-TeamGitBashMount }
+    )
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
+    $text = $null
+    try { $text = & $ReadMount } catch { return }
+    $mounted = ConvertFrom-TeamGitBashMount -Text ([string]$text)
+    if (-not $mounted) { return }
+    try { $mounted = [System.IO.Path]::GetFullPath($mounted).TrimEnd('\') } catch { return }
+    $cutoff = [datetime]::UtcNow.AddHours(-$MaxAgeHours)
+    foreach ($folder in @(Get-ChildItem -LiteralPath $Root -Directory -Force -ErrorAction SilentlyContinue)) {
+        if ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+        if ($folder.LastWriteTimeUtc -gt $cutoff) { continue }
+        if ([string]::Equals($folder.FullName.TrimEnd('\'), $mounted, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (@(Get-ChildItem -LiteralPath $folder.FullName -Force -ErrorAction SilentlyContinue).Count -gt 0) { continue }
+        try { Remove-Item -LiteralPath $folder.FullName -Force -ErrorAction Stop } catch { }
+    }
+}
+
+function Restart-TeamRun {
+    <#
+    .SYNOPSIS
+        Stop one run's process tree - that run's and no other's - and start it again, the same
+        card in the same worktree (pm-stuck-run-check: a run the Proje Yöneticisi, or the 90-
+        minute rule, judged stuck). Nothing in git is touched: what the run committed stays,
+        and the run starts again from it. Returns the new run, in Start-TeamRun's shape, with
+        ReleasedTickets.
+    .PARAMETER SlotStore
+        The test queue's store (scripts/lib/TeamTestSlots.ps1). A slot held by a process of this
+        run's tree is given back at once, not when the next ask notices its holder is gone: on
+        2026-10-04 a stuck child held the heavy slot and the release gate waited 140 minutes.
+        A sibling run's slot is never touched.
+    #>
+    param([Parameter(Mandatory = $true)]$Run, [string]$SlotStore = "")
+    $launchProperty = $Run.PSObject.Properties["Launch"]
+    if ($null -eq $launchProperty -or $null -eq $launchProperty.Value) { throw "the run carries no launch record: it cannot be started again" }
+    $launch = $launchProperty.Value
+    $held = @()
+    if ($SlotStore) {
+        if (-not (Get-Command Get-TestSlotEntries -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot "TeamTestSlots.ps1") }
+        if (-not (Get-Command Get-TeamDescendants -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot "TeamLiveness.ps1") }
+        if (-not $Run.Process.HasExited) {
+            $tree = @{ ([int]$Run.Process.Id) = $true }
+            foreach ($row in @(Get-TeamDescendants -ProcessTable @(Get-TeamProcessTable) -RootProcessId $Run.Process.Id)) { $tree[[int]$row.Id] = $true }
+            $held = @(Get-TestSlotEntries -Store $SlotStore | Where-Object { $_.state -eq "running" -and $tree.ContainsKey([int]$_.holder_pid) } | ForEach-Object { [string]$_.ticket })
+        }
+    }
+    if (-not $Run.Process.HasExited) {
+        Stop-TeamProcessTree -ProcessId $Run.Process.Id
+        [void]$Run.Process.WaitForExit(15000)
+    }
+    try { $Run.Process.Dispose() } catch { }
+    $released = New-Object System.Collections.ArrayList
+    foreach ($ticket in $held) {
+        if (Remove-TestSlotTicket -Store $SlotStore -Ticket $ticket) { [void]$released.Add($ticket) }
+    }
+    $again = Start-TeamRun @launch
+    $again | Add-Member -NotePropertyName ReleasedTickets -NotePropertyValue @($released.ToArray())
+    return $again
 }
 
 function Remove-TeamRunTemp {
     <#
     .SYNOPSIS
-        Remove a finished run's temp folder. Best effort: a file still held open stays, and a
-        folder with a link inside is left whole (a recursive delete would follow it).
+        Empty a finished run's temp folder and keep the folder itself; then sweep the run temp
+        root (Invoke-TeamRunTempSweep).
+
+    .DESCRIPTION
+        The folder stays because Git Bash may have it mounted as /tmp for the whole machine
+        (see Invoke-TeamRunTempSweep). Best effort: a file still held open stays and is named
+        in a warning, and a folder with a link inside is left whole (a recursive delete would
+        follow it). Nothing is written to the pipeline.
     #>
-    param([string]$Path)
+    [CmdletBinding()]
+    param(
+        [string]$Path,
+        [scriptblock]$ReadMount = { Read-TeamGitBashMount }
+    )
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
     $links = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue)
     if (@($links).Count -gt 0) { return }
-    try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop } catch { }
+    foreach ($child in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        try { Remove-Item -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop } catch { }
+    }
+    $left = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue)
+    if (@($left).Count -gt 0) {
+        $names = @($left | Select-Object -First 10 | ForEach-Object { $_.FullName })
+        Write-Warning ("Remove-TeamRunTemp: {0} file(s) left in {1} (held open?): {2}" -f @($left).Count, $Path, ($names -join ", "))
+    }
+    try { Invoke-TeamRunTempSweep -Root (Split-Path -Parent $Path) -ReadMount $ReadMount } catch { }
 }
 
 function Stop-TeamProcessTree {

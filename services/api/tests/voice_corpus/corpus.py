@@ -7310,6 +7310,202 @@ def _macro_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _household_cases() -> list[UtteranceCase]:
+    """home-stock-list: the house's stock and the shopping list, in the owner's words.
+
+    Each level form ("azaldı", "bitmek üzere", "az kaldı", "bitti", "kalmadı", "bitmiş",
+    "aldım", "aldık"), the list's add/remove/read forms, and the neighbours the anchored words
+    must leave alone: "bitti" and "aldım" are everyday verbs ("Toplantı bitti", "Mesajını
+    aldım"), so a level needs a household item or a place. ``tool_arguments`` are what a model
+    sends; the router's own ``household_*`` words win over them inside the tool.
+    """
+    cases: list[UtteranceCase] = []
+    for case_id, text, item, level, source in (
+        ("household.low.1", "Tuvalet kağıdı azaldı.", "tuvalet kağıdı", "azaldı", "canonical"),
+        (
+            "household.low.2",
+            "Bulaşık deterjanı bitmek üzere.",
+            "bulaşık deterjanı",
+            "azaldı",
+            "paraphrase",
+        ),
+        ("household.low.3", "Evde çay az kaldı.", "çay", "azaldı", "paraphrase"),
+        ("household.out.1", "Deterjan bitti.", "deterjan", "bitti", "canonical"),
+        ("household.out.2", "Evde yumurta kalmadı.", "yumurta", "bitti", "paraphrase"),
+        ("household.out.3", "Süt bitmiş.", "süt", "bitti", "paraphrase"),
+        ("household.bought.1", "Süt aldım.", "süt", "var", "canonical"),
+        ("household.bought.2", "Tuvalet kağıdı aldık.", "tuvalet kağıdı", "var", "paraphrase"),
+        ("household.bought.3", "Bir kahve aldım.", "kahve", "var", "regression"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="household_level",
+                    expected_tool="household.level",
+                    expected={"level": level},
+                    tool_arguments={"item": item, "level": level},
+                    category="household",
+                    source=source,
+                )
+            )
+        )
+    for case_id, text, intent, tool, arguments, source in (
+        (
+            "household.add.1",
+            "Listeye süt ekle.",
+            "household_list_add",
+            "household.list_add",
+            {"item": "süt"},
+            "canonical",
+        ),
+        (
+            "household.add.2",
+            "Listeye iki paket makarna yaz.",
+            "household_list_add",
+            "household.list_add",
+            {"item": "makarna", "quantity": "iki paket"},
+            "paraphrase",
+        ),
+        (
+            "household.add.3",
+            "Kedi mamasını alışveriş listesine ekler misin?",
+            "household_list_add",
+            "household.list_add",
+            {"item": "kedi maması"},
+            "paraphrase",
+        ),
+        (
+            "household.add.4",
+            "Market listesine süt ekle.",
+            "household_list_add",
+            "household.list_add",
+            {"item": "süt"},
+            "paraphrase",
+        ),
+        (
+            "household.remove.1",
+            "Listeden sütü çıkar.",
+            "household_list_remove",
+            "household.list_remove",
+            {"item": "süt"},
+            "canonical",
+        ),
+        (
+            "household.remove.2",
+            "Çayı listeden sil.",
+            "household_list_remove",
+            "household.list_remove",
+            {"item": "çay"},
+            "paraphrase",
+        ),
+        (
+            "household.read.1",
+            "Ne almam lazım?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "canonical",
+        ),
+        (
+            "household.read.2",
+            "Neler almam gerekiyor?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+        (
+            "household.read.3",
+            "Listeyi oku.",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "canonical",
+        ),
+        (
+            "household.read.4",
+            "Alışveriş listesini oku.",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+        (
+            "household.read.5",
+            "Listede ne var?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+        (
+            "household.read.6",
+            "Markete gidiyorum.",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "canonical",
+        ),
+        (
+            "household.read.7",
+            "Evde ne eksik?",
+            "household_list_read",
+            "household.list_read",
+            {},
+            "paraphrase",
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent=intent,
+                    expected_tool=tool,
+                    tool_arguments=dict(arguments),
+                    category="household",
+                    source=source,
+                )
+            )
+        )
+    household_tools = (
+        "household.level",
+        "household.list_add",
+        "household.list_remove",
+        "household.list_read",
+    )
+    for case_id, text in (
+        ("household.neighbour.meeting", "Toplantı bitti."),
+        ("household.neighbour.message", "Mesajını aldım."),
+        ("household.neighbour.battery", "Telefonun şarjı azaldı."),
+        ("household.neighbour.question", "Süt bitti mi?"),
+        # Inspector, 2026-10-06: a place is not a stock, and not every list is the shopping list.
+        ("household.neighbour.nobody", "Evde kimse kalmadı."),
+        ("household.neighbour.money", "Evde para kalmadı."),
+        ("household.neighbour.power", "Evde elektrik bitti."),
+        ("household.neighbour.playlist", "Oynatma listesine ekle."),
+        ("household.neighbour.note", "Listeye not ekle."),
+        ("household.neighbour.task", "Görevi listeden sil."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=household_tools,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="household",
+                source="regression",
+            )
+        )
+    return cases
+
+
 def _routine_cases() -> list[UtteranceCase]:
     """B14 req 296-299: the owner's own routines, in their own words.
 
@@ -8008,11 +8204,119 @@ def _b51_paraphrase_cases(existing: list[UtteranceCase]) -> list[UtteranceCase]:
     return out
 
 
+def _watch_cases() -> list[UtteranceCase]:
+    """watch-voice: the owner's watch over a public page ("nöbet"). A create with no page in
+    the sentence is the free local mode's ONE missing-slot question ("Hangi sayfayı
+    izleyeyim?"), never a confirmation; the realtime model fills ``url`` live."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("w.create.1", "Home Assistant'ın yeni kararlı sürümü çıkınca bana söyle.", "canonical"),
+        ("w.create.2", "Şu ürünün fiyatı 20 bin liranın altına inerse haber ver.", "canonical"),
+        ("w.create.3", "Şu ürünün fiyatı 20.000 liranın altına inerse haber ver.", "paraphrase"),
+        ("w.create.4", "Bu sayfa değişince bana söyle.", "canonical"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="watch_create",
+                expected_tool="watch.create",
+                expected_response=RESPONSE_CLARIFY,
+                category="watch",
+                source=source,
+            )
+        )
+    for case_id, text, intent, tool, source in (
+        ("w.list.1", "Nöbetlerimi say.", "watch_list", "watch.list", "canonical"),
+        ("w.list.2", "Hangi nöbetlerim var?", "watch_list", "watch.list", "paraphrase"),
+        ("w.remove.1", "Fiyat nöbetini kaldır.", "watch_remove", "watch.remove", "canonical"),
+        ("w.remove.2", "Nöbeti kaldır.", "watch_remove", "watch.remove", "paraphrase"),
+        ("w.forget.1", "Nöbetleri unut.", "watch_forget_all", "watch.forget_all", "canonical"),
+        (
+            "w.forget.2",
+            "Bütün nöbetleri sil.",
+            "watch_forget_all",
+            "watch.forget_all",
+            "paraphrase",
+        ),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent=intent,
+                expected_tool=tool,
+                category="watch",
+                source=source,
+            )
+        )
+    # The near misses: a pharmacy on duty, a reminder's tell verb, the negative imperative.
+    cases.append(
+        UtteranceCase(
+            case_id="w.negation.unutma_is_remember",
+            utterance="Nöbetleri unutma.",
+            expected_intent="memory_remember",
+            expected_tool="memory.remember",
+            forbidden_tools=("watch.forget_all", "memory.forget"),
+            category="watch",
+            source="canonical",
+            notes="'unutma' is 'do not forget': it must never reach the forget-all.",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="w.near.shift_is_remember",
+            utterance="Bu gece nöbet tutacağım, bana hatırlat.",
+            expected_intent="memory_remember",
+            expected_tool="memory.remember",
+            forbidden_tools=WATCH_TOOLS_ALL,
+            category="watch",
+            source="canonical",
+            notes="The owner's night shift is a thing to remember, not a watch to create.",
+        )
+    )
+    for case_id, text in (
+        ("w.near.nobetci", "nöbetçi eczane nerede"),
+        ("w.near.alarm", "saat yedide haber ver"),
+        ("w.near.leaving", "Evden çıkınca bana söyle."),
+        ("w.near.clock_five", "Saat beşi geçince bana söyle."),
+        ("w.near.clock_twelve", "Saat on ikiyi geçince uyar."),
+        # The allowlist (return 3 of cycle d20261005): these delete nothing.
+        ("w.negation.silme", "Nöbetleri silme."),
+        ("w.negation.kaldirma", "Nöbeti kaldırma."),
+        ("w.ablative.one_of_them", "Nöbetlerden fiyatı kaldır."),
+        ("w.ablative.mine", "Nöbetlerimden birini sil."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=WATCH_TOOLS_ALL,
+                category="watch",
+                source="canonical",
+            )
+        )
+    return cases
+
+
+WATCH_TOOLS_ALL: Final[tuple[str, ...]] = (
+    "watch.create",
+    "watch.list",
+    "watch.remove",
+    "watch.forget_all",
+)
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_clock_cases(),
         *_routine_cases(),
         *_macro_cases(),
+        *_watch_cases(),
+        *_household_cases(),
         *_memory_cases(),
         *_daily_cases(),
         *_research_cases(),

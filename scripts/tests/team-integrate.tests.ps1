@@ -1146,11 +1146,13 @@ try {
         Assert-Equal -Expected 6 -Actual $red.ExitCode -Because $red.Output
         Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $red.Queue -Id "task-two").state -Because "the gate named its file"
         Assert-True -Condition ((Get-TaskById -Queue $red.Queue -Id "task-one").reason -match "task-two") -Because "the task that stays merged says whom it waits for: $((Get-TaskById -Queue $red.Queue -Id 'task-one').reason)"
+        # The run gated twice: the whole branch, and the branch rebuilt without task-two (red as well: this fake gate is always red).
+        Assert-Equal -Expected 2 -Actual @($red.GateCalls).Count -Because "the whole branch and the rebuilt one"
         # The lead's look does not open this either: a branch goes onto main whole, and task-two has not passed.
         foreach ($extra in @("", "-ClearGateStop")) {
             $wait = Invoke-Integrate -Root $root -Gate "green" -ExtraArguments $extra
             Assert-Equal -Expected 0 -Actual $wait.ExitCode -Because "'$extra': $($wait.Output)"
-            Assert-Equal -Expected 1 -Actual @($wait.GateCalls).Count -Because "'$extra': no gate while task-two is returned"
+            Assert-Equal -Expected 2 -Actual @($wait.GateCalls).Count -Because "'$extra': no gate while task-two is returned"
             Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "'$extra': main is where it was - task-two's code is on the branch"
             Assert-Equal -Expected $mainBefore -Actual (Invoke-SandboxGit -Root "$root-origin.git" -Arguments @("rev-parse", "main")) -Because "'$extra': and so is origin's"
             Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $wait.Queue -Id "task-one").state -Because "'$extra': task-one waits"
@@ -1170,7 +1172,7 @@ try {
         Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document $queue
         $green = Invoke-Integrate -Root $root -Gate "green"
         Assert-Equal -Expected 0 -Actual $green.ExitCode -Because $green.Output
-        Assert-Equal -Expected 2 -Actual @($green.GateCalls).Count -Because "one gate for the whole branch"
+        Assert-Equal -Expected 3 -Actual @($green.GateCalls).Count -Because "one gate for the whole branch"
         foreach ($id in @("task-one", "task-two")) { Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $green.Queue -Id $id).state -Because "$id is on main" }
         Assert-Equal -Expected "fixed" -Actual (Invoke-SandboxGit -Root $root -Arguments @("show", "main:src/b/task-two.txt")) -Because "what is on main is the fixed file"
     }
@@ -2153,9 +2155,11 @@ try {
         Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "the lock was released"
 
         # The next run: a gate that WOULD be green is not started; the verdict the gate gave is written.
+        # The first run gated twice: the whole branch, then the branch rebuilt without task-one (red too, the fake is red).
+        Assert-Equal -Expected 2 -Actual @($first.GateCalls).Count -Because "the whole branch and the rebuilt one"
         $second = Invoke-Integrate -Root $root -Gate "green" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 6 -Actual $second.ExitCode -Because "the red gate is said again, not waited on in silence: $($second.Output)"
-        Assert-Equal -Expected 1 -Actual @($second.GateCalls).Count -Because "the gate was not run a second time on the same commit"
+        Assert-Equal -Expected 2 -Actual @($second.GateCalls).Count -Because "the gate was not run a second time on the same commit"
         Assert-Equal -Expected 1 -Actual @($second.LeadCalls).Count -Because "nor a second lead run paid for"
         $state = Get-FakeApiState -Api $api
         $named = @($state.tasks | Where-Object { $_.id -eq "task-one" })[0]
@@ -2174,7 +2178,7 @@ try {
         $third = Invoke-Integrate -Root $root -Gate "green" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 0 -Actual $third.ExitCode -Because $third.Output
         Assert-True -Condition ($third.Output -match "held by task-one \(returned\)") -Because "from here the branch waits for the worker, and says so: $($third.Output)"
-        Assert-Equal -Expected 1 -Actual @($third.GateCalls).Count -Because "still one gate"
+        Assert-Equal -Expected 2 -Actual @($third.GateCalls).Count -Because "still the first run's two gates"
     }
 
     Test-Case "the other machine's lock stops the step before anything: no gate, no worktree, no write" {
@@ -2465,6 +2469,133 @@ exit 0
             Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision "integrate/c1" -File $file)) -Because "$file is not on the integration branch"
         }
         Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the branch went through"
+    }
+
+    # ---- a red card does not hold the green ones (the owner, 2026-10-06: "testler yeşil olanları otomatik yayına alsak")
+    $three = @(@{ Id = "task-a"; Area = "src/a" }, @{ Id = "task-b"; Area = "src/b" }, @{ Id = "task-c"; Area = "src/c" })
+
+    function New-RedWhileGate {
+        <# A gate of the test's: red (naming -File) while -File is in the tree it runs in, green once it is not. #>
+        param([string]$Root, [string]$File)
+        $path = Join-Path "$Root-tools" "red-while-gate.ps1"
+        [System.IO.File]::WriteAllText($path, (@(
+                    "`$env:PAGENTOS_FAKE_GATE_SCENARIO = if (Test-Path -LiteralPath (Join-Path (Get-Location).ProviderPath '$($File -replace '/', '\')')) { 'red' } else { 'green' }",
+                    "`$env:PAGENTOS_FAKE_GATE_NAMES = '$File'",
+                    "& '$(Join-Path $Root 'scripts\tests\lib\fake-gate.ps1')'",
+                    "exit `$LASTEXITCODE") -join "`r`n"), $utf8)
+        return $path
+    }
+
+    function Get-RebuiltBranches {
+        param([string]$Root)
+        return @((Invoke-SandboxGit -Root $Root -Arguments @("for-each-ref", "--format=%(refname:short)", "refs/heads/integrate/")) -split "`r?`n" |
+                ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne "integrate/c1" })
+    }
+
+    Test-Case "red card apart (1): the gate blames task-a; the branch is rebuilt from main without it, gated again in the same run, and task-b and task-c reach main and the green record release.ps1 reads" {
+        $root = New-Sandbox -Work $three
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $run = Invoke-Integrate -Root $root -GateScript (New-RedWhileGate -Root $root -File "src/a/task-a.txt")
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 2 -Actual @($run.GateCalls).Count -Because "the whole branch, then the rebuilt one: $($run.GateCalls -join ' / ')"
+        Assert-True -Condition ($run.GateCalls[0] -match "\|red$" -and $run.GateCalls[1] -match "\|green$") -Because "red with task-a, green without it: $($run.GateCalls -join ' / ')"
+        $rebuilt = @(Get-RebuiltBranches -Root $root)
+        Assert-Equal -Expected 1 -Actual @($rebuilt).Count -Because "one rebuilt branch: $($rebuilt -join ', ')"
+        $second = @($run.GateCalls[1] -split "\|")[1]
+        Assert-Equal -Expected (Get-Sha -Root $root -Revision $rebuilt[0]) -Actual $second -Because "the second gate ran on the rebuilt branch's tip"
+        Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision $second -File "src/a/task-a.txt")) -Because "the rebuilt branch does not hold task-a"
+        foreach ($file in @("src/b/task-b.txt", "src/c/task-c.txt")) { Assert-True -Condition (Test-OnBranch -Root $root -Revision $second -File $file) -Because "the rebuilt branch holds $file" }
+        Assert-True -Condition (Test-TeamAncestor -RepoRoot $root -Ancestor $mainBefore -Of $second) -Because "it is built on main"
+
+        $mainAfter = Get-Sha -Root $root -Revision "main"
+        Assert-True -Condition ($mainAfter -ne $mainBefore) -Because "main moved"
+        Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision "main" -File "src/a/task-a.txt")) -Because "task-a is not on main"
+        Assert-Equal -Expected (Get-Sha -Root $root -Revision "$second^{tree}") -Actual (Get-Sha -Root $root -Revision "main^{tree}") -Because "main holds exactly what the second gate ran on"
+        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-a").state -Because "task-a goes back to its worker"
+        foreach ($id in @("task-b", "task-c")) {
+            $task = Get-TaskById -Queue $run.Queue -Id $id
+            Assert-Equal -Expected "awaiting_release" -Actual $task.state -Because "$id passed"
+            Assert-Equal -Expected $mainAfter -Actual $task.sha -Because "$id carries main's sha"
+            Assert-True -Condition ($task.reason -match "kırmızı iş ayrıldı: task-a" -and $task.reason.Contains($rebuilt[0])) -Because "the Onay Merkezi line says what was left out and where: $($task.reason)"
+        }
+        . (Join-Path $repoRoot "scripts\lib\TeamRelease.ps1")
+        $evidence = Find-TeamReleaseGate -ReportsRoot (Join-Path $root "team\reports") -Sha $mainAfter
+        Assert-True -Condition ([bool]$evidence.Found -and [bool]$evidence.Pass) -Because "release.ps1 finds a green record and a PASS log for main: $($evidence.Why)"
+        Assert-True -Condition ($run.Report -match "kırmızı iş ayrıldı: task-a; kalanlar yeniden kapıda" -and $run.Report.Contains($rebuilt[0])) -Because "the report names the rebuilt branch and who was left out: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    Test-Case "red card apart (2): a red gate that blames nobody gates nothing more: everything waits with today's words" {
+        $root = New-Sandbox -Work $three
+        $run = Invoke-Integrate -Root $root -Gate "red" -Names "src/shared/nobody.txt"
+        Assert-Equal -Expected 6 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 1 -Actual @($run.GateCalls).Count -Because "no second gate"
+        Assert-Equal -Expected 0 -Actual @(Get-RebuiltBranches -Root $root).Count -Because "nothing is rebuilt"
+        foreach ($id in @("task-a", "task-b", "task-c")) {
+            $task = Get-TaskById -Queue $run.Queue -Id $id
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "$id waits"
+            Assert-True -Condition ($task.reason -match "aynı commit yeniden kapıya girmez: yeni bir commit ya da lead'in -ClearGateStop'u beklenir" -and $task.reason -notmatch "ayrıldı") -Because "today's words: $($task.reason)"
+        }
+    }
+
+    Test-Case "red card apart (3): the rebuilt branch is red too - no third gate, everything waits, and the Danışman is told" {
+        $root = New-Sandbox -Work $three
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $run = Invoke-Integrate -Root $root -Gate "red" -Names "src/a/task-a.txt"
+        Assert-Equal -Expected 6 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 2 -Actual @($run.GateCalls).Count -Because "one extra gate at most: $($run.GateCalls -join ' / ')"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-a").state -Because "task-a was blamed"
+        foreach ($id in @("task-b", "task-c")) {
+            $task = Get-TaskById -Queue $run.Queue -Id $id
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "$id waits"
+            Assert-True -Condition ($task.reason -match "Danışman") -Because "$id says the Danışman was told: $($task.reason)"
+        }
+        Assert-True -Condition ($run.Report -match "Danışman" -and $run.Report -match "kırmızı iş ayrıldı: task-a") -Because "the report has the Danışman's line: $($run.Report)"
+        # The next run gates nothing: task-a holds the branch, as before.
+        $again = Invoke-Integrate -Root $root -Gate "green"
+        Assert-Equal -Expected 2 -Actual @($again.GateCalls).Count -Because "no gate while task-a is returned"
+    }
+
+    Test-Case "red card apart (4): when the blamed task is the only one on the branch there is nothing to rebuild and no second gate" {
+        $root = New-Sandbox -Work @(@{ Id = "task-a"; Area = "src/a" })
+        $run = Invoke-Integrate -Root $root -Gate "red" -Names "src/a/task-a.txt"
+        Assert-Equal -Expected 6 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 1 -Actual @($run.GateCalls).Count -Because "no second gate"
+        Assert-Equal -Expected 0 -Actual @(Get-RebuiltBranches -Root $root).Count -Because "nothing is rebuilt"
+        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-a").state -Because "task-a goes back"
+        $reason = (Get-TaskById -Queue $run.Queue -Id "task-a").reason
+        Assert-True -Condition ($reason -match "düzeltilip yeniden birleşene kadar" -and $reason -notmatch "ayrıldı") -Because "today's words, nothing set apart: $reason"
+    }
+
+    Test-Case "red card apart (5): a task whose branch was built on the blamed one's is left out too, and named; the others pass" {
+        $root = New-Sandbox -Work @(@{ Id = "task-a"; Area = "src/a" }, @{ Id = "task-b"; Area = "src/b" })
+        $tree = Join-Path "$root-tools" "wt-task-d"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("branch", "team/c1/worker-task-d", "team/c1/worker-task-a"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", "-q", $tree, "team/c1/worker-task-d"))
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $tree "src\d"))
+        Set-Content -LiteralPath (Join-Path $tree "src\d\task-d.txt") -Value "work on task-d" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", "work on task-d"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "remove", "--force", $tree))
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-task-d" -Base "main"
+        Assert-True -Condition ([bool]$merge.Merged) -Because "task-d is merged: $($merge.Detail)"
+        $queue = Read-TeamJson -Path (Join-Path $root "team\queue.json")
+        $d = New-Task -Id "task-d" -Area @("src/d") -Branch "team/c1/worker-task-d" -Integration "integrate/c1"
+        $d | Add-Member -NotePropertyName sha -NotePropertyValue (Get-Sha -Root $root -Revision "team/c1/worker-task-d")
+        $queue.tasks = @(@($queue.tasks) + @($d))
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document $queue
+
+        $run = Invoke-Integrate -Root $root -GateScript (New-RedWhileGate -Root $root -File "src/a/task-a.txt")
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 2 -Actual @($run.GateCalls).Count -Because "two gates"
+        $second = @($run.GateCalls[1] -split "\|")[1]
+        Assert-True -Condition (-not (Test-OnBranch -Root $root -Revision $second -File "src/d/task-d.txt")) -Because "task-d rides on task-a's code: left out"
+        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-a").state -Because "task-a was blamed"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-d").state -Because "task-d was not blamed: it waits for task-a"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-b").state -Because "task-b passed"
+        Assert-True -Condition ($run.Report -match "task-d") -Because "the report names what was dropped with it: $($run.Report)"
+        Assert-True -Condition ((Get-TaskById -Queue $run.Queue -Id "task-d").reason -match "task-a") -Because "task-d says whom it waits for: $((Get-TaskById -Queue $run.Queue -Id 'task-d').reason)"
     }
 }
 finally {

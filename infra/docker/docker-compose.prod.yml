@@ -123,6 +123,15 @@ services:
       # — and that installer REFUSES a host whose compose does not wire the name, which is
       # why this line has to exist before the owner can supply the value.
       PAGENTOS_ANTHROPIC_API_KEY: ${PAGENTOS_ANTHROPIC_API_KEY:-}
+      # jarvis-calls-owner: JARVIS phones the owner through Twilio. The SID and the token are
+      # SECRETS, installed with scripts/cloud/set-cloud-secret.ps1 (stdin only, never argv);
+      # the numbers and the public https origin go into /opt/pagentos/.env, never here.
+      # All OPTIONAL: absent means the settings page says "bağlı değil" and nothing rings.
+      PAGENTOS_TELEPHONY_TWILIO_ACCOUNT_SID: ${PAGENTOS_TELEPHONY_TWILIO_ACCOUNT_SID:-}
+      PAGENTOS_TELEPHONY_TWILIO_AUTH_TOKEN: ${PAGENTOS_TELEPHONY_TWILIO_AUTH_TOKEN:-}
+      PAGENTOS_TELEPHONY_OWNER_NUMBER: ${PAGENTOS_TELEPHONY_OWNER_NUMBER:-}
+      PAGENTOS_TELEPHONY_FROM_NUMBER: ${PAGENTOS_TELEPHONY_FROM_NUMBER:-}
+      PAGENTOS_TELEPHONY_PUBLIC_BASE_URL: ${PAGENTOS_TELEPHONY_PUBLIC_BASE_URL:-}
       # Production is never "dev": the simulated provider is barred from selection here.
       PAGENTOS_ENVIRONMENT: ${PAGENTOS_ENVIRONMENT:-prod}
       # The web shell is reached over the tailnet; set to the real private origin(s).

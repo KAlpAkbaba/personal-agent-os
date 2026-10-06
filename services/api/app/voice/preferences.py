@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.wit import HUMOR_DRY, normalize_humor
 
 _BOOL_FIELDS = (
     "executive_summary_first",
@@ -39,9 +40,15 @@ class VoicePreferences:
     read_urls: bool = False
     read_footnotes: bool = False
     barge_in: bool = True
+    #: Dry wit in the spoken persona ('dry' | 'off'; anything else reads as 'dry'). The rule
+    #: itself lives in ``app.voice.wit``; this is only the owner's switch.
+    humor: str = HUMOR_DRY
     # Names of fields the owner has set explicitly; these are immune to inferred
     # updates. Persisted alongside the values so the override rule survives reloads.
     owner_set: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.humor = normalize_humor(self.humor)
 
     # ------------------------------------------------------------- (de)serialize
 
@@ -74,6 +81,7 @@ class VoicePreferences:
         for name in _BOOL_FIELDS:
             if not isinstance(getattr(self, name), bool):
                 raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"{name} must be a bool")
+        self.humor = normalize_humor(self.humor)
         return self
 
     # -------------------------------------------------------------- update logic

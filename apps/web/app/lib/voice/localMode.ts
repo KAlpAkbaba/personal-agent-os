@@ -36,6 +36,8 @@
 import type { VoiceSessionApi } from "./api";
 import { VoiceApiError } from "./api";
 import type { EventsResponse, SidebandFrame, ToolCallResponse } from "./contract";
+import { SIDEBAND_PULL_MS } from "./contract";
+import { type Scheduler, realScheduler } from "./events";
 import type { LocalActionPort } from "./ports";
 import { eyeLocalActions } from "../eye/local-actions";
 import { getEyeStore } from "../eye/store";
@@ -197,6 +199,12 @@ export type LocalModeDeps = {
   sttSetting?: () => SttSetting;
   /** What the phrase list is built from; a failure costs the session's names, never the start. */
   phraseSources?: () => Promise<PhraseSources>;
+  /**
+   * The clock of the `SIDEBAND_PULL_MS` sideband pull (a briefing queued while the owner is
+   * silent). Absent = no pull; the browser deps pass the real one. Its own port, so the
+   * speech guard's timer list stays the guard's.
+   */
+  sidebandScheduler?: Scheduler;
 };
 
 // --------------------------------------------------------------- snapshot
@@ -367,6 +375,8 @@ export class LocalVoiceMode {
   private readonly newId: () => string;
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
   private readonly clearTimer: (handle: unknown) => void;
+  private sidebandPullTimer: unknown = null;
+  private sidebandPullInFlight = false;
 
   constructor(private readonly deps: LocalModeDeps) {
     this.now = deps.now ?? (() => Date.now());
@@ -450,6 +460,7 @@ export class LocalVoiceMode {
     recognizer.onerror = (event) => this.onRecognizerError(event?.error);
     this.patch({ sessionId: created.session_id, provider: created.provider });
     this.log(`session.created provider=${created.provider} transport=${created.transport}`);
+    this.armSidebandPull();
     const preparing = this.prepareStt();
     if (preparing) {
       // Only `acik` / `olc` wait for Chrome's answer, and never longer than the guard.
@@ -482,6 +493,7 @@ export class LocalVoiceMode {
   private async end(state: "off" | "error", lastError: string | null): Promise<void> {
     if (!this.active && !this.sessionId) return;
     this.active = false;
+    this.clearSidebandPull();
     this.pending = 0;
     this.running = false;
     const recognizer = this.recognizer;
@@ -509,6 +521,60 @@ export class LocalVoiceMode {
         this.log(`session.close.failed ${describe(error)}`);
       }
     }
+  }
+
+  // --------------------------------------------------------- sideband pull
+
+  /**
+   * The paid controller's rule on this mode's own loop: every `SIDEBAND_PULL_MS` while the
+   * session is open, at most one pull on the wire, a tick yields to a turn in progress (its
+   * `/events` answer carries the frames), a pulled `say` is spoken like an `/events` one,
+   * a 410 ends the mode, anything else costs one tick.
+   */
+  private armSidebandPull(): void {
+    const scheduler = this.deps.sidebandScheduler;
+    if (!scheduler) return;
+    this.clearSidebandPull();
+    this.sidebandPullTimer = scheduler.setTimeout(() => {
+      this.sidebandPullTimer = null;
+      this.armSidebandPull();
+      void this.pullSideband();
+    }, SIDEBAND_PULL_MS);
+  }
+
+  private clearSidebandPull(): void {
+    if (this.sidebandPullTimer !== null) {
+      this.deps.sidebandScheduler?.clearTimeout(this.sidebandPullTimer);
+      this.sidebandPullTimer = null;
+    }
+  }
+
+  private async pullSideband(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!this.active || !sessionId || this.sidebandPullInFlight || this.pending > 0) return;
+    this.sidebandPullInFlight = true;
+    let said: string[];
+    try {
+      said = saidFrames((await this.deps.api.sidebandPull(sessionId)).pending_sideband);
+    } catch (error) {
+      if (!this.active || this.sessionId !== sessionId) return;
+      this.log(`sideband.pull_failed ${describe(error)}`);
+      if (error instanceof VoiceApiError && error.gone) {
+        await this.end("error", "Yerel oturum sunucuda kapanmış; yeniden başlatın.");
+      }
+      return;
+    } finally {
+      this.sidebandPullInFlight = false;
+    }
+    if (!this.active || this.sessionId !== sessionId || said.length === 0) return;
+    this.chain = this.chain
+      .then(async () => {
+        for (const line of said) await this.speak(line);
+      })
+      .catch(() => {})
+      .then(() => {
+        if (this.active) this.listen();
+      });
   }
 
   // ------------------------------------------------------------ listening
@@ -1050,5 +1116,6 @@ export function browserLocalModeDeps(api: VoiceSessionApi): LocalModeDeps {
     },
     sttSetting: () => readSttSetting(typeof window === "undefined" ? null : window.localStorage),
     phraseSources: browserPhraseSources,
+    sidebandScheduler: realScheduler,
   };
 }

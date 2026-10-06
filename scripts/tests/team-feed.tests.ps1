@@ -312,6 +312,76 @@ Test-Case "judge: an item marked needs_owner becomes an awaiting_owner idea with
     Assert-True -Condition (@($problems | Where-Object { $_ -match "already in the queue" }).Count -ge 1) -Because "an idea's id must be free too: $($problems -join '; ')"
 }
 
+function Get-FeedProposalText {
+    <# The proposal the feeder writes for one owner item (no area; goal/acceptance as given). #>
+    param([string]$Id, [string]$Title, [string]$Sentence, [string]$Row, [string]$Goal, [string]$Acceptance, [string]$Date = $feedDate)
+    $owner = [ordered]@{ id = $Id; title = $Title; roadmap_row = $Row; needs_owner = $Sentence; evidence_expected = "PROVEN_AUTOMATED" }
+    if ($Goal) { $owner["goal"] = $Goal }
+    if ($Acceptance) { $owner["acceptance"] = $Acceptance }
+    $made = @(ConvertTo-TeamFeedTasks -Feed (ConvertTo-FeedObjects -Cards @($owner)) -RoadmapRows @(Get-TeamRoadmapRows -Text $roadmapFixture) -Date $Date)
+    Assert-Equal -Expected "owner" -Actual $made[0].Kind -Because "an item with needs_owner is the owner's"
+    return [string]$made[0].ProposalText
+}
+
+function Get-MarkdownHeadings {
+    param([string]$Text)
+    return @(($Text -split "`r?`n") | Where-Object { $_.StartsWith("## ") } | ForEach-Object { $_.Substring(3).Trim() })
+}
+
+Test-Case "proposal: the owner item is written in the researcher's shape - '## Ne' first, then row, goal, acceptance, decision" {
+    # apps/web/tests/approvals/proposal-shapes.test.ts reads every file under team/proposals and
+    # wants exactly one "Ne" section and 3+ '## ' headings; the old '## Sahibe sorulan' turned the
+    # Stage 55 gate red.
+    $text = Get-FeedProposalText -Id "q" -Title "Bir fikir" -Sentence "Soru?" -Row "Yok" -Goal "H" -Acceptance "K"
+    $lines = @($text -split "`n")
+    $order = @("# ", "Kaynak: lead koşusu", "## Ne", "## Roadmap satırı", "## Hedef", "## Kabul", "## Karar")
+    $at = -1
+    foreach ($mark in $order) {
+        $found = -1
+        for ($i = $at + 1; $i -lt $lines.Count; $i++) { if ($lines[$i].StartsWith($mark)) { $found = $i; break } }
+        Assert-True -Condition ($found -gt $at) -Because "'$mark' comes after line $at`: $text"
+        $at = $found
+    }
+    $headings = @(Get-MarkdownHeadings -Text $text)
+    Assert-Equal -Expected "Ne" -Actual $headings[0] -Because "the first section is the one the detail view shows: $($headings -join ' / ')"
+    Assert-True -Condition ($headings.Count -ge 3) -Because "three or more '## ' headings: $($headings -join ' / ')"
+    Assert-Equal -Expected 1 -Actual @($headings | Where-Object { $_ -ceq "Ne" }).Count -Because "one 'Ne' section"
+    Assert-True -Condition ($text -notmatch '\*\*' -and $text -notmatch 'http') -Because "the script adds no bold and no link of its own: $text"
+    $ne = [array]::IndexOf($lines, "## Ne")
+    Assert-Equal -Expected "" -Actual $lines[$ne + 1] -Because "a blank line under the heading"
+    Assert-Equal -Expected "Soru?" -Actual $lines[$ne + 2] -Because "the owner's sentence is the body of '## Ne'"
+    Assert-True -Condition ($lines[$ne + 4].StartsWith("## ")) -Because "and the whole of it: $text"
+    Assert-Equal -Expected "Sahip: evet / hayır / ertele." -Actual $lines[[array]::IndexOf($lines, "## Karar") + 2] -Because "the decision line"
+}
+
+Test-Case "proposal: without goal and acceptance the sections are still there, saying 'Belirtilmedi.'" {
+    $text = Get-FeedProposalText -Id "q" -Title "Bir fikir" -Sentence "Soru?" -Row "" -Goal "" -Acceptance ""
+    $headings = @(Get-MarkdownHeadings -Text $text)
+    Assert-Equal -Expected "Ne|Roadmap satırı|Hedef|Kabul|Karar" -Actual ($headings -join "|") -Because "the same five sections: $text"
+    $lines = @($text -split "`n")
+    foreach ($heading in @("## Roadmap satırı", "## Hedef", "## Kabul")) {
+        Assert-Equal -Expected "Belirtilmedi." -Actual $lines[[array]::IndexOf($lines, $heading) + 2] -Because "'$heading' says it was not given"
+    }
+}
+
+Test-Case "proposal: the web test's FEED_SHAPE fixture is what the script writes, line by line" {
+    # The two halves read each other: the vitest fixture runs the rule, this case runs the script.
+    $fixtures = [IO.File]::ReadAllText((Join-Path $repoRoot "apps\web\tests\approvals\fixtures.ts"), [Text.Encoding]::UTF8)
+    $match = [regex]::Match($fixtures, '(?s)export const FEED_SHAPE = `([^`]*)`;')
+    Assert-True -Condition $match.Success -Because "fixtures.ts has 'export const FEED_SHAPE = ``...``;'"
+    $fixture = $match.Groups[1].Value -replace "`r`n", "`n"
+    $text = Get-FeedProposalText -Id "radicale-calendar-server" -Title "Radicale takvim sunucusu" `
+        -Sentence "Radicale'yi ev PC'sine kuralım mı?" -Row "Ev takvimi kendi sunucumuzda" `
+        -Goal "Takvim verisi evde durur." -Acceptance "Telefon ve web aynı takvimi gösterir." -Date "2026-10-06"
+    Assert-Equal -Expected ((Get-MarkdownHeadings -Text $text) -join "|") -Actual ((Get-MarkdownHeadings -Text $fixture) -join "|") -Because "the same headings"
+    $want = @($text -split "`n"); $have = @($fixture -split "`n")
+    for ($i = 0; $i -lt [math]::Max($want.Count, $have.Count); $i++) {
+        $w = if ($i -lt $want.Count) { $want[$i] } else { "<none>" }
+        $h = if ($i -lt $have.Count) { $have[$i] } else { "<none>" }
+        Assert-Equal -Expected $w -Actual $h -Because "line $($i + 1) of FEED_SHAPE"
+    }
+}
+
 Write-Host ""
 Write-Host "approved ideas and the roadmap's table"
 
@@ -377,6 +447,49 @@ Test-Case "prompt: it names the file, the count, the rows, the limits, the order
     $bare = New-TeamFeedCard -Queue $queue -RoadmapText $roadmapFixture -FeedFile "team/plans/feed-$feedDate-1.json" -MaxNew 3 -Date $feedDate -Ideas @()
     Assert-True -Condition (-not $bare.Contains("- idea:")) -Because "with no idea to write the run is not asked to touch the roadmap"
     Assert-True -Condition ($bare -match "Do NOT edit docs/ROADMAP.md") -Because "and is told so"
+}
+
+# 2026-10-06: two feed runs (5.75 + 5.88 USD) were refused whole because the prompt said "ONE
+# sentence" and the judge counted 400 characters on one line. The prompt's limits are read from
+# the judge's own variables here, so the two halves cannot drift apart again.
+Test-Case "prompt: it states the judge's needs_owner limit, read from the judge's own number" {
+    $queue = New-Queue -Tasks @((New-Task -Id "busy-one" -State "assigned" -Area @("src/busy")))
+    $card = New-TeamFeedCard -Queue $queue -RoadmapText $roadmapFixture -FeedFile "team/plans/feed-$feedDate-1.json" -MaxNew 3 -Date $feedDate
+    Assert-True -Condition ($card.Contains("at most $script:TeamFeedOwnerSentenceMax characters")) -Because "the prompt names the judge's limit ($script:TeamFeedOwnerSentenceMax)"
+    Assert-True -Condition ($card.Contains("ONE line")) -Because "the prompt says the sentence is on one line"
+    $saved = $script:TeamFeedOwnerSentenceMax
+    try {
+        $script:TeamFeedOwnerSentenceMax = 401
+        $moved = New-TeamFeedCard -Queue $queue -RoadmapText $roadmapFixture -FeedFile "team/plans/feed-$feedDate-1.json" -MaxNew 3 -Date $feedDate
+        Assert-True -Condition ($moved.Contains("at most 401 characters")) -Because "the prompt's number is the judge's variable, not a second copy"
+        Assert-True -Condition (-not $moved.Contains("400 characters")) -Because "no mention of the limit is a hand-written copy: every one follows the variable"
+    }
+    finally { $script:TeamFeedOwnerSentenceMax = $saved }
+}
+
+Test-Case "prompt: it names every rule the judge refuses on - cards and owner items counted apart, titles, the note, the area, depends_on" {
+    $card = New-TeamFeedCard -Queue (New-Queue) -RoadmapText $roadmapFixture -FeedFile "team/plans/feed-$feedDate-1.json" -MaxNew 3 -Date $feedDate
+    foreach ($part in @(
+            "at most max_new cards", "at most max_new owner items", "differs only in upper or lower case",
+            "no brackets inside the note", "at most $script:TeamMaxAreaEntries entries",
+            "every id in depends_on is in the queue or in this file")) {
+        Assert-True -Condition ($card.Contains($part)) -Because "the prompt has '$part'"
+    }
+    Assert-True -Condition (-not $card.Contains("at most max_new items")) -Because "'items' alone hides that cards and owner items are counted apart"
+}
+
+Test-Case "judge: needs_owner refusals say what was measured; 400 characters on one line pass" {
+    $long = New-Card -Id "card-long"; $long.Remove("area"); $long["needs_owner"] = ("a" * 611) + "."
+    $problems = @(Get-FeedProblems -Cards @($long))
+    $said = @($problems | Where-Object { $_ -match "needs_owner is one sentence" })
+    Assert-Equal -Expected 1 -Actual @($said).Count -Because "refused: $($problems -join '; ')"
+    Assert-True -Condition ($said[0] -match "needs_owner is one sentence" -and $said[0] -match "\b612 characters") -Because "the refusal says 612: $($said[0])"
+    $lines = New-Card -Id "card-lines"; $lines.Remove("area"); $lines["needs_owner"] = "One.`nTwo.`nThree."
+    $problems = @(Get-FeedProblems -Cards @($lines))
+    $said = @($problems | Where-Object { $_ -match "needs_owner is one sentence" })
+    Assert-True -Condition (@($said).Count -eq 1 -and $said[0] -match "\b3 lines") -Because "the refusal says 3 lines: $($problems -join '; ')"
+    $edge = New-Card -Id "card-edge"; $edge.Remove("area"); $edge["needs_owner"] = ("a" * ($script:TeamFeedOwnerSentenceMax - 1)) + "."
+    Assert-Equal -Expected 0 -Actual @(Get-FeedProblems -Cards @($edge)).Count -Because "exactly $script:TeamFeedOwnerSentenceMax characters is inside the limit: $((Get-FeedProblems -Cards @($edge)) -join '; ')"
 }
 
 Test-Case "the feeder's scripts say which encoding they are in, never name main as a branch to write and never push" {

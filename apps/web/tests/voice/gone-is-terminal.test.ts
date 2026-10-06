@@ -263,6 +263,7 @@ describe("a session the server has declared gone stays gone", () => {
     expect(createHash("sha256").update(JSON.stringify(t.core.requests)).digest("hex")).toBe(
       "cde26c1df03819f9f3f8eb27e47dcf1ffddfdc9128ecc070f8d4d34e7eeea624",
     );
-    expect(t.scheduler.pendingTimers).toBe(0);
+    // The one timer left is the live leg's 15 s sideband pull; a reconnect never stacks a second.
+    expect(t.scheduler.pendingTimers).toBe(1);
   });
 });

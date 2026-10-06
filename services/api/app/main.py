@@ -15,7 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.alarms.audio_store import get_audio_store
+from app.accounts.routes import callback_router as accounts_callback_router
+from app.accounts.routes import router as accounts_router
+from app.accounts.service import AccountsService
+from app.accounts.wiring import AccountDirectory, build_account_calendar, build_account_mail
+from app.alarms.audio_store import AudioStore, get_audio_store
 from app.alarms.greeting_audio import build_greeting_tts
 from app.alarms.routes import audio_router as alarms_audio_router
 from app.alarms.routes import router as alarms_router
@@ -36,11 +40,17 @@ from app.briefing.service import BriefingService
 from app.broker.routes import router as broker_router
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import router as broker_ws_router
-from app.calendar.providers import build_calendar_provider, build_calendar_writer
+from app.calendar.providers import (
+    MultiAccountCalendarProvider,
+    build_calendar_provider,
+    build_calendar_writer,
+)
 from app.calendar.routes import router as calendar_router
 from app.calendar.service import CalendarService
 from app.calendar.syncer import CalendarSyncer
 from app.config import Settings, get_settings
+from app.conversations.routes import router as conversations_router
+from app.conversations.service import LiveConversations
 from app.creative.imaging import build_image_provider
 from app.creative.routes import router as creative_router
 from app.creative.service import CreativeService
@@ -73,6 +83,8 @@ from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
 from app.goals.routes import router as goals_router
 from app.health import failing_checks, run_health_checks
+from app.household.reminders import ReminderLoop as HouseholdReminderLoop
+from app.household.routes import router as household_router
 from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -145,9 +157,16 @@ from app.state.routes import router as state_router
 from app.team.allowlist_routes import router as team_allowlist_router
 from app.team.routes import router as team_router
 from app.team.routes_board import router as team_board_router
+from app.telephony.loop import HEALTH_NAME as TELEPHONY_HEALTH_NAME
+from app.telephony.loop import TelephonyLoop
+from app.telephony.routes import audio_router as telephony_audio_router
+from app.telephony.routes import router as telephony_router
+from app.telephony.service import AUDIO_TTL as TELEPHONY_AUDIO_TTL
+from app.telephony.service import build_owner_caller
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
+from app.voice.crypto import ProfileCipher
 from app.voice.intent_router import (
     AnthropicIntentModel,
     CompositeIntentRouter,
@@ -222,6 +241,39 @@ def _build_push_rung(
         vapid_private_key=private_key,
         vapid_subject=settings.webpush_vapid_subject,
         timeout_s=settings.webpush_request_timeout_s,
+    )
+
+
+def _build_watch_announcer(speaker: Any) -> Any:
+    """watch-voice: the runner's announcer over the owner's presence, greeting policy and
+    quiet hours (the owner's ambient window; 23:00-07:00 Istanbul when none is set)."""
+    from app.alarms.models import AMBIENT_POLICY_ID, AmbientPolicyRow
+    from app.ambient import policy as ambient_policy
+    from app.routines.presence_link import resolve_greeting_allowed, resolve_owner_present
+    from app.watch.announce import WatchAnnouncer, default_quiet_hours
+
+    def quiet_hours(db: Any, now: Any) -> bool:
+        # Read only (``get_policy_row`` would create and COMMIT the row mid-reading), in a
+        # savepoint so a failed read cannot abort the runner's own transaction.
+        try:
+            with db.begin_nested():
+                row = db.get(AmbientPolicyRow, AMBIENT_POLICY_ID)
+            if row is None:
+                return default_quiet_hours(db, now)
+            state = ambient_policy.quiet_hours_state(
+                ambient_policy.AmbientPolicy.from_row(row), now
+            )
+        except Exception:  # noqa: BLE001 - an unreadable policy is quiet (fail closed)
+            return True
+        if state == ambient_policy.QUIET_HOURS_UNSET:
+            return default_quiet_hours(db, now)
+        return state == ambient_policy.QUIET_HOURS_INSIDE
+
+    return WatchAnnouncer(
+        speaker,
+        owner_present=lambda: resolve_owner_present()[0],
+        greeting_allowed=lambda db: resolve_greeting_allowed(db)[0],
+        quiet_hours=quiet_hours,
     )
 
 
@@ -308,6 +360,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # same reason - the push rung runs off the routine clock's event loop, not a
     # request, and must not need the whole ArtifactRuntime just to open a session.
     push_rung = _build_push_rung(settings, dispatch_session_factory)
+    # jarvis-calls-owner: JARVIS phones the owner (Twilio). Its own one-time audio store
+    # (ten minutes, one fetch - Twilio fetches the url), the same dedicated session factory
+    # as the push rung, and the loop that drives the five-minute retry and the event calls.
+    telephony_audio_store = AudioStore(ttl_s=int(TELEPHONY_AUDIO_TTL.total_seconds()))
+    telephony = build_owner_caller(
+        settings, session_scope=dispatch_session_factory, audio_store=telephony_audio_store
+    )
+    telephony_loop = TelephonyLoop(telephony, interval_s=settings.telephony_loop_interval_s)
     # docs/DECISIONS.md ADR-0078: the alarm/display voice tools read the wake sequence
     # and the device-status registry from ToolContext.live (tools_ambient._sequence,
     # display_status). They are registered HERE, where they are built, on the same
@@ -349,9 +409,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # providers, built from settings — never a fake in production (module docstrings of
     # app.mail.providers / app.calendar.providers). With nothing configured the provider
     # (and therefore the service) is honest about `account_missing`.
-    mail_service = MailService(build_mail_provider(settings), build_mail_sender(settings))
+    # Card mail-accounts-connect: the owner's Gmail / Microsoft 365 accounts, connected on
+    # Ayarlar > Hesaplar over OAuth + PKCE. With no OAuth client configured the env
+    # account above is used exactly as before (app.accounts.wiring).
+    accounts_service = AccountsService(settings)
+    account_directory = AccountDirectory(accounts_service, dispatch_session_factory)
+    account_mail_provider, account_mail_sender = build_account_mail(
+        settings, account_directory, build_mail_provider(settings), build_mail_sender(settings)
+    )
+    account_calendar_provider = build_account_calendar(
+        settings, account_directory, build_calendar_provider(settings)
+    )
+    mail_service = MailService(account_mail_provider, account_mail_sender)
     calendar_service = CalendarService(
-        build_calendar_provider(settings),
+        account_calendar_provider,
         build_calendar_writer(settings),
         # B46 (req 354): the owner's cancel policy - refuse unless they chose confirm.
         cancel_policy=settings.calendar_cancel_policy,
@@ -509,14 +580,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # for five days and nothing read it -- fourteen rows, all undelivered, all expired.
     # Speaks through the SAME port the alarm's own briefing uses, so there is one way to
     # talk to the owner, not two. Runs off the request path; failures are logged.
-    briefing_announcer = PendingBriefingAnnouncer(
-        artifacts.session,
-        RealtimeSayBriefingSpeaker(
-            RealtimeSayBriefing(
-                session_factory=dispatch_session_factory, sideband=voice_realtime.sideband
-            )
-        ),
+    owner_speaker = RealtimeSayBriefingSpeaker(
+        RealtimeSayBriefing(
+            session_factory=dispatch_session_factory, sideband=voice_realtime.sideband
+        )
     )
+    briefing_announcer = PendingBriefingAnnouncer(artifacts.session, owner_speaker)
 
     def _build_routine_clock() -> RoutineClock:
         """M18.3 spec §3.3. The three ticks, in order, each in the same worker thread and
@@ -599,6 +668,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         calendar_service,
         enabled=settings.calendar_sync_enabled,
         interval_s=settings.calendar_sync_interval_s,
+        accounts=(
+            account_calendar_provider
+            if isinstance(account_calendar_provider, MultiAccountCalendarProvider)
+            else None
+        ),
     )
     routine_clock = _build_routine_clock()
 
@@ -697,10 +771,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lambda: app.state.artifacts.session(),
         watch_reader,
         provider_factory=lambda: build_chat_provider(settings),
+        # watch-voice: a met condition is spoken into the live session through the SAME
+        # speaker the pending briefings use - only with the owner present, a greeting
+        # allowed and outside quiet hours; otherwise the morning briefing carries it.
+        announcer=_build_watch_announcer(owner_speaker),
         enabled=settings.watch_runner_enabled,
         interval_s=settings.watch_runner_interval_s,
     )
     watch_purge = watch_runner_module.PurgeLoop(lambda: app.state.artifacts.session())
+    # home-stock-list: the "bitmeden" reminder - once an hour, an item whose learnt rhythm says
+    # it runs out in a few days is one short notification per cycle.
+    household_reminders = HouseholdReminderLoop(lambda: app.state.artifacts.session())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -748,6 +829,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await watch_purge.start()
         # Does nothing while ``watch_runner_enabled`` is off (the health check says skipped).
         await watch_runner.start()
+        # jarvis-calls-owner: the no-answer retry and the important-event calls. Without
+        # Twilio credentials a pass does nothing, so health still tells "idle" from "dead".
+        await telephony_loop.start()
+        await household_reminders.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -779,6 +864,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
+            await telephony_loop.stop()
+            await household_reminders.stop()
             await watch_runner.stop()
             await watch_purge.stop()
             await misheard_purge.stop()
@@ -840,6 +927,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.misheard_purge = misheard_purge
     app.state.watch_runner = watch_runner
     app.state.watch_purge = watch_purge
+    # conversation-transcripts: the voice groups of the open conversations live in memory
+    # only; a named, consented person's profile is sealed with the voice-profile secret.
+    app.state.conversation_live = LiveConversations()
+    app.state.conversation_cipher = ProfileCipher(settings.voice_profile_secret)
+    app.state.household_reminders = household_reminders
     app.state.experience_scheduler = experience_scheduler
     app.state.mail_poller = mail_poller
     app.state.calendar_syncer = calendar_syncer
@@ -862,6 +954,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.selfdev_service = selfdev_service
     app.state.mail_service = mail_service
     app.state.calendar_service = calendar_service
+    app.state.accounts_service = accounts_service
+    app.state.accounts_session_factory = dispatch_session_factory
     app.state.app_factory_service = app_factory_service
     app.state.creative3d_service = creative3d_service
     app.state.creative_service = creative_service
@@ -876,6 +970,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # B11 req 372: exposed for tests/diagnostics only - routes never read this directly
     # (app.webpush.routes reads settings and builds its own key/session per request).
     app.state.webpush_push_rung = push_rung
+    app.state.telephony = telephony
+    app.state.telephony_audio_store = telephony_audio_store
+    app.state.telephony_loop = telephony_loop
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -944,6 +1041,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # router applies.
     app.include_router(mail_router)
     app.include_router(calendar_router)
+    # Card mail-accounts-connect: Ayarlar > Hesaplar (owner-gated) and the OAuth callback
+    # (authorised by its single-use hashed state alone - app.accounts.routes).
+    app.include_router(accounts_router)
+    app.include_router(accounts_callback_router)
     app.include_router(documents_router)
     # B35: the self-development queue's REST surface (the Cockpit and the worker).
     app.include_router(selfdev_router)
@@ -1005,6 +1106,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(voice_misheard_router)
     # watch-engine: the owner's watches (GET/POST/DELETE /v1/watches).
     app.include_router(watch_router)
+    # jarvis-calls-owner: the settings page's status and test call (owner-gated), and the
+    # one-time call audio Twilio fetches (the token is the authority).
+    app.include_router(telephony_router)
+    app.include_router(telephony_audio_router)
+    # conversation-transcripts: conversations as text (/v1/conversations).
+    app.include_router(conversations_router)
+    # home-stock-list: the house's stock and the shopping list (/v1/household).
+    app.include_router(household_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -1079,6 +1188,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # watch-engine: the runner ("skipped" while off) and the readings' 30-day purge.
         checks["watch_runner"] = watch_runner.health_check()
         checks["watch_purge"] = watch_purge.health_check()
+        # jarvis-calls-owner: the call loop (retry + event calls). Advisory like the above.
+        checks[TELEPHONY_HEALTH_NAME] = telephony_loop.health_check()
+        # home-stock-list: the hourly reminder pass; advisory like the loops above.
+        checks["household_reminders"] = household_reminders.health_check()
         # B08 req 646/648/649/650: the safety net answers for itself. Both records have
         # been written for weeks and nothing read either of them; a backup nobody checks is
         # one you find out about on the day you need it.

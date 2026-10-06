@@ -5,6 +5,7 @@
 - POST /v1/voice/realtime/sessions/{id}/tool-calls      sideband tool relay (idempotent, call_id)
 - POST /v1/voice/realtime/sessions/{id}/tool-calls/{call_id}/complete   long-running tool done
 - POST /v1/voice/realtime/sessions/{id}/events          client timing/state events
+- GET  /v1/voice/realtime/sessions/{id}/sideband        the web shell's pull of queued frames
 - POST /v1/voice/realtime/sessions/{id}/attach          new client takes over (spec §7)
 - POST /v1/voice/realtime/sessions/{id}/close
 - GET  /v1/voice/realtime/sessions/{id}/benchmark       report from the client's timestamps
@@ -478,6 +479,29 @@ async def report_events(
                 # with. `.get` rather than an attribute: a process that registered none
                 # gets None, and the extractor records "no_runtime" instead of guessing.
                 memory_runtime=runtime.live_sources().get("memory_runtime"),
+            )
+
+    try:
+        return await asyncio.to_thread(work)
+    except VoiceError as exc:
+        _raise_http(exc)
+    return {}  # pragma: no cover - _raise_http always raises
+
+
+@router.get("/sessions/{session_id}/sideband")
+async def pull_sideband(request: Request, session_id: uuid.UUID) -> dict[str, Any]:
+    """The web shell's 15 s pull of frames queued for its leg (a web session has no push).
+
+    /events' identity rule and error mapping (409 wrong leg, 410 over). An empty pull
+    writes nothing, so it never keeps an idle session alive."""
+    runtime = _runtime(request)
+    owner = _owner(request)
+    trace_id = trace_id_var.get()
+
+    def work() -> dict[str, Any]:
+        with runtime.session() as db:
+            return service.pull_pending_sideband(
+                db, _load(db, session_id), owner=owner, trace_id=trace_id
             )
 
     try:

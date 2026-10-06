@@ -4,5 +4,6 @@
   "max_integrators": 1,
   "test_parallel": 4,
   "test_memory_floor_gb": 8,
-  "run_temp_root": "E:\\AI\\tmp-team"
+  "run_temp_root": "E:\\AI\\tmp-team",
+  "run_idle_minutes": 30
 }

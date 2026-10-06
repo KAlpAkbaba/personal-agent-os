@@ -207,6 +207,11 @@ def record_delivery_failure(
 #: the voice path actually put the sentence in the air: a device push, or the browser
 #: shell draining the frame out of its session buffer.
 VIA_VOICE: Final[str] = "voice"
+#: ... and when a rung of the notification ladder reached them instead: the prefix plus
+#: the rung the ladder itself wrote into ``notifications.delivered_via`` (``toast``,
+#: ``sound``, ``push``) - read off the notification row, never assumed when it is queued.
+#: ``inbox`` never follows it: a row sitting in the inbox has not been heard.
+VIA_NOTIFICATION_PREFIX: Final[str] = "notification:"
 
 
 def mark_delivered(
@@ -246,6 +251,7 @@ __all__: list[str] = [
     "POLICY_IMMEDIATE",
     "POLICY_LEDGER_ONLY",
     "POLICY_ONCE",
+    "VIA_NOTIFICATION_PREFIX",
     "VIA_VOICE",
     "classify_policy",
     "mark_delivered",

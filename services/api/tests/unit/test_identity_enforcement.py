@@ -167,6 +167,9 @@ EXPECTED_OPEN = {
     # (app.mail.attachment_fetch); unknown, expired, redeemed and hash-mismatched tokens
     # are all the same bare 404. Deliberately open, mirroring that route.
     ("GET", "/v1/mail/attachments/fetch/{token}"),
+    # jarvis-calls-owner: the short-lived audio TWILIO fetches while it rings the owner - it
+    # holds no owner session; single-use, ten-minute, unguessable token, bare 404 otherwise.
+    ("GET", "/v1/telephony/audio/{token}"),
     # M18.4 gap 1 (ADR-0081 addendum 3): the device handoff between the two colours. The
     # release script calls these from INSIDE the draining container, which holds no owner
     # session and must not need one to finish a release; the routes are loopback-only
@@ -174,6 +177,12 @@ EXPECTED_OPEN = {
     # proves a tailnet peer gets 403). Deliberately not owner-gated.
     ("POST", "/v1/devices/drain"),
     ("POST", "/v1/devices/undrain"),
+    # Card mail-accounts-connect: where Google / Microsoft send the owner's browser back
+    # after consent - a top-level navigation that carries no owner session. Its authority
+    # is the single-use, hashed, 15-minute OAuth ``state`` an owner-gated
+    # POST /v1/accounts/connect issued (app.accounts.service); a forged, replayed or late
+    # state is refused before any request leaves the process. Deliberately open.
+    ("GET", "/v1/accounts/oauth/callback"),
 }
 
 
