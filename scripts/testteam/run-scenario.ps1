@@ -32,9 +32,15 @@
 
     The result file is <OutDir>/<card>.result.json:
       { card, family, scenario, state: passed|failed|broke|environment, staging_sha, steps: [ {
-        name, method, path, expected, actual, ok, ms } ], breaking: { what, tried: [ { load, ok,
-        errors, p95_ms } ], first_failure }, screenshot, refused: [ { name, method, path, state,
-        why } ], environment }
+        name, method, path, expected, actual, ok, ms, input, output } ], breaking: { what, tried:
+        [ { load, ok, errors, p95_ms } ], first_failure }, screenshot, refused: [ { name, method,
+        path, state, why } ], environment }
+
+    A step's `input` is what was sent - { method, path, headers, body } (the JSON body as sent),
+    or for a web step { action, url, sentence, wav, expect } - and its `output` what came back,
+    { status, body }. Bodies are cut at 4 KB with a marker; the Authorization header, every field
+    named *token* / *secret* / *password* and the session itself are masked (TestTeam.ps1:
+    ConvertTo-TestTeamShownText). test-round.ps1's input/output report reads them.
 
     Exit codes: 0 passed, 1 a step failed, 2 refused (not staging, or no scenario), 3 broke
     (every step passed, the ladder found the breaking point), 4 environment (the staging
@@ -156,17 +162,22 @@ Add-Type -AssemblyName System.Net.Http
 $client = New-Object System.Net.Http.HttpClient
 $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
 
+function Get-StepJson {
+    # The body exactly as it is sent; "" for none.
+    param($Step)
+    $body = Get-TeamProperty -InputObject $Step -Name "body"
+    if ($null -eq $body) { return "" }
+    return (ConvertTo-Json -InputObject $body -Depth 8 -Compress)
+}
+
 function New-Request {
     param($Step, [int]$Load = 0)
     $method = ([string](Get-TeamProperty -InputObject $Step -Name "method" -Default "GET")).ToUpperInvariant()
     $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($method), (Resolve-StepUrl -Step $Step))
     if ($token) { [void]$request.Headers.TryAddWithoutValidation("Authorization", "Bearer $token") }
     if ($Load -gt 0) { [void]$request.Headers.TryAddWithoutValidation("X-Load", [string]$Load) }
-    $body = Get-TeamProperty -InputObject $Step -Name "body"
-    if ($null -ne $body) {
-        $json = ConvertTo-Json -InputObject $body -Depth 8 -Compress
-        $request.Content = [System.Net.Http.StringContent]::new($json, [System.Text.Encoding]::UTF8, "application/json")
-    }
+    $json = Get-StepJson -Step $Step
+    if ($json) { $request.Content = [System.Net.Http.StringContent]::new($json, [System.Text.Encoding]::UTF8, "application/json") }
     return $request
 }
 
@@ -181,6 +192,21 @@ function Invoke-Step {
     }
     catch { $status = "hata: " + ($_.Exception.GetBaseException().Message -replace '\s+', ' ') }
     return [pscustomobject]@{ Status = $status; Text = $text; Ms = [int]$clock.ElapsedMilliseconds }
+}
+
+function Get-StepInput {
+    # What the owner reads as the step's input (test-round-io-report): the request as sent - the
+    # session masked, secret fields masked, the body cut at 4 KB.
+    param($Step)
+    $headers = $null
+    if ($token) { $headers = [pscustomobject]@{ Authorization = "Bearer ***" } }
+    $path = [string](Get-TeamProperty -InputObject $Step -Name "path" -Default (Get-TeamProperty -InputObject $Step -Name "url" -Default ""))
+    return [pscustomobject]@{
+        method  = ([string](Get-TeamProperty -InputObject $Step -Name "method" -Default "GET")).ToUpperInvariant()
+        path    = $path
+        headers = $headers
+        body    = (ConvertTo-TestTeamShownText -Text (Get-StepJson -Step $Step) -Secrets @($token))
+    }
 }
 
 function Get-BrowserPython {
@@ -255,7 +281,21 @@ foreach ($step in $steps) {
         $web = Invoke-WebStep -Step $step -Shot $shot
         if ([string]$web.screenshot) { $screenshot = [string]$web.screenshot }
         $ok = [bool]$web.ok
-        [void]$records.Add([pscustomobject]@{ name = $name; method = "WEB"; path = [string]$step.web; expected = [string](Get-TeamProperty -InputObject $step -Name "expect" -Default "geçer"); actual = [string]$web.actual; ok = $ok; ms = 0 })
+        # A web step's input is its action (the script, the page, what it expects); a voice step's
+        # also the sentence the fake microphone says.
+        $sentence = [string](Get-TeamProperty -InputObject $step -Name "say" -Default (Get-TeamProperty -InputObject $step -Name "sentence" -Default ""))
+        $stepInput = [pscustomobject]@{
+            action   = [string]$step.web
+            url      = [string](Get-TeamProperty -InputObject $step -Name "url" -Default "")
+            sentence = $sentence
+            wav      = [string](Get-TeamProperty -InputObject $step -Name "wav" -Default "")
+            expect   = [string](Get-TeamProperty -InputObject $step -Name "expect_contains" -Default "")
+        }
+        $stepOutput = [pscustomobject]@{
+            status = $(if ($ok) { "geçti" } else { "kaldı" })
+            body   = (ConvertTo-TestTeamShownText -Text ([string]$web.actual + $(if ([string]$web.screenshot) { "`nekran görüntüsü: $($web.screenshot)" } else { "" })) -Secrets @($token))
+        }
+        [void]$records.Add([pscustomobject]@{ name = $name; method = "WEB"; path = [string]$step.web; expected = [string](Get-TeamProperty -InputObject $step -Name "expect" -Default "geçer"); actual = [string]$web.actual; ok = $ok; ms = 0; input = $stepInput; output = $stepOutput })
     }
     else {
         $answer = Invoke-Step -Step $step
@@ -270,6 +310,8 @@ foreach ($step in $steps) {
                 name = $name; method = [string](Get-TeamProperty -InputObject $step -Name "method" -Default "GET")
                 path = [string](Get-TeamProperty -InputObject $step -Name "path" -Default (Get-TeamProperty -InputObject $step -Name "url" -Default ""))
                 expected = $expected; actual = $actual; ok = $ok; ms = $answer.Ms
+                input = (Get-StepInput -Step $step)
+                output = [pscustomobject]@{ status = $answer.Status; body = (ConvertTo-TestTeamShownText -Text $answer.Text -Secrets @($token)) }
             })
     }
     if (-not $ok) { $anyFailed = $true }

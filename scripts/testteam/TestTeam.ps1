@@ -51,6 +51,11 @@ function Get-TestTeamBoardTask {
     if ($task -cnotmatch $script:TestTeamBoardTaskPattern) { throw "'$Id' bir pano görev kimliği olamaz ($script:TestTeamBoardTaskPattern)" }
     return $task
 }
+# A step's recorded input and output body (test-round-io-report): cut to this many characters.
+$script:TestTeamBodyMax = 4096
+# The round report the Cloud Core keeps (app/team/test_reports.py: TEXT_MAX_BYTES).
+$script:TestTeamReportMaxBytes = 262144
+$script:TestTeamMask = "***"
 
 function Test-TestTeamTestPort {
     <# Whether -AllowTestPort names a port of the tests' range (41000-49999); 0 is "none". #>
@@ -413,6 +418,194 @@ function Format-TestTeamSeatNote {
     }
     if ($text.Length -gt $script:TestTeamNoteMax) { $text = $text.Substring(0, $script:TestTeamNoteMax - 1) + "…" }
     return $text
+}
+
+function Protect-TestTeamText {
+    <#
+    .SYNOPSIS
+        A request or response body as the owner may read it: every JSON field whose name holds
+        token, secret or password has its value replaced by ***; a Bearer value and an
+        Authorization line are masked; each of -Secrets (the session token) is masked wherever
+        it stands.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Text, [string[]]$Secrets = @())
+    if (-not $Text) { return "" }
+    $mask = $script:TestTeamMask
+    $out = [regex]::Replace($Text, '(?i)("[^"\\]*(?:token|secret|password)[^"\\]*"\s*:\s*)("(?:[^"\\]|\\.)*"|[^,}\]\s]+)', ('$1"' + $mask + '"'))
+    $out = [regex]::Replace($out, '(?im)^(\s*authorization\s*:\s*).+$', ('$1' + $mask))
+    $out = [regex]::Replace($out, '(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+', ('$1' + $mask))
+    foreach ($secret in @($Secrets)) {
+        if ([string]$secret -and ([string]$secret).Length -ge 6) { $out = $out.Replace([string]$secret, $mask) }
+    }
+    return $out
+}
+
+function Limit-TestTeamText {
+    <# A body cut to -Max characters (4096) with a marker that says how much was cut. #>
+    param([AllowEmptyString()][AllowNull()][string]$Text, [int]$Max = $script:TestTeamBodyMax)
+    if (-not $Text) { return "" }
+    if ($Text.Length -le $Max) { return $Text }
+    return $Text.Substring(0, $Max) + ("…[kesildi: {0} karakterin ilk {1}'i]" -f $Text.Length, $Max)
+}
+
+function ConvertTo-TestTeamShownText {
+    <# Masked first, cut second: a secret near the cut is never half shown. #>
+    param([AllowEmptyString()][AllowNull()][string]$Text, [string[]]$Secrets = @())
+    return (Limit-TestTeamText -Text (Protect-TestTeamText -Text $Text -Secrets $Secrets))
+}
+
+function Get-TestTeamRoundCounts {
+    <# A round's passed / failed / broke cards ("geçti / kaldı / koptu"). #>
+    param([AllowEmptyCollection()][object[]]$Cards = @())
+    $counts = [ordered]@{ passed = 0; failed = 0; broke = 0 }
+    foreach ($card in @($Cards)) {
+        $state = [string](Get-TeamProperty -InputObject $card -Name "state" -Default "")
+        if ($counts.Contains($state)) { $counts[$state] = [int]$counts[$state] + 1 }
+    }
+    return [pscustomobject]$counts
+}
+
+function Format-TestTeamFence {
+    <# A block the Markdown cannot be broken out of: a fence of four backticks, and none inside. #>
+    param([AllowEmptyCollection()][string[]]$Lines = @())
+    $body = (@($Lines) -join "`n").Replace('````', "'''' ")
+    return @('````', $body, '````')
+}
+
+function Format-TestTeamRoundReport {
+    <#
+    .SYNOPSIS
+        The owner's input/output report of one round (the owner, 2026-10-06: "test ekibinin
+        yaptığı işlemleri ve aldığı sonuçların girdi çıktı olarak raporlarını istiyorum"): the
+        round, the staging sha, the plan's why per job, then per tester and per step 'Girdi' /
+        'Beklenen' / 'Çıktı' / 'Sonuç' with the ms, the breaking ladder as a table (yük, hata,
+        p95), the cards forwarded to the software queue. -Unfinished: the round died; the report
+        says 'yarım kaldı: <why>' and holds what it had.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Round,
+        [string]$StagingSha = "",
+        [AllowEmptyCollection()][object[]]$Jobs = @(),
+        [AllowEmptyCollection()][object[]]$Cards = @(),
+        [AllowEmptyCollection()][object[]]$Results = @(),
+        [AllowEmptyCollection()][object[]]$Forwarded = @(),
+        [string]$Unfinished = "",
+        [string]$At = ""
+    )
+    if (-not $At) { $At = Get-TeamTimestamp }
+    $counts = Get-TestTeamRoundCounts -Cards $Cards
+    $word = @{ passed = "geçti"; failed = "kaldı"; broke = "koptu" }
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add("# Test turu $Round - girdi / çıktı raporu")
+    [void]$lines.Add("")
+    if ($Unfinished) { [void]$lines.Add("**yarım kaldı: $Unfinished**"); [void]$lines.Add("") }
+    [void]$lines.Add("- Tarih: $At")
+    [void]$lines.Add("- Staging sha: " + $(if ($StagingSha) { $StagingSha } else { "okunamadı" }))
+    [void]$lines.Add(("- Sonuç: {0} geçti, {1} kaldı, {2} koptu ({3} iş)" -f $counts.passed, $counts.failed, $counts.broke, @($Cards).Count))
+    [void]$lines.Add("")
+    [void]$lines.Add("## Plan")
+    [void]$lines.Add("")
+    if (@($Jobs).Count -eq 0) { [void]$lines.Add("- (plan yok)") }
+    $index = 0
+    foreach ($job in @($Jobs)) {
+        $card = if ($index -lt @($Cards).Count) { @($Cards)[$index] } else { $null }
+        $index++
+        $family = [string](Get-TeamProperty -InputObject $job -Name "family" -Default "?")
+        $why = [string](Get-TeamProperty -InputObject $job -Name "why" -Default "")
+        $who = if ($null -ne $card) { " ({0}, {1})" -f $card.id, $card.tester } else { "" }
+        [void]$lines.Add(("- {0}{1}: {2}" -f $family, $who, $(if ($why) { $why } else { "(gerekçe yazılmamış)" })))
+    }
+    foreach ($card in @($Cards)) {
+        $state = [string](Get-TeamProperty -InputObject $card -Name "state" -Default "")
+        $said = if ($word.ContainsKey($state)) { $word[$state] } elseif ($state -eq "running") { "sonuç yazılmadı" } else { "koşmadı" }
+        [void]$lines.Add("")
+        [void]$lines.Add(("## {0} - {1} ({2}) - sonuç: {3}" -f $card.tester, $card.family, $card.id, $said))
+        $result = @(@($Results) | Where-Object { [string](Get-TeamProperty -InputObject $_ -Name "card" -Default "") -eq [string]$card.id }) | Select-Object -First 1
+        if ($null -eq $result) {
+            [void]$lines.Add("")
+            [void]$lines.Add("(bu iş için sonuç dosyası yok)")
+            continue
+        }
+        [void]$lines.Add("")
+        [void]$lines.Add("Senaryo: " + [string](Get-TeamProperty -InputObject $result -Name "scenario" -Default "?"))
+        $n = 0
+        foreach ($step in @(Get-TeamProperty -InputObject $result -Name "steps" -Default @())) {
+            $n++
+            $name = [string](Get-TeamProperty -InputObject $step -Name "name" -Default "")
+            $ms = [string](Get-TeamProperty -InputObject $step -Name "ms" -Default "?")
+            $ok = [bool](Get-TeamProperty -InputObject $step -Name "ok" -Default $false)
+            $method = [string](Get-TeamProperty -InputObject $step -Name "method" -Default "")
+            $path = [string](Get-TeamProperty -InputObject $step -Name "path" -Default "")
+            $stepIn = Get-TeamProperty -InputObject $step -Name "input"
+            $stepOut = Get-TeamProperty -InputObject $step -Name "output"
+            $in = New-Object System.Collections.ArrayList
+            if ($null -ne $stepIn) {
+                $sentence = [string](Get-TeamProperty -InputObject $stepIn -Name "sentence" -Default "")
+                $action = [string](Get-TeamProperty -InputObject $stepIn -Name "action" -Default "")
+                if ($action) { [void]$in.Add("WEB $action") } else { [void]$in.Add(("{0} {1}" -f (Get-TeamProperty -InputObject $stepIn -Name "method" -Default $method), (Get-TeamProperty -InputObject $stepIn -Name "path" -Default $path)).Trim()) }
+                if ($sentence) { [void]$in.Add("Cümle: $sentence") }
+                $headers = Get-TeamProperty -InputObject $stepIn -Name "headers"
+                if ($null -ne $headers) { foreach ($h in $headers.PSObject.Properties) { [void]$in.Add(("{0}: {1}" -f $h.Name, $h.Value)) } }
+                $sent = [string](Get-TeamProperty -InputObject $stepIn -Name "body" -Default "")
+                [void]$in.Add($(if ($sent) { ConvertTo-TestTeamShownText -Text $sent } else { "(gövde yok)" }))
+            }
+            else { [void]$in.Add(("{0} {1} (girdi kaydı yok)" -f $method, $path).Trim()) }
+            $outLines = New-Object System.Collections.ArrayList
+            if ($null -ne $stepOut) {
+                $status = [string](Get-TeamProperty -InputObject $stepOut -Name "status" -Default "")
+                if ($status) { [void]$outLines.Add($status) }
+                $came = [string](Get-TeamProperty -InputObject $stepOut -Name "body" -Default "")
+                [void]$outLines.Add($(if ($came) { ConvertTo-TestTeamShownText -Text $came } else { "(gövde yok)" }))
+            }
+            else { [void]$outLines.Add([string](Get-TeamProperty -InputObject $step -Name "actual" -Default "(çıktı kaydı yok)")) }
+            [void]$lines.Add("")
+            [void]$lines.Add(("### {0}. {1} ({2} ms)" -f $n, $name, $ms))
+            [void]$lines.Add("")
+            [void]$lines.Add("Girdi:")
+            foreach ($l in (Format-TestTeamFence -Lines @($in.ToArray()))) { [void]$lines.Add($l) }
+            [void]$lines.Add("")
+            [void]$lines.Add("Beklenen: " + [string](Get-TeamProperty -InputObject $step -Name "expected" -Default ""))
+            [void]$lines.Add("")
+            [void]$lines.Add("Çıktı:")
+            foreach ($l in (Format-TestTeamFence -Lines @($outLines.ToArray()))) { [void]$lines.Add($l) }
+            [void]$lines.Add("")
+            [void]$lines.Add("Sonuç: " + $(if ($ok) { "geçti" } else { "kaldı" }))
+        }
+        if ($n -eq 0) { [void]$lines.Add(""); [void]$lines.Add("(adım yok)") }
+        $breaking = Get-TeamProperty -InputObject $result -Name "breaking"
+        if ($null -ne $breaking) {
+            $first = ConvertTo-TestTeamLadderStep -Step (Get-TeamProperty -InputObject $breaking -Name "first_failure")
+            [void]$lines.Add("")
+            [void]$lines.Add("### Kopma merdiveni: " + [string](Get-TeamProperty -InputObject $breaking -Name "what" -Default ""))
+            [void]$lines.Add("")
+            [void]$lines.Add("| yük | hata | p95 (ms) |")
+            [void]$lines.Add("| --- | --- | --- |")
+            foreach ($rung in @(@(Get-TeamProperty -InputObject $breaking -Name "tried" -Default @()) | ForEach-Object { ConvertTo-TestTeamLadderStep -Step $_ })) {
+                [void]$lines.Add(("| {0} | {1} | {2} |" -f $rung.load, $rung.errors, $rung.p95_ms))
+            }
+            [void]$lines.Add("")
+            [void]$lines.Add($(if ($null -ne $first) { "İlk kırılan yük: $($first.load)" } else { "Kırılmadı." }))
+        }
+    }
+    [void]$lines.Add("")
+    [void]$lines.Add("## Yazılım kuyruğuna iletilen kartlar")
+    [void]$lines.Add("")
+    if (@($Forwarded).Count -eq 0) { [void]$lines.Add("- yok") }
+    foreach ($task in @($Forwarded)) { [void]$lines.Add(("- {0}: {1}" -f $task.id, $task.title)) }
+    return [pscustomobject]@{ Markdown = (($lines.ToArray()) -join "`n") + "`n"; Counts = $counts }
+}
+
+function Limit-TestTeamReportText {
+    <# The text the Cloud Core takes: at most 256 KB of UTF-8, cut with a marker; the round
+       folder keeps the whole. #>
+    param([AllowEmptyString()][string]$Text, [int]$MaxBytes = $script:TestTeamReportMaxBytes)
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    if ($encoding.GetByteCount($Text) -le $MaxBytes) { return $Text }
+    $marker = "`n…[rapor 256 KB'ı aştı; tamamı tur klasöründe]`n"
+    $room = $MaxBytes - $encoding.GetByteCount($marker)
+    $cut = [Math]::Min($Text.Length, $room)
+    while ($cut -gt 0 -and $encoding.GetByteCount($Text.Substring(0, $cut)) -gt $room) { $cut = [int]($cut * 0.95) }
+    return $Text.Substring(0, $cut) + $marker
 }
 
 function New-TestTeamJobCard {

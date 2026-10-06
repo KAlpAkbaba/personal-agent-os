@@ -29,6 +29,10 @@
          -PostProof posts a finished round's proof again and does nothing else.
       5. The 'kopma noktası' report: <OutRoot>/<round>/kopma-noktasi.md, and one board note
          addressed to the Danışman's seat ('danisman') (never to the owner).
+      6. The owner's input/output report (test-round-io-report): <OutRoot>/<round>/test-raporu.md
+         - per tester and per step Girdi / Beklenen / Çıktı / Sonuç, the plan's why, the ladder,
+         the forwarded cards - and, with -QueueUrl, POST /v1/team/test-reports on the Cloud Core
+         (the Ofis' 'Test raporları'). A round that dies writes what it had, 'yarım kaldı: <why>'.
 
     Before the plan (staging-follows-release, the Danışman 2026-10-06): staging must serve
     origin/main's tip (/v1/system/health release.version). Otherwise the round REFUSES - exit 4,
@@ -383,6 +387,50 @@ else {
     Write-Host "staging main'in ucunda: $mainTip"
 }
 
+# ------------------------------------------------------------------------------ the input/output report
+
+# What the round has so far: the report is written from these at its end, or when it dies.
+$plan = $null
+$cards = @()
+$results = New-Object System.Collections.ArrayList
+$added = New-Object System.Collections.ArrayList
+$stagingSha = ""
+$script:ioWritten = $false
+$script:unfinished = ""
+
+function Write-RoundIoReport {
+    <# The owner's input/output report (test-round-io-report): test-raporu.md in the round folder,
+       and POSTed to the Cloud Core's owner-only /v1/team/test-reports when -QueueUrl names it.
+       Never stops the round: a report that cannot be written or sent is said. #>
+    param([string]$Unfinished = "")
+    $script:ioWritten = $true
+    try {
+        $jobs = if ($null -ne $plan) { @(Get-TeamProperty -InputObject $plan -Name "jobs" -Default @()) } else { @() }
+        $sha = $stagingSha
+        foreach ($result in $results) { if (-not $sha) { $sha = [string](Get-TeamProperty -InputObject $result -Name "staging_sha" -Default "") } }
+        $io = Format-TestTeamRoundReport -Round $Round -StagingSha $sha -Jobs $jobs -Cards @($cards) -Results @($results.ToArray()) -Forwarded @($added) -Unfinished $Unfinished
+        $file = Join-Path $roundDir "test-raporu.md"
+        [System.IO.File]::WriteAllText($file, $io.Markdown, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "girdi/çıktı raporu: $file"
+        if ($null -eq $apiStore) { Write-Host "  Cloud Core adresi yok; rapor yalnız tur klasöründe"; return }
+        $body = [pscustomobject]@{
+            round       = $Round
+            staging_sha = $sha
+            counts      = $io.Counts
+            unfinished  = $Unfinished
+            text        = (Limit-TestTeamReportText -Text $io.Markdown)
+        }
+        try { [void](Invoke-TeamApi -Store $apiStore -Method "POST" -Path "/v1/team/test-reports" -Body $body); Write-Host "  rapor Cloud Core'a yazıldı (Ofis: Test raporları)" }
+        catch { Write-Host "  rapor Cloud Core'a yazılamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+    }
+    catch { Write-Host "  girdi/çıktı raporu yazılamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+}
+
+# The round from its plan to its end. A round that dies on the way still writes the report of
+# what it had, marked 'yarım kaldı: <why>' (finally below); the body is not indented so that the
+# history of every line stays readable.
+try {
+
 # ------------------------------------------------------------------------------ the plan
 
 if (-not $PlanPath) {
@@ -400,7 +448,7 @@ if (-not $PlanPath) {
         $run = Start-RoleProcess -Role "test-lead" -Prompt $prompt -Seat "test-lead"
         $done = Wait-TeamRun -Run $run -Deadline ([datetime]::UtcNow.AddMinutes($RunMinutes))
         [System.IO.File]::WriteAllText((Join-Path $roundDir "test-lead-plan.log"), [string]$done.StdOut, (New-Object System.Text.UTF8Encoding($false)))
-        if (-not (Test-Path -LiteralPath $PlanPath)) { Write-Host "Test PY plan yazmadı ($PlanPath); tur başlamadı"; exit 1 }
+        if (-not (Test-Path -LiteralPath $PlanPath)) { Write-Host "Test PY plan yazmadı ($PlanPath); tur başlamadı"; $script:unfinished = "Test PY plan yazmadı"; exit 1 }
     }
 }
 $plan = Read-TeamJson -Path $PlanPath
@@ -441,6 +489,7 @@ $cap = Get-RoundCap
 if ($script:saidReasons -eq "") { Write-Host ("test ekibi sınırı: {0} (ayar {1})" -f $cap.Cap, $cap.Configured) }
 if ($cap.Cap -eq 0) {
     Write-Host "bu turda test çalışanı başlatılmadı; kartlar planned kaldı: $cardsPath"
+    $script:unfinished = "test çalışanı başlatılmadı (sınır 0: $(@($cap.Reasons) -join '; '))"
     exit 0
 }
 
@@ -469,7 +518,6 @@ if (-not $NoAuth) {
 $pending = New-Object System.Collections.Queue
 foreach ($card in $cards) { $pending.Enqueue($card) }
 $inFlight = New-Object System.Collections.ArrayList
-$results = New-Object System.Collections.ArrayList
 $measuredAt = [datetime]::UtcNow
 $finishedSince = $false
 while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
@@ -551,12 +599,10 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
 $failures = @()
 foreach ($result in $results) { $failures += @(Get-TestTeamFailures -Result $result) }
 $failures = @(Merge-TestTeamFailures -Failures $failures)
-$stagingSha = ""
 foreach ($result in $results) { $sha = [string](Get-TeamProperty -InputObject $result -Name "staging_sha" -Default ""); if ($sha) { $stagingSha = $sha } }
 $queue = Read-Queue
 $known = @{}
 foreach ($task in (Get-TeamTasks -Queue $queue)) { $known[[string]$task.id] = $true }
-$added = New-Object System.Collections.ArrayList
 foreach ($failure in $failures) {
     $task = ConvertTo-TestTeamFailureTask -Failure $failure -StagingSha $stagingSha -Round $Round
     foreach ($card in $cards) {
@@ -599,4 +645,16 @@ $report = Format-TestTeamBreakingReport -Round $Round -Results @($results.ToArra
 Send-Note -Seat "test-lead" -To $report.To -Text $report.Note
 $counts = @($cards | Group-Object state | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ", "
 Write-Host "tur $Round bitti: $counts; iletilen $($added.Count); kopma raporu $(Join-Path $roundDir 'kopma-noktasi.md')"
+Write-RoundIoReport
 exit 0
+
+}
+catch {
+    $script:unfinished = $_.Exception.Message -replace '\s+', ' '
+    throw
+}
+finally {
+    if (-not $script:ioWritten) {
+        Write-RoundIoReport -Unfinished $(if ($script:unfinished) { $script:unfinished } else { "tur beklenmedik biçimde bitti" })
+    }
+}

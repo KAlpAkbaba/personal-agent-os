@@ -440,6 +440,8 @@ public static class FakeStaging {
             if (p == "/load" && failAbove > 0 && load > failAbove) { code = 503; body = "{}"; }
             if (p == "/slowone" && Interlocked.Increment(ref slowSeen) == 1) { Thread.Sleep(1500); }
             if (p == "/flaky" && load == 16 && Interlocked.Increment(ref flakySeen) == 1) { code = 503; body = "{}"; }
+            if (p == "/big") { body = "{\"items\":\"" + new String('x', 6000) + "\"}"; }
+            if (p == "/secret") { body = "{\"access_token\":\"tok-SIRRI-1234\",\"title\":\"ok\"}"; }
             byte[] bytes = Encoding.UTF8.GetBytes(body);
             c.Response.StatusCode = code;
             c.Response.OutputStream.Write(bytes, 0, bytes.Length);
@@ -532,6 +534,110 @@ Test-Case "a load that breaks once and holds when measured again is 'flaky', not
     }
 }
 
+Test-Case "a scenario run records each step's input and output: the body as sent, the answer cut at 4 KB, the session and secret fields masked" {
+    # The owner, 2026-10-06: "test ekibinin yaptığı işlemleri ve aldığı sonuçların girdi çıktı
+    # olarak raporlarını istiyorum". The result kept a status; not what was sent nor what came back.
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $fake = Start-FakeStaging -Port $port
+    $sessionToken = "pagentos" + "_st_" + "OturumAnahtariTestIcin0123456789abcdefghij"
+    try {
+        $session = Join-Path $work "owner.json"
+        Write-Utf8 $session ('{"session_token":"' + $sessionToken + '"}')
+        $scenario = Join-Path $work "io.json"
+        Write-Utf8 $scenario ('{"id":"io","family":"girdi-cikti","steps":[{"name":"büyük yanıt","method":"GET","path":"/big","expect_status":200},{"name":"giriş","method":"POST","path":"/secret","body":{"title":"Not al","password":"hunter2-gizli"},"expect_status":200,"expect_contains":"ok"}]}')
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -SessionFile $session -Card "tj-io" 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "both steps pass: $out"
+        $raw = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $work "tj-io.result.json")
+        $result = $raw | ConvertFrom-Json
+        $big = @($result.steps)[0]
+        Assert-Equal -Expected "GET" -Actual ([string]$big.input.method) -Because "the input names the method"
+        Assert-Equal -Expected "/big" -Actual ([string]$big.input.path) -Because "and the path"
+        Assert-Equal -Expected "Bearer ***" -Actual ([string]$big.input.headers.Authorization) -Because "the session is masked"
+        Assert-Equal -Expected "200" -Actual ([string]$big.output.status) -Because "the output's status"
+        $body = [string]$big.output.body
+        Assert-True -Condition ($body.StartsWith('{"items":"xxxx')) -Because "the answer as it came: $($body.Substring(0, 30))"
+        Assert-True -Condition ($body.Length -lt 4200 -and $body.Length -gt 4096) -Because "cut at 4096 with a marker: $($body.Length)"
+        Assert-True -Condition ($body -match 'kesildi') -Because "the marker says it was cut"
+        $login = @($result.steps)[1]
+        Assert-True -Condition ([string]$login.input.body -match '"title":"Not al"') -Because "the body as sent: $($login.input.body)"
+        Assert-True -Condition ([string]$login.input.body -match '"password":"\*\*\*"') -Because "a password field masked: $($login.input.body)"
+        Assert-True -Condition ([string]$login.output.body -match '"access_token":"\*\*\*"') -Because "a token field in the answer masked: $($login.output.body)"
+        foreach ($secret in @($sessionToken, "hunter2-gizli", "tok-SIRRI-1234")) {
+            Assert-True -Condition (-not $raw.Contains($secret)) -Because "'$secret' is nowhere in the result file"
+        }
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fake.HasExited) { $fake.Kill() }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "masking and cutting: token, secret and password fields, Bearer values and the session itself; masked before cut" {
+    $masked = Protect-TestTeamText -Text '{"refresh_token":"r-1","clientSecret":"s-2","Password":12345,"name":"ali","nested":{"api_token":"x"}}'
+    Assert-Equal -Expected '{"refresh_token":"***","clientSecret":"***","Password":"***","name":"ali","nested":{"api_token":"***"}}' -Actual $masked -Because "every such field"
+    Assert-Equal -Expected "Authorization: ***" -Actual (Protect-TestTeamText -Text "Authorization: Bearer abc.def") -Because "a header line"
+    Assert-Equal -Expected "oturum *** bitti" -Actual (Protect-TestTeamText -Text "oturum ABCDEFGH123 bitti" -Secrets @("ABCDEFGH123")) -Because "the session token wherever it stands"
+    Assert-Equal -Expected "kısa" -Actual (Limit-TestTeamText -Text "kısa") -Because "a short body is whole"
+    $cut = ConvertTo-TestTeamShownText -Text (("a" * 4090) + '"token":"GIZLIGIZLIGIZLI"')
+    Assert-True -Condition (-not $cut.Contains("GIZLI")) -Because "masked first, so the cut never shows half a secret: $($cut.Substring(4080))"
+}
+
+Test-Case "the round report: Girdi / Beklenen / Çıktı / Sonuç for every step, the plan's why, the ladder table, the forwarded cards; a dead round says 'yarım kaldı'" {
+    $cards = @(
+        [pscustomobject]@{ id = "tj-r-1"; tester = "tester-1"; family = "saglik"; state = "passed" },
+        [pscustomobject]@{ id = "tj-r-2"; tester = "tester-2"; family = "yuk"; state = "broke" },
+        [pscustomobject]@{ id = "tj-r-3"; tester = "tester-3"; family = "kirik"; state = "running" }
+    )
+    $jobs = @(
+        [pscustomobject]@{ family = "saglik"; why = "Stage 58 yayında" },
+        [pscustomobject]@{ family = "yuk" },
+        [pscustomobject]@{ family = "kirik"; why = "dikili hata" }
+    )
+    $results = @(
+        [pscustomobject]@{ card = "tj-r-1"; scenario = "s.json"; steps = @(
+                [pscustomobject]@{ name = "sağlık"; method = "GET"; path = "/v1/system/health"; expected = "200"; actual = "200"; ok = $true; ms = 12
+                    input = [pscustomobject]@{ method = "GET"; path = "/v1/system/health"; headers = [pscustomobject]@{ Authorization = "Bearer ***" }; body = "" }
+                    output = [pscustomobject]@{ status = "200"; body = '{"status":"ok"}' } },
+                [pscustomobject]@{ name = "not"; method = "POST"; path = "/v1/notes"; expected = "201"; actual = "500"; ok = $false; ms = 40
+                    input = [pscustomobject]@{ method = "POST"; path = "/v1/notes"; body = '{"text":"süt al","password":"p-sizdi"}' }
+                    output = [pscustomobject]@{ status = "500"; body = '{"detail":"boom"}' } },
+                [pscustomobject]@{ name = "elle"; method = "GET"; path = "/v1/x"; expected = "200"; actual = "404"; ok = $false }
+            ) },
+        [pscustomobject]@{ card = "tj-r-2"; scenario = "y.json"; steps = @(); breaking = [pscustomobject]@{ what = "GET /v1/watches"; tried = @([pscustomobject]@{ load = 8; ok = 8; errors = 0; p95_ms = 80 }, [pscustomobject]@{ load = 16; ok = 10; errors = 6; p95_ms = 3000 }); first_failure = [pscustomobject]@{ load = 16; ok = 10; errors = 6; p95_ms = 3000 } } }
+    )
+    $forwarded = @([pscustomobject]@{ id = "test-fail-saglik-abc"; title = "Test ekibi: saglik - not" })
+    $report = Format-TestTeamRoundReport -Round "r7" -StagingSha ("e" * 40) -Jobs $jobs -Cards $cards -Results $results -Forwarded $forwarded -At "2026-10-07T00:00:00Z"
+    $md = $report.Markdown
+    Assert-Equal -Expected 3 -Actual ([regex]::Matches($md, '(?m)^Girdi:$').Count) -Because "one Girdi per step: $md"
+    Assert-Equal -Expected 3 -Actual ([regex]::Matches($md, '(?m)^Beklenen: ').Count) -Because "one Beklenen per step"
+    Assert-Equal -Expected 3 -Actual ([regex]::Matches($md, '(?m)^Çıktı:$').Count) -Because "one Çıktı per step"
+    Assert-Equal -Expected 3 -Actual ([regex]::Matches($md, '(?m)^Sonuç: (geçti|kaldı)$').Count) -Because "one Sonuç per step"
+    Assert-True -Condition ($md -match '### 1\. sağlık \(12 ms\)') -Because "the step and its ms"
+    Assert-True -Condition ($md -match 'POST /v1/notes') -Because "the input's request line"
+    Assert-True -Condition ($md -match '"password":"\*\*\*"' -and -not $md.Contains("p-sizdi")) -Because "a secret a hand-written result left in is masked here too"
+    Assert-True -Condition ($md -match '\{"detail":"boom"\}') -Because "the output's body"
+    Assert-True -Condition ($md -match 'GET /v1/x \(girdi kaydı yok\)') -Because "a step without a record says so"
+    Assert-True -Condition ($md -match '- saglik \(tj-r-1, tester-1\): Stage 58 yayında') -Because "the plan's why per job"
+    Assert-True -Condition ($md -match 'yuk \(tj-r-2, tester-2\): \(gerekçe yazılmamış\)') -Because "a job with no why says so"
+    Assert-True -Condition ($md -match 'tester-2 - yuk \(tj-r-2\) - sonuç: koptu') -Because "the tester's result: koptu"
+    Assert-True -Condition ($md -match 'tester-3 - kirik \(tj-r-3\) - sonuç: sonuç yazılmadı') -Because "a running card wrote nothing"
+    Assert-True -Condition ($md -match '\| 16 \| 6 \| 3000 \|') -Because "the ladder table: yük, hata, p95"
+    Assert-True -Condition ($md -match '- test-fail-saglik-abc: Test ekibi: saglik - not') -Because "the forwarded card"
+    Assert-True -Condition ($md -match '1 geçti, 0 kaldı, 1 koptu') -Because "the counts"
+    Assert-True -Condition ($md -notmatch 'yarım kaldı') -Because "a whole round is not 'yarım'"
+    Assert-Equal -Expected 1 -Actual ([int]$report.Counts.broke) -Because "the counts the Cloud Core keeps"
+    $dead = Format-TestTeamRoundReport -Round "r7" -Cards $cards -Results $results -Unfinished "kuyruk okunamadı"
+    Assert-True -Condition ($dead.Markdown -match '\*\*yarım kaldı: kuyruk okunamadı\*\*') -Because "the dead round says why"
+    Assert-Equal -Expected 3 -Actual ([regex]::Matches($dead.Markdown, '(?m)^Girdi:$').Count) -Because "and keeps what it had"
+    $fenced = Format-TestTeamRoundReport -Round "r7" -Cards @($cards[0]) -Results @([pscustomobject]@{ card = "tj-r-1"; steps = @([pscustomobject]@{ name = "x"; ok = $true; output = [pscustomobject]@{ status = "200"; body = "a````b" } }) })
+    Assert-Equal -Expected 4 -Actual ([regex]::Matches($fenced.Markdown, '(?m)^````$').Count) -Because "a body cannot close the block it stands in"
+    $huge = Limit-TestTeamReportText -Text ("ğ" * 200000)
+    Assert-True -Condition ((New-Object System.Text.UTF8Encoding($false)).GetByteCount($huge) -le 262144) -Because "the Cloud Core's copy is at most 256 KB"
+    Assert-True -Condition ($huge -match "256 KB") -Because "and says it was cut"
+}
+
 # ============================================================================ a round
 
 Write-Host ""
@@ -559,7 +665,7 @@ $seat = [regex]::Match($card, '(?m)^- tester: (.+)$').Groups[1].Value.Trim()
 [IO.File]::WriteAllText((Join-Path $log "$id.call"), "$role $seat $id $family $([datetime]::UtcNow.ToString('o'))")
 if ($family -eq "sikis") { [IO.File]::WriteAllText($env:PAGENTOS_FAKE_SQUEEZE, '{"test_parallel":4,"test_memory_floor_gb":64}') }
 Start-Sleep -Milliseconds 600
-$state = "passed"; $steps = @(@{ name = "adim"; expected = "200"; actual = "200"; ok = $true })
+$state = "passed"; $steps = @(@{ name = "adim"; method = "GET"; path = "/v1/system/health"; expected = "200"; actual = "200"; ok = $true; ms = 7; input = @{ method = "GET"; path = "/v1/system/health"; body = "" }; output = @{ status = "200"; body = '{"status":"ok"}' } })
 $breaking = @{ what = "ayni istek iki kez"; tried = @(@{ load = 2; ok = 2; errors = 0; p95_ms = 30 }); first_failure = $null }
 if ($family -eq "kirik") { $state = "failed"; $steps = @(@{ name = "nobet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = "500"; ok = $false }) }
 # 'kopuk': the staging credential is rotated under the round (the session file now holds a dead
@@ -618,11 +724,48 @@ Test-Case "a round deals four jobs to four testers at once, gets four results ba
         Assert-Equal -Expected ("d" * 40) -Actual ([string](@($cards.cards)[1].found_sha)) -Because "and the staging sha the failure was found on (the retest's yardstick)"
         $breaking = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $outRoot "r9\kopma-noktasi.md")
         Assert-True -Condition ($breaking -match "16") -Because "the first failing load"
+        # The owner's input/output report (test-round-io-report), left in the round folder.
+        $io = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $outRoot "r9\test-raporu.md")
+        Assert-Equal -Expected 4 -Actual ([regex]::Matches($io, '(?m)^Girdi:$').Count) -Because "one Girdi for each of the four testers' one step: $io"
+        Assert-Equal -Expected 4 -Actual ([regex]::Matches($io, '(?m)^Çıktı:$').Count) -Because "one Çıktı each"
+        Assert-True -Condition ($io -match 'tester-2 - kirik \(tj-r9-2\) - sonuç: kaldı' -and $io -match 'tester-3 - yuk \(tj-r9-3\) - sonuç: koptu') -Because "each tester's result"
+        Assert-True -Condition ($io -match '- test-fail-kirik-[0-9a-f]{10}: ') -Because "the forwarded card is named"
+        Assert-True -Condition ($io -match '2 geçti, 1 kaldı, 1 koptu') -Because "the counts"
+        Assert-True -Condition (($out -join " ") -match "Cloud Core adresi yok") -Because "without a Cloud Core it says the report stayed in the folder: $out"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "testteam"))) -Because "no run data beside the team's files"
         # A second round over the same queue forwards nothing twice.
         $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "r10" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
         $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
         Assert-Equal -Expected 1 -Actual @($queue.tasks).Count -Because "an open card for the same failure is not opened again: $out"
+    }
+    finally {
+        Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a round that dies after its testers still writes its input/output report, marked 'yarım kaldı: <why>'" {
+    $work = New-Work
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        # A queue that cannot be read: the round dies at the forward, after both testers finished.
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[ bozuk'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"saglik","scenario":"a.json","why":"her tur"},{"family":"kirik","scenario":"b.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        $outRoot = Join-Path $work "out"
+        # The dying child writes its error to stderr: a line of output here, not this test's error.
+        $ErrorActionPreference = "Continue"
+        $out = & $powershell -NoProfile -File $testRound -Round "olu"-TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        Assert-True -Condition ($LASTEXITCODE -ne 0) -Because "the round died: $out"
+        $file = Join-Path $outRoot "olu\test-raporu.md"
+        Assert-True -Condition (Test-Path -LiteralPath $file) -Because "the report is written anyway: $out"
+        $io = Get-Content -Raw -Encoding UTF8 -LiteralPath $file
+        Assert-True -Condition ($io -match '\*\*yarım kaldı: .+\*\*') -Because "marked unfinished, with why: $io"
+        Assert-Equal -Expected 2 -Actual ([regex]::Matches($io, '(?m)^Girdi:$').Count) -Because "with what the two testers did"
+        Assert-True -Condition ($io -match '- saglik \(tj-olu-1, tester-1\): her tur') -Because "and the plan"
     }
     finally {
         Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
@@ -651,6 +794,11 @@ while (`$true) {
         [IO.File]::AppendAllText('$puts', `$p + ' ' + `$in + "``n")
         `$body = '{"ok":true}'
     }
+    if (`$c.Request.HttpMethod -eq 'POST') {
+        `$in = (New-Object IO.StreamReader(`$c.Request.InputStream, [Text.Encoding]::UTF8)).ReadToEnd()
+        [IO.File]::WriteAllText('$work\post-' + [guid]::NewGuid().ToString('N') + '.json', `$p + ' ' + `$c.Request.Headers['Authorization'] + ' ' + `$in, [Text.Encoding]::UTF8)
+        `$body = '{"report":{"round":"x"}}'
+    }
     `$b = [Text.Encoding]::UTF8.GetBytes(`$body)
     `$c.Response.ContentType = 'application/json'
     `$c.Response.OutputStream.Write(`$b, 0, `$b.Length)
@@ -677,6 +825,18 @@ while (`$true) {
         Assert-True -Condition ($written[0] -match '^/v1/team/queue/tasks/test-fail-kirik-[0-9a-f]{10} ') -Because "the task's own path: $($written[0])"
         Assert-True -Condition ($written[0] -match '"expected_updated_at":null') -Because "create-only: $($written[0])"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "queue.json"))) -Because "no local queue file is written in API mode"
+        # The round's input/output report goes to the Cloud Core's owner-only route.
+        $posts = @(Get-ChildItem -LiteralPath $work -Filter "post-*.json" | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8) })
+        Assert-Equal -Expected 1 -Actual @($posts).Count -Because "one report a round: $out"
+        $post = $posts[0]
+        Assert-True -Condition ($post.StartsWith("/v1/team/test-reports Bearer test-token ")) -Because "the route, with the team token: $($post.Substring(0, 60))"
+        $sent = $post.Substring("/v1/team/test-reports Bearer test-token ".Length) | ConvertFrom-Json
+        Assert-Equal -Expected "api1" -Actual ([string]$sent.round) -Because "the round"
+        Assert-Equal -Expected 1 -Actual ([int]$sent.counts.failed) -Because "the counts: $($sent.counts | ConvertTo-Json -Compress)"
+        Assert-Equal -Expected ("d" * 40) -Actual ([string]$sent.staging_sha) -Because "the staging sha"
+        Assert-True -Condition ([string]$sent.text -match '(?m)^Girdi:$') -Because "the report's text"
+        Assert-Equal -Expected "" -Actual ([string]$sent.unfinished) -Because "a whole round"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $outRoot "api1\test-raporu.md")) -Because "and the same report in the round folder"
         # The same failure next round: the store has the id, nothing is written.
         $id = [regex]::Match($written[0], 'tasks/(\S+) ').Groups[1].Value
         Write-Utf8 (Join-Path $work "queue-answer.json") ('{"version":1,"tasks":[{"id":"' + $id + '","state":"proposed"}]}')
