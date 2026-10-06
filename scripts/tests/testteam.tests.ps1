@@ -245,6 +245,13 @@ Test-Case "jobs are dealt to the four testers in turn, one scenario family a job
     $threw = $false
     try { [void](New-TestTeamCards -Round "r1" -Jobs $twice) } catch { $threw = $true }
     Assert-True -Condition $threw -Because "one family is one job"
+    # test-lead.md: a family with no scenario file is an improvise job; its tester writes one.
+    $new = @(New-TestTeamCards -Round "r1" -Jobs @([pscustomobject]@{ family = "ev-stoku"; scenario = $null; improvise = $true; why = "yeni" }))
+    Assert-Equal -Expected "" -Actual ([string]@($new)[0].scenario) -Because "no file yet: the tester writes it"
+    Assert-True -Condition (@($new)[0].improvise) -Because "the job is to improvise"
+    $threw = $false
+    try { [void](New-TestTeamCards -Round "r1" -Jobs @([pscustomobject]@{ family = "x"; scenario = $null; improvise = $false })) } catch { $threw = $true }
+    Assert-True -Condition $threw -Because "a scripted job with no file names nothing to run"
 }
 
 Test-Case "a failure becomes a software card with steps, expected, actual, the scenario, the screenshot and the staging sha; two alike are one" {
@@ -332,6 +339,12 @@ Test-Case "the breaking-point report is short, names the first failing load with
     $report = Format-TestTeamBreakingReport -Round "r1" -Results $failedToo
     Assert-True -Condition ($report.Note -match "yük 32" -and $report.Note -notmatch "yük 2 ") -Because "the headline is the real breaking point: $($report.Note)"
     Assert-True -Condition ($report.Markdown -match "ölçüm geçersiz") -Because "the failed scenario's ladder is said, and why it does not count: $($report.Markdown)"
+    # 2026-10-06: an improvised result a tester wrote by hand has no tester or card; the round
+    # died here after every tester had finished, and no report was written.
+    $handWritten = @([pscustomobject]@{ family = "nobet"; state = "broke"; breaking = [pscustomobject]@{
+                tried = @([pscustomobject]@{ load = 8; ok = 6; errors = 2; p95_ms = 40 }); first_failure = [pscustomobject]@{ load = 8; ok = 6; errors = 2; p95_ms = 40 }; what = "POST /v1/watches" } }) + $results
+    $report = Format-TestTeamBreakingReport -Round "r1" -Results $handWritten
+    Assert-True -Condition ($report.Markdown -match "nobet \(\?, \?\)") -Because "a result without tester and card is reported, not thrown: $($report.Markdown)"
 }
 
 Test-Case "a tester's board note is what the Ofis' Test odası reads: 'iş: <job>', then 'sonuç: <state> - <job> - kopma: ...'" {
@@ -340,6 +353,11 @@ Test-Case "a tester's board note is what the Ofis' Test odası reads: 'iş: <job
     $card.state = "broke"
     $result = [pscustomobject]@{ breaking = [pscustomobject]@{ first_failure = [pscustomobject]@{ load = 256; ok = 250; errors = 6; p95_ms = 7982 } } }
     Assert-Equal -Expected "sonuç: broke - saglik (tj-r1-2) - kopma: yük 256, 6 hata / 256, p95 7982 ms" -Actual (Format-TestTeamSeatNote -Card $card -Result $result) -Because "a broken card carries its numbers"
+    # 2026-10-06: a hand-written result's rung without p95_ms stopped a round mid-way.
+    $handWritten = [pscustomobject]@{ breaking = [pscustomobject]@{ first_failure = [pscustomobject]@{ load = 8; ok = 4; errors = 4 } } }
+    Assert-Equal -Expected "sonuç: broke - saglik (tj-r1-2) - kopma: yük 8, 4 hata / 8, p95 ? ms" -Actual (Format-TestTeamSeatNote -Card $card -Result $handWritten) -Because "a missing field is '?', not a thrown round"
+    $report = Format-TestTeamBreakingReport -Round "r1" -Results @([pscustomobject]@{ family = "x"; state = "broke"; breaking = [pscustomobject]@{ what = "w"; tried = @([pscustomobject]@{ load = 8 }); first_failure = [pscustomobject]@{ load = 8 } } })
+    Assert-True -Condition ($report.Markdown -match "ilk kırılan yük 8") -Because "a rung with only its load is still reported: $($report.Markdown)"
     $card.state = "passed"
     Assert-Equal -Expected "sonuç: passed - saglik (tj-r1-2)" -Actual (Format-TestTeamSeatNote -Card $card -Result $result) -Because "a passed card is just its end"
 }
