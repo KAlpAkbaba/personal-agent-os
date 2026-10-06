@@ -91,6 +91,9 @@ def _collect(*arguments: str) -> subprocess.CompletedProcess[str]:
             str(COLLECT_SCRIPT),
             *arguments,
         ],
+        # No inherited stdin: a PowerShell child that holds the runner's stdin waited out the
+        # 120 s guard once in the gate (2026-10-06 03:54) for a script that takes 0.4 s alone.
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         encoding="utf-8",
