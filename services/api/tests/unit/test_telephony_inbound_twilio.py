@@ -67,7 +67,9 @@ def test_twilio_documentation_vector_is_accepted() -> None:
     url = "https://mycompany.com/myapp.php?foo=1&bar=2"
     assert tw.validate_signature("12345", url, fields, "GvWf1cFY/Q7PnoempGyD5oXAezc=")
     assert not tw.validate_signature("12345", url, fields, "GvWf1cFY/Q7PnoempGyD5oXAezc")
-    assert not tw.validate_signature("12345", url, {**fields, "Digits": "1235"}, "GvWf1cFY/Q7PnoempGyD5oXAezc=")
+    assert not tw.validate_signature(
+        "12345", url, {**fields, "Digits": "1235"}, "GvWf1cFY/Q7PnoempGyD5oXAezc="
+    )
 
 
 def test_a_correct_signature_is_accepted() -> None:

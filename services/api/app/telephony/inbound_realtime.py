@@ -47,8 +47,7 @@ SECRETARY_INSTRUCTIONS_TR: Final[str] = (
     "ileteceğim, iyi günler' diyerek vedalaş."
 )
 FAREWELL_INSTRUCTIONS_TR: Final[str] = (
-    "Görüşme süresi doldu. Kibarca, tek cümleyle Türkçe vedalaş ve mesajı sahibe "
-    "ileteceğini söyle."
+    "Görüşme süresi doldu. Kibarca, tek cümleyle Türkçe vedalaş ve mesajı sahibe ileteceğini söyle."
 )
 
 
@@ -199,7 +198,9 @@ class OpenAIRealtimeLeg:
         await self._send({"type": CMD_INPUT_AUDIO_APPEND, "audio": payload_b64})
 
     async def say(self, instructions: str) -> None:
-        await self._send({"type": oai.CMD_RESPONSE_CREATE, "response": {"instructions": instructions}})
+        await self._send(
+            {"type": oai.CMD_RESPONSE_CREATE, "response": {"instructions": instructions}}
+        )
 
     async def events(self) -> AsyncIterator[LegEvent]:
         from websockets.exceptions import ConnectionClosed

@@ -107,7 +107,9 @@ def test_finalize_writes_one_row_and_one_notification_and_a_second_adds_nothing(
             select(ActivityEventRow).where(ActivityEventRow.source_ref == f"inbound:{call_sid}")
         ).scalar_one()
         note = db.execute(
-            select(NotificationRow).where(NotificationRow.data_json["call_sid"].as_string() == call_sid)
+            select(NotificationRow).where(
+                NotificationRow.data_json["call_sid"].as_string() == call_sid
+            )
         ).scalar_one()
     assert row.event_type == "telephony.inbound_answered"
     assert row.detail_json["duration_s"] == 75
@@ -135,5 +137,7 @@ def test_the_daily_allowance_is_read_from_the_real_ledger(scope, tag: str) -> No
         leg_factory=lambda: None,  # type: ignore[arg-type,return-value]
         clock=lambda: NOON,
     )
-    admission = line.admit(f"CA{tag}" + "9" * 20, CALLER, used_seconds=recorder.seconds_used_today(NOON))
+    admission = line.admit(
+        f"CA{tag}" + "9" * 20, CALLER, used_seconds=recorder.seconds_used_today(NOON)
+    )
     assert admission.token is None and admission.reason == "daily_cap"

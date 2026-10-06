@@ -154,7 +154,7 @@ def test_the_leg_opens_a_toolless_g711_secretary_session_and_maps_events() -> No
 
 
 def test_a_session_with_tools_is_refused_by_the_fake(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fake really checks: a session carrying a manifest is closed 1008 (the leg's events end)."""
+    """The fake really checks: a session carrying a manifest is closed 1008 (events end)."""
     real = rt.build_session_update
 
     def with_tools(**kwargs: Any) -> dict[str, Any]:

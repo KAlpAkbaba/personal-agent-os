@@ -68,7 +68,9 @@ def compute_signature(auth_token: str, public_url: str, fields: Fields) -> str:
     return base64.b64encode(digest).decode("ascii")
 
 
-def validate_signature(auth_token: str, public_url: str, fields: Fields, header: str | None) -> bool:
+def validate_signature(
+    auth_token: str, public_url: str, fields: Fields, header: str | None
+) -> bool:
     """Whether ``header`` is Twilio's signature of this request. No token or no header: never."""
     if not auth_token or not header:
         return False
@@ -157,12 +159,16 @@ def parse_stream_event(raw: str | bytes | Mapping[str, Any]) -> StreamEvent:
     if kind == "dtmf":
         return StreamEvent(kind=kind, stream_sid=stream_sid, digit=str(body.get("digit") or ""))
     if kind == "stop":
-        return StreamEvent(kind=kind, stream_sid=stream_sid, call_sid=str(body.get("callSid") or ""))
+        return StreamEvent(
+            kind=kind, stream_sid=stream_sid, call_sid=str(body.get("callSid") or "")
+        )
     return StreamEvent(kind=kind, stream_sid=stream_sid)
 
 
 def media_frame(stream_sid: str, payload_b64: str) -> str:
-    return json.dumps({"event": "media", "streamSid": stream_sid, "media": {"payload": payload_b64}})
+    return json.dumps(
+        {"event": "media", "streamSid": stream_sid, "media": {"payload": payload_b64}}
+    )
 
 
 def mark_frame(stream_sid: str, name: str) -> str:

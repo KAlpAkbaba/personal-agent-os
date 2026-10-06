@@ -159,7 +159,9 @@ def test_unsigned_or_badly_signed_webhooks_are_403_without_a_body(world: World, 
     response = world.voice(signature=signature)
     assert response.status_code == 403
     assert len(response.content) == 0
-    status = world.post(tw.STATUS_PATH, {"CallSid": CALL_A, "CallStatus": "completed"}, signature=signature)
+    status = world.post(
+        tw.STATUS_PATH, {"CallSid": CALL_A, "CallStatus": "completed"}, signature=signature
+    )
     assert status.status_code == 403 and len(status.content) == 0
     assert world.line.tokens.pending() == 0
 
@@ -227,9 +229,7 @@ def test_the_daily_allowance_is_counted_from_the_ledger(world: World) -> None:
     recorder = world.line.recorder
     for n in range(3):
         start = T0 - timedelta(hours=1) + timedelta(minutes=13 * n)
-        assert recorder.finalize(
-            f"CA{n:032d}", CALLER, start, start + timedelta(minutes=10), []
-        )
+        assert recorder.finalize(f"CA{n:032d}", CALLER, start, start + timedelta(minutes=10), [])
     third_used = recorder.seconds_used_today(T0)
     assert third_used == 1800
     response = world.voice()
@@ -239,7 +239,9 @@ def test_the_daily_allowance_is_counted_from_the_ledger(world: World) -> None:
 
 def test_yesterday_does_not_count(world: World) -> None:
     yesterday = T0 - timedelta(days=1)
-    world.line.recorder.finalize("CA" + "9" * 32, CALLER, yesterday, yesterday + timedelta(minutes=40), [])
+    world.line.recorder.finalize(
+        "CA" + "9" * 32, CALLER, yesterday, yesterday + timedelta(minutes=40), []
+    )
     assert not _is_refusal(world.voice())
 
 

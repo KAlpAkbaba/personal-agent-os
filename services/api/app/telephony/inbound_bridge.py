@@ -280,7 +280,9 @@ class InboundCallBridge:
         async for event in leg.events():
             if event.kind == rt.LEG_AUDIO_DELTA:
                 self._frames_out += 1
-                await self._twilio.send_text(self._provider.media_frame(self._stream_sid, event.data))
+                await self._twilio.send_text(
+                    self._provider.media_frame(self._stream_sid, event.data)
+                )
             elif event.kind == rt.LEG_SPEECH_STARTED:
                 await self._twilio.send_text(self._provider.clear_frame(self._stream_sid))
             elif event.kind == rt.LEG_TRANSCRIPT_IN:

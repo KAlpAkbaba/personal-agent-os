@@ -599,7 +599,7 @@ EVENT_TYPE_TELEPHONY_CALL_ENDED = "telephony.call_ended"
 EVENT_TYPE_TELEPHONY_CALL_SKIPPED = "telephony.call_skipped"
 EVENT_TYPE_TELEPHONY_CALL_REFUSED = "telephony.call_refused"
 EVENT_TYPE_TELEPHONY_CALL_FAILED = "telephony.call_failed"
-#: inbound-calls-bridge: JARVIS answered a call on the owner's behalf (caller, duration, transcript).
+#: inbound-calls-bridge: JARVIS answered a call for the owner (caller, duration, transcript).
 EVENT_TYPE_TELEPHONY_INBOUND_ANSWERED = "telephony.inbound_answered"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (

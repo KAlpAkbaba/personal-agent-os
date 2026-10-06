@@ -34,7 +34,6 @@ from app.ledger.models import ActivityEventRow
 from app.notifications.models import NotificationRow
 from app.telephony import inbound_bridge as br
 from app.telephony import inbound_realtime as rt
-from app.telephony import inbound_twilio as tw
 from app.telephony.inbound_records import InboundRecorder
 from app.telephony.inbound_settings import InboundSettings
 from app.voice import providers_openai_realtime as oai
@@ -205,7 +204,9 @@ class Harness:
         self.sleeps.append(seconds)
         await asyncio.Event().wait()
 
-    def bridge(self, finalize: Callable[[br.CallRecord], Any] | None = None) -> br.InboundCallBridge:
+    def bridge(
+        self, finalize: Callable[[br.CallRecord], Any] | None = None
+    ) -> br.InboundCallBridge:
         return br.InboundCallBridge(
             twilio=self.socket,
             leg_factory=self.leg_factory,
@@ -386,7 +387,7 @@ def test_a_leg_that_cannot_connect_still_ends_and_writes() -> None:
 
     async def scenario() -> Harness:
         h = Harness()
-        h.leg_factory = lambda: (h.legs.append(Broken()) or h.legs[-1])  # type: ignore[method-assign]
+        h.leg_factory = lambda: h.legs.append(Broken()) or h.legs[-1]  # type: ignore[method-assign]
         token = h.tokens.issue(CALL_SID, CALLER, max_seconds=300)
         h.socket.push(start_frame(token))
         await h.bridge().run()
