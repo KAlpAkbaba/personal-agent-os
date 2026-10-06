@@ -292,6 +292,28 @@ def test_a_closed_sessions_research_is_told_to_the_owners_live_session(session_f
     assert not call.result_json["speech"].startswith("Daha önce")
 
 
+def test_a_production_sweep_forwards_on_the_clock_it_claimed_the_batch_with(
+    session_factory, monkeypatch
+) -> None:
+    """Production passes no ``now``: the pass's one clock (``moment``) must reach the
+    completion too, or the live-session window is judged on a second clock."""
+    import app.voice.realtime_sessions.research_announcer as announcer_module
+
+    class _PassClock(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return NOW
+
+    monkeypatch.setattr(announcer_module, "datetime", _PassClock)
+    _ready_closed_call(session_factory, "r-clock")
+    live = _seed_session(session_factory, updated_at=NOW - timedelta(minutes=5))
+    sideband = RecordingSideband(deliver=True)
+    announcer = ResearchToolCallAnnouncer(session_factory, sideband)
+
+    assert announcer.sweep_once() == 1
+    assert [frame["session_id"] for _, frame in sideband.frames] == [str(live)]
+
+
 def test_a_closed_sessions_research_is_not_forwarded_when_the_owner_switched_it_off(
     session_factory,
 ) -> None:

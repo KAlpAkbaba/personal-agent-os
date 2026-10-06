@@ -261,6 +261,9 @@ def test_the_local_conversation_is_not_carried_when_switched_off(wired) -> None:
     assert response.status_code == 200, response.text
     first = _local_chat_session(client, runtime, fake, ["Kuantum bilgisayar nedir?"])
     assert client.post(f"/v1/voice/realtime/sessions/{first}/close", json={}).status_code == 200
+    # the local mode's own gate (B), not only create_session's (A): switched off, the
+    # chat's text is never written to the session row at all (ADR KVKK note)
+    assert _summary_of(runtime, first) == ""
 
     asked_before = len(fake.asked)
     _local_chat_session(client, runtime, fake, ["Nerede kalmıştık?"])
