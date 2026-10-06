@@ -5,7 +5,8 @@ Test team, round t-manual-20261006e (staging 72884b71): POST ``/segments`` with 
 holding ``data:audio/wav;base64,...`` answered 201 and stored it. The owner, 2026-10-05: his
 conversations are kept as text only, never the audio (KVKK: a voice is biometric data). The
 route refuses, 422 ``audio_refused`` in Turkish, a line carrying a ``data:`` URL, a long base64
-run or a base64 run that opens with an audio file's magic (RIFF / ID3 / OggS / fLaC / EBML).
+run, a base64 block wrapped into lines (76 / 64 a line) or a base64 run carrying an audio
+file's magic (RIFF / ID3 / OggS / fLaC / EBML / #!AMR / an m4a ``ftyp`` box).
 Ordinary Turkish text - digits, punctuation, a long sentence - is still written; the length
 limit is the service's and stays.
 """
@@ -61,6 +62,17 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
+def _wrapped(data: bytes, *, width: int = 76, eol: str = "\n") -> str:
+    text = _b64(data)
+    return eol.join(text[i : i + width] for i in range(0, len(text), width))
+
+
+#: A phone's recording (m4a: an ``ftyp`` box) and a raw AAC/ADTS stream - neither opens with
+#: a magic the first pass knew, so only their wrapped shape or the ``ftyp`` box betrays them.
+M4A = b"\x00\x00\x00\x20ftypM4A \x00\x00\x00\x00M4A mp42isom" + bytes(range(7, 250, 3)) * 4
+AAC = b"\xff\xf1\x50\x80\x2e\x7f\xfc" + bytes(range(3, 256, 5)) * 6
+
+
 def _rows(engine) -> int:
     with engine.connect() as connection:
         return len(connection.execute(select(SegmentRow.id)).all())
@@ -77,6 +89,13 @@ REFUSED = {
     "oggs_prefix": "işte " + _b64(b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"),
     "flac_prefix": _b64(b"fLaC\x00\x00\x00\x22\x10\x00\x10\x00"),
     "webm_prefix": _b64(b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81"),
+    # Inspector, first pass: the `base64` CLI / MIME shape - 76-character lines - kept every
+    # line under the 200 run, and a phone's m4a (`ftyp`) had no magic in the list.
+    "m4a_76_line_block": _wrapped(M4A),
+    "aac_76_line_block": _wrapped(AAC),
+    "aac_64_line_block_crlf": _wrapped(AAC, width=64, eol="\r\n"),
+    "m4a_short_unsplit": "kayıt " + _b64(M4A[:90]),
+    "m4a_box_size_24": _b64(b"\x00\x00\x00\x18ftyp3gp4\x00\x00\x00\x00isom3gp4"),
 }
 
 
@@ -105,6 +124,19 @@ ACCEPTED = {
     "url": "Şu linke bak: https://www.example.com/haber/2026/10/06/ekonomi?id=42&ref=ana",
     "long_sentence": LONG_SENTENCE[:TEXT_WIDTH],
     "magic_like_short_word": "SUQz ve UklGR diye iki kısaltma gördüm.",
+    "multi_line_turkish": (
+        "Bugünkü notlar:\n"
+        "1) Ahmet'i 15:00'te ara, sözleşmeyi konuş.\n"
+        "2) Market: süt, yumurta, ekmek, 2 kg domates.\n"
+        "3) Akşam 20:30 annemle görüntülü konuşma.\n"
+        "Unutma: kargo takip no 1234567890123 yarın gelecek."
+    ),
+    "multi_line_links": (
+        "Linkler:\n"
+        "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/view\n"
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890abcdef\n"
+        "https://example.com/belgeler/2026/sozlesme-taslagi-son-hali.pdf"
+    ),
 }
 
 

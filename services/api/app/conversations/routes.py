@@ -55,11 +55,18 @@ AUDIO_KEY_PARTS = (
 #: ...and the sound may also ride inside the line itself (test team, 2026-10-06: a
 #: ``data:audio/wav;base64,...`` content answered 201): a ``data:`` URL, a base64 run no
 #: sentence has (200+ characters, no space), or a base64 run opening with an audio file's
-#: magic - RIFF, ID3, OggS, fLaC, EBML (webm/mkv) - long enough to be bytes, not a word.
+#: magic - RIFF, ID3, OggS, fLaC, EBML (webm/mkv), #!AMR, and an m4a/mp4/3gp ``ftyp`` box
+#: (``GZ0eX``: four bytes in, after a box size that is a multiple of 4) - long enough to be
+#: bytes, not a word. Inspector, first pass: the ``base64`` CLI / MIME shape wraps at 76 (PEM
+#: at 64) so no line reaches 200 - two wrapped lines of 40+ base64 characters and a third
+#: line's start are a block no sentence has (a sentence line has spaces). Both run shapes
+#: start only where a run starts, so a line of 199-character runs is scanned once, not
+#: once per character (11 ms -> under 1 ms a 4000-character line).
 EMBEDDED_AUDIO = re.compile(
     r"(?i:data:\s*[\w.+-]+/[\w.+-]+\s*[;,])"
-    r"|[A-Za-z0-9+/_-]{200,}"
-    r"|(?:UklGR|SUQz|T2dnU|ZkxhQ|GkXfo)[A-Za-z0-9+/_-]{8,}"
+    r"|(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{200,}"
+    r"|(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{40,}={0,2}[ \t]*\r?\n[ \t]*){2}[A-Za-z0-9+/_-]{8}"
+    r"|(?:UklGR|SUQz|T2dnU|ZkxhQ|GkXfo|IyFBTV|GZ0eX)[A-Za-z0-9+/_-]{8,}"
 )
 
 
