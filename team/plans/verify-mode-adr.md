@@ -1,7 +1,23 @@
-# verify-mode - design decisions (draft, run 1 stopped on ALAN_ISTEGI)
+# verify-mode - design decisions (draft; runs 1 and 2 stopped on ALAN_ISTEGI)
 
-Status: proposed. Nothing implemented yet; this records the design so the next run starts at
-the code.
+Status: proposed. Run 2 implemented the pure verdict core `app/research/verify.py` (decisions
+7 and 10, 18 unit tests); the voice tools, the table and the announcer wait for the area.
+
+## Run 2 additions
+10. Recall (pure): every query word must prefix a Turkish-folded claim word (İ->i, I->ı);
+    date words give a [since, until) window - "geçen hafta" is the previous Monday-to-Monday
+    week, "bu hafta", "geçen ay", "bu ay", "dün", "bugün"; words matched whole so "dünya" is
+    not "dün". Newest first.
+11. The owner hears the verdict through the announcer: `research_announcer.py` scans only
+    `research.start` and speaks the research summary; it must also pick up `research.verify`
+    and speak `verify.spoken_sentence` when the run settles (inspector, run 1). Out of area.
+12. The table's migration goes under `services/api/alembic/versions/` (the card named a
+    `migrations/versions/` folder that does not exist). `models.py` gets the table only
+    together with its migration - a model without one would break the schema-drift guard.
+13. Spoken sentence: "Hüküm: <doğru|yanlış|kısmen doğru> (güven yüzde N). Kaynak: <title>,
+    <1 Eylül 2026>." + "Kaynaklardan biri iddianın konusundan eski." when a kept source
+    predates the year the claim names; no decisive source -> "Bunu doğrulayacak bir kaynak
+    bulamadım; hüküm belirsiz."
 
 ## Context
 "Bunu doğrula: ...", "X doğru mu", "şunu kontrol et: ..." -> a claim, a verdict, sources, a
