@@ -25,6 +25,7 @@ from app.ledger.briefing import VIA_VOICE
 from app.ledger.briefing_announcer import (
     PendingBriefingAnnouncer,
     RealtimeSayBriefingSpeaker,
+    SayOutcome,
     digest_sentence,
 )
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
@@ -55,12 +56,12 @@ class FakeSpeaker:
     said: list[str] = field(default_factory=list)
     receipts: list[list[uuid.UUID]] = field(default_factory=list)
 
-    def say(self, text: str, briefing_ids=()) -> bool:
+    def say(self, text: str, briefing_ids=()) -> SayOutcome:
         if self.raise_on_say:
             raise RuntimeError("transport fell over")
         self.said.append(text)
         self.receipts.append(list(briefing_ids))
-        return self.deliver
+        return SayOutcome(self.deliver, "delivered" if self.deliver else "queued_to_session")
 
 
 def _queue(factory, *, event_type: str, summary: str, at: datetime, **detail) -> uuid.UUID:
@@ -298,13 +299,15 @@ def test_the_realtime_speaker_reports_exactly_what_the_port_delivered() -> None:
 
     one = uuid.uuid4()
     yes = Port(True)
-    assert RealtimeSayBriefingSpeaker(yes).say("merhaba", [one]) is True
+    assert RealtimeSayBriefingSpeaker(yes).say("merhaba", [one]) == SayOutcome(True, "delivered")
     assert yes.calls[0]["text"] == "merhaba"
     assert yes.calls[0]["routine_id"] == RealtimeSayBriefingSpeaker.SYSTEM_ORIGIN
     assert yes.calls[0]["briefing_ids"] == [one], "the receipt reaches the port"
 
     no = Port(False)
-    assert RealtimeSayBriefingSpeaker(no).say("merhaba", [one]) is False
+    assert RealtimeSayBriefingSpeaker(no).say("merhaba", [one]) == SayOutcome(
+        False, "no_live_session"
+    )
 
 
 # ------------------------------------------------------------------- wiring
