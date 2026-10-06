@@ -423,6 +423,38 @@ def test_get_event_reads_the_item_by_its_name_without_a_report(monkeypatch) -> N
     assert occ is not None and occ.uid == "ev-dis@fixture.example"
 
 
+def test_get_event_by_name_reads_back_in_the_owners_local_time(monkeypatch) -> None:
+    """The 07:00 bug (see the REPORT-path test above) on the GET path: the item this
+    provider PUT carries ``DTSTART:...Z``; "Toplantı ne zaman?" must say 10:00, not 07:00.
+    Found by the inspector (radicale-caldav-live): dropping ``_local`` here stayed green."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from app.calendar.ics import build_vevent
+
+    istanbul = ZoneInfo("Europe/Istanbul")
+    # Inside get_event's own +-365-day expansion window from today.
+    day = datetime.now(istanbul).date() + timedelta(days=14)
+    start = datetime(day.year, day.month, day.day, 10, 0, tzinfo=istanbul)
+    vevent = build_vevent(
+        uid="mine@pagentos", summary="Toplantı", start=start, end=start.replace(hour=11)
+    )
+    assert "T070000Z" in vevent
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=vevent, headers={"Content-Type": "text/calendar"})
+        if request.method == "REPORT":
+            raise AssertionError("get_event must not REPORT when the name is known")
+        return _radicale(request)
+
+    _mock_httpx(monkeypatch, handler)
+    occ = _provider().get_event("mine@pagentos")
+    assert occ is not None and occ.start == start
+    assert occ.start.strftime("%H:%M") == "10:00"
+    assert occ.end.strftime("%H:%M") == "11:00"
+
+
 def test_get_event_falls_back_to_report_when_the_name_is_unknown(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -436,3 +468,35 @@ def test_get_event_falls_back_to_report_when_the_name_is_unknown(monkeypatch) ->
     occ = _provider().get_event("ev-ogle@fixture.example")
     assert calls[-2:] == ["GET", "REPORT"]
     assert occ is not None and occ.summary == "Öğle yemeği (Zeynep)"
+
+
+# ------------------------------------------------- the service hears the honest error
+
+
+@pytest.mark.parametrize("capability", ["calendar.agenda", "calendar.find_slot"])
+def test_a_refused_login_on_a_read_is_an_honest_receipt_not_an_internal_bug(
+    monkeypatch, capability
+) -> None:
+    """Found by the inspector (radicale-caldav-live): with a wrong password, "Yarın ne
+    var?" through the real application object answered ``internal_bug`` /
+    ``CalDavAuthError`` - the provider's ``error_class`` and ``speech`` never reached the
+    owner. A read answers the provider's honest receipt, the way ``account_missing`` does."""
+    from datetime import timedelta
+
+    from app.calendar.service import CalendarService
+
+    _mock_httpx(
+        monkeypatch,
+        lambda request: httpx.Response(401, text="Access to the resource is forbidden."),
+    )
+    service = CalendarService(_provider(), None)
+    start = datetime(2026, 9, 10, 9, 0, tzinfo=UTC)
+    if capability == "calendar.agenda":
+        result = service.agenda(None, start=start, end=start + timedelta(days=1))
+    else:
+        result = service.find_slot(
+            None, start=start, end=start + timedelta(hours=9), duration_minutes=60
+        )
+    assert result["error_class"] == CalDavAuthError.error_class == "account_invalid"
+    assert result["speech"] == CalDavAuthError.speech
+    assert "secret" not in str(result)
