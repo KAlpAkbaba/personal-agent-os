@@ -13,6 +13,7 @@ from typing import Any
 
 from app.actions.receipt import FAKE_COMPLETION_PHRASES
 from app.voice.preferences import VoicePreferences
+from app.voice.wit import HUMOR_OFF, WIT_TR, normalize_humor
 
 PERSONA_TR = (
     "Sen PagentOS'un sesli asistanısın: sahibinin kişisel yönetici asistanı. "
@@ -349,6 +350,11 @@ def build_instructions(
             + (f" (kapsam: {scope})" if scope else "")
             + (f" — durum: {status}." if status else ".")
         )
+    # Personality, dry wit: after the style and the owner's preference sentences (it is a
+    # way of speaking, like them) and before pronunciation and memory, whose order against
+    # each other matters. The one rule, shared with the local mode's chat prompt.
+    if normalize_humor(prefs.humor) != HUMOR_OFF:
+        parts.append(WIT_TR)
     # req 229: BEFORE the transcript summary and the memory block, because it is a rule
     # about how to say things rather than a fact about what is true, and the two blocks
     # after it are the ones whose order against each other matters.
@@ -382,6 +388,7 @@ __all__ = [
     "SELF_EXPLANATION_TR",
     "VOICE_STYLE_ARBOR_TR",
     "VOICE_STYLE_BLOCKS",
+    "WIT_TR",
     "build_instructions",
     "pronunciation_block",
 ]

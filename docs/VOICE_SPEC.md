@@ -270,6 +270,11 @@ read_headings: true
 read_urls: false
 read_footnotes: false
 barge_in: true
+humor: dry
 ```
+
+`humor` is the owner's switch for dry wit (`dry` | `off`, default `dry`; the rule text is
+`app.voice.wit.WIT_TR`, used by the realtime persona and the local chat alike). `off` removes
+the rule from both; write it with `PATCH /voice/preferences {"humor": "off"}`.
 
 System may learn these, but explicit owner instruction overrides inferred behavior.

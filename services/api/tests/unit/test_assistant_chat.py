@@ -53,7 +53,7 @@ def test_the_request_is_a_plain_messages_call_with_the_alias_and_no_tools() -> N
     assert url == "https://api.anthropic.com/v1/messages"
     assert headers["anthropic-version"] == "2023-06-01" and headers["x-api-key"] == "k-test"
     assert body["model"] == "claude-haiku-4-5"
-    assert body["system"] == chat.SYSTEM_PROMPT_TR
+    assert body["system"].startswith(chat.SYSTEM_PROMPT_TR)
     assert "tools" not in body and "thinking" not in body
     assert body["messages"] == [
         {"role": "user", "content": "[Şu an: 19.09.2026 22:40]\nKuantum bilgisayar nedir?"}
