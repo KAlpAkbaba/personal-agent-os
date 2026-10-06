@@ -72,6 +72,27 @@ def pytest_configure(config):
     os.environ.setdefault("PYTHONHASHSEED", XDIST_HASH_SEED)
 
 
+#: FastAPI keeps three module-level lru_caches (4096 entries each) keyed by endpoint callables.
+#: A create_app() endpoint is a closure over its app, so every test's app stayed alive: one
+#: serial unit run grew to 21 GB (measured 2026-10-06; 25 of 25 apps alive after one file).
+#: Cleared after each test; a cache missing in another FastAPI version is skipped.
+_FASTAPI_CALLABLE_CACHES = (
+    "_is_gen_callable_cached",
+    "_is_async_gen_callable_cached",
+    "_is_coroutine_callable_cached",
+)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item, nextitem):
+    from fastapi.dependencies import models
+
+    for name in _FASTAPI_CALLABLE_CACHES:
+        cached = getattr(models, name, None)
+        if cached is not None and hasattr(cached, "cache_clear"):
+            cached.cache_clear()
+
+
 def pytest_collection_modifyitems(config, items):
     shard = parse_shard(os.environ.get(SHARD_ENV))
     if shard is None:

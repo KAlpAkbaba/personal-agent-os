@@ -172,6 +172,45 @@ Test-Case "6. the gate runs this suite, inside its parallel suite group (CI is o
     Assert-True ($at -gt $start -and $at -lt $end) "the suite is called outside the gate-parallel-suites group (between Start-GateGroup and Complete-GateGroup)"
 }
 
+Test-Case "7. a finished test's FastAPI app is freed: FastAPI's callable caches do not keep every create_app() alive (the suite grew to 21 GB in one process)" {
+    # A probe plugin counts the FastAPI apps still alive when the session ends. Before
+    # tests/conftest.py cleared fastapi.dependencies.models' lru_caches after each test, all 25
+    # apps of this file were alive (their endpoint closures are the caches' keys).
+    $probeDir = Join-Path $sandbox "probe"
+    New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $probeDir "liveapps_probe.py"), @'
+import gc
+import os
+
+
+def pytest_sessionfinish(session):
+    gc.collect()
+    from fastapi import FastAPI
+
+    with open(os.environ["LIVEAPPS_OUT"], "w") as fh:
+        fh.write("LIVE_FASTAPI_APPS=%d\n" % sum(1 for o in gc.get_objects() if isinstance(o, FastAPI)))
+'@, (New-Object System.Text.ASCIIEncoding))
+    $countFile = Join-Path $probeDir "count.txt"
+    $uv = (Get-Command uv -ErrorAction SilentlyContinue)
+    $uvPath = if ($uv) { $uv.Source } else { Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe" }
+    $savedPath = $env:PYTHONPATH; $savedOut = $env:LIVEAPPS_OUT
+    Push-Location $apiRoot
+    try {
+        $env:PYTHONPATH = $probeDir; $env:LIVEAPPS_OUT = $countFile
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        $out = @(& $uvPath run pytest tests/unit/test_allowlist_editor.py -q -p no:cacheprovider -p liveapps_probe 2>&1 | ForEach-Object { [string]$_ })
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = $prev
+    } finally { $env:PYTHONPATH = $savedPath; $env:LIVEAPPS_OUT = $savedOut; Pop-Location }
+    $tail = ($out | Select-Object -Last 8) -join "`n"
+    Assert-Equal 0 $code ("the file passes:`n" + $tail)
+    $written = if (Test-Path -LiteralPath $countFile) { @([System.IO.File]::ReadAllLines($countFile)) } else { @() }
+    $line = @($written | Where-Object { $_ -match '^LIVE_FASTAPI_APPS=(\d+)' })
+    Assert-Equal 1 $line.Count ("the probe printed its count:`n" + $tail)
+    $live = [int]([regex]::Match($line[0], '\d+').Value)
+    Assert-True ($live -le 2) ("$live FastAPI apps of 25 tests are still alive after the session (at most the last test's may be)")
+}
+
 Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host ("gate-unit-parallel: {0} passed, {1} failed" -f $script:Passes, $script:Failures)
