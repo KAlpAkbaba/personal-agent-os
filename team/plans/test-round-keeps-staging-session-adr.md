@@ -47,13 +47,17 @@ called by a scenario.
    a `rotate`/`credential(s)` segment. It is recorded under `refused` (state `refused`) with a
    Turkish reason. A breaking ladder aimed at one refuses the whole scenario (exit 2). GETs stay
    allowed.
-3. A run whose failed steps include a 401, while the session's own
+3. A run whose failed steps are ALL 401 (at least one), while the session's own
    `/v1/identity/sessions/current` answers 401, is `environment` (exit 4, no ladder). The api's
    401 body is only `unauthorized`, and the reason `owner_credential_rotated` exists only in
-   staging's log, so the client-side proof is that the session itself is dead. The round
-   treats such a result as card state `environment` and forwards nothing. It does the same for a
-   tester-written `failed` result whose failed steps are all 401 when the session is dead at the
-   job's end. On a retest, exit 4 leaves the card as it was (not reopened).
+   staging's log, so the client-side proof is that the session itself is dead. A 500 (or any
+   non-401 failure) among them keeps the run `failed`: it happened while the session lived and
+   is staging's bug. A 401 while the probe answers 200 stays `failed` too (an auth regression).
+   The round treats an `environment` result as card state `environment` and forwards nothing,
+   but only after its own check (Test-AllFailed401): a tester-written `environment` with a
+   non-401 failure is turned back into `failed` and forwarded. It also treats a tester-written
+   `failed` result whose failed steps are all 401 as `environment` when the session is dead at
+   the job's end. On a retest, exit 4 leaves the card as it was (not reopened).
 4. tester.md: never run seed.ps1 or `app.identity.recover`, and never call an
    enrol/rotate/revoke route. A dead session is reported as environment and not re-seeded.
 

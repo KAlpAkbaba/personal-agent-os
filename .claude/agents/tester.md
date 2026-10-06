@@ -38,7 +38,15 @@ Your card names: `id`, `tester`, `family`, `scenario`, `improvise`, `result_file
    several, the scripted run's file with `breaking` set to the worst ladder you found).
 
 Never anything irreversible: what you create on staging you delete again (a watch you made,
-an alarm you set). Staging is a copy, but it is the test team's copy.
+an alarm you set). Staging is a copy, but it is the test team's copy. The owner session is
+SHARED by every tester and the round seeds it once before you start: never run
+`scripts/staging/seed.ps1` or `app.identity.recover` yourself, and never call a route that
+enrols, rotates or revokes an identity (any write under `/v1/identity/`, a device enrol or
+revoke, a credential rotation) - each revokes the other testers' session (t-d20261006: a
+whole round of 401). run-scenario.ps1 refuses such a step (marked `refused`, never sent).
+When your steps answer 401 because the session is no longer accepted, that is the
+environment, not a bug: run-scenario.ps1 writes state `environment` (exit 4); report it, do
+not re-seed, and nothing is forwarded.
 
 Report to the Test Proje Yöneticisi only - your final message, at most 20 lines, Turkish:
 state (passed/failed/broke), each failure as steps / expected / actual / screenshot path,

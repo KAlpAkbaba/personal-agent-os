@@ -235,7 +235,6 @@ $records = New-Object System.Collections.ArrayList
 $refused = New-Object System.Collections.ArrayList
 $screenshot = ""
 $anyFailed = $false
-$saw401 = $false
 $rotatedSaid = $false
 
 function Test-Refused {
@@ -260,7 +259,6 @@ foreach ($step in $steps) {
     }
     else {
         $answer = Invoke-Step -Step $step
-        if ($answer.Status -eq "401") { $saw401 = $true }
         if ($answer.Text -match 'owner_credential_rotated') { $rotatedSaid = $true }
         $expected = [string](Get-TeamProperty -InputObject $step -Name "expect_status" -Default 200)
         $contains = [string](Get-TeamProperty -InputObject $step -Name "expect_contains" -Default "")
@@ -281,8 +279,11 @@ foreach ($step in $steps) {
 # A 401 is staging's answer to the SESSION, not to the scenario, when the session itself is no
 # longer accepted: its own /v1/identity/sessions/current answers 401 too (the api's 401 body
 # says only 'unauthorized'; the reason, e.g. owner_credential_rotated, is in staging's log).
+# Every failed step must be a 401: a 500 before the session died is still staging's bug.
 $environment = ""
-if ($anyFailed -and $token -and ($saw401 -or $rotatedSaid)) {
+$failedSteps = @($records | Where-Object { -not $_.ok })
+$all401 = (@($failedSteps).Count -gt 0) -and (@($failedSteps | Where-Object { [string]$_.actual -notmatch '^401\b' }).Count -eq 0)
+if ($anyFailed -and $token -and $all401) {
     $probe = Invoke-Step -Step ([pscustomobject]@{ method = "GET"; path = "/v1/identity/sessions/current" })
     if ($rotatedSaid -or $probe.Status -eq "401") {
         $environment = "staging oturumu geçersiz: /v1/identity/sessions/current $($probe.Status) (kimlik döndürülmüş ya da oturum iptal; seed.ps1 tur başında bir kez)"

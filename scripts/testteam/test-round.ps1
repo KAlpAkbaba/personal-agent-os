@@ -381,7 +381,12 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         }
         # A dead staging session is the environment, not staging's bug: run-scenario.ps1 says so
         # (exit 4), or a tester's own result failed only with 401 while the session is dead now.
+        # Either way every failed step must be a 401: a 500 among them is forwarded as 'failed'.
         $environment = ""
+        if ($null -ne $result -and $state -eq "environment" -and -not (Test-AllFailed401 -Result $result)) {
+            $state = "failed"
+            Set-TeamProperty -InputObject $result -Name "state" -Value "failed"
+        }
         if ($null -ne $result -and $state -eq "environment") { $environment = [string](Get-TeamProperty -InputObject $result -Name "environment" -Default "sonuç 'environment'") }
         elseif ($null -ne $result -and $state -eq "failed" -and -not $NoAuth -and (Test-AllFailed401 -Result $result)) {
             $status = Get-SessionStatus
