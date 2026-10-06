@@ -230,7 +230,8 @@ describe("the controller against a session the server has closed", () => {
     const attaches = limited.requests.filter((path) => path.endsWith("/attach")).length;
     // One reconnect, not twenty: the later edges join the series already running.
     expect(attaches).toBe(1);
-    expect(t.scheduler.pendingTimers).toBe(0);
+    // The one timer left is the live leg's 15 s sideband pull; a reconnect never stacks a second.
+    expect(t.scheduler.pendingTimers).toBe(1);
   });
 
   it("one reconnect settles the session once, not once per trigger", async () => {

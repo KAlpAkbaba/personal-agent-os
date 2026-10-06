@@ -54,7 +54,7 @@ import type {
   SidebandFrame,
   ToolCallResponse,
 } from "./contract";
-import { MAX_EVENT_TEXT_CHARS, MAX_SUMMARY_CHARS } from "./contract";
+import { MAX_EVENT_TEXT_CHARS, MAX_SUMMARY_CHARS, SIDEBAND_PULL_MS } from "./contract";
 import { EventReporter, numbersOnly, type Scheduler, realScheduler } from "./events";
 import { HesitationGuard, type HesitationGuardConfig } from "./hesitation";
 import {
@@ -484,6 +484,9 @@ export const LEG_RENEW_RETRY_MS = 10_000;
  */
 export const LEG_RENEW_MIN_WAIT_MS = 250;
 
+/** The live leg's sideband pull interval (contract.ts; one constant with the local mode). */
+export { SIDEBAND_PULL_MS };
+
 /**
  * B20 req 218: how long an impaired link is given to recover by itself before the session
  * re-attaches. Short, because the owner is mid-conversation and hears the silence; not
@@ -648,6 +651,11 @@ export class VoiceSessionController {
   private reattachRun: Promise<void> | null = null;
   /** The `POST .../attach` currently on the wire, so callers share one request. */
   private attachInFlight: Promise<void> | null = null;
+
+  // sideband pull (a web session has no push channel)
+  private sidebandPullTimer: unknown = null;
+  /** A `GET .../sideband` is on the wire: a tick that finds one sends nothing. */
+  private sidebandPullInFlight = false;
 
   // link health (B20 req 218)
   /** When the transport last warned that media had stopped flowing; null when healthy. */
@@ -945,6 +953,56 @@ export class VoiceSessionController {
     });
     this.log("transport.connected");
     this.armLegRenewal(payload);
+    this.armSidebandPull();
+  }
+
+  /**
+   * Pull the sideband every `SIDEBAND_PULL_MS` while this leg is live.
+   *
+   * Without it a frame queued for a web session (a briefing: `queued_to_session`) waited
+   * for the owner's next sentence, because only the `/events` answer and an attach carried
+   * it. Armed by `openLeg`, cleared by `teardownLeg` - so close, gone, a network loss and a
+   * re-attach all stop it, and the next leg arms exactly one. A fixed cadence with at most
+   * one pull on the wire; a tick yields to a reporter with events queued, whose answer
+   * carries the frames anyway. Pulled frames go through `onSideband`, the /events path.
+   */
+  private armSidebandPull(): void {
+    this.clearSidebandPullTimer();
+    this.sidebandPullTimer = this.scheduler.setTimeout(() => {
+      this.sidebandPullTimer = null;
+      this.armSidebandPull();
+      void this.pullSideband();
+    }, SIDEBAND_PULL_MS);
+  }
+
+  private async pullSideband(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (this.closing || this.gone || !sessionId || !this.transport) return;
+    if (this.sidebandPullInFlight || (this.reporter?.pending ?? 0) > 0) return;
+    this.sidebandPullInFlight = true;
+    try {
+      const answer = await this.deps.api.sidebandPull(sessionId);
+      if (this.closing || this.gone || this.sessionId !== sessionId) return;
+      for (const frame of answer.pending_sideband ?? []) this.onSideband(frame);
+    } catch (error) {
+      if (this.closing || this.sessionId !== sessionId) return;
+      if (error instanceof VoiceApiError && error.gone) {
+        this.onSessionGone();
+        return;
+      }
+      // Anything else costs this tick only: the next one tries again, and the single
+      // request on the wire is the whole backoff (no reconnect from a pull).
+      this.log(`sideband.pull_failed:${describe(error)}`);
+    } finally {
+      this.sidebandPullInFlight = false;
+    }
+  }
+
+  private clearSidebandPullTimer(): void {
+    if (this.sidebandPullTimer !== null) {
+      this.scheduler.clearTimeout(this.sidebandPullTimer);
+      this.sidebandPullTimer = null;
+    }
   }
 
   /**
@@ -1222,6 +1280,8 @@ export class VoiceSessionController {
   private teardownLeg(reason: string): void {
     for (const unsub of this.transportUnsubs) unsub();
     this.transportUnsubs = [];
+    // So does the sideband pull: only a live leg asks; the next `openLeg` arms it again.
+    this.clearSidebandPullTimer();
     // The ceiling belongs to the leg, not to the session: the next `openLeg` arms a new
     // one from the payload that opened it.
     this.clearLegRenewTimer();
@@ -2884,12 +2944,7 @@ export class VoiceSessionController {
         // "the session closed on the server", which is true, useless, and a consequence of
         // our own action. Ten consecutive sessions on the owner's machine died in ~1.5 s
         // and every one of them reported the consequence instead of the cause.
-        if (!this.closedByUs) {
-          this.fail("Oturum sunucuda kapanmış.", [], { viaReporter: false });
-        }
-        this.markGone();
-        this.teardownLeg("gone");
-        this.patch({ state: "closed" });
+        this.onSessionGone();
         return;
       }
       if (error.status === 429) {
@@ -2909,6 +2964,16 @@ export class VoiceSessionController {
     }
     // Network-level failure: the browser will tell us when it is back.
     if (this.snapshot.state !== "reconnecting") this.onNetworkLost("events_unreachable", this.now());
+  }
+
+  /** A 410 from `/events` or the sideband pull: terminal, no reconnect (see onReportFailure). */
+  private onSessionGone(): void {
+    if (!this.closedByUs) {
+      this.fail("Oturum sunucuda kapanmış.", [], { viaReporter: false });
+    }
+    this.markGone();
+    this.teardownLeg("gone");
+    this.patch({ state: "closed" });
   }
 
   /** Test/diagnostic hook: flush queued events now. */

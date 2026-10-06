@@ -625,8 +625,9 @@ type ForcedFailure = { status: number; detail: unknown };
 /**
  * In-memory stand-in for `/v1/voice/realtime/sessions/*` with the behaviour
  * the real service has: idempotent `tool-calls` on call_id, `events` replaying
- * queued sideband frames, `attach` minting a new credential and moving the
- * leg, 409 for a stale leg, 410 once closed.
+ * queued sideband frames, `GET .../sideband` draining them on the shell's timer,
+ * `attach` minting a new credential and moving the leg, 409 for a stale leg, 410
+ * once closed.
  */
 export class FakeCloudCore {
   readonly requests: RecordedRequest[] = [];
@@ -803,6 +804,12 @@ export class FakeCloudCore {
       });
     }
     if (this.currentLeg !== this.clientLeg) return this.json(409, { detail: { leg: "mismatch" } });
+    if (verb === "sideband" && method === "GET") {
+      // service.py `pull_pending_sideband`: drains what is queued; the next pull is empty.
+      const pending = this.pendingSideband;
+      this.pendingSideband = [];
+      return this.json(200, { session_id: this.sessionId, pending_sideband: pending });
+    }
     if (verb === "tool-calls") {
       const call = body as { call_id: string; name: string; arguments: Record<string, unknown> };
       const existing = this.toolCalls.get(call.call_id);
