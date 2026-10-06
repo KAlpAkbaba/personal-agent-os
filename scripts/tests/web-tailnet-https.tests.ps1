@@ -9,7 +9,10 @@
         loopback target, HTTPS 443, backgrounded (persistent) - and nothing else that serves;
       * a second run is idempotent: it sees the target served and changes nothing;
       * `tailscale funnel` (public exposure) is never called, on any path, and the script
-        text has no funnel invocation; a Funnel found ON stops the script (exit 4);
+        text has no funnel invocation; a Funnel found ON on 443 stops the script (exit 4);
+      * the telephony Funnel (8443, exactly /telephony/inbound and /v1/telephony/audio, from
+        enable-telephony-funnel.sh) is recognised: a 'telefon yolu' line and 443 is served;
+        a third root on 8443 stops it (4); without python an AllowFunnel fails closed (4);
       * --off removes exactly the serve entry and is itself idempotent;
       * --status prints what is served (exit 0 served, 1 not served);
       * a tailnet without HTTPS certificates gives exit 3 and the one owner line naming
@@ -48,7 +51,8 @@ $posix = { param($p) $p = ($p -replace '\\', '/'); if ($p -match '^([A-Za-z]):(.
 # https URL line and its "proxy" handler; `serve --bg --https=443 URL` stores the target;
 # `serve --https=443 off` clears it; `funnel` is logged to its own file and fails. Knobs:
 # FAKE_TS_DOWN (status fails), FAKE_TS_NOT_ENABLED (serve refuses with the real wording of an
-# unenabled tailnet), FAKE_TS_FUNNEL (the serve status says "Funnel on").
+# unenabled tailnet), FAKE_TS_FUNNEL (the serve status says "Funnel on" and its JSON has
+# AllowFunnel on <node>:443), FAKE_TS_JSON (a file: `serve status --json` prints it as is).
 $tailscale = @(
     '#!/usr/bin/env bash',
     'echo "tailscale $*" >> "$FAKE_STATE/calls.log"',
@@ -60,6 +64,13 @@ $tailscale = @(
     '  serve)',
     '    shift',
     '    case "$*" in',
+    '      "status --json")',
+    '        if [ -n "${FAKE_TS_JSON:-}" ]; then cat "$FAKE_TS_JSON"; exit 0; fi',
+    '        if [ -s "$FAKE_STATE/serve" ]; then',
+    '          af=""; [ -n "${FAKE_TS_FUNNEL:-}" ] && af=",\"AllowFunnel\":{\"pagentos-core.tail1234.ts.net:443\":true}"',
+    '          printf "{\"TCP\":{\"443\":{\"HTTPS\":true}},\"Web\":{\"pagentos-core.tail1234.ts.net:443\":{\"Handlers\":{\"/\":{\"Proxy\":\"%s\"}}}}%s}\n" "$(cat "$FAKE_STATE/serve")" "$af"',
+    '        else echo "{}"; fi',
+    '        exit 0;;',
     '      status)',
     '        if [ -s "$FAKE_STATE/serve" ]; then',
     '          label="tailnet only"; [ -n "${FAKE_TS_FUNNEL:-}" ] && label="Funnel on"',
@@ -144,13 +155,52 @@ try {
         $rb3 = Invoke-Web -Flags @("--bogus")
         Assert-True ($rb3.Exit -eq 64) "an unknown flag is a usage error (64)"
 
-        # A Funnel found on: stop, say so, touch nothing (not even to turn it off).
+        # The Funnel state is read per port from `serve status --json` with python (the host has
+        # python3; Git Bash here has none on PATH, so the venv's or the PATH's python is passed).
+        $python = @(
+            (Join-Path $repoRoot "services\api\.venv\Scripts\python.exe"),
+            (Join-Path (Split-Path -Parent (& git -C $repoRoot rev-parse --path-format=absolute --git-common-dir)) "services\api\.venv\Scripts\python.exe")
+        ) + @(Get-Command python, python3 -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source } | Where-Object { $_ -notmatch 'WindowsApps' }) |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+        Assert-True ([bool]$python) "a python for the JSON cases was found (venv or PATH)"
+        $pyEnv = @{ PAGENTOS_JSON_PYTHON = (& $u "$python") }
+
+        # A Funnel found on 443: stop, say so, touch nothing (not even to turn it off).
         Reset-State
         [IO.File]::WriteAllText((Join-Path $state "serve"), "http://127.0.0.1:3000")
-        $rf = Invoke-Web -Env @{ FAKE_TS_FUNNEL = "1" }
-        Assert-True ($rf.Exit -eq 4 -and $rf.Output -match "Funnel is ON" -and @($rf.Calls | Where-Object { $_ -match "^tailscale serve (--bg|--https)" }).Count -eq 0 -and -not (Test-FunnelCalled)) "a Funnel that is already on stops the script (4) with no change and no funnel call"
-        $rfo = Invoke-Web -Flags @("--off") -Env @{ FAKE_TS_FUNNEL = "1" }
+        $rf = Invoke-Web -Env (@{ FAKE_TS_FUNNEL = "1" } + $pyEnv)
+        Assert-True ($rf.Exit -eq 4 -and $rf.Output -match "Funnel is ON" -and @($rf.Calls | Where-Object { $_ -match "^tailscale serve (--bg|--https)" }).Count -eq 0 -and -not (Test-FunnelCalled)) "a Funnel on 443 stops the script (4) with no change and no funnel call"
+        $rfo = Invoke-Web -Flags @("--off") -Env (@{ FAKE_TS_FUNNEL = "1" } + $pyEnv)
         Assert-True ($rfo.Exit -eq 4 -and -not (Test-FunnelCalled)) "--off also stops at a Funnel rather than reaching for it"
+
+        # The telephony Funnel (enable-telephony-funnel.sh): 8443 with exactly the two roots is
+        # recognised and the web shell is served on 443 as before; anything else is still a STOP.
+        # The JSON is read with python (the host has python3; Git Bash here has none on PATH).
+        $node = "pagentos-core.tail1234.ts.net"
+        $web443 = "`"$($node):443`":{`"Handlers`":{`"/`":{`"Proxy`":`"http://127.0.0.1:3000`"}}}"
+        $phone = "`"/telephony/inbound`":{`"Proxy`":`"http://100.64.0.9:8001/telephony/inbound`"},`"/v1/telephony/audio`":{`"Proxy`":`"http://100.64.0.9:8001/v1/telephony/audio`"}"
+        $jsonPhone = Join-Path $script:Sandbox "phone.json"
+        $jsonExtra = Join-Path $script:Sandbox "extra.json"
+        [IO.File]::WriteAllText($jsonPhone, "{`"TCP`":{`"443`":{`"HTTPS`":true},`"8443`":{`"HTTPS`":true}},`"Web`":{$web443,`"$($node):8443`":{`"Handlers`":{$phone}}},`"AllowFunnel`":{`"$($node):8443`":true}}")
+        [IO.File]::WriteAllText($jsonExtra, "{`"TCP`":{`"443`":{`"HTTPS`":true},`"8443`":{`"HTTPS`":true}},`"Web`":{$web443,`"$($node):8443`":{`"Handlers`":{$phone,`"/`":{`"Proxy`":`"http://100.64.0.9:8001`"}}}},`"AllowFunnel`":{`"$($node):8443`":true}}")
+
+        Reset-State
+        $rt = Invoke-Web -Env (@{ FAKE_TS_JSON = (& $u $jsonPhone) } + $pyEnv)
+        if ($rt.Exit -ne 0) { Write-Host $rt.Output }
+        Assert-True ($rt.Exit -eq 0 -and $rt.Output -match "Funnel 8443: telefon yolu" -and $rt.Output -match "SERVED https://" -and ($rt.Calls -contains "tailscale serve --bg --https=443 $target") -and -not (Test-FunnelCalled)) "a Funnel on 8443 with exactly the two telephony roots: the 'telefon yolu' line, 443 served on the tailnet, exit 0, no funnel call"
+        $rts = Invoke-Web -Flags @("--status") -Env (@{ FAKE_TS_JSON = (& $u $jsonPhone) } + $pyEnv)
+        Assert-True ($rts.Exit -eq 0 -and $rts.Output -match "telefon yolu") "--status beside the telephony Funnel: exit 0 and the 'telefon yolu' line"
+
+        Reset-State
+        $rx = Invoke-Web -Env (@{ FAKE_TS_JSON = (& $u $jsonExtra) } + $pyEnv)
+        Assert-True ($rx.Exit -eq 4 -and $rx.Output -match "STOP" -and @($rx.Calls | Where-Object { $_ -match "^tailscale serve (--bg|--https)" }).Count -eq 0 -and -not (Test-FunnelCalled)) "a third root on the 8443 Funnel stops the script (4): no serve change, no funnel call"
+
+        Reset-State
+        $rnp = Invoke-Web -Env @{ FAKE_TS_JSON = (& $u $jsonPhone); PAGENTOS_JSON_PYTHON = "/no/such/python3" }
+        Assert-True ($rnp.Exit -eq 4 -and @($rnp.Calls | Where-Object { $_ -match "^tailscale serve (--bg|--https)" }).Count -eq 0) "without python any AllowFunnel in the JSON fails closed: STOP (4), nothing served"
+        Reset-State
+        $rnp2 = Invoke-Web -Env @{ PAGENTOS_JSON_PYTHON = "/no/such/python3" }
+        Assert-True ($rnp2.Exit -eq 0 -and (Get-Served) -eq $target) "without python and with no Funnel at all the web shell is still served"
 
         # Certificates not enabled: an owner step, one line, nothing served.
         Reset-State
