@@ -25,6 +25,7 @@ thing that is holding a device command open.
 from __future__ import annotations
 
 import asyncio
+import unicodedata
 import uuid
 from datetime import timedelta
 from typing import Annotated, Any
@@ -86,7 +87,9 @@ _NOT_RINGING_TR = (
 
 
 def _has_control(text: str | None) -> bool:
-    return text is not None and any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+    """Unicode category Cc: C0 (NUL, BEL, newline...), DEL and the C1 block (U+0080-U+009F,
+    e.g. NEL) - the inspector found U+0085 stored raw where NUL was refused."""
+    return text is not None and any(unicodedata.category(ch) == "Cc" for ch in text)
 
 
 def _refuse(
@@ -170,7 +173,7 @@ async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, 
     now = alarms_service.utcnow()
     kept_texts = [body.label, body.greeting_text]
     if body.media is not None:
-        kept_texts += [body.media.title, body.media.remembered]
+        kept_texts += [body.media.url, body.media.title, body.media.remembered]
     if any(_has_control(text) for text in kept_texts):
         raise _refuse(_CONTROL_TR)
     try:
@@ -301,6 +304,8 @@ async def get_wake_song(request: Request) -> dict[str, Any]:
 async def put_wake_song(request: Request, body: WakeSongRequest) -> dict[str, Any]:
     """Remember the wake song the owner named (spec §3.8: "an already approved remembered
     wake song"). Only an http(s) URL the owner gave; the system never picks one."""
+    if _has_control(body.url) or _has_control(body.title):
+        raise _refuse(_CONTROL_TR)
     artifacts = _artifacts(request)
 
     def write() -> dict[str, Any]:
@@ -337,6 +342,8 @@ async def cancel_alarm(
     artifacts = _artifacts(request)
     sequence = _sequence(request)
     reason = (body.reason if body else None) or "owner"
+    if _has_control(reason):
+        raise _refuse(_CONTROL_TR)
 
     def write() -> dict[str, Any]:
         with artifacts.session() as session:

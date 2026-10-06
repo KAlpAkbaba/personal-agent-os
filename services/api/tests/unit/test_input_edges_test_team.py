@@ -159,9 +159,7 @@ def test_a_wake_song_with_a_control_character_is_a_turkish_422(
 
 
 def test_a_clean_wake_song_is_still_kept(client: TestClient) -> None:
-    response = client.put(
-        "/v1/alarms/wake-song", json={"url": _SONG_URL, "title": "Sabah şarkısı"}
-    )
+    response = client.put("/v1/alarms/wake-song", json={"url": _SONG_URL, "title": "Sabah şarkısı"})
     assert response.status_code == 200, response.text
     assert client.get("/v1/alarms/wake-song").json()["wake_song"]["title"] == "Sabah şarkısı"
 
@@ -169,7 +167,8 @@ def test_a_clean_wake_song_is_still_kept(client: TestClient) -> None:
 def test_a_cancel_reason_with_a_nul_is_a_turkish_422_and_the_alarm_stays(
     client: TestClient,
 ) -> None:
-    alarm_id = client.post("/v1/alarms", json={"when": {"relative_seconds": 600}}).json()["id"]
+    created = client.post("/v1/alarms", json={"when": {"relative_seconds": 600}}).json()
+    alarm_id = created["alarm_id"]
     response = client.post(f"/v1/alarms/{alarm_id}/cancel", json={"reason": "uy\x00andım"})
     assert response.status_code == 422, response.text
     assert "okunamayan" in _message(response)

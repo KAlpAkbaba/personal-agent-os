@@ -9,10 +9,13 @@ taken silently, answered in English, or escaped as a 500. A worker reproduced th
 alarm let `IllegalAlarmTransition` escape.
 
 ## Decision (all at the route layer; the services are unchanged)
-1. **Control characters.** A character below U+0020 or U+007F in an alarm's `label`,
-   `greeting_text` or `media.title/remembered`, or in a watch's `label/url/condition/selector`,
-   gives a Turkish 422 (alarms: `validation_error`; watches: `control_character`). Household
-   names were already refused by `service.clean_name`. `when_text` is left to the parser.
+1. **Control characters.** On alarms, any Unicode category `Cc` character (C0, U+007F and
+   the C1 block U+0080-U+009F, e.g. NEL - the inspector found U+0085 stored raw) in `label`,
+   `greeting_text`, `media.url/title/remembered`, the wake song's `url/title` and a cancel
+   `reason` gives a Turkish 422 ("okunamayan bir karakter", `validation_error`); nothing is
+   written. A watch's `label/url/condition/selector` below U+0020 or U+007F gives a Turkish 422
+   `control_character`. Household names were already refused by `service.clean_name`.
+   `when_text` is left to the parser (it is never stored).
 2. **Alarm dates.** A past date/time is a 422 with "geçmişte kaldı". Anything more than
    **366 days** ahead is a 422 with "bir yıldan daha ileriye alarm kuramam". This covers the
    overflow too: a date that cannot be moved to UTC gets the same answer.
