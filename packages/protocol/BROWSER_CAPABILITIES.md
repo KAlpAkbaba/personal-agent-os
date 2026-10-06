@@ -1,7 +1,19 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.8** — binding for `services/api` (Cloud Core), `devices/windows-agent`
-(Session Companion) and `services/browser` (Browser Worker). Change it here first.
+Status: contract **v1.9** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+(Session Companion) and `services/browser` (Browser Worker). Change it here first. v1.9 is
+an annex for the cloud worker (§4b); a payload without its two fields is served exactly as
+under Status: contract **v1.8**.
+
+- **v1.9 (2026-10-07, ADR-0213 addendum option 4 / ADR-0218): a cloud task writes on the
+  owner's allow-listed sites** — no new operation name and no new `contracts` key (§4b).
+  `browser.session_open` takes two optional fields, `cloud_task` (boolean) and
+  `owner_allow_list` (the owner's registrable domains, as Cloud Core's allow-list holds them
+  at that moment). The cloud device lets such a session reach `REVERSIBLE_WRITE`, never
+  `EXTERNAL_COMMUNICATION` or `HIGH_IMPACT`; the worker makes each write of a session that
+  carries a list only on a listed site, and refuses elsewhere with evidence
+  `{"reason":"not_on_owner_allow_list","site":…}`. A session opened without the fields — the
+  owner's Chrome, every v1.8 caller — is served as in v1.8.
 
 - **v1.8 (2026-10-03, ADR-0207, PR-C): the ceiling on a write** — no new operation name
   and no new `contracts` key (§4a). `browser.fill`, `browser.select_option` and
@@ -676,6 +688,54 @@ BEFORE it resolves a target: `security_scope_error`, `retryable:false`, evidence
 (`observe`, `extract`, `snapshot`, …) and leaving (`navigate`, `back`, tabs) are served:
 the owner may ask what a page says, and a task that landed there must be able to go.
 The rule holds for every session and every profile, the owner's own Chrome included.
+
+## 4b. A cloud task's writes and the owner's allow-list (contract v1.9)
+
+The owner's rule (ADR-0213 addendum, 2026-09-30, option 4): the cloud reads everywhere and
+acts only on the sites the owner listed. Three keepers hold it, the first one first.
+
+**S1 — what Cloud Core sends.** For a task whose target is the cloud worker,
+`browser.session_open` carries `profile: "research"`, `channel: "chromium"`,
+`policy: {"allowed_risk_classes": ["READ","NAVIGATE","REVERSIBLE_WRITE"], "visible": false}`
+and two fields more: `cloud_task: true` and `owner_allow_list: [<site>, …]` — the owner's
+effective allow-list at that moment (it may be empty). For the owner's Chrome and every
+device target the payload is unchanged (profile `owner`, every class, visible, channel
+`chrome`) and the two fields are NOT sent.
+
+**S2 — the cloud device's clamp.** A `session_open` with `cloud_task: true` and a list
+`owner_allow_list` may hold at most `READ`, `NAVIGATE` and `REVERSIBLE_WRITE`;
+`EXTERNAL_COMMUNICATION` and `HIGH_IMPACT` are refused on the cloud ALWAYS, listed site or
+not (`security_scope_error`, evidence `{"refused":[…]}`) — pending the owner's review. Each
+list entry must be written as the allow-list editor writes it: lower case, a registrable
+domain (`magaza.com.tr`, not `www.magaza.com.tr`, `Magaza.com.tr`, `co.example` or `""`);
+one malformed entry refuses the whole `session_open` — a site is never dropped silently.
+`cloud_task: true` without a list, a list without `cloud_task: true`, or a `cloud_task` that
+is not a boolean are refused the same way. A `session_open` without `cloud_task` is clamped
+as before v1.9: `READ` + `NAVIGATE`. The profile is still `research` only; `visible` and
+`channel` are still the device's. Both fields reach the worker unchanged. Operations other
+than `session_open` pass untouched (`browser.media_status` is `READ`, `browser.media_play`
+`NAVIGATE`: the media clock is readable on a cloud worker that has no sound device).
+
+**S3 — the worker.** A session opened with `owner_allow_list` runs `browser.fill`,
+`browser.select_option`, `browser.set_checked`, and a `browser.click` whose resolved class
+is `REVERSIBLE_WRITE` or above, only when the host of the session's CURRENT page is a
+listed site or a subdomain of one (the list is joined to the seed of
+`browser-cloud-allowlist.json`, never put in its place) and is not on the task deny-list.
+Otherwise: `security_scope_error`, `retryable:false`, evidence exactly
+`{"reason":"not_on_owner_allow_list","site":<registrable domain of the page>}`. The §4a
+deny-list refusal (`denied_site`) comes first and is unchanged; the keeper itself asks the
+deny-list before the list as well (`deny_listed_site`). An empty list refuses every write.
+`READ` and `NAVIGATE` operations — and a click that only follows a link — do not ask the
+list. The §4a ceiling still applies to every write. A session opened without the field is
+not asked. The worker refuses a list that is not a list of non-empty lower-case strings, or
+a `cloud_task` that is not a boolean, with `validation_error` before anything is launched.
+A reopen only narrows the list (the sites in both), as it only narrows the classes.
+
+**S4 — Cloud Core's gate** applies the same rule BEFORE it sends a write (the device's
+answer is the one that holds when the two disagree): a step to the cloud target that is
+more than `READ`/`NAVIGATE` on a site the allow-list does not allow is refused with
+`not_on_owner_allow_list`; `HIGH_IMPACT` and `EXTERNAL_COMMUNICATION` are refused on the
+cloud even on a listed site.
 
 ## 5. Errors
 
