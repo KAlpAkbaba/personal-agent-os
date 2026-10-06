@@ -42,6 +42,15 @@
     never in the checkout.
 
     Staging only: run-scenario.ps1 refuses any other host, and the tester's role file says so.
+
+    The staging session (t-d20261006, 2026-10-06: the testers read an owner.json two days old -
+    the 19:38 seed had written its file into the Claude desktop's redirected LOCALAPPDATA - and
+    every step answered 401; two testers then re-seeded and revoked each other's sessions): the
+    round runs scripts\staging\seed.ps1 ONCE before its first tester, in its own environment,
+    which its testers inherit, and starts no tester (exit 1, a board note, no card) unless
+    /v1/identity/sessions/current answers 200 with the seeded token. A job whose result is
+    'environment' (run-scenario.ps1 exit 4), or whose failed steps all answered 401 while the
+    session is no longer accepted, is 'environment' and forwards nothing.
 #>
 [CmdletBinding()]
 param(
@@ -62,7 +71,12 @@ param(
     [switch]$Retest,
     [string]$BaseUrl = "http://127.0.0.1:28001",
     [int]$AllowTestPort = 0,
+    # The stand-in staging of the tests needs no session: no seed, no session check.
     [switch]$NoAuth,
+    # The seed the round runs once before its first tester, and the session file it writes (the
+    # one run-scenario.ps1 reads). For the tests: stand-ins.
+    [string]$SeedScript = "",
+    [string]$SessionFile = "",
     # The Cloud Core's queue, as in the cycle: the failures go there as create-only writes (the
     # feeder's Save-TeamFeedCreates). -QueueToken is the PATH of the token file.
     [string]$QueueUrl = "",
@@ -145,6 +159,36 @@ function Start-RoleProcess {
     return (Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $Prompt -WorkingDirectory $repoRoot -Environment $environment)
 }
 
+if (-not $SeedScript) { $SeedScript = Join-Path $repoRoot "scripts\staging\seed.ps1" }
+if (-not $SessionFile) { $SessionFile = Join-Path $env:LOCALAPPDATA "PagentOS\staging\owner.json" }
+
+function Get-SessionStatus {
+    # What staging answers to the seeded session now: "200", "401", ... or "hata: <why>".
+    if (-not (Test-TestTeamStagingUrl -Url $BaseUrl -AllowTestPort $AllowTestPort)) { return "hata: $BaseUrl staging değil" }
+    if (-not (Test-Path -LiteralPath $SessionFile)) { return "hata: oturum dosyası yok ($SessionFile)" }
+    $token = ""
+    try { $token = [string](Get-TeamProperty -InputObject (Read-TeamJson -Path $SessionFile) -Name "session_token" -Default "") } catch { return "hata: oturum dosyası okunamadı" }
+    if (-not $token) { return "hata: oturum dosyasında belirteç yok" }
+    Add-Type -AssemblyName System.Net.Http
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(15)
+    try {
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, ($BaseUrl.TrimEnd("/") + "/v1/identity/sessions/current"))
+        [void]$request.Headers.TryAddWithoutValidation("Authorization", "Bearer $token")
+        return [string][int]$client.SendAsync($request).GetAwaiter().GetResult().StatusCode
+    }
+    catch { return "hata: " + ($_.Exception.GetBaseException().Message -replace '\s+', ' ') }
+    finally { $client.Dispose() }
+}
+
+function Test-AllFailed401 {
+    # A result whose failed steps (at least one) all answered 401.
+    param($Result)
+    $failed = @(@(Get-TeamProperty -InputObject $Result -Name "steps" -Default @()) | Where-Object { -not [bool](Get-TeamProperty -InputObject $_ -Name "ok" -Default $true) })
+    if (@($failed).Count -eq 0) { return $false }
+    return (@($failed | Where-Object { [string](Get-TeamProperty -InputObject $_ -Name "actual" -Default "") -notmatch '^401\b' }).Count -eq 0)
+}
+
 function Read-Queue {
     if ($null -ne $apiStore) { return (Get-TeamQueueApi -Store $apiStore) }
     if (-not (Test-Path -LiteralPath $queuePath)) { return [pscustomobject]@{ version = 1; tasks = @() } }
@@ -181,6 +225,7 @@ if ($Retest) {
             continue
         }
         Set-TeamProperty -InputObject $card -Name "retested_sha" -Value $stagingNow
+        $before = [string]$card.state
         Set-TestTeamCardState -Card $card -To "running"
         $arguments = @("-NoProfile", "-File", $runScenario, "-Scenario", [string]$card.scenario, "-Card", "$($card.id)-retest", "-OutDir", $roundDir, "-BaseUrl", $BaseUrl)
         if ($AllowTestPort -gt 0) { $arguments += @("-AllowTestPort", [string]$AllowTestPort) }
@@ -190,6 +235,11 @@ if ($Retest) {
         if ($code -eq 0 -or $code -eq 3) {
             Set-TestTeamCardState -Card $card -To "passed"
             Write-Host "  $($card.id): yeniden test GEÇTİ - kapandı ($forwarded)"
+        }
+        elseif ($code -eq 4) {
+            # A dead staging session judged nothing: the card stays as it was, not reopened.
+            Set-TestTeamCardState -Card $card -To $before
+            Write-Host "  $($card.id): yeniden test ORTAM - staging oturumu geçersiz; kart değişmedi ($forwarded)"
         }
         else {
             Set-TestTeamCardState -Card $card -To "failed"
@@ -263,6 +313,26 @@ if ($cap.Cap -eq 0) {
     exit 0
 }
 
+# ------------------------------------------------------------------------------ the staging session
+
+if (-not $NoAuth) {
+    # ONE seed for the round, in this process' environment (the testers inherit it, so they read
+    # the very file it writes); a tester never seeds (tester.md).
+    Write-Host "staging oturumu açılıyor: $SeedScript"
+    $ErrorActionPreference = "Continue"
+    & $powershell -NoProfile -File $SeedScript -ApiBase $BaseUrl 2>&1 | ForEach-Object { Write-Host "  seed: $_" }
+    $seedCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $status = Get-SessionStatus
+    if ($status -ne "200") {
+        $why = "staging oturumu açılamadı: seed çıkış $seedCode, /v1/identity/sessions/current $status"
+        Write-Host "TUR BAŞLAMADI: $why; test çalışanı başlatılmadı, kart açılmadı; kartlar planned: $cardsPath"
+        Send-Note -Seat "test-lead" -Text "Test PY: tur $Round başlamadı - $why. Kart açılmadı."
+        exit 1
+    }
+    Write-Host "staging oturumu geçerli (/v1/identity/sessions/current 200)"
+}
+
 # ------------------------------------------------------------------------------ the testers
 
 $pending = New-Object System.Collections.Queue
@@ -308,6 +378,24 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         $result = $null
         if (Test-Path -LiteralPath $entry.ResultFile) {
             try { $result = Read-TeamJson -Path $entry.ResultFile; $state = [string]$result.state } catch { $result = $null }
+        }
+        # A dead staging session is the environment, not staging's bug: run-scenario.ps1 says so
+        # (exit 4), or a tester's own result failed only with 401 while the session is dead now.
+        $environment = ""
+        if ($null -ne $result -and $state -eq "environment") { $environment = [string](Get-TeamProperty -InputObject $result -Name "environment" -Default "sonuç 'environment'") }
+        elseif ($null -ne $result -and $state -eq "failed" -and -not $NoAuth -and (Test-AllFailed401 -Result $result)) {
+            $status = Get-SessionStatus
+            if ($status -ne "200") { $environment = "adımlar 401, staging oturumu geçersiz (/v1/identity/sessions/current $status)" }
+        }
+        if ($environment) {
+            # Not a move of the card table (scripts/lib/TeamQueue.ps1): the job never reached the
+            # product, nothing is forwarded, and the next round deals new cards.
+            $entry.Card.state = "environment"
+            Set-TeamProperty -InputObject $entry.Card -Name "environment" -Value $environment
+            Write-Json -Path $cardsPath -Document $document
+            Write-Host "  $($entry.Card.tester) -> $($entry.Card.id): ortam - $environment; iletilmedi"
+            Send-Note -Seat $entry.Card.tester -Text ("sonuç: environment - {0} ({1}) - staging oturumu geçersiz, iletilmedi" -f $entry.Card.family, $entry.Card.id)
+            continue
         }
         if (@("passed", "failed", "broke") -notcontains $state) { $state = "failed" }
         if ($null -eq $result) {

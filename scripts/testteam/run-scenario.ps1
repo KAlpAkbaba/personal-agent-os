@@ -21,15 +21,24 @@
     stops at the first load with an error, or a p95 over max_p95_ms - each request timed from
     its own send, and a breaking load measured TWICE (a load that breaks once and holds the
     second time is 'flaky' and the ladder goes on): that is the breaking point, with its numbers. Never anything irreversible: a scenario only does what the owner
-    does on staging, and staging is a copy.
+    does on staging, and staging is a copy. A step (or cleanup step) that would enrol, rotate or
+    revoke an identity - any write under /v1/identity/, a device enrol or revoke, a credential
+    rotation - is NOT sent: it is recorded under 'refused' (state 'refused'); a ladder aimed at
+    one refuses the whole scenario. The test team shares one seeded owner session.
+
+    A step that fails with 401 while the session itself is no longer accepted (its own
+    /v1/identity/sessions/current answers 401) is the environment, not staging's bug: the
+    result is 'environment' and the ladder is not run.
 
     The result file is <OutDir>/<card>.result.json:
-      { card, family, scenario, state: passed|failed|broke, staging_sha, steps: [ { name,
-        method, path, expected, actual, ok, ms } ], breaking: { what, tried: [ { load, ok,
-        errors, p95_ms } ], first_failure }, screenshot }
+      { card, family, scenario, state: passed|failed|broke|environment, staging_sha, steps: [ {
+        name, method, path, expected, actual, ok, ms } ], breaking: { what, tried: [ { load, ok,
+        errors, p95_ms } ], first_failure }, screenshot, refused: [ { name, method, path, state,
+        why } ], environment }
 
     Exit codes: 0 passed, 1 a step failed, 2 refused (not staging, or no scenario), 3 broke
-    (every step passed, the ladder found the breaking point).
+    (every step passed, the ladder found the breaking point), 4 environment (the staging
+    session is no longer accepted).
 
 .PARAMETER AllowTestPort
     For scripts/tests/testteam.tests.ps1 only: one more port on 127.0.0.1 (a stand-in for
@@ -85,6 +94,20 @@ function Resolve-StepUrl {
     return $BaseUrl + [string](Get-TeamProperty -InputObject $Step -Name "path" -Default "/")
 }
 
+function Get-IdentityChange {
+    <# Why a step would change staging's identity - enrol, rotate or revoke a credential, a
+       session or a device - or "" when it does not. Every other tester shares the one seeded
+       owner session: t-d20261006 (2026-10-06) lost a whole round to 401 after a rotation. #>
+    param($Step)
+    $method = ([string](Get-TeamProperty -InputObject $Step -Name "method" -Default "GET")).ToUpperInvariant()
+    if (@("GET", "HEAD", "OPTIONS") -contains $method) { return "" }
+    $path = ([System.Uri](Resolve-StepUrl -Step $Step)).AbsolutePath.ToLowerInvariant()
+    if ($path -match '^/v1/identity(/|$)') { return "$method $path kimliği değiştirir (oturum aç/yenile/kapat/iptal, kimlik kurulumu, panik)" }
+    if ($path -match '^/v1/devices/(enroll|enrol)/?$' -or $path -match '^/v1/devices/[^/]+/revoke/?$') { return "$method $path bir cihazı kaydeder ya da iptal eder" }
+    if ($path -match '(^|/)(rotate|credentials?)(/|$)') { return "$method $path bir kimlik bilgisini döndürür" }
+    return ""
+}
+
 $steps = @(Get-TeamProperty -InputObject $document -Name "steps" -Default @())
 $breaking = Get-TeamProperty -InputObject $document -Name "breaking"
 $cleanup = @(Get-TeamProperty -InputObject $document -Name "cleanup" -Default @())
@@ -97,6 +120,10 @@ foreach ($step in @($steps + $cleanup)) {
 }
 if ($null -ne $breaking -and -not (Test-TestTeamStagingUrl -Url (Resolve-StepUrl -Step $breaking) -AllowTestPort $AllowTestPort)) {
     Stop-Refused "STAGING DEĞİL: kopma merdiveni $(Resolve-StepUrl -Step $breaking) adresine gidiyor"
+}
+if ($null -ne $breaking) {
+    $change = Get-IdentityChange -Step $breaking
+    if ($change) { Stop-Refused "KİMLİK DEĞİŞİKLİĞİ: kopma merdiveni $change - test ekibinin ortak oturumu düşer" }
 }
 if ($DryRun) { Write-Host "senaryo hedefleri staging: $Scenario"; exit 0 }
 
@@ -205,10 +232,25 @@ try {
 catch { }
 
 $records = New-Object System.Collections.ArrayList
+$refused = New-Object System.Collections.ArrayList
 $screenshot = ""
 $anyFailed = $false
+$saw401 = $false
+$rotatedSaid = $false
+
+function Test-Refused {
+    # A step that would change staging's identity is not sent; it is recorded as 'refused'.
+    param($Step, [string]$Name)
+    $change = Get-IdentityChange -Step $Step
+    if (-not $change) { return $false }
+    Write-Host "  REDDEDİLDİ $Name - gönderilmedi: $change; test ekibinin ortak staging oturumu düşerdi (t-d20261006)"
+    [void]$refused.Add([pscustomobject]@{ name = $Name; method = [string](Get-TeamProperty -InputObject $Step -Name "method" -Default "GET"); path = ([System.Uri](Resolve-StepUrl -Step $Step)).AbsolutePath; state = "refused"; why = $change })
+    return $true
+}
+
 foreach ($step in $steps) {
     $name = [string](Get-TeamProperty -InputObject $step -Name "name" -Default "")
+    if (Test-Refused -Step $step -Name $name) { continue }
     if ([string](Get-TeamProperty -InputObject $step -Name "web" -Default "")) {
         $shot = Join-Path $OutDir ("{0}-{1}.png" -f $Card, ($records.Count + 1))
         $web = Invoke-WebStep -Step $step -Shot $shot
@@ -218,6 +260,8 @@ foreach ($step in $steps) {
     }
     else {
         $answer = Invoke-Step -Step $step
+        if ($answer.Status -eq "401") { $saw401 = $true }
+        if ($answer.Text -match 'owner_credential_rotated') { $rotatedSaid = $true }
         $expected = [string](Get-TeamProperty -InputObject $step -Name "expect_status" -Default 200)
         $contains = [string](Get-TeamProperty -InputObject $step -Name "expect_contains" -Default "")
         $ok = ($answer.Status -eq $expected) -and (-not $contains -or $answer.Text.Contains($contains))
@@ -232,6 +276,18 @@ foreach ($step in $steps) {
     }
     if (-not $ok) { $anyFailed = $true }
     Write-Host ("  {0} {1} ({2})" -f $(if ($ok) { "GEÇTİ" } else { "KALDI" }), $name, $records[$records.Count - 1].actual)
+}
+
+# A 401 is staging's answer to the SESSION, not to the scenario, when the session itself is no
+# longer accepted: its own /v1/identity/sessions/current answers 401 too (the api's 401 body
+# says only 'unauthorized'; the reason, e.g. owner_credential_rotated, is in staging's log).
+$environment = ""
+if ($anyFailed -and $token -and ($saw401 -or $rotatedSaid)) {
+    $probe = Invoke-Step -Step ([pscustomobject]@{ method = "GET"; path = "/v1/identity/sessions/current" })
+    if ($rotatedSaid -or $probe.Status -eq "401") {
+        $environment = "staging oturumu geçersiz: /v1/identity/sessions/current $($probe.Status) (kimlik döndürülmüş ya da oturum iptal; seed.ps1 tur başında bir kez)"
+        Write-Host "  ORTAM: $environment - bu bir yazılım hatası değil"
+    }
 }
 
 function Measure-Load {
@@ -258,7 +314,8 @@ function Measure-Load {
 }
 
 $ladder = $null
-if ($null -ne $breaking) {
+# A dead session's ladder would measure 401s, not a load.
+if ($null -ne $breaking -and -not $environment) {
     if (-not ('TestTeamLadder' -as [type])) {
         Add-Type -ReferencedAssemblies System.Net.Http -TypeDefinition @"
 using System;
@@ -326,17 +383,21 @@ public static class TestTeamLadder {
 }
 # What the scenario made on staging it removes again, whatever happened above.
 foreach ($step in $cleanup) {
+    $name = [string](Get-TeamProperty -InputObject $step -Name "name" -Default "")
+    if (Test-Refused -Step $step -Name $name) { continue }
     $answer = Invoke-Step -Step $step
-    Write-Host ("  temizlik {0}: {1}" -f [string](Get-TeamProperty -InputObject $step -Name "name" -Default ""), $answer.Status)
+    Write-Host ("  temizlik {0}: {1}" -f $name, $answer.Status)
 }
 $client.Dispose()
 
 $state = "passed"
-if ($anyFailed) { $state = "failed" }
+if ($environment) { $state = "environment" }
+elseif ($anyFailed) { $state = "failed" }
 elseif ($null -ne $ladder -and $null -ne $ladder.first_failure) { $state = "broke" }
 $result = [pscustomobject]@{
     card = $Card; family = $family; scenario = $Scenario; state = $state; staging_sha = $stagingSha
     steps = @($records.ToArray()); breaking = $ladder; screenshot = $screenshot
+    refused = @($refused.ToArray()); environment = $environment
     at = (Get-TeamTimestamp)
 }
 $file = Join-Path $OutDir "$Card.result.json"
@@ -344,4 +405,5 @@ $file = Join-Path $OutDir "$Card.result.json"
 Write-Host "sonuç: $state -> $file"
 if ($state -eq "failed") { exit 1 }
 if ($state -eq "broke") { exit 3 }
+if ($state -eq "environment") { exit 4 }
 exit 0
