@@ -426,6 +426,15 @@ Test-Case "restart releases the test slot its stuck child held, and only that on
 Stop-Started
 try { Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction Stop } catch { Write-Host "  (temp folder left: $script:TempRoot)" }
 
+Test-Case "the newest-write walk has a time budget: past it the answer is 'no sign', never a wait (the cycle froze three times inside one walk, 2026-10-06)" {
+    $big = Join-Path $repoRoot "services"
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $answer = Get-TeamNewestWrite -Path $big -TimeoutMilliseconds 1
+    Assert-True ($null -eq $answer) "a walk past its budget answers nothing, not a partial time: $answer"
+    Assert-True ($watch.Elapsed.TotalSeconds -lt 10) "a hang guard: it returned in $([Math]::Round($watch.Elapsed.TotalSeconds, 1)) s"
+    Assert-True ($null -ne (Get-TeamNewestWrite -Path $big -TimeoutMilliseconds 120000)) "with room, the same tree has a newest write"
+}
+
 Write-Host ""
 Write-Host "team-liveness tests: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }
