@@ -223,7 +223,10 @@ def test_antalia_synthesize_speaks_the_freya_contract(
         path = tmp_path / "models" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(name.encode())
-        pinned[name] = ("https://example.invalid/" + name, hashlib.sha256(name.encode()).hexdigest())
+        pinned[name] = (
+            "https://example.invalid/" + name,
+            hashlib.sha256(name.encode()).hexdigest(),
+        )
     monkeypatch.setattr(synthesize, "WEIGHTS", pinned)
     written: list[str] = []
     monkeypatch.setattr(synthesize, "_write_wav", lambda path, wav: written.append(path.name))
@@ -257,3 +260,34 @@ def test_antalia_synthesize_speaks_the_freya_contract(
     assert rows[1]["streamed"] is False and rows[1]["first_audio_ms"] == rows[1]["synth_ms"]
     assert written == ["03.wav"]
     assert seen == [("Merhaba.", 32, 20260803)]
+
+
+def test_antalia_vendor_prints_never_reach_the_json_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Found by the worker's one-sentence smoke (2026-10-06): BigVGAN's remove_weight_norm()
+    # prints "Removing weight norm..." to stdout, which the merge reads as a malformed line.
+    synthesize = _antalia_module()
+    monkeypatch.setattr(synthesize, "mismatched", lambda models: [])
+    monkeypatch.setattr(synthesize, "_write_wav", lambda path, wav: None)
+
+    def noisy_load(models: Path, threads: int, seed: int) -> Any:
+        print("Removing weight norm...")
+
+        def speak(text: str, steps: int, seed: int) -> list[float]:
+            print("vendor chatter during synthesis")
+            return [0.0] * 2400
+
+        return synthesize.Loaded(speak, threads)
+
+    code = synthesize.synth_main(
+        ["--models", str(tmp_path), "--out", str(tmp_path / "out"), "--threads", "1"],
+        stdin=iter([json.dumps({"index": 1, "text": "x"})]),
+        load=noisy_load,
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    rows = [json.loads(line) for line in captured.out.strip().splitlines()]
+    assert [row.get("event", row.get("index")) for row in rows] == ["load", 1]
+    assert "Removing weight norm..." in captured.err
+    assert "vendor chatter during synthesis" in captured.err

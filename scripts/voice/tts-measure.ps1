@@ -23,20 +23,29 @@
 
   Runs unchanged on Linux PowerShell 7 (the Cloud Core) - that run is a separate, remote step.
 
+  -Engine antalia (tts-antalia-measure) measures the second candidate, Antalia 1, beside
+  FreyaTTS with the same rules: build context tools/tts-measure/antalia, image
+  pagentos-antalia-measure:<12 hex>, volume pagentos-antalia-weights, evidence
+  tts-antalia-measure.*, WAVs under ...\PagentOS\tts-measure\antalia\<label>\. The default
+  -Engine freya keeps every name and folder above. Each run re-renders
+  <EvidenceDir>/tts-measure-compare.md from whichever engine evidence exists.
+
 .EXAMPLE
   .\scripts\voice\tts-measure.ps1 -Label ev-pc
   .\scripts\voice\tts-measure.ps1 -Label cpx32-bicimi -Cpus 4 -Threads 4
+  .\scripts\voice\tts-measure.ps1 -Engine antalia -Label ev-pc
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidatePattern("^[a-z0-9][a-z0-9-]{0,39}$")][string]$Label,
+    [ValidateSet("freya", "antalia")][string]$Engine = "freya",
     [string]$Cpus = "",
     [int]$Threads = 0,
     [string]$EvidenceDir = "",
     [string]$Docker = "",
     [string]$Python = "",
     [string]$Image = "",
-    [string]$WeightsVolume = "pagentos-freya-weights",
+    [string]$WeightsVolume = "",
     [string]$MemoryLimit = "8g",
     [int]$TimeoutSec = 3600,
     [int]$BuildTimeoutSec = 3600,
@@ -51,9 +60,19 @@ Set-StrictMode -Version Latest
 
 $onWindows = [System.IO.Path]::DirectorySeparatorChar -eq '\'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$toolDir = Join-Path $repoRoot "tools/tts-measure"
+# Per engine: build context, image name, weights volume, evidence base name, WAV sub-folder,
+# seed. FreyaTTS keeps every name it had before -Engine existed.
+$engines = @{
+    freya   = @{ Tool = "tools/tts-measure"; ImageName = "pagentos-freya-measure"; Volume = "pagentos-freya-weights"
+                 Evidence = "tts-freya-measure"; WavSub = ""; Seed = "9" }
+    antalia = @{ Tool = "tools/tts-measure/antalia"; ImageName = "pagentos-antalia-measure"; Volume = "pagentos-antalia-weights"
+                 Evidence = "tts-antalia-measure"; WavSub = "antalia/"; Seed = "20260803" }
+}
+$spec = $engines[$Engine]
+$toolDir = Join-Path $repoRoot $spec.Tool
 $apiDir = Join-Path $repoRoot "services/api"
 if (-not $EvidenceDir) { $EvidenceDir = Join-Path $repoRoot "docs/evidence" }
+if (-not $WeightsVolume) { $WeightsVolume = $spec.Volume }
 if ($Threads -le 0) { $Threads = [Environment]::ProcessorCount }
 if (-not $Image) {
     # Content-addressed tag: a changed Dockerfile / lock / script is a new image, never a stale one.
@@ -62,7 +81,7 @@ if (-not $Image) {
     }
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $digest = -join ($sha.ComputeHash([System.Text.Encoding]::ASCII.GetBytes($parts -join "`n")) | ForEach-Object { $_.ToString("x2") })
-    $Image = "pagentos-freya-measure:" + $digest.Substring(0, 12)
+    $Image = $spec.ImageName + ":" + $digest.Substring(0, 12)
 }
 
 function Format-Argument([string]$Value) {
@@ -148,7 +167,7 @@ if ($MinFreeGB -gt 0) {
 }
 
 $localBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME ".local/share" }
-$wavDir = Join-Path $localBase "PagentOS/tts-measure/$Label"
+$wavDir = Join-Path $localBase ("PagentOS/tts-measure/" + $spec.WavSub + $Label)
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("pagentos-tts-measure-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
 $container = "pagentos-tts-measure-" + [guid]::NewGuid().ToString("N").Substring(0, 12)
 $exitCode = 0
@@ -190,7 +209,7 @@ try {
     if ($Cpus) { $runArgs += @("--cpus", $Cpus) }
     if (-not $onWindows) { $runArgs += @("--user", "$(& /usr/bin/id -u):$(& /usr/bin/id -g)") }
     $runArgs += @("-v", "${WeightsVolume}:/models:ro", "-v", "${wavDir}:/out", $Image,
-        "synth", "--models", "/models", "--out", "/out", "--threads", "$Threads", "--seed", "9", "--steps", "32")
+        "synth", "--models", "/models", "--out", "/out", "--threads", "$Threads", "--seed", $spec.Seed, "--steps", "32")
     Write-Host "synthesizing $((Get-Content -LiteralPath $inputFile).Count) sentences as '$Label' (threads $Threads, cpus $(if ($Cpus) { $Cpus } else { 'all' })) ..."
     $synth = Invoke-Native $Docker $runArgs $TimeoutSec -StdIn ([System.IO.File]::ReadAllBytes($inputFile))
     if ($synth.TimedOut) {
@@ -210,10 +229,14 @@ try {
     $imageId = (Invoke-Native $Docker @("image", "inspect", "--format", "{{.Id}}", $Image) 120).StdOut.Trim()
     $merge = Invoke-Native $Python ($pythonArgs + @("-m", "app.voice.tts_measure", "merge", "--output", $outputFile,
         "--label", $Label, "--threads", "$Threads", "--cpus-limit", $cpusLimit, "--wav-dir", $wavDir,
-        "--evidence-dir", $EvidenceDir, "--repo-root", $repoRoot, "--image", "$Image $imageId")) 300 -WorkingDirectory $apiDir
+        "--evidence-dir", $EvidenceDir, "--repo-root", $repoRoot, "--image", "$Image $imageId",
+        "--engine", $Engine, "--seed", $spec.Seed)) 300 -WorkingDirectory $apiDir
     if ($merge.ExitCode -ne 0) { Stop-Measure 6 ("tts_measure merge failed: " + ($merge.StdOut + $merge.StdErr).Trim()) }
     Write-Host $merge.StdOut.Trim()
-    Write-Host "evidence: $(Join-Path $EvidenceDir 'tts-freya-measure.md'); WAVs: $wavDir"
+    $compare = Invoke-Native $Python ($pythonArgs + @("-m", "app.voice.tts_measure", "compare",
+        "--evidence-dir", $EvidenceDir, "--repo-root", $repoRoot)) 300 -WorkingDirectory $apiDir
+    if ($compare.ExitCode -ne 0) { Stop-Measure 6 ("tts_measure compare failed: " + ($compare.StdOut + $compare.StdErr).Trim()) }
+    Write-Host "evidence: $(Join-Path $EvidenceDir ($spec.Evidence + '.md')), $(Join-Path $EvidenceDir 'tts-measure-compare.md'); WAVs: $wavDir"
 }
 finally {
     if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
