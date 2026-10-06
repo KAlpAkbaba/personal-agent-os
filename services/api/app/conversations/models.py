@@ -1,6 +1,7 @@
 """The conversation tables (conversation-transcripts).
 
-Canonical schema: ``alembic/versions/20261006_0069_conversation_transcripts.py``. A conversation is TEXT:
+Canonical schema: ``alembic/versions/20261006_0069_conversation_transcripts.py``.
+A conversation is TEXT:
 ``conversation_segments`` holds one line each - what was said, when, whether it was the owner,
 the voice's number in that conversation and, when the voice belongs to a consenting named
 person, that person. No table has a column for audio. The only bytes column is

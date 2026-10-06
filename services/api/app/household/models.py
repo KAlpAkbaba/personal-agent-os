@@ -1,6 +1,7 @@
 """The house's two tables.
 
-Canonical schema: ``alembic/versions/20261006_0070_household_stock.py``. ``household_items`` is one row per
+Canonical schema: ``alembic/versions/20261006_0070_household_stock.py``.
+``household_items`` is one row per
 thing the house keeps (its level, whether it is on the shopping list, the rhythm learnt for
 it); ``household_events`` is one dated row per depletion and per restock - the only input the
 rhythm is computed from, so recomputing it never reads its own output.

@@ -4,9 +4,9 @@ Revision ID: 0070_household_stock
 Revises: 0069_conversation_transcripts
 Create Date: 2026-10-05
 
-Re-pointed at ``0069_conversation_transcripts`` by the Danisman at the 2026-10-06 integration (it was written on ``0066_watches``). Another
-card's migration that lands first re-points ``down_revision`` at merge (the Danışman's note
-on the card).
+Re-pointed at ``0069_conversation_transcripts`` by the Danisman at the 2026-10-06
+integration (it was written on ``0066_watches``). Another card's migration that lands
+first re-points ``down_revision`` at merge (the Danışman's note on the card).
 
 **Why two tables.** ``household_items`` is one row per thing the house keeps: its name and
 folded key (unique - "sütü" and "süt" are one row), the level (var / azaldı / bitti, or NULL
