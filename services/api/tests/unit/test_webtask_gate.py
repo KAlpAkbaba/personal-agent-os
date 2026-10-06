@@ -1219,3 +1219,106 @@ def test_a_card_number_field_is_the_owners_whatever_the_write() -> None:
     # The same field, not marked: an ordinary write. The mark is what the gate reads.
     plain = el("e1", "textbox", "Kart numarası", in_form=True)
     assert decide(write(ACTION_FILL), page(plain), WRITE_CTX).kind == DECISION_ALLOW
+
+
+# ------------------------------------------------------------ the cloud (ADR-0213 addendum)
+#
+# Card cloud-task-loop-core, S4: a task that runs in the CLOUD writes only on a site the
+# owner put on his allow-list, and never sends or does what cannot be undone there - not
+# even on a listed site (the most restrictive safe option; the owner's review is pending).
+
+
+CLOUD_GOAL = 'Notu "Merhaba dünya" yaz, magaza.example.com sepetine bak'
+CLOUD = TaskContext(goal=CLOUD_GOAL, target="cloud")
+
+
+@pytest.fixture()
+def owner_list(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The owner's allow-list as ``allowlist_store`` reads it, empty unless a test fills it."""
+    from app.execution import allowlist_store
+
+    listed: list[str] = []
+    monkeypatch.setattr(allowlist_store, "effective_sites", lambda: tuple(listed))
+    return listed
+
+
+def _fill() -> Step:
+    return Step(
+        action=ACTION_FILL,
+        ref="e1",
+        value="Merhaba dünya",
+        expect=Expectation(EXPECT_FIELD_HAS_VALUE),
+    )
+
+
+def test_a_cloud_write_off_the_owners_list_is_refused_in_turkish(owner_list: list[str]) -> None:
+    field = el("e1", "textbox", "Not")
+    decision = decide(_fill(), page(field), CLOUD)
+    assert decision.kind == DECISION_REFUSE
+    assert decision.reason == "not_on_owner_allow_list"
+    assert decision.message == (
+        "Bu sitede bulutta yazamam; Onay Merkezi'nden siteyi izin listesine ekle."
+    )
+    # The same step, the same page, on the owner's Chrome: today's answer.
+    assert decide(_fill(), page(field), TaskContext(goal=CLOUD_GOAL)).kind == DECISION_ALLOW
+
+
+def test_a_cloud_write_on_the_owners_list_is_allowed_at_its_own_class(
+    owner_list: list[str],
+) -> None:
+    owner_list.append("example.com")
+    decision = decide(_fill(), page(el("e1", "textbox", "Not")), CLOUD)
+    assert decision.kind == DECISION_ALLOW
+    assert decision.risk_ceiling == RISK_REVERSIBLE_WRITE
+    # A reversible click is a write too, and the list opens it the same way.
+    assert decide(click("e1"), page(el("e1", "button", "Sepete ekle")), CLOUD).kind == (
+        DECISION_ALLOW
+    )
+
+
+def test_a_cloud_click_that_is_a_write_needs_the_list_too(owner_list: list[str]) -> None:
+    decision = decide(click("e1"), page(el("e1", "button", "Sepete ekle")), CLOUD)
+    assert decision.kind == DECISION_REFUSE and decision.reason == "not_on_owner_allow_list"
+
+
+@pytest.mark.parametrize(
+    ("element", "risk_class"),
+    [
+        (el("e1", "button", "Paylaş"), RISK_EXTERNAL_COMMUNICATION),
+        (el("e1", "button", "Sil"), RISK_HIGH_IMPACT),
+    ],
+)
+def test_the_cloud_never_sends_nor_does_what_cannot_be_undone_even_on_a_listed_site(
+    owner_list: list[str], element: Element, risk_class: str
+) -> None:
+    owner_list.append("example.com")
+    assert risk.classify_step(ACTION_CLICK, element) == risk_class
+    decision = decide(click("e1"), page(element), CLOUD)
+    assert decision.kind == DECISION_REFUSE, decision
+    assert decision.reason == "cloud_risk_not_allowed"
+    assert decision.message
+    # On the owner's Chrome the same click is read back to him, as it always was.
+    assert decide(click("e1"), page(element), TaskContext(goal=CLOUD_GOAL)).ask_kind == (
+        ASK_CONFIRM
+    )
+
+
+def test_reading_and_moving_in_the_cloud_do_not_ask_the_list(owner_list: list[str]) -> None:
+    link = el("e1", "link", "Kargo", href_host="www.magaza.example.com", risk_hint="NAVIGATE")
+    assert decide(click("e1"), page(link), CLOUD).kind == DECISION_ALLOW
+    going = Step(
+        action=ACTION_NAVIGATE,
+        url="https://www.magaza.example.com/sepet",
+        expect=Expectation(EXPECT_URL_CONTAINS, value="sepet"),
+    )
+    assert decide(going, page(), CLOUD).kind == DECISION_ALLOW
+
+
+def test_a_deny_listed_site_in_the_cloud_is_the_deny_list_s_answer_first(
+    owner_list: list[str],
+) -> None:
+    owner_list.append("turkiye.gov.tr")  # a row written behind the editor
+    decision = decide(
+        _fill(), page(el("e1", "textbox", "Not"), url="https://giris.turkiye.gov.tr/"), CLOUD
+    )
+    assert decision.kind == DECISION_ASK and decision.ask_kind == "denied_site"
