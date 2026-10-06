@@ -4,7 +4,8 @@ Autogenerate compares Base.metadata with the database, so a models module env.py
 makes its tables look like tables to DROP. The hand-kept list had drifted: on 2026-10-06 it
 imported 21 modules besides app.models while the tree held 46, and 46 tables
 (conversations, mail_accounts, household_items, goals, ...) were invisible to autogenerate.
-env.py now calls ``app.registry.register_models()``; this test pins that the discovered set IS the tree.
+env.py now calls ``app.registry.register_models()``; this test pins that the discovered set
+IS the tree, and that env.py really calls it.
 """
 
 from __future__ import annotations
