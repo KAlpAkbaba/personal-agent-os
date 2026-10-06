@@ -135,7 +135,12 @@ on the card), then decide ONE of these - never more than one decision per task:
 - (c) the THIRD return of the same task -> do not send the same instruction again: change the
   approach in it (2026-10-03: cycle-auto-release went from a deny-list of SQL forms to an
   allow-list of alembic calls);
-- (d) a conflict on the integration branch, a lead-protected file (the shared files,
+- (c2) a conflict on the integration branch (an approved task stopped with 'entegrasyon dalında
+  çakışma') -> `resolve_integration`: YOU resolve it (the owner, 2026-10-06: "çalışan 2'nin direk
+  sana değil proje yöneticisine gitmeli"); scripts/team/resolve-integration.ps1 merges, keeps both
+  sides of an additive conflict, re-points a new migration and runs the guards, and escalates
+  to the Danışman by itself only when it cannot;
+- (d) a lead-protected file (the shared files,
   `.claude/agents`, the constitution, CLAUDE.md, secrets, LKG, the recovery roots), a security or
   architecture decision, an owner rule, a release or host step, or a task the owner or the
   Danışman stopped by hand -> `escalate`: the Danışman decides; your reason says what to decide.

@@ -31,6 +31,8 @@ RELEASE_SCRIPTS = (
     "release-cloud-core.sh",
     "restore-cloud-core.sh",
     "backup-cloud-core.sh",
+    # radicale-stack-ops: the host step that writes the calendar's users file.
+    "install-radicale.sh",
 )
 
 #: Codes deliberately raised from more than one place because they ARE one failure, said

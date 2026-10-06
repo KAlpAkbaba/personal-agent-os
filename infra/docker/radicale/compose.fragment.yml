@@ -1,0 +1,45 @@
+# Radicale - the owner's own CalDAV server (radicale-stack-ops). A FRAGMENT: it is not
+# `docker compose`-complete on its own (the `default` network and the `api` service belong to
+# the production file). The wiring card radicale-prod-wire (full text in the ADR,
+# team/plans/radicale-stack-ops-adr.md) copies `services.radicale` into
+# docker-compose.prod.yml VERBATIM; test_radicale_stack.py then demands equality.
+#
+# No `ports`: not on the tailnet, not on loopback. The api reaches it over the compose network
+# at http://radicale:5232/owner/takvim/ (user `owner`, password PAGENTOS_CALDAV_PASSWORD in
+# /opt/pagentos/.env). Host step first, as root: scripts/cloud/install-radicale.sh writes
+# /mnt/pagentos-data/radicale-auth/users (bcrypt, uid 10002, 0600) and the data folder; without
+# the users file the entrypoint stops instead of starting Radicale with no users.
+#
+# Data: /mnt/pagentos-data/radicale is a bind, so backup-cloud-core.sh reads it directly
+# (under Radicale's own .Radicale.lock) and restore-cloud-core.sh --apply swaps it.
+services:
+  radicale:
+    build:
+      context: .
+    image: pagentos/radicale:local
+    container_name: pagentos-prod-radicale
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    pids_limit: 256
+    volumes:
+      - /mnt/pagentos-data/radicale:/data
+      - /mnt/pagentos-data/radicale-auth/users:/etc/radicale/users:ro
+    healthcheck:
+      # No curl in the image. 200 (urlopen returns) and 401 (an unauthenticated GET) are a
+      # healthy server; a refused connection is not.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request as r, urllib.error as e\ntry: r.urlopen('http://127.0.0.1:5232/', timeout=4)\nexcept e.HTTPError as x: sys.exit(0 if x.code == 401 else 1)\nexcept Exception: sys.exit(1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

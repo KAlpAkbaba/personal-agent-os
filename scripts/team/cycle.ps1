@@ -1086,6 +1086,9 @@ try {
     $dutyTimes = @{}
     $dutyWaits = @{}
     $dutyCapNoted = @{}
+    # resolve_integration decisions of one duty file, run together by resolve-integration.ps1
+    # after the file's other decisions are saved (pm-resolves-integration-conflicts).
+    $script:dutyResolve = New-Object System.Collections.ArrayList
     $dutyMaxTimes = 3
     # The duty ledger (review 2026-10-04): $dutyHanded and a task's hand-over count outlive the
     # cycle in team/duty-ledger.json, so the next tick does not hand the same stop again, and a
@@ -1380,6 +1383,12 @@ try {
             return
         }
         $task = $found[0]
+        if ($action -eq "resolve_integration") {
+            # The owner, 2026-10-06: an integration conflict is the Proje Yöneticisi's to resolve.
+            # The resolver claims and writes the task itself (its own process, the store's copy).
+            [void]$script:dutyResolve.Add($id)
+            return
+        }
         if ($action -eq "escalate") {
             Set-TeamProperty -InputObject $task -Name "reason" -Value ((Get-TeamDutyPrefix -Kind "escalated") + $reason)
             Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
@@ -1609,8 +1618,33 @@ try {
             Add-CycleNote -List "risks" -Text ("nöbet kararı reddedildi (${label}): " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
             return
         }
+        $script:dutyResolve.Clear()
         foreach ($decision in @($read.Decisions)) { Invoke-DutyDecision -Decision $decision -Listed @($duty.Tasks) }
         Save-PoolQueue -What "nöbet: $label"
+        if ($script:dutyResolve.Count -gt 0) {
+            if (-not $useApi) {
+                Add-CycleNote -List "risks" -Text ("nöbet: entegrasyon çakışması çözümü yalnız ortak kuyrukta çalışır; Danışman'a kalır: " + (@($script:dutyResolve.ToArray()) -join ", "))
+            }
+            else {
+                $resolver = Join-Path $repoRoot "scripts\team\resolve-integration.ps1"
+                $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $resolver, "-CycleId", $CycleId, "-QueueUrl", $QueueUrl, "-QueueToken", $QueueToken, "-Base", $Base, "-TaskIds", (@($script:dutyResolve.ToArray()) -join ","))
+                $ran = Invoke-NativeProcess -FilePath (Join-Path $PSHOME "powershell.exe") -Arguments $arguments -SuccessExitCodes @(0, 1) -TimeoutSeconds 2700 -WorkingDirectory $repoRoot
+                $line = @(([string]$ran.StdOut) -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") }) | Select-Object -Last 1
+                $parsed = $null
+                try { if ($line) { $parsed = ConvertFrom-Json -InputObject $line } } catch { $parsed = $null }
+                $results = if ($null -ne $parsed) { @(Get-TeamProperty -InputObject $parsed -Name "results" -Default @()) } else { @() }
+                if (@($results).Count -eq 0) {
+                    $why = if ($null -ne $parsed) { [string](Get-TeamProperty -InputObject $parsed -Name "error" -Default "sonuç yok") } else { "çıkış $($ran.ExitCode)" }
+                    Add-CycleNote -List "risks" -Text "nöbet: entegrasyon çakışması çözülemedi ($why): $(@($script:dutyResolve.ToArray()) -join ', ')"
+                }
+                foreach ($r in @($results)) {
+                    $list = if ([string]$r.Outcome -eq "merged") { "gaps" } else { "risks" }
+                    Add-CycleNote -List $list -Text ("Proje Yöneticisi entegrasyon çakışmasını çözdü: {0} -> {1}" -f [string]$r.Task, [string]$r.Outcome)
+                }
+                # The resolver wrote the store: the cycle's copy re-reads before its next save.
+                $script:queue = Read-TeamQueueApi -Store $apiStore
+            }
+        }
     }
 
     function Start-PoolRun {

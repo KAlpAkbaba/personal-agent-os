@@ -30,11 +30,13 @@ from app.accounts.service import AccountsService
 from app.config import Settings
 from app.db import build_engine, build_session_factory
 from app.mail.models import MailIndexRow
+from tests.integration.migration_ids import parent_of, revision_named
 
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-BEFORE = "0066_watches"
+MAIL_ACCOUNTS = revision_named("mail_accounts")
+BEFORE = parent_of(MAIL_ACCOUNTS)
 TAG = "pg-mail-accounts-test"
 REFRESH = "1//REFRESH-SECRET-postgres"  # noqa: S105 - test fixture
 #: Index rows are keyed by the account's id (``mail_accounts.id`` as text), never its name.
@@ -155,7 +157,7 @@ def test_the_chain_has_one_head_and_0068_follows_the_base_tip() -> None:
     script = ScriptDirectory.from_config(_alembic())
     # One head (the conversation tables follow 0068 since the 2026-10-06 integration).
     assert len(script.get_heads()) == 1
-    assert script.get_revision("0068_mail_accounts").down_revision == BEFORE
+    assert script.get_revision(MAIL_ACCOUNTS).down_revision == BEFORE
 
 
 def test_the_migration_makes_the_tables_and_columns(factory) -> None:

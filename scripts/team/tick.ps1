@@ -38,13 +38,24 @@ param(
     # Where the tick writes what it stopped (default team/logs/tick.log, git-ignored), and the
     # folder of the cycle reports that get an orphan line (default team/reports).
     [string]$LogPath = "",
-    [string]$ReportsRoot = ""
+    [string]$ReportsRoot = "",
+    # 2026-10-06: the cycle starts the test team's round only with -TestTeam, and the scheduled
+    # tick never passed it - five test seats waited all day beside a healthy staging. The round
+    # is now asked for by default; -NoTestTeam opts out (-TestTeam says the default out loud).
+    # It is not asked for when staging does not answer: a line on the board, in the log and in
+    # the report, never a failure.
+    [switch]$TestTeam,
+    [switch]$NoTestTeam,
+    [string]$StagingHealthUrl = "http://127.0.0.1:28001/v1/system/health",
+    # The tests put a fake in place of board.ps1.
+    [string]$BoardPath = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $repoRoot "scripts\lib\TeamTickKeep.ps1")
 $feedScript = if ($FeedPath) { $FeedPath } else { Join-Path $PSScriptRoot "feed.ps1" }
 $cycleScript = if ($CyclePath) { $CyclePath } else { Join-Path $PSScriptRoot "cycle.ps1" }
 if (-not $LogPath) { $LogPath = Join-Path $repoRoot "team\logs\tick.log" }
@@ -169,6 +180,7 @@ function Get-JobProcessIds {
 function Stop-JobLeftovers {
     # Called only after the script's own process has exited: what is still in its job is named, then the job is ended.
     param([IntPtr]$Job, [string]$Label, [int]$OwnId)
+    $listed = New-Object System.Collections.ArrayList
     foreach ($id in @(Get-JobProcessIds -Job $Job)) {
         if ($id -eq $OwnId) { continue }
         $name = "?"; $line = ""
@@ -177,12 +189,24 @@ function Stop-JobLeftovers {
             if ($null -ne $found) { $name = [string]$found.Name; $line = [string]$found.CommandLine }
         }
         catch { }
+        [void]$listed.Add([pscustomobject]@{ Id = $id; Name = $name; Line = $line; Keep = (Test-TeamTickKeep -Name $name -CommandLine $line) })
+    }
+    $keeping = @($listed | Where-Object { $_.Keep }).Count -gt 0
+    foreach ($process in $listed) {
+        $line = $process.Line
         if ($line.Length -gt 200) { $line = $line.Substring(0, 200) }
-        $entry = "pid $id $name (left by the $Label): $line"
+        # A console host beside a kept service may be that service's own console.
+        if ($process.Keep -or ($keeping -and $process.Name -eq "conhost.exe")) {
+            Write-TickLog "keeping pid $($process.Id) $($process.Name) (a machine service the $Label started; never stopped): $line"
+            continue
+        }
+        $entry = "pid $($process.Id) $($process.Name) (left by the $Label): $line"
         [void]$script:leftovers.Add($entry)
         Write-TickLog "stopping $entry"
+        # With a kept service in the job the job is not ended: each leftover is stopped alone.
+        if ($keeping) { try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch { } }
     }
-    [void][PagentOS.Team.TickJob]::TerminateJobObject($Job, 1)
+    if (-not $keeping) { [void][PagentOS.Team.TickJob]::TerminateJobObject($Job, 1) }
 }
 
 function Invoke-ScriptWithoutJob {
@@ -254,6 +278,49 @@ function Add-ReportLeftovers {
     catch { Write-TickLog "the report $report could not be written: $($_.Exception.Message)" }
 }
 
+function Test-StagingAnswers {
+    # Staging's health answers 200 within the bound: the round may start; anything else: it may not.
+    try {
+        $answer = Invoke-WebRequest -UseBasicParsing -Uri $StagingHealthUrl -TimeoutSec 15
+        return ([int]$answer.StatusCode -eq 200)
+    }
+    catch { return $false }
+}
+
+function Send-StagingDownNote {
+    # The board never stops the tick (board.ps1 says UYARI and exits 0); a hang guard of 60 s.
+    param([string]$Text)
+    $board = if ($BoardPath) { $BoardPath } else { Join-Path $PSScriptRoot "board.ps1" }
+    try {
+        $all = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$board`"", "post", "-Seat", "test-lead", "-Task", "test-team", "-Kind", "bilgi", "-Text", "`"$Text`"")
+        # The scheduled task has no PAGENTOS_TEAM_URL: the board is the queue the task names.
+        if ($QueueUrl) { $all += @("-Url", $QueueUrl, "-TokenFile", "`"$QueueToken`"") }
+        $process = Start-Process -FilePath $powershell -ArgumentList $all -NoNewWindow -PassThru
+        if (-not $process.WaitForExit(60000)) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    }
+    catch { Write-TickLog "the board note could not be posted: $($_.Exception.Message)" }
+}
+
+function Add-ReportRisk {
+    # The staging line under its own heading in the cycle's report, when the tick knows its name.
+    param([string]$CycleId, [string]$Text)
+    if (-not $CycleId) { return }
+    $report = Join-Path $ReportsRoot "$CycleId.md"
+    if (-not (Test-Path -LiteralPath $report)) { return }
+    try {
+        $heading = "## Riskler (tick)"
+        # Not $text: PowerShell names are case-blind and that is the parameter.
+        $existing = [System.IO.File]::ReadAllText($report)
+        $lines = @()
+        if (-not $existing.Contains($heading)) { $lines += @("", $heading, "") }
+        $lines += "- $Text"
+        [System.IO.File]::AppendAllText($report, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    catch { Write-TickLog "the report $report could not be written: $($_.Exception.Message)" }
+}
+
+if ($TestTeam -and $NoTestTeam) { throw "-TestTeam and -NoTestTeam together: say one" }
+
 $store = @()
 if ($QueueUrl) {
     if (-not $QueueToken) { throw "-QueueUrl needs -QueueToken (the path of the token file)" }
@@ -283,6 +350,19 @@ if ($Base) {
     if ($Base -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$') { throw "-Base is a branch name" }
     $cycleArguments += @("-Base", $Base)
 }
+$stagingRisk = ""
+if (-not $NoTestTeam) {
+    if (Test-StagingAnswers) { $cycleArguments += "-TestTeam" }
+    else {
+        # "Test ekibi turu baslamadi: staging ... yanit vermedi; dongu test ekibi olmadan calisti" with
+        # its Turkish letters: this file stays ASCII for Windows PowerShell 5.1.
+        $dotless = [string][char]0x0131; $sh = [string][char]0x015F
+        $stagingRisk = "test ekibi turu ba${sh}lamad${dotless}: staging ($StagingHealthUrl) yan${dotless}t vermedi; d" + [char]0x00F6 + "ng" + [char]0x00FC +
+            " test ekibi olmadan " + [char]0x00E7 + "al${dotless}${sh}t${dotless}"
+        Write-TickLog $stagingRisk
+        Send-StagingDownNote -Text ("Test PY: " + $stagingRisk)
+    }
+}
 $cycleArguments += $store
 
 # cycle.ps1 -DailyId names the cycle by the day it starts on; without it the tick cannot know the report.
@@ -290,4 +370,5 @@ $cycleId = if ($DailyId) { "d" + (Get-Date).ToString("yyyyMMdd", [System.Globali
 $cycleExit = Invoke-Script -Path $cycleScript -Arguments $cycleArguments -Label "cycle"
 Write-Host "tick: the cycle ended with exit $cycleExit"
 Add-ReportLeftovers -CycleId $cycleId
+if ($stagingRisk) { Add-ReportRisk -CycleId $cycleId -Text $stagingRisk }
 exit $cycleExit

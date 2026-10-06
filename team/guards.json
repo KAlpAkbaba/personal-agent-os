@@ -42,6 +42,12 @@
       "kind": "pytest",
       "path": "services/api/tests/unit/test_destructive_negation_guard.py",
       "label": "olumsuz emir silen araca gidiyor"
+    },
+    {
+      "id": "migration-revision-literals",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_migration_revision_literals.py",
+      "label": "testte sabit göç numarası"
     }
   ]
 }
