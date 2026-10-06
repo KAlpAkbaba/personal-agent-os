@@ -264,6 +264,9 @@ def test_media_socket_refuses_a_bad_token_with_1008(world: World, case: str) -> 
     sent = {"missing": None, "wrong": "x" * 43}.get(case, token)
     with world.client.websocket_connect(tw.MEDIA_PATH) as ws:
         ws.send_json(start_frame(sent, call_sid=CALL_A))
+        # A 'stop' right behind it: a bridge that wrongly accepted the token ends the call
+        # (normal close, a leg opened) instead of leaving this receive waiting for ever.
+        ws.send_json({"event": "stop", "streamSid": STREAM_SID, "stop": {"callSid": CALL_A}})
         with pytest.raises(WebSocketDisconnect) as closed:
             ws.receive_text()
     assert closed.value.code == 1008
