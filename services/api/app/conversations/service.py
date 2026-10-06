@@ -289,8 +289,9 @@ def _now(now: datetime | None) -> datetime:
     return now or datetime.now(UTC)
 
 
-def _conversation(db: Session, cid: uuid.UUID) -> ConversationRow:
-    row = db.get(ConversationRow, cid)
+def _conversation(db: Session, cid: uuid.UUID, *, lock: bool = False) -> ConversationRow:
+    """The conversation; ``lock`` holds its row (FOR UPDATE) until the transaction ends."""
+    row = db.get(ConversationRow, cid, with_for_update=lock or None, populate_existing=lock)
     if row is None:
         raise ConversationRefused("not_found", "Bu konuşma yok; silinmiş olabilir.")
     return row
@@ -406,7 +407,10 @@ def add_segment(
         "" if text is None else text, code="text_invalid", message="Satır bir yazı olmalı."
     ).strip()
     vector = _vector(embedding)
-    row = _conversation(db, cid)
+    # Two devices write one conversation at once (test team, 2026-10-06: of four, two lines
+    # were lost to uq_conversation_segments_seq). The row lock queues them here, before the
+    # next number is read, so each reads the number the previous writer committed.
+    row = _conversation(db, cid, lock=True)
     if row.ended_at is not None:
         raise ConversationRefused("closed", "Bu konuşma bitti; yeni satır eklenmez.")
     if not content:
