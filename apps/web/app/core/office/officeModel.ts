@@ -69,6 +69,41 @@ export const TASK_STATE_TR: Record<string, string> = {
 };
 
 /** The task's state in Turkish; a state this page does not know is shown as it is. */
+/**
+ * What a stopped task is really waiting for, in the owner's words (the owner, 2026-10-05: "işin
+ * durumu aslında Proje Yöneticisi değil, Çalışan 2'nin bitirmesini beklediği için bunları bu
+ * şekilde güncelleyelim"). A duty return that waits for another task's files names the seat that
+ * holds them; a task with the Danışman says so; anything else is null (the plain state text).
+ */
+/** A seat name in the accusative: "Çalışan 2" -> "Çalışan 2'yi", "Denetleyici" -> "Denetleyici'yi". */
+export function accusative(name: string): string {
+  const digit = /(\d)$/.exec(name);
+  if (digit) {
+    const suffix = ["'ı", "'i", "'yi", "'ü", "'ü", "'i", "'yı", "'yi", "'i", "'u"][Number(digit[1])];
+    return `${name}${suffix}`;
+  }
+  const vowels = name.toLocaleLowerCase("tr").match(/[aeıioöuü]/g);
+  const last = vowels ? vowels[vowels.length - 1] : "e";
+  const harmony = "aı".includes(last) ? "ı" : "ei".includes(last) ? "i" : "ou".includes(last) ? "u" : "ü";
+  return /[aeıioöuü]$/i.test(name) ? `${name}'y${harmony}` : `${name}'${harmony}`;
+}
+
+export function waitText(view: OfficeView, task: OfficeTask | undefined): { short: string; long: string } | null {
+  if (!task || task.state !== "stopped") return null;
+  const reason = task.reason ?? "";
+  const files = /\(alan çakışması: ([^;)]+);[^)]*\)\s*$/.exec(reason);
+  if (files) {
+    const holder = files[1].split(",")[0].trim();
+    const agent = view.agents.find((a) => a.task_id === holder && a.state === "working");
+    const seat = agent ? seatName(agent.seat) : null;
+    const title = view.tasks[holder]?.title ?? holder;
+    if (seat) return { short: `${accusative(seat)} bekliyor`, long: `Sırada: ${seat} "${title}" işini bitirince başlayacak` };
+    return { short: "sırasını bekliyor", long: `Sırada: "${title}" işi bitince başlayacak` };
+  }
+  if (/^\s*Danışman'a iletildi:/.test(reason)) return { short: "Danışman'da", long: "Danışman'a iletildi: karar onda" };
+  return null;
+}
+
 export function taskStateText(state: string): string {
   return Object.hasOwn(TASK_STATE_TR, state) ? TASK_STATE_TR[state] : state;
 }
@@ -208,7 +243,39 @@ export type Panel = {
   shaFull: string | null;
   /** The role's model selector; null for the owner, an unknown seat, or no setting. */
   model: PanelModel | null;
+  /** How far the working run has got (the owner, 2026-10-05); null when the cycle sent none. */
+  progress: PanelProgress | null;
 };
+
+export type PanelProgress = {
+  /** 0..100: the share of the card's files that have a change - not "the work is X% done". */
+  percent: number;
+  label: string;
+  marks: { text: string; done: boolean }[];
+  lastChange: string | null;
+};
+
+/** The run's measured progress in the owner's words; null without a measurement or an area. */
+export function panelProgress(agent: OfficeAgent, now: Date = new Date()): PanelProgress | null {
+  const p = agent.progress;
+  if (agent.state !== "working" || !p || p.area_total <= 0) return null;
+  const percent = Math.min(100, Math.round((100 * p.area_touched) / p.area_total));
+  let lastChange: string | null = null;
+  if (p.last_change_at) {
+    const minutes = Math.max(0, Math.round((now.getTime() - Date.parse(p.last_change_at)) / 60000));
+    lastChange = Number.isNaN(minutes) ? null : minutes < 1 ? "az önce" : `${minutes} dk önce`;
+  }
+  return {
+    percent,
+    label: `Kartın dosyalarının %${percent}'i değişti (${p.area_touched}/${p.area_total})`,
+    marks: [
+      { text: "Testler yazıldı", done: p.tests_changed },
+      { text: "Kod değişti", done: p.area_touched > 0 },
+      { text: "ADR taslağı", done: p.adr_draft },
+    ],
+    lastChange,
+  };
+}
 
 const POSE: Record<SeatState, Pose> = { working: "typing", waiting: "seated", returned: "standing" };
 
@@ -266,6 +333,7 @@ function drawSeat(
   task?: OfficeTask,
   now: Date = new Date(),
   limited = false,
+  waiting: string | null = null,
 ): DrawnSeat {
   const known = seatName(agent.seat);
   const name = known ?? agent.seat;
@@ -285,7 +353,7 @@ function drawSeat(
     pose: POSE[state],
     plain: known === null,
     warning: state === "returned" && (mood === "angry" || mood === "sad"),
-    label: state === "working" ? (agent.task_title ?? agent.task_id) : null,
+    label: state === "working" ? (agent.task_title ?? agent.task_id) : state === "returned" ? waiting : null,
     badge: owner ? String(ownerCount) : null,
     runCount: runs > 0 ? `×${runs}` : null,
     mood,
@@ -323,7 +391,14 @@ export function buildOffice(view: OfficeView, now: Date = new Date()) {
   return {
     topBar,
     seats: view.agents.map((agent) =>
-      drawSeat(agent, view.approvals.length, agent.task_id ? view.tasks[agent.task_id] : undefined, now, limited),
+      drawSeat(
+        agent,
+        view.approvals.length,
+        agent.task_id ? view.tasks[agent.task_id] : undefined,
+        now,
+        limited,
+        waitText(view, agent.task_id ? view.tasks[agent.task_id] : undefined)?.short ?? null,
+      ),
     ),
     approvals: view.approvals.map((a) => ({
       taskId: a.task_id,
@@ -359,7 +434,7 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
     task: task
       ? {
           title: task.title,
-          stateText: taskStateText(task.state),
+          stateText: waitText(view, task)?.long ?? taskStateText(task.state),
           since: agent.since ? clock(agent.since) : null,
           goal: task.goal,
           acceptance: task.acceptance,
@@ -374,6 +449,7 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
     sha: task?.sha ? task.sha.slice(0, SHA_SHORT) : null,
     shaFull: task?.sha ?? null,
     model: panelModel(view, agent),
+    progress: panelProgress(agent),
   };
 }
 

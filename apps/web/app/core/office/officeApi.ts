@@ -73,6 +73,17 @@ export type OfficeAgent = {
   model?: string | null;
   /** Only while a live run of the seat is on another model than configured. */
   running_model?: string;
+  /** How far the first run has got, measured by the cycle from its worktree; an older cycle sends none. */
+  progress?: RunProgress;
+};
+
+export type RunProgress = {
+  area_total: number;
+  area_touched: number;
+  tests_changed: boolean;
+  adr_draft: boolean;
+  commits: number;
+  last_change_at: string | null;
 };
 
 export type OfficeTask = {

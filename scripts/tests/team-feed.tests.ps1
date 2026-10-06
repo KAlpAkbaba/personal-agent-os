@@ -224,15 +224,20 @@ Test-Case "rows: the rows this repository's queue names today are rows of this r
             "How it is built from here (TEAM_PROTOCOL 3a)", "How it is built from here",
             "Records everything and tells him, whenever he asks (order 2c)",
             "Repairs and improves itself (kept controlled)",
-            "Runs the workshop by voice: machines, files, fabrication",
-            "The same JARVIS in the house, the car, the suit, the phone",
-            "browser-use, anywhere (order 2b, ADR-0213)", "Secretary", "The house", "Voice and character")) {
+            "The same JARVIS in the house, the car, the suit, the phone", "Voice and character")) {
         Assert-True -Condition (Test-TeamRoadmapRow -Row $row -Rows $rows) -Because "'$row' is in use in team/queue.json and must stay a row"
+    }
+    # The owner's JARVIS-only roadmap (2026-10-05) removed the workshop, the house, the Secretary
+    # and browser-use rows; finished cards keep the row they were cut from. A card that can still
+    # run (any state but done/released) must name a row the roadmap has today.
+    $queue = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText((Join-Path $repoRoot "team\queue.json"), [System.Text.Encoding]::UTF8))
+    foreach ($task in @($queue.tasks | Where-Object { @("done", "released") -notcontains [string]$_.state })) {
+        Assert-True -Condition (Test-TeamRoadmapRow -Row ([string]$task.roadmap_row) -Rows $rows) -Because "'$($task.id)' ($($task.state)) names '$($task.roadmap_row)', which is not a row of ROADMAP.md"
     }
     Assert-True -Condition (-not (Test-TeamRoadmapRow -Row "Flies the suit" -Rows $rows)) -Because "what the roadmap does not name is not a row"
     Assert-True -Condition (-not (Test-TeamRoadmapRow -Row "Breaks into any system; flies the suit; drives the car" -Rows $rows)) -Because "the row the roadmap marks NEVER is a limit, not work to cut"
     Assert-True -Condition ((Get-TeamRoadmapSection -Text $text -Heading "The limits, stated once") -match "No unauthorised access, ever") -Because "the limits are read for the prompt"
-    Assert-True -Condition ((Get-TeamRoadmapSection -Text $text -Heading "The order") -match "browser-use, anywhere") -Because "the order is read for the prompt"
+    Assert-True -Condition ((Get-TeamRoadmapSection -Text $text -Heading "The order") -match "Research and analysis") -Because "the order is read for the prompt"
 }
 
 Write-Host ""

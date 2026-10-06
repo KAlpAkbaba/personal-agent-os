@@ -65,24 +65,30 @@ def _matrix(rows: list[tuple[str, str]]) -> str:
 # ------------------------------------------------------------------ the real documents
 
 
-def test_the_real_roadmap_jarvis_table_is_12_rows_5_have_5_partial_2_missing_62_percent():
+def test_the_real_roadmap_jarvis_table_is_16_rows_4_have_5_partial_7_missing_41_percent():
+    # 2026-10-05: the owner's five JARVIS rows (calls him, home stock, follows him outside,
+    # verifies what he hears, his conversations) - 12 rows at 62% became 17 at 47%; the same day the
+    # owner cut the workshop, the holograms and the NEVER row (15 rows, 43%), then added his
+    # money: 16 rows, 6.5 of 16 = 41%.
     jarvis = progress.parse_jarvis((REPO / progress.ROADMAP).read_text(encoding="utf-8"))
     assert jarvis is not None
-    assert (jarvis["have"], jarvis["partial"], jarvis["missing"], jarvis["never"]) == (5, 5, 2, 1)
-    assert jarvis["counted"] == 12
+    assert (jarvis["have"], jarvis["partial"], jarvis["missing"], jarvis["never"]) == (4, 5, 7, 0)
+    assert jarvis["counted"] == 16
     assert jarvis["unknown"] == []
-    assert jarvis["percent"] == 62
-    assert len(jarvis["rows"]) == 13
+    assert jarvis["percent"] == 41
+    assert len(jarvis["rows"]) == 16
     assert jarvis["rows"][0]["state"] == "have"
-    assert jarvis["rows"][-1]["state"] == "never"
+    assert all(row["state"] != "never" for row in jarvis["rows"])
 
 
-def test_the_real_order_is_seven_steps_with_memory_done():
+def test_the_real_order_is_six_steps_with_memory_done():
+    # 2026-10-05: the owner cut the order to JARVIS (memory, research, conversations, everywhere,
+    # the house, voice) - the old step 7 "Sight" is gone.
     order = progress.parse_order((REPO / progress.ROADMAP).read_text(encoding="utf-8"))
     assert order is not None
-    assert [s["n"] for s in order["steps"]] == [1, 2, 3, 4, 5, 6, 7]
+    assert [s["n"] for s in order["steps"]] == [1, 2, 3, 4, 5, 6]
     assert order["steps"][0] == {"n": 1, "title": "Memory", "state": "done"}
-    assert order["steps"][1]["title"] == "browser-use, anywhere"
+    assert order["steps"][1]["title"] == "Research and analysis"
     assert order["next"]["n"] == 2
 
 
@@ -104,7 +110,7 @@ def test_the_real_matrix_is_750_rows_711_done_95_percent_and_20_percent_proven_r
 def test_the_whole_answer_reads_the_tree_and_names_the_release():
     answer = progress.progress(REPO, as_of="a" * 40)
     assert answer["as_of"] == "a" * 40
-    assert answer["jarvis"]["percent"] == 62
+    assert answer["jarvis"]["percent"] == 41
     assert answer["v1"]["done"] == 711
     assert "0,5" in answer["rule"]
 
@@ -207,7 +213,7 @@ def owner(tmp_path):
 
 def test_the_office_answer_carries_progress_from_the_tree(owner):
     body = owner.get("/v1/team/office").json()
-    assert body["progress"]["jarvis"]["percent"] == 62
+    assert body["progress"]["jarvis"]["percent"] == 41
     assert body["progress"]["v1"]["total"] == 750
     assert "agents" in body
 

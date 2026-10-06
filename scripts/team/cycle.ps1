@@ -158,6 +158,12 @@ param(
     # The Proje Yöneticisi's duty for stopped tasks (pm-duty-stopped) is on in every cycle;
     # -NoDuty turns it off.
     [switch]$NoDuty,
+    # The TEST team (test-team, the owner of 2026-10-03): one round of
+    # scripts/testteam/test-round.ps1 runs BESIDE the cycle, in its own process and its own
+    # seats ('test_parallel' in team/cycle-settings.json). The software seats do not move.
+    [switch]$TestTeam,
+    # For the tests: the script started as the round (default scripts/testteam/test-round.ps1).
+    [string]$TestRoundScript = "",
     [switch]$DryRun,
     # The Cloud Core's queue (pilot-02): with -QueueUrl the queue, the lock and the report go
     # through /v1/team/queue there, so an approval can be given with this PC off and the other
@@ -405,6 +411,8 @@ $statusTickSeconds = 120
 # A test hook (the heartbeat is otherwise only visible after two minutes): a whole number of seconds.
 if ([string]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS -match '^[1-9]\d{0,3}$') { $statusTickSeconds = [int]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS }
 $liveRuns = New-Object System.Collections.ArrayList
+# A live run's measured progress, kept a minute (task/role -> @{ At; Value }).
+$runProgress = @{}
 $statusWrittenAt = [datetime]::MinValue
 # The pool: the runs in flight (what Start-RoleRun returned). $unwrittenMerges are the merges
 # whose write the store could not take when they were made (Resolve-UnwrittenMerges).
@@ -446,6 +454,29 @@ $limitWaitUntil = $null
 function Add-CycleNote {
     param([string]$List, [string]$Text)
     $script:cycle.$List = @(@($script:cycle.$List) + $Text)
+}
+
+function Start-CycleTestRound {
+    <# The test team's round beside this cycle (-TestTeam): its own process, its own seats - the
+       round measures its cap itself (Get-TeamTestCap: none under the memory floor, one while
+       the gate holds a heavy slot) and says why on the board. The cycle neither waits for it
+       nor gives it a software seat; a round that cannot start is a line under the risks. #>
+    $round = ("t-" + $CycleId).ToLowerInvariant() -replace '[^a-z0-9-]', '-'
+    if ($round.Length -gt 41) { $round = $round.Substring(0, 41).TrimEnd('-') }
+    $script = if ($TestRoundScript) { $TestRoundScript } else { Join-Path $repoRoot "scripts\testteam\test-round.ps1" }
+    $arguments = @("-NoProfile", "-File", "`"$script`"", "-Round", $round, "-TeamRoot", "`"$TeamRoot`"", "-ClaudePath", "`"$ClaudePath`"")
+    if ($useApi) { $arguments += @("-QueueUrl", $QueueUrl, "-QueueToken", "`"$QueueToken`"") }
+    $log = Join-Path $cycleDir "test-round.log"
+    try {
+        $process = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $log -RedirectStandardError (Join-Path $cycleDir "test-round.err.log")
+        Write-Host "test ekibi turu $round yazılım ekibinin yanında başladı (pid $($process.Id)); yazılım koltukları değişmedi"
+        return $process
+    }
+    catch {
+        Add-CycleNote -List "risks" -Text "test ekibi turu başlamadı: $($_.Exception.Message -replace '\s+', ' ')"
+        return $null
+    }
 }
 
 function Get-LimitsDocument {
@@ -493,7 +524,23 @@ function New-CycleStatus {
         started_at    = [string]$script:cycle.started_at
         runs          = @($script:liveRuns | ForEach-Object {
                 $entry = [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at }
-                if (-not $Legacy) { $entry["model"] = $_.model }
+                if (-not $Legacy) {
+                    $entry["model"] = $_.model
+                    # The owner, 2026-10-05: how far the run has got, measured from its worktree.
+                    # StrictMode: a live entry built elsewhere (a test, an older path) may carry no dir/area.
+                    $runDir = [string](Get-TeamProperty -InputObject $_ -Name "dir" -Default "")
+                    $runArea = @(Get-TeamProperty -InputObject $_ -Name "area" -Default @())
+                    if ($runDir -and @($runArea).Count -gt 0) {
+                        # At most once a minute per run: three git calls must never slow the refill.
+                        $key = [string]$_.task + "/" + [string]$_.role
+                        $cached = $script:runProgress[$key]
+                        if ($null -eq $cached -or ([datetime]::UtcNow - $cached.At).TotalSeconds -ge 60) {
+                            $cached = @{ At = [datetime]::UtcNow; Value = (Get-TeamRunProgress -Worktree $runDir -Base $Base -Area $runArea -TaskId ([string]$_.task)) }
+                            $script:runProgress[$key] = $cached
+                        }
+                        if ($null -ne $cached.Value) { $entry["progress"] = $cached.Value }
+                    }
+                }
                 $entry
             })
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
@@ -740,6 +787,7 @@ else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine 
 try {
     Write-CycleStatus
     if (-not (Test-Path -LiteralPath $cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $cycleDir) }
+    if ($TestTeam -and -not $ResearchOnly) { [void](Start-CycleTestRound) }
     $runCount = @{}
 
     function Test-CapReached {
@@ -825,7 +873,9 @@ try {
             $boardEnvironment["PAGENTOS_TEAM_TOKEN_FILE"] = $QueueToken
         }
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory -TempDirectory $runTemp -Environment $boardEnvironment
-        $live = [pscustomobject]@{ task = $taskLabel; role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $seat }
+        # dir/area: what the Ofis panel measures the run's progress from (never sent as such).
+        $liveArea = $(if ($null -ne $Task) { @(Get-TeamProperty -InputObject $Task -Name "area" -Default @()) } else { @() })
+        $live = [pscustomobject]@{ task = $taskLabel; role = $Role; started_at = (Get-TeamTimestamp); model = $runModel; seat = $seat; dir = [string]$WorkingDirectory; area = $liveArea }
         [void]$script:liveRuns.Add($live)
         $loweredFrom = ""
         if ([bool]$Pick.Lowered) {

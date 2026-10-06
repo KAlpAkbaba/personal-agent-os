@@ -78,6 +78,31 @@ export default function OfficePanel({
           <p className="muted">İşin durumu: {panel.task.stateText}</p>
           <h3>{panel.task.title}</h3>
           {panel.task.since && <p className="muted">Başladı: {panel.task.since}</p>}
+          {panel.progress && (
+            <div className="office-progress-run" data-panel="progress">
+              <p>{panel.progress.label}</p>
+              <div
+                className="office-progress-bar"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={panel.progress.percent}
+                aria-label="İşin dosyalarında ilerleme"
+              >
+                <span style={{ width: `${panel.progress.percent}%` }} />
+              </div>
+              <ul className="office-progress-marks">
+                {panel.progress.marks.map((mark) => (
+                  <li key={mark.text} data-done={mark.done}>
+                    {mark.done ? "✓" : "·"} {mark.text}
+                  </li>
+                ))}
+              </ul>
+              {panel.progress.lastChange && (
+                <p className="muted">Son değişiklik: {panel.progress.lastChange}</p>
+              )}
+            </div>
+          )}
           {panel.reason && <p role="status">Neden: {panel.reason}</p>}
           {panel.outcome && <p>Son rapor: {panel.outcome}</p>}
           {/* The card text is written for the agents, in English; the owner read its "-> RED."

@@ -25626,3 +25626,23 @@ ayırt edebilelim."
 
 `apps/web/tests/office/mood.test.tsx` (five new cases; mutations RED: the limit rule removed, the
 wait rule removed). Web only: no API or cycle change.
+
+### ADR-0214 addendum 26 (2026-10-05): the Ofis panel shows how far a working run has got
+
+The owner, 2026-10-05: "tıkladığımda ajanların çalıştıkları kısımda kodun yüzde kaçını yazdığı bir
+kısım ekler misin, böylece ben de detaylıca görmüş olurum" - and "bunu sen yap, hızlıca": built by
+the Danışman, not queued (card `office-run-progress` closed for it).
+
+- **Measured, never self-reported.** At each status write the cycle reads the run's own worktree
+  (`Get-TeamRunProgress`, scripts/lib/TeamRun.ps1): `git diff --name-only <base>...HEAD` plus the
+  working tree's changes, `git rev-list --count`, the newest commit or file write. No model call.
+- **The number is honest.** `Measure-TeamAreaProgress`: how many of the card's area entries have a
+  change (a folder entry counts once). The panel says "Kartın dosyalarının %X'i değişti (n/m)", not
+  "the work is X% done", with three marks (testler yazıldı, kod değişti, ADR taslağı) and "son
+  değişiklik: N dk önce" - which also shows whether the run is alive.
+- **Contract.** The status run accepts an optional bounded `progress` object (counts 0-500, commits
+  0-10000, a stamp); the office passes it to the seat; an older cycle sends none and the panel shows
+  nothing new. Runs without a card area (the lead's duty and split, the researcher) send none.
+- Tests: team-cycle `progress:` (a fake repo: committed, uncommitted, ADR, folder once; mutations RED:
+  a folder counted per file, the working tree ignored), `test_a_run_carries_its_measured_progress_to_its_seat`,
+  `apps/web/tests/office/run-progress.test.tsx`.

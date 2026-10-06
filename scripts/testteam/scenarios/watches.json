@@ -1,0 +1,14 @@
+{
+  "id": "watches",
+  "family": "nobet",
+  "why": "Stage 54 released the watch engine: create, list, the same request twice, many watches at once",
+  "steps": [
+    { "name": "temiz başla", "method": "DELETE", "path": "/v1/watches", "expect_status": 200 },
+    { "name": "nöbet kur", "method": "POST", "path": "/v1/watches", "body": { "url": "https://example.com/", "condition": "changed", "label": "test ekibi nöbeti", "every_hours": 6 }, "expect_status": 201 },
+    { "name": "aynı istek iki kez", "method": "POST", "path": "/v1/watches", "body": { "url": "https://example.com/", "condition": "changed", "label": "test ekibi nöbeti", "every_hours": 6 }, "expect_status": 201 },
+    { "name": "nöbet listesi", "method": "GET", "path": "/v1/watches", "expect_status": 200, "expect_contains": "test ekibi nöbeti" },
+    { "name": "özel adres reddi", "method": "POST", "path": "/v1/watches", "body": { "url": "http://127.0.0.1:28001/", "condition": "changed", "label": "iç adres" }, "expect_status": 422 }
+  ],
+  "breaking": { "method": "POST", "path": "/v1/watches", "body": { "url": "https://example.com/", "condition": "changed", "label": "yük nöbeti", "every_hours": 6 }, "start": 2, "factor": 2, "max": 32, "what": "POST /v1/watches eşzamanlı (çok nöbet birden)" },
+  "cleanup": [ { "name": "nöbetleri sil", "method": "DELETE", "path": "/v1/watches" } ]
+}

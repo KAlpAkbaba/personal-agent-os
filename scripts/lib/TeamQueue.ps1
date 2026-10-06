@@ -57,6 +57,17 @@ $script:TeamMaxAreaEntries = 25
 # A task in these states is, or is about to be, worked on: its area is taken.
 $script:TeamStatesInWork = @("approved", "assigned", "in_progress", "inspecting", "returned")
 
+# The test team (test-team): its cap's defaults and its cards' states. A test card is not a
+# task of the queue: it lives in team/testteam/<round>/cards.json, and a failure it finds is
+# forwarded to the queue as a normal task (scripts/testteam/TestTeam.ps1).
+$script:TeamTestParallelDefault = 4
+$script:TeamTestFloorGbDefault = 8
+$script:TeamTestCardStates = @("planned", "running", "passed", "failed", "broke")
+$script:TeamTestCardMoves = @{
+    planned = @("running"); running = @("passed", "failed", "broke")
+    passed = @("running"); failed = @("running"); broke = @("running")
+}
+
 $script:TeamLockStaleHours = 6
 $script:TeamSummaryMaxLines = 40
 $script:TeamMaxReturns = 2
@@ -445,9 +456,16 @@ function Read-TeamCycleSettings {
         each optional, each a whole number from 1 to 16; another key is not this function's.
         A file that cannot be read, or a value that is not such a number, changes NOTHING - the
         parameters stand, not half of the file - and the problem is returned as a sentence.
+
+        The TEST team's seats are its own (test-team, the owner of 2026-10-03): 'test_parallel'
+        (0 to 16, default 4; 0 is the test team switched off) and 'test_memory_floor_gb' (1 to
+        64, default 8; under it the test team starts nothing - Get-TeamTestCap). The software
+        team's seats never change with them.
     #>
     param([Parameter(Mandatory = $true)][string]$Path, [int]$Workers, [int]$Inspectors, [int]$Integrators)
-    $named = [ordered]@{ max_parallel = $Workers; max_inspectors = $Inspectors; max_integrators = $Integrators }
+    $defaults = { [ordered]@{ max_parallel = $Workers; max_inspectors = $Inspectors; max_integrators = $Integrators; test_parallel = $script:TeamTestParallelDefault; test_memory_floor_gb = $script:TeamTestFloorGbDefault } }
+    $bounds = @{ max_parallel = @(1, 16); max_inspectors = @(1, 16); max_integrators = @(1, 16); test_parallel = @(0, 16); test_memory_floor_gb = @(1, 64) }
+    $named = & $defaults
     $problems = New-Object System.Collections.ArrayList
     if (Test-Path -LiteralPath $Path) {
         $document = $null
@@ -459,16 +477,64 @@ function Read-TeamCycleSettings {
             foreach ($name in @($named.Keys)) {
                 if ($null -eq $document.PSObject.Properties[$name]) { continue }
                 $value = $document.$name
-                if (($value -is [int] -or $value -is [long]) -and $value -ge 1 -and $value -le 16) { $named[$name] = [int]$value }
-                else { [void]$problems.Add("team/cycle-settings.json: '$name' 1 ile 16 arasında bir tam sayı olmalı ('$value' değil)") }
+                $low = [int]$bounds[$name][0]; $high = [int]$bounds[$name][1]
+                if (($value -is [int] -or $value -is [long]) -and $value -ge $low -and $value -le $high) { $named[$name] = [int]$value }
+                else { [void]$problems.Add("team/cycle-settings.json: '$name' $low ile $high arasında bir tam sayı olmalı ('$value' değil)") }
             }
         }
     }
-    if (@($problems).Count -gt 0) { $named = [ordered]@{ max_parallel = $Workers; max_inspectors = $Inspectors; max_integrators = $Integrators } }
+    if (@($problems).Count -gt 0) { $named = & $defaults }
     return [pscustomobject]@{
         Workers = [int]$named["max_parallel"]; Inspectors = [int]$named["max_inspectors"]; Integrators = [int]$named["max_integrators"]
+        Testers = [int]$named["test_parallel"]; TestFloorGb = [int]$named["test_memory_floor_gb"]
         Problems = @($problems.ToArray())
     }
+}
+
+# ------------------------------------------------------------------------ the test team
+
+function Get-TeamTestCardStates { return @($script:TeamTestCardStates) }
+
+function Test-TeamTestCardMove {
+    <# A test card's moves: planned -> running -> passed | failed | broke; a finished card only
+       back to running (a re-test after a fix, or the next round). #>
+    param([string]$From, [string]$To)
+    if (-not $script:TeamTestCardMoves.ContainsKey($From)) { return $false }
+    return (@($script:TeamTestCardMoves[$From]) -contains $To)
+}
+
+function Test-TeamGateHoldsHeavy {
+    <# Whether the quality gate holds a heavy test slot now (scripts/lib/TeamTestSlots.ps1 entries:
+       role 'gate', state granted or running, kinds with 'heavy'). A waiting gate holds nothing. #>
+    param([AllowEmptyCollection()][object[]]$Entries = @())
+    foreach ($entry in @($Entries)) {
+        if ($null -eq $entry) { continue }
+        if ([string](Get-TeamProperty -InputObject $entry -Name "role" -Default "") -ne "gate") { continue }
+        if (@("granted", "running") -notcontains [string](Get-TeamProperty -InputObject $entry -Name "state" -Default "")) { continue }
+        if (@(Get-TeamProperty -InputObject $entry -Name "kinds" -Default @()) -contains "heavy") { return $true }
+    }
+    return $false
+}
+
+function Get-TeamTestCap {
+    <#
+    .SYNOPSIS
+        How many testers may run NOW: the configured 'test_parallel', lowered to none under the
+        memory floor and to one while the gate holds a heavy slot. The reasons are Turkish
+        sentences for the report and the Ofis; no reason when nothing was lowered.
+    #>
+    param([int]$Configured, [int64]$FreeBytes, [int]$FloorGb, [bool]$GateRunning)
+    $cap = [Math]::Max(0, $Configured)
+    $reasons = New-Object System.Collections.ArrayList
+    if ($cap -gt 0 -and $FreeBytes -lt ([int64]$FloorGb * 1GB)) {
+        $cap = 0
+        [void]$reasons.Add(("bellek tabanın altında ({0:0.0} GB boş, taban {1} GB): test ekibi yeni iş başlatmıyor" -f ($FreeBytes / 1GB), $FloorGb))
+    }
+    if ($cap -gt 1 -and $GateRunning) {
+        $cap = 1
+        [void]$reasons.Add("kapı ağır test yuvasını tutuyor: test ekibi bir test çalışanına indi")
+    }
+    return [pscustomobject]@{ Cap = [int]$cap; Configured = $Configured; Reasons = @($reasons.ToArray()) }
 }
 
 function Read-TeamRunTempRoot {

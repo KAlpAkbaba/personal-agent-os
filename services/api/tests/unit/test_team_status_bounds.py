@@ -57,7 +57,22 @@ def _full(**extra: Any) -> dict[str, Any]:
         "machine": "MAIL",
         "pid": 7,
         "started_at": STAMP,
-        "runs": [{"task": "a-task", "role": "worker", "started_at": STAMP, "model": OPUS}],
+        "runs": [
+            {
+                "task": "a-task",
+                "role": "worker",
+                "started_at": STAMP,
+                "model": OPUS,
+                "progress": {
+                    "area_total": 4,
+                    "area_touched": 2,
+                    "tests_changed": True,
+                    "adr_draft": False,
+                    "commits": 1,
+                    "last_change_at": STAMP,
+                },
+            }
+        ],
         "estimated_usd": 1.5,
         "usage_limit": {"state": "waiting", "resets_at": STAMP},
         "limits": {
@@ -207,8 +222,9 @@ STAMP_PATHS = _stamp_paths(routes.StatusRequest, _full())
 def test_every_timestamp_field_of_the_request_model_is_in_the_sample():
     named = _stamp_fields(routes.StatusRequest)
     assert {owner for owner, _ in STAMP_PATHS} == named
-    # started_at twice (the cycle's, a run's), updated_at, three resets_at, a lowered's at
-    assert len(named) >= 5 and len(STAMP_PATHS) == 7, STAMP_PATHS
+    # started_at twice (the cycle's, a run's), updated_at, three resets_at, a lowered's at, and
+    # a run's progress last_change_at (2026-10-05)
+    assert len(named) >= 6 and len(STAMP_PATHS) == 8, STAMP_PATHS
 
 
 def test_the_bound_is_the_width_of_the_column_that_keeps_updated_at():

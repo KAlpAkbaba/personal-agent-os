@@ -426,6 +426,39 @@ function Get-DutyProblems {
     return @(Test-TeamDuty -Decisions @($document.decisions) -Listed $Listed -Queue (New-Queue -Tasks $Tasks))
 }
 
+Test-Case "progress: a run's progress is measured from its worktree - a folder entry counts once, the working tree's changes count, an ADR draft is seen" {
+    # The owner, 2026-10-05: "tikladigimda ajanlarin calistiklari kisimda kodun yuzde kacini yazdigi".
+    $m = Measure-TeamAreaProgress -Area @("services/api/app/x.py", "apps/web/app/y/", "docs/z.md", "scripts\tests\a.tests.ps1") -Changed @("services/api/app/x.py", "apps/web/app/y/one.tsx", "apps/web/app/y/two.tsx", "other/file.py")
+    Assert-Equal -Expected "4|2|False" -Actual ("{0}|{1}|{2}" -f $m.AreaTotal, $m.AreaTouched, $m.TestsChanged) -Because "two of four: a file and a folder (once, for two files inside it); no test changed"
+    $t = Measure-TeamAreaProgress -Area @("scripts/tests/a.tests.ps1") -Changed @("scripts\tests\a.tests.ps1")
+    Assert-Equal -Expected "1|1|True" -Actual ("{0}|{1}|{2}" -f $t.AreaTotal, $t.AreaTouched, $t.TestsChanged) -Because "backslashes and a test file"
+    $none = Measure-TeamAreaProgress -Area @("a.py") -Changed @()
+    Assert-Equal -Expected 0 -Actual $none.AreaTouched -Because "nothing changed"
+
+    $repo = Join-Path ([System.IO.Path]::GetTempPath()) ("progress-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    try {
+        [void](New-Item -ItemType Directory -Force -Path $repo)
+        foreach ($a in @(@("init", "-q", "-b", "main"), @("config", "user.email", "t@example.com"), @("config", "user.name", "t"))) { [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments $a) }
+        [System.IO.File]::WriteAllText((Join-Path $repo "base.txt"), "x")
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("add", "."))
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("commit", "-q", "-m", "base"))
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("checkout", "-q", "-b", "work"))
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $repo "src"))
+        [System.IO.File]::WriteAllText((Join-Path $repo "src\one.py"), "1")
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("add", "."))
+        [void](Invoke-TeamGit -WorkingDirectory $repo -Arguments @("commit", "-q", "-m", "one"))
+        [System.IO.File]::WriteAllText((Join-Path $repo "src\two.py"), "2")   # not committed: still counts
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $repo "team\plans"))
+        [System.IO.File]::WriteAllText((Join-Path $repo "team\plans\t-one-adr.md"), "# adr")
+        $p = Get-TeamRunProgress -Worktree $repo -Base "main" -Area @("src/one.py", "src/two.py", "src/three.py", "team/plans/t-one-adr.md") -TaskId "t-one"
+        Assert-True -Condition ($null -ne $p) -Because "a readable worktree has a progress"
+        Assert-Equal -Expected "4|3|1|True|False" -Actual ("{0}|{1}|{2}|{3}|{4}" -f $p.area_total, $p.area_touched, $p.commits, $p.adr_draft, $p.tests_changed) -Because "one committed, one uncommitted, the ADR; three of four"
+        Assert-True -Condition ([string]$p.last_change_at -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$') -Because "a stamp: $($p.last_change_at)"
+        Assert-True -Condition ($null -eq (Get-TeamRunProgress -Worktree (Join-Path $repo "nope") -Base "main" -Area @("a"))) -Because "no worktree: no progress, no throw"
+    }
+    finally { Remove-Item -LiteralPath $repo -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Test-Case "duty: the stopped tasks are handed once per stop; an escalated one, one set aside and a task in any other state are not" {
     $ids = { param($tasks, $handed, $skip) (@(Get-TeamDutyCandidates -Queue (New-Queue -Tasks $tasks) -Handed $handed -Skip $skip | ForEach-Object { $_.id }) -join ",") }
     $tasks = @((New-Stopped), (New-Stopped -Id "stuck-two" -Reason "Danışman'a iletildi: güvenlik kararı" -Area @("src/b")),
@@ -1496,6 +1529,31 @@ try {
         $merged = Invoke-SandboxGit -Root $root -Arguments @("log", "--format=%s", "main..integrate/c1")
         Assert-True -Condition ($merged -match "merge: team/c1/worker-task-one into integrate/c1") -Because $merged
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "src\area\task-one.txt"))) -Because "the work is on its branch, not in the main checkout"
+    }
+
+    Test-Case "with -TestTeam the test team's round runs beside the cycle in its own process; the software team's workers keep working" {
+        # test-team (the owner, 2026-10-03): two teams, separate. The round is a stand-in that
+        # writes what it was started with; the software tasks run on their own seats as ever.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-two"))
+        $marker = Join-Path $root "round.marker"
+        $fakeRound = Join-Path $root "fake-round.ps1"
+        [System.IO.File]::WriteAllText($fakeRound, "[System.IO.File]::WriteAllText('$marker', (`$args -join ' '))", (New-Object System.Text.UTF8Encoding($false)))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -ExtraArguments "-TestTeam -TestRoundScript '$fakeRound'"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        for ($i = 0; $i -lt 50 -and -not (Test-Path -LiteralPath $marker); $i++) { Start-Sleep -Milliseconds 200 }
+        Assert-True -Condition (Test-Path -LiteralPath $marker) -Because "the round was started: $($run.StdOut)"
+        $started = [System.IO.File]::ReadAllText($marker)
+        Assert-True -Condition ($started -match '-Round t-c1\b') -Because "its own round, named after the cycle: $started"
+        Assert-True -Condition ($started -match [regex]::Escape((Join-Path $root "team"))) -Because "the same team root: $started"
+        Assert-Equal -Expected "merged,merged" -Actual ((@(Get-TeamTasks -Queue $run.Queue) | ForEach-Object { $_.state }) -join ",") -Because "both software tasks were worked on: $($run.StdOut)"
+        Assert-Equal -Expected 4 -Actual @($run.Calls).Count -Because "a worker and an inspector each, no software seat for the test team"
+        Assert-True -Condition ($run.StdOut -match "test ekibi turu t-c1") -Because "the cycle says it: $($run.StdOut)"
+
+        Remove-Item -LiteralPath $marker -Force
+        $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $plain -Scenario "approve" -ExtraArguments "-TestRoundScript '$fakeRound'"
+        Start-Sleep -Milliseconds 800
+        Assert-True -Condition (-not (Test-Path -LiteralPath $marker)) -Because "without -TestTeam no round starts"
     }
 
     Test-Case "the report is the protocol's, in Turkish, and the queue holds forty lines of each run" {
