@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.household import parse
@@ -178,8 +179,17 @@ def _get_or_create(db: Session, name: str, now: datetime) -> HouseholdItem:
         created_at=now,
         updated_at=now,
     )
-    db.add(row)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except IntegrityError:
+        # Another device said the same new item between the read and this insert and its row
+        # holds the key: only the savepoint is undone, and this request lands on that row.
+        existing = db.scalars(select(HouseholdItem).where(HouseholdItem.key == key)).first()
+        if existing is None:
+            raise
+        return existing
     return row
 
 
