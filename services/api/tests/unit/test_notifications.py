@@ -389,8 +389,9 @@ def test_the_inbox_is_the_last_rung_and_the_floor() -> None:
 
 def test_the_ladder_order_is_soonest_first() -> None:
     """Each rung reaches the owner sooner than the one after it; push before inbox because
-    a phone buzzing beats a list they have to open."""
-    assert LADDER == (CHANNEL_TOAST, "sound", CHANNEL_PUSH, CHANNEL_INBOX)
+    a phone buzzing beats a list they have to open. urgent-alert-wire: the alarm (the phone
+    ringing through silent mode, important rows only) right after the desk."""
+    assert LADDER == (CHANNEL_TOAST, "alarm", "sound", CHANNEL_PUSH, CHANNEL_INBOX)
 
 
 def test_delivering_twice_does_not_happen(db) -> None:

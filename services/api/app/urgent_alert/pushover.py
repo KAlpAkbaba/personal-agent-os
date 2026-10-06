@@ -56,6 +56,11 @@ def _install_mask() -> None:
             target.addFilter(_MASK)
 
 
+# At import, beside the Twilio SID filter (app.telephony.twilio): installed before any
+# provider exists, so no request can be logged ahead of it.
+_install_mask()
+
+
 def _reveal(value: Any) -> str:
     """Accepts a plain string or a pydantic ``SecretStr`` (what settings will hand over)."""
     getter = getattr(value, "get_secret_value", None)

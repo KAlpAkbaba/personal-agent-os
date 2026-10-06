@@ -1,6 +1,6 @@
 """B11 req 389: reaching the owner, in order, until one way works.
 
-    toast  ->  sound  ->  push  ->  inbox
+    toast  ->  alarm  ->  sound  ->  push  ->  inbox
 
 Each rung is a way to reach the owner sooner than the one after it. The inbox is the floor:
 the notification is already there, so the ladder cannot fail - it can only end with the owner
@@ -23,10 +23,24 @@ without a second round trip nothing here implements; "a queue is not a delivery"
 applies to what ``delivered_via='push'`` can mean, not to whether the ladder may stop
 trying — it may, the same way ``sound`` will once it exists, because inbox is always
 the floor underneath either way.
+
+**Alarm (urgent-alert-wire).** ``app.urgent_alert.AlarmRung`` rings the owner's phone through
+silent mode and Do Not Disturb (Pushover priority=2) - for IMPORTANT rows only
+(``app.telephony.policy``), after the desk and before everything that only buzzes. Its
+``True`` means Pushover accepted the alarm AND its receipt was kept - still not "he saw it";
+that is ``alert.seen``, from the receipt loop (``app.urgent_alert.loop``).
+
+**The night trap.** ``ToastRung``'s ``True`` is "Windows showed it", also to an empty room:
+the home PC is on at 03:00 and an important row ended at the toast while the phone never
+rang. So when the alarm rung would ring for a row, a shown toast ends the ladder only if the
+owner is known to be at a desk (input idle < 2 min, ``app.urgent_alert.presence``); otherwise
+the toast stays shown, is recorded as attempted, and the ladder steps down to ``alarm``.
+Not known is not present: a loud phone beats a silent miss.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -36,6 +50,7 @@ from app.logging import get_logger
 from app.notifications import service as notifications
 from app.notifications import toast as toast_contract
 from app.notifications.models import (
+    CHANNEL_ALARM,
     CHANNEL_INBOX,
     CHANNEL_PUSH,
     CHANNEL_SOUND,
@@ -72,8 +87,18 @@ class ToastRung:
     #: that has stopped answering does not hold the rest of the ladder behind it.
     TIMEOUT_S = 15.0
 
-    def __init__(self, *, device_action: Any) -> None:
+    def __init__(
+        self,
+        *,
+        device_action: Any,
+        must_reach_owner: Callable[[NotificationRow], bool] | None = None,
+        owner_present: Callable[[], bool] | None = None,
+    ) -> None:
         self._device_action = device_action
+        # The night trap (module docstring): rows for which a shown toast is not enough
+        # unless the owner is known to be at a desk. None = every shown toast ends the ladder.
+        self._must_reach_owner = must_reach_owner
+        self._owner_present = owner_present
 
     def available(self) -> bool:
         """Whether this deployment HAS the channel, not whether a device is online now.
@@ -133,6 +158,11 @@ class ToastRung:
                 surface=toast_contract.surface(result) or "unknown",
                 actions_rendered=(result or {}).get("actions_rendered"),
             )
+            if self._must_reach_owner is not None and self._must_reach_owner(row):
+                present = self._owner_present is not None and self._owner_present()
+                if not present:
+                    logger.info("toast_shown_owner_not_known_present", notification_id=str(row.id))
+                    return False
         return shown
 
 
@@ -288,7 +318,13 @@ def sweep(
     return delivered
 
 
-def default_rungs(*, device_action: Any = None, push_rung: Rung | None = None) -> dict[str, Rung]:
+def default_rungs(
+    *,
+    device_action: Any = None,
+    push_rung: Rung | None = None,
+    alarm_rung: Any = None,
+    owner_present: Callable[[], bool] | None = None,
+) -> dict[str, Rung]:
     """What this deployment can do. Sound is not wired yet and is absent rather than
     present-and-failing: a rung that is always going to say no is noise in the ladder,
     and `available()` returning False is how the ladder skips it in one step.
@@ -297,10 +333,29 @@ def default_rungs(*, device_action: Any = None, push_rung: Rung | None = None) -
     here, because building one needs the VAPID private key loaded from settings and a
     provider instance - construction concerns this function has never had for
     ``device_action`` either (``BrokerDeviceAction`` is also built by the caller).
+
+    ``alarm_rung`` (``app.urgent_alert.wiring.build_alarm_rung``) the same way; ``None`` when
+    the Pushover keys are not set, and then the ladder is exactly what it was - including
+    the toast, which ends the ladder for every row. With it, the toast applies the night
+    trap for the rows the alarm would ring for, asking ``owner_present`` (default: the
+    companions' idle time, ``app.urgent_alert.presence.owner_present``).
     """
     rungs: dict[str, Rung] = {}
     if device_action is not None:
-        rungs[CHANNEL_TOAST] = ToastRung(device_action=device_action)
+        if alarm_rung is not None:
+            if owner_present is None:
+                from app.urgent_alert.presence import owner_present as companion_presence
+
+                owner_present = companion_presence
+            rungs[CHANNEL_TOAST] = ToastRung(
+                device_action=device_action,
+                must_reach_owner=alarm_rung.rings_for,
+                owner_present=owner_present,
+            )
+        else:
+            rungs[CHANNEL_TOAST] = ToastRung(device_action=device_action)
+    if alarm_rung is not None:
+        rungs[CHANNEL_ALARM] = alarm_rung
     if push_rung is not None:
         rungs[CHANNEL_PUSH] = push_rung
     rungs[CHANNEL_INBOX] = InboxRung()
@@ -308,6 +363,7 @@ def default_rungs(*, device_action: Any = None, push_rung: Rung | None = None) -
 
 
 __all__ = [
+    "CHANNEL_ALARM",
     "CHANNEL_INBOX",
     "CHANNEL_PUSH",
     "CHANNEL_SOUND",

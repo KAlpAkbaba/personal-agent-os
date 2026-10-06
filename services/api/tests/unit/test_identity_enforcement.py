@@ -130,6 +130,10 @@ PROTECTED_ENDPOINTS = [
     ("calendar-proposals-pending", "get", "/v1/calendar/proposals/pending"),
     ("calendar-proposals-confirm", "post", f"/v1/calendar/proposals/{PROPOSAL_ID}/confirm"),
     ("calendar-proposals-discard", "post", f"/v1/calendar/proposals/{PROPOSAL_ID}/discard"),
+    # urgent-alert-wire: the test rings the owner's phone; the status says whether it is
+    # connected. The owner's session is enough (no step-up), but never no session.
+    ("urgent-alert-test", "post", "/v1/urgent-alert/test"),
+    ("urgent-alert-status", "get", "/v1/urgent-alert/status"),
     ("identity", "get", "/v1/identity/sessions"),
 ]
 

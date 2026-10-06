@@ -171,6 +171,9 @@ export default function CoreControls({
       <Link href="/core/misheard" className="core-controls-link" data-control="misheard">
         Ne demek istemiştin? →
       </Link>
+      <Link href="/core/urgent-alert" className="core-controls-link" data-control="urgent-alert">
+        Önemli olunca telefon →
+      </Link>
     </div>
   );
 }

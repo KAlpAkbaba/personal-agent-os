@@ -62,7 +62,14 @@ def refusal(category: str) -> str | None:
     return None
 
 
-def link_refusal(link: str) -> str | None:
+def _origin(parts) -> tuple[str, str]:  # noqa: ANN001 - a urllib SplitResult
+    return parts.scheme.lower(), parts.netloc.lower()
+
+
+def link_refusal(link: str, *, root: str | None = None) -> str | None:
+    """Why ``link`` may not ride with an alarm, or ``None``. With ``root`` (the configured
+    ``urgent_alert_link_base``) the scheme and host:port must be that root's EXACTLY: any
+    ``*.ts.net`` is somebody's tailnet, only this one is the owner's."""
     if len(link) > MAX_URL:
         return "link_too_long"
     # urlsplit silently drops tabs and newlines; the raw string is what Pushover receives.
@@ -81,12 +88,16 @@ def link_refusal(link: str) -> str | None:
         return "link_not_tailnet"
     if not _PATH.fullmatch(parts.path):
         return "link_path_not_allowed"
+    if root is not None:
+        base = urlsplit(root)
+        if base.path not in ("", "/") or _origin(parts) != _origin(base):
+            return "link_not_configured_root"
     return None
 
 
-def compose(category: str, link: str) -> tuple[str, str, str]:
+def compose(category: str, link: str, *, root: str | None = None) -> tuple[str, str, str]:
     """``(title, body, url)`` for an alarm, or :class:`TextRefused`."""
-    reason = refusal(category) or link_refusal(link)
+    reason = refusal(category) or link_refusal(link, root=root)
     if reason:
         raise TextRefused(reason)
     return TITLE, category, link
