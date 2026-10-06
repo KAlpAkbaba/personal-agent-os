@@ -1,4 +1,4 @@
-# ADR (unnumbered) - Mail and calendar accounts connected from the web: Gmail + Microsoft 365 over OAuth 2.0 + PKCE, several named accounts
+# ADR-0298 - Mail and calendar accounts connected from the web: Gmail + Microsoft 365 over OAuth 2.0 + PKCE, several named accounts
 
 Card: mail-accounts-connect (cycle d20261005). The owner, 2026-10-05: "e-posta bağlamayı
 arayüzden ver, Gmail ve M365 bağlayayım, 3 hesap, isimlendirmek istiyorum".
@@ -57,8 +57,22 @@ three accounts, each with a name he chooses, connected from the page.
 9. **No OAuth client configured = no change**: the env account is used exactly as before.
    With a client configured, a still-configured env account rides along as "IMAP"/"Takvim";
    both names are reserved (an owner account cannot take them, in either case folding).
-10. **Migration `0068_mail_accounts`** (expand-only, reversible; down drops the account rows
-    of the `mail_index` cache before restoring the old unique index).
+10. **Migration `0068_mail_accounts`** (reversible; one contract-phase step, below; down drops
+    the account rows of the `mail_index` cache before restoring the old unique index).
+
+## Contract phase
+
+`0068` declares `contract-phase: ADR-0298`: its `upgrade()` drops the old unique index
+`ix_mail_index_provider_message_id`, because one Message-ID must be able to sit in two of the
+owner's accounts and that index forbids it. This is compatible with the old colour still
+serving during the blue-green drain: the old code looks a `mail_index` row up by
+`provider_message_id` with `.first()` / `.scalar()`, so a duplicate row never breaks its read
+(the inspector checked it on Postgres, 3rd return), and its inserts get `account_key = ''`
+from the server default. The old colour's single-column lookup keeps an index: the new
+composite unique index starts with `account_key`, so `upgrade()` re-creates
+`ix_mail_index_provider_message_id` NON-unique (the downgrade drops it and restores the unique
+one). If 0298 is taken at merge time, the Proje Yöneticisi renumbers it together with the
+`down_revision` re-point.
 
 ## For the owner (READY_FOR_OWNER)
 

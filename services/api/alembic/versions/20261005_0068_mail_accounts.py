@@ -22,12 +22,20 @@ account the draft goes from. The key is ``mail_accounts.id`` as text, never the 
 name - a rename must not make old mail new or strand a draft (inspector, 3rd return); so a
 rename moves no row, and the env account keeps ``''`` when an OAuth client is switched on.
 
-**Expand-only for a blue-green release.** The old colour never reads the new tables; it
-writes ``mail_index`` rows without the new column (the server default fills ``''``) and its
-upsert looks a row up by Message-ID alone, which still finds the env account's row. The
-downgrade drops the tables and columns; ``mail_index`` is a cache rebuilt by the next poll,
-so its account rows are deleted first (the old unique index on Message-ID alone could not
-hold one message twice).
+contract-phase: ADR-0298
+The old unique index on Message-ID alone has to be dropped so one message may sit in two
+accounts; the old colour still reads correctly, because it looks a ``mail_index`` row up by
+``provider_message_id`` with ``.first()`` / ``.scalar()`` and so tolerates a duplicate row
+(verified on Postgres by the inspector, 3rd return). Its single-column lookup keeps an index:
+``ix_mail_index_provider_message_id`` is re-created NON-unique, since the new composite index
+starts with ``account_key`` and cannot serve a search on Message-ID alone.
+
+**Otherwise expand-only for a blue-green release.** The old colour never reads the new
+tables; it writes ``mail_index`` rows without the new column (the server default fills
+``''``) and its upsert looks a row up by Message-ID alone, which still finds the env
+account's row. The downgrade drops the tables and columns; ``mail_index`` is a cache rebuilt
+by the next poll, so its account rows are deleted first (the old unique index on Message-ID
+alone could not hold one message twice).
 
 ORM models: app/accounts/models.py::MailAccountRow, MailAccountPendingRow;
 app/mail/models.py::MailIndexRow.account_key, MailDraftRow.account_key.
@@ -91,12 +99,16 @@ def upgrade() -> None:
         ["account_key", "provider_message_id"],
         unique=True,
     )
+    op.create_index(
+        "ix_mail_index_provider_message_id", "mail_index", ["provider_message_id"], unique=False
+    )
     op.add_column("mail_drafts", sa.Column("account_key", sa.String(length=64), nullable=True))
 
 
 def downgrade() -> None:
     op.drop_column("mail_drafts", "account_key")
     op.execute("DELETE FROM mail_index WHERE account_key <> ''")
+    op.drop_index("ix_mail_index_provider_message_id", table_name="mail_index")
     op.drop_index("ix_mail_index_account_message_id", table_name="mail_index")
     op.create_index(
         "ix_mail_index_provider_message_id", "mail_index", ["provider_message_id"], unique=True
