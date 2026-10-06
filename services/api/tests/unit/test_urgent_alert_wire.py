@@ -637,5 +637,26 @@ def test_the_alarm_rung_is_in_the_ladder_of_the_real_app() -> None:
     assert isinstance(loop, UrgentAlertLoop)
     assert loop.configured is True
     assert isinstance(app.state.urgent_alert_alarm_rung, AlarmRung)
-    paths = {getattr(r, "path", "") for r in app.routes}
-    assert {"/v1/urgent-alert/test", "/v1/urgent-alert/status"} <= paths
+
+    def _walk(routes):  # included routers nest (test_identity_enforcement._walk)
+        for route in routes:
+            inner = getattr(getattr(route, "original_router", None), "routes", None)
+            inner = inner if inner is not None else getattr(route, "routes", None)
+            if inner is not None:
+                yield from _walk(inner)
+            else:
+                yield getattr(route, "path", "")
+
+    assert {"/v1/urgent-alert/test", "/v1/urgent-alert/status"} <= set(_walk(app.routes))
+
+
+def test_the_real_ladder_sweep_hands_the_alarm_rung_on(monkeypatch) -> None:
+    """The retention sweeper's 'notification_ladder' pass is what delivers a row: the rung
+    built in main.py must reach default_rungs there, not only sit on app.state."""
+    from app.main import create_app
+
+    app = create_app(_settings())
+    seen: list[dict] = []
+    monkeypatch.setattr(ladder, "sweep", lambda db, *, rungs, **_: seen.append(rungs) or {})
+    app.state.retention_sweeper._sweeps["notification_ladder"]()
+    assert seen and seen[0].get("alarm") is app.state.urgent_alert_alarm_rung
