@@ -343,6 +343,104 @@ Test-Case "a list the runner refuses: said in Turkish from the runner's own file
     Assert-Equal -Expected 1 -Actual @($run.GateCalls).Count -Because "the gate ran"
 }
 
+Write-Host ""
+Write-Host "a guard under services/api/tests/integration/ runs on a database of its own (card guards-integration-tests-own-db)"
+
+# 2026-10-07: the task's own Postgres test ran on the SHARED dev database (a revision no released
+# tree knows), all three tests errored at the fixture, and the guard said the task was red. A guard
+# that ran green would have migrated the shared database to the integration branch's head instead.
+
+$docker = [string](@((Get-Command "docker" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { $_.Source }),
+        "C:\Program Files\Docker\Docker\resources\bin\docker.exe") | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1)
+$py = Get-TeamGuardDefaultPython -Worktree $repoRoot
+$sharedUrl = "postgresql+psycopg://pagentos:secret@127.0.0.1:15432/pagentos"
+
+function Invoke-DevPsql {
+    <# One answer from the dev server's psql (database -Database), through the dev container. #>
+    param([string]$Database, [string]$Sql)
+    $r = Invoke-NativeProcess -FilePath $docker -Arguments @("exec", "pagentos-postgres", "psql", "-U", "pagentos", "-d", $Database, "-tAc", $Sql) -TimeoutSeconds 60
+    if (-not $r.Success) { throw "psql: $($r.StdErr)" }
+    return @(([string]$r.StdOut -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+function Get-GuardDatabases { return @(Invoke-DevPsql -Database "postgres" -Sql "SELECT datname FROM pg_database WHERE datname LIKE 'pagentos\_g\_%' ORDER BY datname") }
+
+function New-DatabaseGuardSandbox {
+    <# A git repository holding services/api/tests/integration/test_guard_db_<mode>.py for each mode: pass, fail, hang. #>
+    $root = Join-Path $env:TEMP ("pagentos-gdb-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+    [void]$sandboxes.Add($root)
+    $folder = Join-Path $root "services\api\tests\integration"
+    [void](New-Item -ItemType Directory -Force -Path $folder)
+    $body = @{ pass = "pass"; fail = "raise AssertionError('red on purpose')"; hang = "time.sleep(300)" }
+    foreach ($mode in @("pass", "fail", "hang")) {
+        $text = "import os`nimport time`n`nimport psycopg`n`n`ndef test_own_database():`n" +
+        "    url = os.environ[`"PAGENTOS_DATABASE_URL`"].replace(`"postgresql+psycopg://`", `"postgresql://`", 1)`n" +
+        "    with psycopg.connect(url, connect_timeout=10) as conn:`n" +
+        "        name = conn.execute(`"select current_database()`").fetchone()[0]`n" +
+        "        assert name.startswith(`"pagentos_g_`"), name`n" +
+        "        conn.execute(`"create table guard_probe (id int)`")`n" +
+        "        $($body[$mode])`n"
+        [System.IO.File]::WriteAllText((Join-Path $folder "test_guard_db_$mode.py"), $text, $utf8)
+    }
+    [void](Invoke-SandboxGit -Root $root -Arguments @("init", "-q", "-b", "main"))
+    [void](Invoke-SandboxGit -Root $root -Arguments @("config", "user.name", "team test"))
+    [void](Invoke-SandboxGit -Root $root -Arguments @("config", "user.email", "team@example.invalid"))
+    [void](Invoke-SandboxGit -Root $root -Arguments @("add", "-A"))
+    [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "the sandbox"))
+    return $root
+}
+
+function New-DatabaseGuard { param([string]$Mode) return [pscustomobject]@{ id = "task-db-$Mode"; kind = "pytest"; path = "services/api/tests/integration/test_guard_db_$Mode.py"; label = "işin kendi testi kırmızı (test_guard_db_$Mode.py)" } }
+
+Test-Case "the command of an integration guard names a pagentos_g_ database of its own; a unit guard's names none" {
+    $integration = New-DatabaseGuard -Mode "pass"
+    $command = Get-TeamGuardCommand -Guard $integration -Worktree "E:\tree" -Python "E:\py\python.exe" -DatabaseUrl $sharedUrl
+    $environment = $command.Environment
+    Assert-True -Condition ($null -ne $environment -and $environment.ContainsKey("PAGENTOS_DATABASE_URL")) -Because "the child is pointed at a database"
+    $url = [string]$environment["PAGENTOS_DATABASE_URL"]
+    Assert-True -Condition ($url -cmatch '^postgresql\+psycopg://pagentos:secret@127\.0\.0\.1:15432/pagentos_g_[a-z0-9]+$') -Because "the same server, a pagentos_g_ database: $url"
+    Assert-True -Condition ($url -notmatch '/pagentos$') -Because "never the shared database"
+    Assert-Equal -Expected ($url.Substring($url.LastIndexOf("/") + 1)) -Actual ([string]$command.Database) -Because "the command says which database it makes and drops"
+    $again = Get-TeamGuardCommand -Guard $integration -Worktree "E:\tree" -Python "E:\py\python.exe" -DatabaseUrl $sharedUrl
+    Assert-True -Condition ([string]$again.Database -ne [string]$command.Database) -Because "every run its own name"
+    $unit = [pscustomobject]@{ id = "owner-error-language"; kind = "pytest"; path = "services/api/tests/unit/test_owner_error_language.py"; label = "unit" }
+    $plain = Get-TeamGuardCommand -Guard $unit -Worktree "E:\tree" -Python "E:\py\python.exe" -DatabaseUrl $sharedUrl
+    Assert-True -Condition (-not (@($plain.Environment.Keys) -contains "PAGENTOS_DATABASE_URL")) -Because "a unit guard gets no database variable"
+    Assert-Equal -Expected "" -Actual ([string]$plain.Database) -Because "and no database"
+}
+
+Test-Case "against the dev server: a passing, a failing and a hung guard each leave no pagentos_g_ database and the shared revision as it was" {
+    if (-not $docker) { throw "docker was not found: the dev stack's PostgreSQL is this case's evidence" }
+    $base = Get-TeamGuardSettingsDatabaseUrl -Python $py -ApiRoot (Join-Path $repoRoot "services\api")
+    Assert-True -Condition ($base -cmatch '^postgresql') -Because "the application's own database setting is read"
+    $revisionBefore = @(Invoke-DevPsql -Database "pagentos" -Sql "SELECT version_num FROM alembic_version") -join ","
+    $databasesBefore = @(Get-GuardDatabases)
+    $root = New-DatabaseGuardSandbox
+    $run = Invoke-TeamGuards -Worktree $root -List @((New-DatabaseGuard -Mode "pass"), (New-DatabaseGuard -Mode "fail"), (New-DatabaseGuard -Mode "hang")) -Python $py -HangSeconds 20 -DatabaseUrl $base
+    $outcomes = @($run.rows | ForEach-Object { "$($_.id)=$($_.outcome)" }) -join " "
+    Write-Host "        rows: $outcomes; pagentos alembic_version before: $revisionBefore"
+    Assert-Equal -Expected "task-db-pass=green task-db-fail=red task-db-hang=hung" -Actual $outcomes -Because "the passing test ran on its own database, the failing one is red, the hung one stopped: $(@($run.rows | ForEach-Object { $_.detail }) -join ' | ')"
+    $databasesAfter = @(Get-GuardDatabases)
+    Write-Host "        pagentos_g_* after: $(@($databasesAfter).Count) (before: $(@($databasesBefore).Count))"
+    Assert-Equal -Expected (@($databasesBefore) -join ",") -Actual (@($databasesAfter) -join ",") -Because "every guard database is dropped, success, failure or hang"
+    $revisionAfter = @(Invoke-DevPsql -Database "pagentos" -Sql "SELECT version_num FROM alembic_version") -join ","
+    Write-Host "        pagentos alembic_version after: $revisionAfter"
+    Assert-Equal -Expected $revisionBefore -Actual $revisionAfter -Because "the shared database is never named"
+    Assert-Equal -Expected 0 -Actual @(Invoke-DevPsql -Database "pagentos" -Sql "SELECT 1 FROM information_schema.tables WHERE table_name = 'guard_probe'").Count -Because "the tests' table never reached the shared database"
+}
+
+Test-Case "a guard whose database cannot be made says 'veritabanı açılamadı', not that the task's test is red" {
+    $root = New-DatabaseGuardSandbox
+    $closed = "postgresql+psycopg://pagentos:secret@127.0.0.1:1/pagentos"
+    $run = Invoke-TeamGuards -Worktree $root -List @(New-DatabaseGuard -Mode "pass") -Python $py -DatabaseUrl $closed
+    $row = @($run.rows)[0]
+    Assert-Equal -Expected "no-database" -Actual ([string]$row.outcome) -Because "its own outcome: $($row.detail)"
+    Assert-Equal -Expected "red" -Actual ([string]$run.status) -Because "a guard that could not run is not green"
+    $line = Get-TeamGuardLine -Row $row
+    Assert-True -Condition ($line -match "veritabanı açılamadı" -and $line -notmatch "işin kendi testi kırmızı") -Because "its own line: $line"
+    Assert-True -Condition ($line -notmatch "secret" -and [string]$row.detail -notmatch "secret") -Because "the password is never said: $line / $($row.detail)"
+}
+
 foreach ($folder in @($sandboxes)) {
     if (Test-Path -LiteralPath $folder) {
         if (Test-Path -LiteralPath (Join-Path $folder ".git")) { [void](Invoke-TeamGit -WorkingDirectory $folder -Arguments @("worktree", "prune")) }
