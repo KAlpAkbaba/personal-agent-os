@@ -231,27 +231,16 @@ UNCOVERED_BASELINE: frozenset[str] = frozenset(
         "PUT /v1/team/queue/status",
         "PUT /v1/team/queue/tasks/{task_id}",
         "PUT /v1/voice/measurement/recordings/{place}/{index}",
-        # 2026-10-07 integration (the Danışman): eleven write routes of cards built in parallel with
-        # this ratchet (inbound-calls-bridge, money-ledger, cloud-task-loop-core) - they existed
-        # before it reached their branches. Card two-devices-tests-late-write-routes writes their
-        # tests and takes them out again (the ceiling goes back to 190).
-        "POST /telephony/inbound/status",
-        "POST /telephony/inbound/voice",
-        "POST /v1/money/cash",
-        "POST /v1/money/entries/{entry_id}/cancel",
-        "POST /v1/money/questions/{question_id}/answer",
-        "POST /v1/web-tasks",
-        "POST /v1/web-tasks/{task_id}/cancel",
-        "POST /v1/web-tasks/{task_id}/confirm",
-        "POST /v1/web-tasks/{task_id}/continue",
-        "POST /v1/web-tasks/{task_id}/decline",
-        "POST /v1/web-tasks/{task_id}/read-back",
+        # The eleven write routes the 2026-10-07 integration added here (inbound-calls-bridge,
+        # money-ledger, cloud-task-loop-core, built in parallel with this ratchet) are raced in
+        # tests/integration/test_two_devices_late_routes_pg.py (card
+        # two-devices-tests-late-write-routes) and are out again.
     }
 )
 
 #: The baseline's size when it was frozen. It may only go down, so an entry added for a new
 #: route is refused even when the list is edited in the same change.
-BASELINE_CEILING = 201
+BASELINE_CEILING = 190
 
 
 def _string_constants(tree: ast.Module, *, follow_imports: bool = True) -> dict[str, str]:
