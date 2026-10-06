@@ -78,7 +78,9 @@ describe("the test room", () => {
     const base = { seat: "tester-1", job: "x", breaking: null } as const;
     expect(testMoodOf({ ...base, state: "working", since: "2026-10-05T12:00:00Z" }, NOW)).toBe("focused");
     expect(testMoodOf({ ...base, state: "working", since: "2026-10-05T11:30:00Z" }, NOW)).toBe("tired");
-    expect(testMoodOf({ ...base, state: "failed", since: null }, NOW)).toBe("angry");
+    // The owner, 2026-10-06: a found bug is sad; angry only on the tester's own error.
+    expect(testMoodOf({ ...base, state: "failed", since: null }, NOW)).toBe("sad");
+    expect(testMoodOf({ ...base, state: "error", since: null }, NOW)).toBe("angry");
     expect(testMoodOf({ ...base, state: "broke", since: null }, NOW)).toBe("sad");
     expect(testMoodOf({ ...base, state: "waiting", since: null }, NOW)).toBe("relaxed");
   });
