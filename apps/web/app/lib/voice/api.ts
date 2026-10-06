@@ -16,6 +16,7 @@ import type {
   EventsResponse,
   SessionLegPayload,
   SessionState,
+  SidebandPullResponse,
   ToolCallResponse,
 } from "./contract";
 import { isForbiddenKey } from "./contract";
@@ -372,6 +373,11 @@ export class VoiceSessionApi {
       method: "POST",
       body: JSON.stringify({ events }),
     });
+  }
+
+  /** The timer pull of frames queued for this leg (same leg rule as `events`; 410 once over). */
+  sidebandPull(sessionId: string): Promise<SidebandPullResponse> {
+    return this.call<SidebandPullResponse>(`${BASE}/${sessionId}/sideband`);
   }
 
   attach(sessionId: string, body: AttachBody = {}): Promise<SessionLegPayload> {

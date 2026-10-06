@@ -193,6 +193,22 @@ export type EventsResponse = {
   state: SessionState;
 };
 
+/**
+ * `GET .../sessions/{id}/sideband`: the frames queued for this leg, drained once (a briefing
+ * is stamped delivered by the pull that takes it). Empty = nothing waiting, nothing written.
+ */
+export type SidebandPullResponse = {
+  session_id: string;
+  pending_sideband: SidebandFrame[];
+};
+
+/**
+ * How often a live web leg pulls its sideband when the owner is silent. A web session has
+ * no push channel; without the pull a queued briefing waited for the owner's next sentence.
+ * One constant for the paid controller and the local mode.
+ */
+export const SIDEBAND_PULL_MS = 15_000;
+
 /** Server-side bounds the client respects before sending. */
 export const MAX_EVENTS_PER_REQUEST = 200;
 export const MAX_EVENT_PAYLOAD_BYTES = 4 * 1024;
