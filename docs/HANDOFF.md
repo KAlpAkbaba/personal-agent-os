@@ -15,11 +15,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `fba299af49fe59c40952efd9516615fb70205da1` (2026-10-06 16:35 UTC = 19:35 yerel, api-green), LKG `72884b71`,
-pin = RELEASE, reconcile OK, şema `0070_household_stock`. QUALIFICATION Stage 57 (test ekibi döngüyle başlar, PM entegrasyon
-çakışmasını çözer, döngü donmaz). SIRADAKİ (sahip kararı 2026-10-06): projeyi tamamen K:'ye (Samsung 990 PRO NVMe) taşı - E:
-USB HDD, günün bütün takılmalarının kökü (memory project-lives-on-usb-hdd). verify-mode integrate/d20261006'da (448d4f05,
-göç 0071_claim_verifications) yayın bekliyor. Geçici nöbetçi %USERPROFILE%\.pagentos-team\team-feed-wrapper.ps1 içinde.**
+**ÜRETİM: main `da3e26b9e747b389c0c9387d23c1fd77aab05784` (2026-10-06 22:45 UTC = 01:45 yerel, api-blue), LKG `fba299af`,
+pin = RELEASE, reconcile OK, şema `0072_money_ledger`. QUALIFICATION Stage 58 (para defteri, test koltuklarının yüzleri, ekip
+entegrasyon düzeltmeleri). Proje K:'de (NVMe); E: kopyası yedek, sahip onayıyla silinir. GECE NÖBETİ (sahip 2026-10-06 23:40):
+zamanlanmış görev 'PagentOS Danisman Watch' 15 dk'da bir %USERPROFILE%\.pagentos-team\danisman-watch.ps1 çalıştırır
+(sonuç watch-latest.txt / watch.log; yeni bulguda başsız Danışman koşusu kart yazar); kart danisman-watch-in-repo depoya taşır.
+Bekleyen Danışman işi: conversation-carryover ve registry-models-and-routers denetçi onaylı, birleştirme çakışmasında (stopped).**
 **ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
 `team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
 yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**
