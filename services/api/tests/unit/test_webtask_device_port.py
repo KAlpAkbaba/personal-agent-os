@@ -525,3 +525,43 @@ def test_every_other_target_opens_the_owners_chrome_as_before(target: str) -> No
         "policy": {"allowed_risk_classes": list(RISK_ORDER), "visible": True},
         "channel": "chrome",
     }
+
+
+# ------------------------------------------------------------------ the activity's wiring
+#
+# The inspector's mutation: ``_default_ports`` handing ``()`` instead of the owner's list
+# left every test green, and the cloud worker would have refused every write even on a site
+# the owner listed. These read the list out of the session_open the real wiring sends.
+
+
+def _wired(monkeypatch: pytest.MonkeyPatch, target: str) -> FakeDeviceCommandClient:
+    from app.execution import allowlist_store
+    from app.webtask import activities
+
+    c = client()
+    monkeypatch.setattr(activities, "_factory", lambda: None)
+    monkeypatch.setattr(activities, "DeviceCommandClient", lambda _factory: c)
+    monkeypatch.setattr(activities, "default_planner", lambda: None)
+    monkeypatch.setattr(
+        allowlist_store, "effective_sites", lambda: ("example.com", "magaza.example.org")
+    )
+    ports = activities._default_ports(uuid.UUID(TASK), DEVICE, lambda: None, target)
+    ports.browser.observe(task_id=TASK, key="k1")
+    return c
+
+
+def test_the_activity_hands_a_cloud_task_the_owners_list_as_it_is_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name, opened = sent(_wired(monkeypatch, "cloud"))[0]
+    assert name == "browser.session_open"
+    assert opened["profile"] == "research" and opened["cloud_task"] is True
+    assert opened["owner_allow_list"] == ["example.com", "magaza.example.org"]
+
+
+def test_the_activity_opens_the_owners_chrome_without_the_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened = sent(_wired(monkeypatch, ""))[0][1]
+    assert opened["profile"] == "owner"
+    assert "owner_allow_list" not in opened and "cloud_task" not in opened

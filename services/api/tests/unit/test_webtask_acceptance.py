@@ -1397,3 +1397,52 @@ def test_a_card_number_field_is_never_written_by_any_of_the_three_writes() -> No
         state = drive(task(PLAN_GOAL), browser, [write_card(action)])
         assert state.pending is not None and state.pending.kind == ASK_SENSITIVE_FIELD, action
         assert browser.done == [] and browser.fields == {} and browser.checked == {}
+
+
+# ------------------------------------------------------------------ the cloud, through the loop
+#
+# Card cloud-task-loop-core, rule 9 (S4), proven through ``run_round`` and not only through
+# ``gate.decide``: the loop must hand the task's TARGET to the gate. The inspector's mutation
+# (``target=state.target`` dropped from the round's TaskContext) left every gate test green
+# while a cloud fill off the owner's list would have been ALLOWED.
+
+
+@pytest.fixture
+def owner_list(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from app.execution import allowlist_store
+
+    listed: list[str] = []
+    monkeypatch.setattr(allowlist_store, "effective_sites", lambda: tuple(listed))
+    return listed
+
+
+def test_a_cloud_task_does_not_write_off_the_owners_list_and_says_so(
+    owner_list: list[str],
+) -> None:
+    browser = form_site()
+    ports = Ports(
+        browser=browser,
+        planner=ChainPlanner([RuleTablePlanner(), ScriptedPlanner([fill("Ad", "Kadir")])]),
+        clock=Clock(),
+    )
+    state = run_round(task(T2_GOAL, target="cloud"), ports)
+    assert outcomes(state) == [ROUND_REFUSED]
+    assert state.rounds[0].detail == "not_on_owner_allow_list"
+    assert state.message == (
+        "Bu sitede bulutta yazamam; Onay Merkezi'nden siteyi izin listesine ekle."
+    )
+    assert browser.fields == {}
+    assert ACTION_FILL not in [c[0] for c in browser.commands]
+
+
+def test_a_cloud_task_writes_on_a_site_the_owner_listed(owner_list: list[str]) -> None:
+    owner_list.append("example.org")
+    browser = form_site()
+    state = drive(
+        task(T2_GOAL, target="cloud"),
+        browser,
+        [fill("Ad", "Kadir Akbaba"), done("Formu doldurdum, göndermedim.")],
+    )
+    assert state.status == STATUS_DONE
+    assert outcomes(state) == [ROUND_ACTED, "done"]
+    assert browser.fields == {"Ad": "Kadir Akbaba"}
