@@ -449,7 +449,10 @@ function ConvertTo-TeamFeedTasks {
         [void]$lines.Add("")
         [void]$lines.Add("Kaynak: lead koşusu (roadmap beslemesi), $Date. Bu bir iş kartı DEĞİL: sahibin kararını bekleyen bir fikir.")
         [void]$lines.Add("")
-        [void]$lines.Add("## Sahibe sorulan")
+        # The researcher's shape (apps/web/tests/approvals/proposal-shapes.test.ts reads every
+        # file under team/proposals): "## Ne" holds what the owner is asked, every section is
+        # written even when empty, and the fixture FEED_SHAPE there is this text byte for byte.
+        [void]$lines.Add("## Ne")
         [void]$lines.Add("")
         [void]$lines.Add($sentence)
         [void]$lines.Add("")
@@ -458,8 +461,12 @@ function ConvertTo-TeamFeedTasks {
         if ($isRow) { [void]$lines.Add($row) }
         elseif ($row) { [void]$lines.Add("Roadmap'te yok; önerilen yeni satır: $row") }
         else { [void]$lines.Add("Belirtilmedi.") }
-        if ($goal) { [void]$lines.Add(""); [void]$lines.Add("## Hedef"); [void]$lines.Add(""); [void]$lines.Add($goal) }
-        if ($acceptance) { [void]$lines.Add(""); [void]$lines.Add("## Kabul"); [void]$lines.Add(""); [void]$lines.Add($acceptance) }
+        [void]$lines.Add(""); [void]$lines.Add("## Hedef"); [void]$lines.Add("")
+        [void]$lines.Add($(if ($goal) { $goal } else { "Belirtilmedi." }))
+        [void]$lines.Add(""); [void]$lines.Add("## Kabul"); [void]$lines.Add("")
+        [void]$lines.Add($(if ($acceptance) { $acceptance } else { "Belirtilmedi." }))
+        [void]$lines.Add(""); [void]$lines.Add("## Karar"); [void]$lines.Add("")
+        [void]$lines.Add("Sahip: evet / hayır / ertele.")
         [void]$made.Add([pscustomobject]@{
                 Task = [pscustomobject]$task; Kind = "owner"; ProposalPath = $path
                 ProposalText = ((@($lines.ToArray()) -join "`n") + "`n")
