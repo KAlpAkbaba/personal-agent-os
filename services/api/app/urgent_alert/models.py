@@ -6,7 +6,7 @@ is written in the same transaction as the ``alert.sent`` ledger line; the loop c
 ``seen`` (the phone's "acknowledge", or the owner read it in the inbox - ``source``),
 ``unseen`` (it rang out) or ``cancelled`` (read elsewhere first, the ringing stopped).
 
-Migration: ``alembic/versions/20261007_0073_urgent_alert_receipts.py``.
+Migration: ``alembic/versions/urgent_alert_receipts.py``.
 """
 
 from __future__ import annotations
