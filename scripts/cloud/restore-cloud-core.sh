@@ -25,7 +25,13 @@
 #       blue/green operation lock (no release, rollback or reconcile can interleave), stops
 #       both api colours and Temporal, restores every database and bucket, verifies the
 #       databases against the backup's fingerprints, starts Temporal, and hands the colours
-#       back to the reconcile. The env file and credential root are NOT replaced (they are in
+#       back to the reconcile. The owner's calendar (radicale-stack-ops): Radicale is stopped,
+#       /mnt/pagentos-data/radicale is replaced by the snapshot's (the replaced folder is kept
+#       beside it as radicale.pre-restore) and Radicale is started again; when there is no
+#       Radicale container yet (the wiring card has not shipped) its files are verified and
+#       left alone, and the run says so. The drill counts the calendar's items into the
+#       report (radicale_items); its files are verified against the manifest like every
+#       other file. The env file and credential root are NOT replaced (they are in
 #       the snapshot under config/ for a rebuilt host; overwriting live secrets is a decision,
 #       not a side effect).
 #
@@ -34,7 +40,8 @@
 # repository password (restore it from the escrow first);
 # 96 the snapshot could not be restored; 97 files differ from the manifest; 98 a database
 # did not restore to the same rows; 99 the objects did not load back; 100 --apply: the
-# pre-restore backup failed (nothing was touched); 101 --apply: services did not come back.
+# pre-restore backup failed (nothing was touched); 101 --apply: services did not come back;
+# 102 --apply: the calendar (Radicale) could not be stopped or its folder not replaced.
 
 set -Eeuo pipefail
 
@@ -45,6 +52,11 @@ pg_user=${PAGENTOS_PG_USER:-pagentos}
 minio_container=${PAGENTOS_MINIO_CONTAINER:-pagentos-prod-minio}
 temporal_container=${PAGENTOS_TEMPORAL_CONTAINER:-pagentos-prod-temporal}
 colour_containers=${PAGENTOS_COLOUR_CONTAINERS:-pagentos-prod-api-blue pagentos-prod-api-green}
+data=${PAGENTOS_DATA:-/mnt/pagentos-data}
+radicale_container=${PAGENTOS_RADICALE_CONTAINER:-pagentos-prod-radicale}
+# The uid that owns the calendar's data: the Dockerfile's RADICALE_UID (test_radicale_stack.py).
+radicale_uid=${PAGENTOS_RADICALE_UID:-10002}
+chown_bin=${PAGENTOS_CHOWN:-chown}
 restic_bin=${PAGENTOS_RESTIC:-restic}
 docker_bin=${PAGENTOS_DOCKER:-docker}
 flock_bin=${PAGENTOS_FLOCK:-flock}
@@ -294,6 +306,35 @@ if ! diff -r "$tree/minio" "$readback" >/dev/null; then
 fi
 objects_s=$(now_s)
 
+# ---- 3b. the owner's calendar (Radicale; radicale-stack-ops) -----------------------------
+# Its files were already verified against the manifest in step 1. Radicale's cache names its
+# files <href>.ics too; they are not calendar items.
+radicale_items=0
+if [ -d "$tree/radicale" ]; then
+    radicale_items=$(find "$tree/radicale" -name .Radicale.cache -prune -o -type f -name '*.ics' -print \
+        | wc -l | tr -d ' ')
+    say "calendar: $radicale_items item(s), identical to the manifest"
+    if [ "$mode" = "apply" ]; then
+        if "$docker_bin" inspect "$radicale_container" >/dev/null 2>&1; then
+            "$docker_bin" stop "$radicale_container" >/dev/null \
+                || fail 102 "$radicale_container could not be stopped; its folder was not touched"
+            rm -rf "$data/radicale.pre-restore"
+            if [ -d "$data/radicale" ]; then
+                mv "$data/radicale" "$data/radicale.pre-restore" || fail 102 "the calendar folder could not be set aside"
+            fi
+            cp -a "$tree/radicale" "$data/radicale" || fail 102 "the snapshot's calendar could not be copied into place"
+            "$chown_bin" -R "$radicale_uid:$radicale_uid" "$data/radicale" \
+                || fail 102 "the restored calendar could not be given to uid $radicale_uid"
+            "$docker_bin" start "$radicale_container" >/dev/null || fail 101 "$radicale_container did not start again"
+            say "calendar: restored (the replaced folder is $data/radicale.pre-restore)"
+        else
+            say "calendar: no $radicale_container container (not wired yet); its files were verified and left alone"
+        fi
+    fi
+else
+    say "calendar: the snapshot holds none (Radicale was not installed)"
+fi
+
 # ---- 4. --apply: hand the services back ---------------------------------------------------
 if [ "$mode" = "apply" ]; then
     "$docker_bin" start "$temporal_container" >/dev/null || fail 101 "Temporal did not start again"
@@ -305,10 +346,11 @@ finished_s=$(now_s)
 report_dir="$backup_root/drills"
 mkdir -p "$report_dir"
 report="$report_dir/$stamp-$mode.json"
-printf '{"mode":"%s","snapshot":"%s","finished_at":"%s","seconds":{"restore":%s,"verify_files":%s,"databases":%s,"objects":%s,"total":%s},"databases":{%s},"objects":%s,"verdict":"passed"}\n' \
+printf '{"mode":"%s","snapshot":"%s","finished_at":"%s","seconds":{"restore":%s,"verify_files":%s,"databases":%s,"objects":%s,"total":%s},"databases":{%s},"objects":%s,"radicale_items":%s,"verdict":"passed"}\n' \
     "$mode" "$snapshot" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     $((restored_s - started_s)) $((verified_s - restored_s)) $((postgres_s - verified_s)) \
     $((objects_s - postgres_s)) $((finished_s - started_s)) "${database_rows%,}" "$object_files" \
+    "$radicale_items" \
     > "$report"
 # B08 req 647: a unit clears its own failure marker when it succeeds. Without this a single
 # bad night would leave the health surface complaining for ever, and a check that complains
