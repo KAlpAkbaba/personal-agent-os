@@ -599,6 +599,8 @@ EVENT_TYPE_TELEPHONY_CALL_ENDED = "telephony.call_ended"
 EVENT_TYPE_TELEPHONY_CALL_SKIPPED = "telephony.call_skipped"
 EVENT_TYPE_TELEPHONY_CALL_REFUSED = "telephony.call_refused"
 EVENT_TYPE_TELEPHONY_CALL_FAILED = "telephony.call_failed"
+#: inbound-calls-bridge: JARVIS answered a call on the owner's behalf (caller, duration, transcript).
+EVENT_TYPE_TELEPHONY_INBOUND_ANSWERED = "telephony.inbound_answered"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -792,6 +794,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_TELEPHONY_CALL_SKIPPED,
     EVENT_TYPE_TELEPHONY_CALL_REFUSED,
     EVENT_TYPE_TELEPHONY_CALL_FAILED,
+    EVENT_TYPE_TELEPHONY_INBOUND_ANSWERED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the
@@ -946,6 +949,7 @@ __all__ = [
     "EVENT_TYPE_MEDIA_OPENED",
     "EVENT_TYPE_MEDIA_STOPPED",
     "EVENT_TYPE_MEDIA_UNVERIFIED",
+    "EVENT_TYPE_TELEPHONY_INBOUND_ANSWERED",
     "EVENT_TYPES",
     "EVOLUTION_EVENT_TYPES",
     "GENESIS_EVENT_TYPE_BY_STATE",
