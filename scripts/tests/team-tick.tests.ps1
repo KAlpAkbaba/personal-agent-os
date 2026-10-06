@@ -144,10 +144,31 @@ function New-FakeScript {
     Set-Content -LiteralPath $Path -Encoding ASCII -Value @($lines)
 }
 
+function Get-ClosedPort {
+    # A loopback port nobody listens on: bound, read, released.
+    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    $listener.Stop()
+    return $port
+}
+
+function New-FakeBoard {
+    # A stand-in for board.ps1: one line per call into <Work>\board.log, exit 0.
+    param([string]$Work)
+    $path = Join-Path $Work "board.ps1"
+    $log = Join-Path $Work "board.log"
+    Set-Content -LiteralPath $path -Encoding ASCII -Value @("Add-Content -LiteralPath '$log' -Encoding UTF8 -Value (`$args -join ' ')", "exit 0")
+    return $path
+}
+
 function Start-Tick {
     # The tick under Windows PowerShell 5.1, -File, its output into files (an orphan holding a
-    # pipe would hold the reader; a file holds nobody).
+    # pipe would hold the reader; a file holds nobody). A case that names no staging gets a
+    # closed loopback port and a fake board: no case reaches the real staging or the real board.
     param([string]$Work, [string[]]$Arguments)
+    if (@($Arguments) -notcontains "-StagingHealthUrl") { $Arguments = @($Arguments) + @("-StagingHealthUrl", "http://127.0.0.1:$(Get-ClosedPort)/v1/system/health") }
+    if (@($Arguments) -notcontains "-BoardPath") { $Arguments = @($Arguments) + @("-BoardPath", ('"' + (New-FakeBoard -Work $Work) + '"')) }
     $stem = Join-Path $Work ("tick-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
     $all = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $tick + '"')) + $Arguments
     $process = Start-Process -FilePath $powershell -ArgumentList $all -NoNewWindow -PassThru `
@@ -379,6 +400,117 @@ Test-Case "(6) no job object: the tick still runs the cycle, waits only for its 
         Stop-ById -Ids $ids
         Remove-Work -Work $work
     }
+}
+
+function Get-CycleLine {
+    # The fake cycle's one line from calls.log ("cycle <its arguments>").
+    param([string]$Calls)
+    $line = @(Get-Content -LiteralPath $Calls | Where-Object { $_ -like "cycle*" })
+    if ($line.Count -ne 1) { throw "the fake cycle ran $($line.Count) times: $(@(Get-Content -LiteralPath $Calls) -join ' | ')" }
+    return [string]$line[0]
+}
+
+# 2026-10-06: the scheduled tick never passed -TestTeam to the cycle, so the five test seats
+# waited all day beside a healthy staging. The tick now asks for the round by default; it is
+# not asked for when staging does not answer (a risk line, never a failure).
+. (Join-Path $PSScriptRoot "lib\LoopbackJson.ps1")
+
+Test-Case "(7) a tick with no flag, staging answering: the cycle is started with -TestTeam, and the board is not written" {
+    $work = New-Work
+    $stub = Start-JsonStub -Json '{"status":"ok"}' -Seconds 90
+    try {
+        $calls = Join-Path $work "calls.log"
+        $feed = Join-Path $work "feed.ps1"; New-FakeScript -Path $feed -LogFile $calls -Name "feed"
+        $cycle = Join-Path $work "cycle.ps1"; New-FakeScript -Path $cycle -LogFile $calls -Name "cycle"
+        $run = Start-Tick -Work $work -Arguments @("-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + (Join-Path $work "tick.log") + '"'),
+            "-StagingHealthUrl", "http://127.0.0.1:$($stub.Port)/v1/system/health")
+        $result = Wait-Tick -Tick $run
+        Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ($result.Out + $result.Err)
+        $line = Get-CycleLine -Calls $calls
+        Assert-True -Condition ($line -match "(^|\s)-TestTeam(\s|$)") -Because "the cycle is asked for the test round: $line"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $work "board.log"))) -Because "staging answered: nothing to say on the board"
+    }
+    finally { Stop-JsonStub -Stub $stub; Remove-Work -Work $work }
+}
+
+Test-Case "(8) -NoTestTeam: the cycle is started without -TestTeam; -TestTeam with -NoTestTeam is refused before anything runs" {
+    $work = New-Work
+    $stub = Start-JsonStub -Json '{"status":"ok"}' -Seconds 90
+    try {
+        $calls = Join-Path $work "calls.log"
+        $feed = Join-Path $work "feed.ps1"; New-FakeScript -Path $feed -LogFile $calls -Name "feed"
+        $cycle = Join-Path $work "cycle.ps1"; New-FakeScript -Path $cycle -LogFile $calls -Name "cycle"
+        $common = @("-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + (Join-Path $work "tick.log") + '"'),
+            "-StagingHealthUrl", "http://127.0.0.1:$($stub.Port)/v1/system/health")
+        $result = Wait-Tick -Tick (Start-Tick -Work $work -Arguments ($common + @("-NoTestTeam")))
+        Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ($result.Out + $result.Err)
+        $line = Get-CycleLine -Calls $calls
+        Assert-True -Condition ($line -notmatch "-TestTeam") -Because "-NoTestTeam: no test round asked for: $line"
+        Remove-Item -LiteralPath $calls -Force
+        $both = Wait-Tick -Tick (Start-Tick -Work $work -Arguments ($common + @("-TestTeam", "-NoTestTeam")))
+        Assert-True -Condition ($both.ExitCode -ne 0) -Because "both flags: the tick refuses ($($both.Out)$($both.Err))"
+        Assert-True -Condition (-not (Test-Path -LiteralPath $calls)) -Because "both flags: neither the feeder nor the cycle ran"
+    }
+    finally { Stop-JsonStub -Stub $stub; Remove-Work -Work $work }
+}
+
+Test-Case "(9) every other forwarded switch reaches the cycle unchanged, with or without the test round" {
+    $work = New-Work
+    $stub = Start-JsonStub -Json '{"status":"ok"}' -Seconds 90
+    try {
+        $calls = Join-Path $work "calls.log"
+        $feed = Join-Path $work "feed.ps1"; New-FakeScript -Path $feed -LogFile $calls -Name "feed"
+        $cycle = Join-Path $work "cycle.ps1"; New-FakeScript -Path $cycle -LogFile $calls -Name "cycle"
+        $reports = Join-Path $work "reports"
+        $token = Join-Path $work "queue.token"
+        $common = @("-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + (Join-Path $work "tick.log") + '"'),
+            "-ReportsRoot", ('"' + $reports + '"'), "-StagingHealthUrl", "http://127.0.0.1:$($stub.Port)/v1/system/health",
+            "-MaxParallel", "6", "-MaxUsd", "2.5", "-CycleMinutes", "30", "-MaxHours", "12", "-Research", "-DailyId",
+            "-ResearchEveryHours", "6", "-Base", "team/nightly/lead", "-QueueUrl", "https://queue.invalid", "-QueueToken", ('"' + $token + '"'))
+        # What the tick passed before the test round existed, word for word.
+        $before = "cycle -MaxUsd 2.5 -MaxParallel 6 -CycleMinutes 30 -MaxHours 12 -Research -DailyId -ResearchEveryHours 6 -Base team/nightly/lead -QueueUrl https://queue.invalid -QueueToken $token"
+        $result = Wait-Tick -Tick (Start-Tick -Work $work -Arguments ($common + @("-NoTestTeam")))
+        Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ($result.Out + $result.Err)
+        Assert-Equal -Expected $before -Actual (Get-CycleLine -Calls $calls) -Because "-NoTestTeam: the cycle's arguments are what they always were"
+        Remove-Item -LiteralPath $calls -Force
+        $result = Wait-Tick -Tick (Start-Tick -Work $work -Arguments $common)
+        Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ($result.Out + $result.Err)
+        $line = Get-CycleLine -Calls $calls
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($line, "(^|\s)-TestTeam(?=\s|$)").Count) -Because "one -TestTeam: $line"
+        Assert-Equal -Expected $before -Actual ($line -replace " -TestTeam(?=\s|$)", "") -Because "with the test round, every other argument is unchanged"
+    }
+    finally { Stop-JsonStub -Stub $stub; Remove-Work -Work $work }
+}
+
+Test-Case "(10) staging not answering: the cycle runs without -TestTeam, exits as the cycle did, and the board, the log and the report carry a risk line" {
+    $work = New-Work
+    try {
+        $calls = Join-Path $work "calls.log"
+        $feed = Join-Path $work "feed.ps1"; New-FakeScript -Path $feed -LogFile $calls -Name "feed"
+        $cycle = Join-Path $work "cycle.ps1"; New-FakeScript -Path $cycle -LogFile $calls -Name "cycle"
+        $log = Join-Path $work "tick.log"
+        $reports = Join-Path $work "reports"
+        [void](New-Item -ItemType Directory -Force -Path $reports)
+        $days = @((Get-Date).ToString("yyyyMMdd"), (Get-Date).AddMinutes(2).ToString("yyyyMMdd")) | Select-Object -Unique
+        foreach ($day in $days) { Set-Content -LiteralPath (Join-Path $reports "d$day.md") -Encoding UTF8 -Value "# report d$day" }
+        $url = "http://127.0.0.1:$(Get-ClosedPort)/v1/system/health"
+        # The scheduled task has no PAGENTOS_TEAM_URL: the board's address is the queue the task names.
+        $token = Join-Path $work "queue.token"
+        $run = Start-Tick -Work $work -Arguments @("-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + $log + '"'),
+            "-DailyId", "-ReportsRoot", ('"' + $reports + '"'), "-StagingHealthUrl", $url,
+            "-QueueUrl", "https://queue.invalid", "-QueueToken", ('"' + $token + '"'))
+        $result = Wait-Tick -Tick $run
+        Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ("a risk, not a failure: " + $result.Out + $result.Err)
+        $line = Get-CycleLine -Calls $calls
+        Assert-True -Condition ($line -notmatch "-TestTeam") -Because "staging down: no test round asked for: $line"
+        $board = Read-Log -Path (Join-Path $work "board.log")
+        Assert-True -Condition ($board -match "^post " -and $board -match "-Seat test-lead" -and $board -match "-Kind bilgi" -and $board.Contains($url)) -Because "one board note names staging: $board"
+        Assert-True -Condition ($board.Contains("-Url https://queue.invalid") -and $board.Contains("-TokenFile $token")) -Because "the note goes to the queue's board, not to an unset PAGENTOS_TEAM_URL: $board"
+        Assert-True -Condition ((Read-Log -Path $log).Contains($url)) -Because "the tick's log names staging: $(Read-Log -Path $log)"
+        $report = ($days | ForEach-Object { [System.IO.File]::ReadAllText((Join-Path $reports "d$_.md")) }) -join "`n"
+        Assert-True -Condition ($report.Contains($url) -and $report -match "(?m)^## Riskler") -Because "the cycle's report has a risk line: $report"
+    }
+    finally { Remove-Work -Work $work }
 }
 
 Write-Host ""
