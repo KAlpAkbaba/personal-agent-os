@@ -318,6 +318,11 @@ def owner_humor(db: Any) -> str:
         ).scalar_one_or_none()
     except Exception as exc:  # noqa: BLE001 - see the docstring
         logger.warning("assistant_chat_humor_read_failed", error=f"{type(exc).__name__}: {exc}")
+        # A failed SELECT leaves a Postgres transaction aborted; the turn's own writes follow.
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 - see the docstring
+            pass
         return HUMOR_DRY
     return normalize_humor((settings or {}).get("humor") if isinstance(settings, dict) else None)
 

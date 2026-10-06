@@ -216,3 +216,31 @@ def test_the_wit_module_imports_none_of_its_readers() -> None:
     ):
         assert banned not in imported, banned
     assert not any(name.startswith("app.") for name in imported), imported
+
+
+def test_the_wit_rule_appears_exactly_once() -> None:
+    """``index`` finds only the first copy; a second insertion after pronunciation survived it."""
+    text = build_instructions(
+        VoicePreferences(), pronunciation={"PDF": "pe de fe"}, memory_block="Sahip hakkında: x."
+    )
+    assert text.count(wit.WIT_TR) == 1
+    system = _recorded_body(humor="dry", about_owner="Sahip kahveyi şekersiz içer.")["system"]
+    assert system.count(wit.WIT_TR) == 1
+
+
+class _FailingSession:
+    def __init__(self) -> None:
+        self.rolled_back = 0
+
+    def execute(self, *_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("relation does not exist")
+
+    def rollback(self) -> None:
+        self.rolled_back += 1
+
+
+def test_owner_humor_rolls_back_a_failed_read() -> None:
+    """A failed SELECT leaves a Postgres transaction aborted; the turn's later writes would fail."""
+    db = _FailingSession()
+    assert assistant_chat.owner_humor(db) == "dry"
+    assert db.rolled_back == 1

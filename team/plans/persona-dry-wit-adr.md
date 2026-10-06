@@ -36,7 +36,14 @@ yapılan şaka, hiç kişilik olmamasından kötüdür.
 
 ## Sonraki kart
 - Sesle "espri yapma / mizahı kapat / mizahı aç" niyeti (`intents.py`, hub; money-ledger kartında
-  dokunuluyor) — bu kartta YOK. Bugün anahtar tercih API'siyle (`humor`) yazılır.
+  dokunuluyor) — bu kartta YOK.
+- Tercih API'si: `app/voice/routes.py` `PreferencesUpdate` `extra="forbid"`; `humor` alanı
+  (`str | None`, desen `^(dry|off)$`) eklenmeden `PATCH /voice/preferences {"humor":"off"}` 422
+  döner, yani sahip anahtara bugün hiçbir yoldan ulaşamaz. Alan isteği; kırmızı test
+  `test_voice_preferences.py::test_the_preferences_route_accepts_the_humor_switch` bunu bekliyor.
+  Alan eklenince rota başka değişiklik istemez (`updates` sözlüğü `update_preferences`'a gider).
+- `docs/VOICE_SPEC.md` §12 varsayılan tercih listesine `humor: dry` (alan isteği).
+- `owner_humor` okuma hatasında `db.rollback()` yapar (Postgres'te başarısız SELECT işlemi iptal bırakır).
 - `test_assistant_chat.py:56` `system == SYSTEM_PROMPT_TR` tam eşitliğini bekliyor; varsayılan
   açık nükte bunu bilerek değiştirir — `startswith` ya da `humor="off"` ile güncellenmeli (alan isteği).
 

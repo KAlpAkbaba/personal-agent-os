@@ -107,3 +107,21 @@ def test_a_row_written_before_humor_existed_reads_as_dry() -> None:
         locale="tr-TR", narration_settings={"read_urls": True, "owner_set": ["read_urls"]}
     )
     assert restored.humor == "dry"
+
+
+def test_the_preferences_route_accepts_the_humor_switch() -> None:
+    """The owner's switch must be writable through PATCH /voice/preferences (inspector, 2026-10-06).
+
+    ``PreferencesUpdate`` forbids extra keys, so without a ``humor`` field the route answers
+    422 and the dataclass switch is unreachable for the owner.
+    """
+    from pydantic import ValidationError
+
+    from app.voice.routes import PreferencesUpdate
+
+    body = PreferencesUpdate(humor="off")
+    assert body.model_dump()["humor"] == "off"
+    assert PreferencesUpdate(humor="dry").model_dump()["humor"] == "dry"
+    assert PreferencesUpdate().model_dump()["humor"] is None
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(humor="kahkaha")
