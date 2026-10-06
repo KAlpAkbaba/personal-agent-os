@@ -1503,3 +1503,25 @@ the owner chose to move the project to K: (NVMe).
 | 57.3 | An exited tool's open output cannot freeze a caller | `PROVEN_AUTOMATED` | `scripts/tests/team-run-temp.tests.ps1` (the native-process case), RED without the fix |
 | 57.4 | The liveness walk has a budget | `PROVEN_AUTOMATED` | `scripts/tests/team-liveness.tests.ps1` 16/16, the budget case RED under a mutation |
 | 57.5 | The PM resolves integration conflicts | `PROVEN_AUTOMATED` | `scripts/tests/team-duty-integration.tests.ps1` 11/11; `scripts/tests/team-cycle.tests.ps1` 267/267 |
+
+## Stage 58 — the 2026-10-06 evening: the money ledger, the test team's faces, the team's integration fixes
+
+Released 2026-10-06 22:45 UTC (01:45 local, 2026-10-07) as main `da3e26b9e747b389c0c9387d23c1fd77aab05784` (api-blue; previous
+`fba299af…` kept as last known good; migrations `0071_claim_verifications` and `0072_money_ledger`, one head). Thirteen cards
+released: tts-antalia-measure, verify-mode, money-ledger, radicale-caldav-live, inbound-calls-bridge,
+conversation-segment-race-loses-lines, household-item-create-race-500, watch-cap-race-21, conversation-text-refuses-audio,
+household-input-validation-and-suffix, guards-after-every-merge, cycle-watchdog, office-panel-last-activity. The Danışman's
+integration fixes: the money migration re-chained after `0071_claim_verifications`; `money_spend_loop` in the health and
+bounded-delivery lists; the `money` capability's Turkish name; the money tools declared as `ToolSpec(name=...)` so the
+self-model index sees them, their tiers, and the verify and money tools in the session contract; exemplars re-exported; the
+`team-guards-after-merge` and `team-watchdog` suites in the gate and CI. The Ofis' test seats: sad on a found bug, angry only on
+the tester's own error, tired on long work (the owner, 2026-10-06). Full gate on `f492a551`: every step green but the API unit
+step (6 registry guards the money tools had not joined); `a54a4b59`'s rerun of the unit step PASS (17401 passed). First gate on
+the NVMe disk K:: 7139 s wall time.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 58.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: da3e26b9…`, `api-blue schema at 0072_money_ledger`; recovery supervisor pinned to the full sha, `RECONCILE OK: api-blue is canonical`; staging deployed and seeded at the same sha |
+| 58.2 | One migration head after two cards added a 0071 | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_migration_*` green; `Alembic upgrade head` step PASS on the gate database |
+| 58.3 | Every registered tool is indexed, tiered and in the session contract | `PROVEN_AUTOMATED` | `test_selfmodel_indexer.py`, `test_voice_step_up.py`, `test_voice_realtime_sessions.py` - red on `f492a551`, green on `a54a4b59` |
+| 58.4 | A test seat is sad on a found bug, angry only on its own error | `PROVEN_AUTOMATED` | `apps/web/tests/office/test-room.test.tsx`, RED under a mutation |
