@@ -27,3 +27,15 @@ the check before any insert committed. Reproduced locally: 8/8 opened at service
 - `app/conversations/models.py` does not declare the index (outside this card's area);
   `test_migration_model_agreement` passes as is. A follow-up may add it to `__table_args__`.
 - An upgrade on a database with several open conversations silently ends the older ones.
+- The upgrade's `UPDATE` and `CREATE UNIQUE INDEX` share one transaction: an open insert by
+  the old colour between them makes the index fail and the migration roll back whole (retry).
+
+## Merge onto integrate/d20261006 (return 1, "entegrasyon dalında çakışma")
+The integration branch already chains `0073_memory_text_trgm` from `0072_money_ledger`, so
+this card's migration made a second head. No text conflict. The PM duty's own re-chain
+(`Update-TeamDutyMigrationChain`, scripts/lib/TeamDuty.ps1), run on a scratch merge at
+`fd23c18a`, renames it to `20261006_0074_conversation_one_open.py`, revision
+`0074_conversation_one_open`, down_revision `0073_memory_text_trgm`: one head. The tests use
+`revision_named("conversation_one_open")` and `parent_of(...)`, so they hold under the new
+number. The branch itself stays on its base (`0072`): pointing it at `0073` there would name
+a revision the base does not have.

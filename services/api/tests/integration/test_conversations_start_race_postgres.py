@@ -163,6 +163,36 @@ def test_a_start_losing_the_race_answers_409_already_open(factory, settings) -> 
     assert _open_count(factory) == 1
 
 
+class _Diag:
+    def __init__(self, constraint_name: str | None) -> None:
+        self.constraint_name = constraint_name
+
+
+class _Orig(Exception):
+    def __init__(self, constraint_name: str | None) -> None:
+        super().__init__("integrity")
+        self.diag = _Diag(constraint_name)
+
+
+@pytest.mark.parametrize("constraint", ["conversations_pkey", None])
+def test_another_integrity_error_on_start_stays_store_conflict(
+    factory, settings, monkeypatch, constraint
+) -> None:
+    """Only the one-open index is 'already open': any other integrity error (another
+    constraint, or a driver that names none) keeps the store's ``409 store_conflict``
+    (inspector, 2026-10-06: a route reading every IntegrityError as already_open survived)."""
+
+    def clash(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise IntegrityError("INSERT INTO conversations", {}, _Orig(constraint))
+
+    monkeypatch.setattr(service, "start_conversation", clash)
+    response = owner_client(settings).post("/v1/conversations", json={"mode": "manual"})
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "store_conflict"
+    assert _open_count(factory) == 0
+
+
 def test_eight_posts_at_once_through_the_real_application_one_201_seven_409(
     factory, settings
 ) -> None:
