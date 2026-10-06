@@ -366,6 +366,15 @@ class _RunProgress(_Strict):
     last_change_at: _Stamp | None = None
 
 
+_Minutes = Annotated[int, Field(ge=0)]
+
+
+class _StuckChild(_Strict):
+    pid: int
+    name: Annotated[str, Field(max_length=260)]
+    idle_minutes: _Minutes
+
+
 class _Run(_Strict):
     task: str
     role: _Role
@@ -377,6 +386,11 @@ class _Run(_Strict):
     #: A worker run's seat number, kept for the run's life (office-stable-seats). An older
     #: cycle sends none; office_view seats a bad or duplicate one by the unseated rule.
     seat: int | None = None
+    #: pm-stuck-run-check: the run's last measured sign of life, its idle minutes then, and its
+    #: tool processes idle as long. Optional: an older cycle sends none.
+    last_activity_at: _Stamp | None = None
+    idle_minutes: _Minutes | None = None
+    stuck_children: list[_StuckChild] | None = None
 
 
 class _UsageLimit(_Strict):
@@ -425,6 +439,8 @@ class StatusRequest(_Strict):
     account: str | None = Field(
         default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$"
     )
+    #: The cycle's run_idle_minutes (team/cycle-settings.json). Optional, like the run fields.
+    run_idle_minutes: Annotated[int, Field(ge=1, le=1440)] | None = None
     updated_at: _Stamp
 
 

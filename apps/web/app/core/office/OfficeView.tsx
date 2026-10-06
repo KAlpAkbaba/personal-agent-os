@@ -10,6 +10,7 @@ import OfficeProgress from "./OfficeProgress";
 import OfficeScene from "./OfficeScene";
 import type { ModelSetting, OfficeView as Office } from "./officeApi";
 import { energyOf } from "./officeEnergy";
+import { livenessLines } from "./officeLiveness";
 import { buildOffice, buildPanel } from "./officeModel";
 import { TestRoom, type TestSeat } from "./officeTestRoom";
 
@@ -43,6 +44,7 @@ export default function OfficeView({
   const bar = office.topBar;
   const energy = energyOf(view);
   const panel = selected ? buildPanel(view, selected) : null;
+  const liveness = livenessLines(view.agents, view.tasks);
   return (
     <div className="office" data-office="root">
       <div className="office-topbar" data-office="topbar">
@@ -97,6 +99,15 @@ export default function OfficeView({
           onChooseModel={onChooseModel}
         />
       </div>
+      {liveness.length > 0 && (
+        <ul className="office-liveness" data-office="liveness">
+          {liveness.map(({ seat, liveness: l }) => (
+            <li key={seat} data-kind={l.kind}>
+              <strong>{seat}</strong>: {l.label}
+            </li>
+          ))}
+        </ul>
+      )}
       {testSeats && <TestRoom seats={testSeats} now={new Date()} animated={!reducedMotion} />}
       <div className="office-energy" data-office="energy" data-level={energy.level}>
         <div className="office-energy-meter">

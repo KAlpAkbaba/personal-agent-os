@@ -42,6 +42,13 @@ one (lowered by the chain, or raised to the inspector's floor); a run entry carr
 when the status named one. ``cycle.limits`` is the status' ``limits`` - ``ok`` with null
 percentages when no status gave any: nobody computes a percentage here - and ``models`` is the
 setting document itself.
+
+Liveness (pm-stuck-run-check): a run the cycle measured carries ``last_activity_at`` (its last
+sign of life: a write in its temp folder or worktree, output, CPU), ``idle_minutes`` counted from
+it to the answer's clock, ``stuck`` (idle for the status' ``run_idle_minutes``, 30 without, or a
+tool process of it idle as long: ``stuck_children``). A working seat with a measured run carries
+``stuck`` (any of its runs) and ``idle_minutes`` (the longest). A run the cycle did not measure -
+an older cycle - or one with a broken field carries none of it: it is not trusted as stuck.
 """
 
 from __future__ import annotations
@@ -60,6 +67,10 @@ STATUS_STALE_MINUTES = 10
 STATUS_FUTURE_SKEW_MINUTES = team_store.STATUS_FUTURE_SKEW_MINUTES
 SUMMARY_MAX_LINES = 40  # queue.schema.json: report.summary maxItems
 MIN_WORKER_SEATS = 4
+#: pm-stuck-run-check: a run with no sign of life this long is "takılmış olabilir" - the bound
+#: the status names (``run_idle_minutes``, the cycle's setting), else this one.
+RUN_IDLE_MINUTES_DEFAULT = 30
+RUN_IDLE_MINUTES_MAX = 1440
 _ROLE_SEATS = ("lead", "researcher", "integrator", "inspector")
 _FINISHED = ("released", "done")
 _RETURNED = ("returned", "stopped")
@@ -185,7 +196,47 @@ def _seat(seat: str, role: str, state: str, task: dict[str, Any] | None, since: 
     }
 
 
-def _working_seat(seat: str, role: str, runs: list[dict], by_id: dict[str, dict]) -> dict:
+def _whole(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _idle_bound(status: dict[str, Any] | None) -> int:
+    bound = (status or {}).get("run_idle_minutes")
+    if _whole(bound) and 1 <= bound <= RUN_IDLE_MINUTES_MAX:
+        return bound
+    return RUN_IDLE_MINUTES_DEFAULT
+
+
+def _liveness(run: dict[str, Any], bound: int, now: datetime) -> dict[str, Any] | None:
+    """The run's signs of life as the Ofis shows them; None when the cycle sent none we trust."""
+    last = team_store._parse(run.get("last_activity_at"))
+    if last is None or ("idle_minutes" in run and not _whole(run["idle_minutes"])):
+        return None
+    children = run.get("stuck_children", [])
+    if not isinstance(children, list) or not all(
+        isinstance(c, dict)
+        and _whole(c.get("pid"))
+        and isinstance(c.get("name"), str)
+        and _whole(c.get("idle_minutes"))
+        for c in children
+    ):
+        return None
+    # Counted to the clock of the answer: a status written a while ago is that much older.
+    idle = max(0, int((now - last).total_seconds() // 60))
+    stuck = idle >= bound or any(c["idle_minutes"] >= bound for c in children)
+    shown: dict[str, Any] = {
+        "last_activity_at": run["last_activity_at"],
+        "idle_minutes": idle,
+        "stuck": stuck,
+    }
+    if children:
+        shown["stuck_children"] = children
+    return shown
+
+
+def _working_seat(
+    seat: str, role: str, runs: list[dict], by_id: dict[str, dict], bound: int, now: datetime
+) -> dict:
     listed = []
     for run in runs:
         task = by_id.get(str(run.get("task")), {})
@@ -198,8 +249,22 @@ def _working_seat(seat: str, role: str, runs: list[dict], by_id: dict[str, dict]
             entry["model"] = run["model"]  # a cycle older than the policy names none
         if isinstance(run.get("progress"), dict):
             entry["progress"] = run["progress"]  # measured by the cycle; an older one sends none
+        entry.update(_liveness(run, bound, now) or {})  # a cycle older than liveness sends none
         listed.append(entry)
-    return {"seat": seat, "role": role, "state": "working", **listed[0], "runs": listed}
+    agent = {"seat": seat, "role": role, "state": "working", **listed[0], "runs": listed}
+    agent.pop("stuck_children", None)
+    measured = [r for r in listed if "stuck" in r]
+    if measured:
+        agent["stuck"] = any(r["stuck"] for r in measured)
+        # A run that writes while its test process sits idle (the card's real case, 2026-10-04):
+        # the seat says the child's minutes and carries the child, so the page can name it.
+        children = [c for r in measured for c in r.get("stuck_children", [])]
+        agent["idle_minutes"] = max(
+            [r["idle_minutes"] for r in measured] + [c["idle_minutes"] for c in children]
+        )
+        if children:
+            agent["stuck_children"] = children
+    return agent
 
 
 def _with_models(agent: dict[str, Any], roles: dict[str, str]) -> dict[str, Any]:
@@ -229,6 +294,7 @@ def office_view(
     by_id = {str(t.get("id")): t for t in tasks}
     live = _is_live(lock, status, now)
     runs = _live_runs(status) if live and status else []
+    bound = _idle_bound(status)
 
     worker_seats, placed = _place_workers([r for r in runs if r.get("role") == "worker"])
     for run in runs:
@@ -253,7 +319,7 @@ def office_view(
         if seat == "owner":
             agents.append(_seat(seat, "owner", "waiting", None, None))
         elif seat in placed:
-            agents.append(_working_seat(seat, role, placed[seat], by_id))
+            agents.append(_working_seat(seat, role, placed[seat], by_id, bound, now))
         elif seat in worker_seats:
             index = free_worker_seats.index(seat)  # position among the seats nobody is working
             if index < len(free_worker_tasks):
