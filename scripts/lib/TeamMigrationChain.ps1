@@ -42,14 +42,14 @@ function Read-TeamMigrationHeader {
     $revisions = @([regex]::Matches($Text, $script:TeamMigrationRevisionPattern) | ForEach-Object { $_.Groups[1].Value })
     $downLines = @([regex]::Matches($Text, '(?m)^down_revision\b.*$'))
     $downs = @([regex]::Matches($Text, $script:TeamMigrationDownPattern))
-    $branched = ($downLines.Count -ne 1) -or ($downs.Count -ne 1)
+    $branched = (@($downLines).Count -ne 1) -or (@($downs).Count -ne 1)
     $down = $null
-    if ($downs.Count -eq 1 -and $downs[0].Groups[1].Success) { $down = $downs[0].Groups[1].Value }
+    if (@($downs).Count -eq 1 -and $downs[0].Groups[1].Success) { $down = $downs[0].Groups[1].Value }
     $labels = [regex]::Match($Text, '(?m)^branch_labels:?[^=\n]*=\s*(.+)$')
     if ($labels.Success -and $labels.Groups[1].Value.Trim() -ne "None") { $branched = $true }
     return [pscustomobject]@{
-        Revision = if ($revisions.Count -eq 1) { $revisions[0] } else { $null }
-        RevisionCount = $revisions.Count
+        Revision = if (@($revisions).Count -eq 1) { $revisions[0] } else { $null }
+        RevisionCount = @($revisions).Count
         Down = $down
         Branched = $branched
     }
@@ -80,7 +80,7 @@ function Convert-TeamMigrationTokens {
         another key (0068 -> 0069 beside 0067 -> 0068) is never replaced twice. Case-sensitive.
     #>
     param([AllowEmptyString()][string]$Text, [Parameter(Mandatory = $true)]$Map)
-    if ($Map.Count -eq 0 -or -not $Text) { return $Text }
+    if (@($Map.Keys).Count -eq 0 -or -not $Text) { return $Text }
     $keys = @($Map.Keys | Sort-Object -Property Length -Descending | ForEach-Object { [regex]::Escape($_) })
     $pattern = '(?<![A-Za-z0-9_])(?:' + ($keys -join '|') + ')(?![A-Za-z0-9_])'
     $lookup = $Map
@@ -125,7 +125,7 @@ function Get-TeamMigrationChainPlan {
     )
     $New = @($New | Where-Object { $null -ne $_ })
     $Existing = @($Existing | Where-Object { $null -ne $_ })
-    if ($New.Count -eq 0) { return (New-TeamMigrationPlan -Action "none") }
+    if (@($New).Count -eq 0) { return (New-TeamMigrationPlan -Action "none") }
 
     foreach ($file in $New) {
         if ($file.PSObject.Properties["InBase"] -and [bool]$file.InBase) {
@@ -146,10 +146,10 @@ function Get-TeamMigrationChainPlan {
         if ($header.Revision) { [void]$existingRevisions.Add($header.Revision) }
     }
     $heads = @(Get-TeamMigrationHeads -Files $Existing)
-    if ($heads.Count -gt 1) {
+    if (@($heads).Count -gt 1) {
         return (New-TeamMigrationPlan -Action "stop" -Reason ("entegrasyon dalı zaten iki uçlu: " + (($heads | Sort-Object) -join ", ")))
     }
-    if ($heads.Count -eq 0) {
+    if (@($heads).Count -eq 0) {
         return (New-TeamMigrationPlan -Action "stop" -Reason "entegrasyon dalında göç zinciri bulunamadı")
     }
     $tip = $heads[0]
@@ -172,17 +172,17 @@ function Get-TeamMigrationChainPlan {
     }
     $newRevisions = @($parsed | ForEach-Object { $_.Revision })
     $roots = @($parsed | Where-Object { $newRevisions -cnotcontains $_.Down })
-    if ($roots.Count -ne 1) {
+    if (@($roots).Count -ne 1) {
         return (New-TeamMigrationPlan -Action "stop" -Tip $tip -Reason "dalın göçleri tek bir zincir değil")
     }
     if (-not $roots[0].Down -or -not $existingRevisions.Contains([string]$roots[0].Down)) {
         return (New-TeamMigrationPlan -Action "stop" -Tip $tip -Reason ("göç entegrasyon dalında olmayan bir ebeveyne bağlı: " + $roots[0].File.Path))
     }
     $ordered = @($roots[0])
-    while ($ordered.Count -lt $parsed.Count) {
+    while (@($ordered).Count -lt @($parsed).Count) {
         $last = $ordered[-1].Revision
         $children = @($parsed | Where-Object { $_.Down -ceq $last })
-        if ($children.Count -ne 1) {
+        if (@($children).Count -ne 1) {
             return (New-TeamMigrationPlan -Action "stop" -Tip $tip -Reason "dalın göçleri tek bir zincir değil")
         }
         $ordered += $children[0]
@@ -253,7 +253,7 @@ function Get-TeamMigrationChainPlan {
         $text = [string]$test.Text
         $path = [string]$test.Path -replace '\\', '/'
         $hits = @($map.Keys | Where-Object { [regex]::IsMatch($text, '(?<![A-Za-z0-9_])' + [regex]::Escape($_) + '(?![A-Za-z0-9_])') })
-        if ($hits.Count -eq 0) { continue }
+        if (@($hits).Count -eq 0) { continue }
         foreach ($key in $hits) { $rewrites += [pscustomobject]@{ Path = $path; OldToken = $key; NewToken = $map[$key] } }
         $testFiles += [pscustomobject]@{ Path = $path; Text = (Convert-TeamMigrationTokens -Text $text -Map $map) }
     }

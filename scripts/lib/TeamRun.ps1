@@ -194,7 +194,7 @@ function Invoke-TeamMergeRechain {
     $added = Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("diff", "--name-only", "--diff-filter=A", "$Base...$Branch")
     if (-not $added.Success) { return [pscustomobject]@{ Stop = $true; Reason = "git diff okunamadı: $($added.StdErr.Trim())"; Rechained = @(); Detail = "" } }
     $addedPaths = @($added.StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and ($_ -match '(^|/)alembic/versions/[^/]+\.py$') })
-    if ($addedPaths.Count -eq 0) { return $nothing }
+    if (@($addedPaths).Count -eq 0) { return $nothing }
     if (-not (Get-Command Get-TeamMigrationChainPlan -ErrorAction SilentlyContinue)) {
         return [pscustomobject]@{ Stop = $true; Reason = "TeamMigrationChain.ps1 yüklenmedi"; Rechained = @(); Detail = "" }
     }
@@ -250,7 +250,7 @@ function Invoke-TeamMergeRechain {
         $tail = (@(([string]$check.Output) -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 3) -join " | "
         return [pscustomobject]@{ Stop = $true; Reason = "tek uç testi kırmızı: $tail"; Rechained = @(); Detail = "" }
     }
-    if ($rechained.Count -eq 0) { return $nothing }
+    if (@($rechained).Count -eq 0) { return $nothing }
     $detail = "göç zinciri yeniden kuruldu (uç $($plan.Tip)): " + (@($rechained | ForEach-Object { "$($_.OldRevision) -> $($_.NewRevision)" }) -join ", ")
     return [pscustomobject]@{ Stop = $false; Reason = ""; Rechained = @($rechained); Detail = $detail }
 }
