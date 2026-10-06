@@ -28,7 +28,13 @@ etkinlik görmezdi ("iki yarı birbirini okumalı" hatası). Stack-ops denetçis
    `CalDavConflictError` (`uid_conflict`), üzerine yazılmaz. Güncelleme (onaylı erteleme)
    önkoşulsuz PUT'tur (sahibin kendi etkinliği). DELETE 404 sessiz (istenen sonuç).
 4. **401/403** -> `CalDavAuthError` (`account_invalid`, Türkçe cümle, `CalendarApiError` alt
-   sınıfı; şifre mesajda yok). `service.py` bu kartta değişmez.
+   sınıfı; şifre mesajda yok).
+   **Okuma yolundaki hata makbuzu (alan genişletmesi, denetçi raporu 3 madde 2):**
+   `CalendarService.agenda/find_slot` sağlayıcının `CalendarApiError`'ını yakalar ve
+   `_account_missing` gibi dürüst bir makbuza çevirir: EXECUTION_REFUSED / TERMINAL_FAILED,
+   `error_class` ve `speech` istisna sınıfından (sınıfı olmayan düz `CalendarApiError` için
+   `calendar_api_error` + genel cümle); sunucu metni ve kimlik bilgisi makbuza girmez. Saat
+   yolları (`sync`, `remind_due`) ve yazma yolları değişmedi.
 5. **get_event GET yolu.** Önce `GET <href ya da uid>.ics`; yalnız 404'te ±365 günlük REPORT.
 6. **Yerel saat (bütünleşme koşusunun bulduğu hata).** `create` UTC yazar; geri okunan olay
    UTC kalınca "yarın saat 10'da" eklenen toplantı "yarın ne var"da "(07:00)" söylendi. CalDAV
@@ -53,8 +59,9 @@ etkinlik görmezdi ("iki yarı birbirini okumalı" hatası). Stack-ops denetçis
   Kokpit takvim panelinde ve "yarın ne var" cevabında 10:00 ile görünür; Radicale konteyneri
   /health'te sağlıklı.
 
-## Açık risk
+## Açık soru
 
-`CalendarService.agenda/find_slot` sağlayıcı istisnasını yakalamaz (service.py bu kartta
-değişmez): 401'de `CalDavAuthError` (error_class + speech taşır) çağırana kadar çıkar; okuma
-yolunda receipt'e çevirmek service.py'ye dokunan ayrı bir kart ister.
+Ağ/zaman aşımı hataları (`httpx.ConnectError`, `httpx.TimeoutException`; Radicale ayakta
+değil) `CalendarApiError` değildir ve okuma yolunda hâlâ `internal_bug` olarak çıkar. Bunlar
+için ayrı bir sınıf (ör. `calendar_unreachable`, "Takvim sunucusuna ulaşamadım") bu kartta
+açılmadı; lead karar verir.
