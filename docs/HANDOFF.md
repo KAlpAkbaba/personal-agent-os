@@ -15,11 +15,14 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `2568bfc5d8e675c21e75818d1bdb17d8e6affd0f` (2026-10-06 02:36 UTC = 05:36 yerel, api-green), LKG `dd999f88`,
-pin = RELEASE, reconcile OK, şema `0066_watches`. QUALIFICATION Stage 55 (koltuk paneli ilerlemesi, bekleyen koltuğun
-etiketi, test ekibi - d20261005 entegrasyonundan öne alındı). Ana kopya `team/nightly/lead` (= main). Sıradaki: integrate/d20261005'in
-geri kalanı (test-team artık main'de). Kapı kendi DB'sinde: `pagentos_gate` + PAGENTOS_DATABASE_URL. Kapı ana kopyadaki
-izlenmeyen team/proposals dosyalarını okur (proposal-shapes.test.ts kırmızısı) - kapıdan önce bak. Git Bash "/tmp yok" derse:
+**ÜRETİM: main `72884b718546727cd68a8b3709b0f2afaef586ce` (2026-10-06 08:40 UTC = 11:40 yerel, api-blue), LKG `2568bfc5`,
+pin = RELEASE, reconcile OK, şema `0070_household_stock`. QUALIFICATION Stage 56 (posta hesapları, konuşma dökümü, ev stoku,
+JARVIS arar, acil uyarı, takılan iş kontrolü, test ekibi aynı ofiste). Ana kopya `team/nightly/lead` (= main). Sıradaki:
+integrate/d20261006'nın geri kalanı (test-team-in-the-tick = test ekibi otomatik başlasın, migration-revision-from-tree, ...).
+SAHİP KURALI 2026-10-06: entegrasyon çakışmasını Proje Yöneticisi çözer (kart pm-resolves-integration-conflicts); besleyici
+döngünün yanında 30 dk'da bir ("PagentOS Team Feeder", %USERPROFILE%\.pagentos-team\team-feed-wrapper.ps1). Kapıyı ana kopyada
+DEĞİL `.claude/worktrees/int-catchup`'ta koş (ana kopyada izlenmeyen öneri dosyaları var); oradaki node_modules artık
+kendisinin (bağlantı/junction değil). Kapı kendi DB'sinde: `pagentos_gate` + PAGENTOS_DATABASE_URL. Git Bash "/tmp yok" derse:
 `mount | grep tmp`, gösterilen klasörü oluştur (kart run-temp-keeps-git-bash-tmp). Ekip varsayilan (1.) hesapta; hesap geçişi için tek seferlik görev
 `PagentOS Team Account Switch` + `%USERPROFILE%\.pagentos-team\switch-account.ps1 -Account .claude-hesapN`. Ön kontrole ekle:
 `uv run ruff check .`, test_multi_device_invariant.py, installer-strictmode.tests.ps1, provision.tests.ps1.**
