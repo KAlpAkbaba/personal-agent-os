@@ -206,6 +206,36 @@ def test_a_refused_model_renders_with_its_reason_never_zeros(bench):
     assert bench.verdict_tr(report)["letter"] == "a"
 
 
+@pytest.mark.parametrize(
+    ("int8_shift", "chosen", "diff"),
+    [
+        (0.005, GRANITE_INT8, "0.0050"),  # every pair within 0.01 of FP32: INT8
+        (0.0152, GRANITE, "0.0152"),  # one pair 0.0152 away (the real run's gap): FP32
+    ],
+)
+def test_render_tr_names_the_granite_name_for_the_corpus_and_why(bench, int8_shift, chosen, diff):
+    report = _report(0.30, 5.0)
+    int8 = _model(GRANITE_INT8, 0.29, hard=(0.71, 0.63 + int8_shift))
+    report["models"].append(int8)
+    choice = bench.corpus_choice_tr(report)
+    assert choice["chosen"] == chosen
+    assert choice["threshold"] == 0.01
+    assert f"{choice['max_diff']:.4f}" == diff
+    md = bench.render_tr(report)
+    section = md.split("## Korpus için seçilen Granite adı", 1)[1].split("\n## ", 1)[0]
+    assert f"`{chosen}`" in section
+    assert diff in section and "0.01" in section
+    assert HARD[1][0] in section  # the pair that drove the gap, by its sentence
+
+
+def test_corpus_choice_with_int8_refused_is_fp32_and_says_so(bench):
+    report = _report(0.30, 5.0)
+    report["models"].append({"model_name": GRANITE_INT8, "refused": "allowlist"})
+    choice = bench.corpus_choice_tr(report)
+    assert choice["chosen"] == GRANITE and choice["max_diff"] is None
+    assert "REDDEDİLDİ" in choice["text"]
+
+
 def test_the_markdown_holds_no_vector(bench):
     report = _report(0.61, 5.0)
     report["models"][1]["vector_probe"] = [0.123456789] * 8  # a stray field must not render
