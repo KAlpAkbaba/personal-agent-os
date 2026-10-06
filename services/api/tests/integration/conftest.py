@@ -5,6 +5,7 @@
 Every test in this package is marked `integration`.
 """
 
+import gc
 import socket
 import time
 import warnings
@@ -16,6 +17,7 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from fastapi.testclient import TestClient
 from sqlalchemy import make_url, text
+from sqlalchemy.engine import Engine
 
 from app.config import Settings
 from app.db import build_engine
@@ -92,6 +94,26 @@ def pytest_collection_modifyitems(items) -> None:
         item_path = Path(str(getattr(item, "fspath", ""))).resolve()
         if here == item_path or here in item_path.parents:
             item.add_marker(pytest.mark.integration)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def release_idle_pools() -> Iterator[None]:
+    """Close the idle pooled connections of every engine once a test module is done.
+
+    `owner_client` builds a whole app per test without its lifespan, and every app keeps its
+    own pools; nothing closed them, so the suite's connections only grew - 275 by the end on
+    2026-10-06 and `too many clients already` on the dev server's 300 for the last modules
+    (13 tests red in two gates, alone on the server). `dispose()` closes only checked-in
+    connections and leaves every engine usable, so a module- or session-scoped engine still
+    in use reconnects on its next checkout.
+    """
+    yield
+    for obj in gc.get_objects():
+        if isinstance(obj, Engine):
+            try:
+                obj.dispose()
+            except Exception:  # noqa: BLE001, S112 - one engine that will not close is no reason to fail a module
+                continue
 
 
 #: Arbitrary fixed key; any value works as long as every runner uses the same one.
