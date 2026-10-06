@@ -40,8 +40,11 @@ to it is invisible to the team.
   task name is the same, `-Force` replaces it).
 - The first real look (2026-10-07 00:42, read-only, no-op launcher) found five stops on the
   Danışman's desk, the oldest 31.8 hours: the new finding works on the live queue.
-- `scripts/tests/team-watch.tests.ps1` (18 cases) is not yet a gate step:
-  `scripts/quality-gate.ps1` is outside this card's area; the lead adds it beside team-liveness.
+- `scripts/tests/team-watch.tests.ps1` (20 cases; the second pass added a NEW returned /
+  awaiting_owner card and a run with stuck children) is not yet a gate step:
+  `scripts/quality-gate.ps1` and `.github/workflows/ci.yml` ("PowerShell 5.1 script suites")
+  are outside this card's area, and `tests/unit/test_ci_covers_every_suite.py` is RED until
+  the lead adds `team-watch.tests.ps1` to both, beside team-liveness.
 
 ## For the lead: the role file
 

@@ -223,6 +223,14 @@ try {
         $check = Invoke-Check -Status (New-Status -Runs @((New-Run -Task "slow" -Idle 31)))
         Assert-True ((Get-Keys $check) -contains "run-idle-slow") "($((Get-Keys $check) -join ','))"
     }
+    Test-Case "a run with stuck children is a finding of its own; a run without is not" {
+        $stuck = New-Run -Task "hung"
+        $stuck.stuck_children = @([pscustomobject]@{ pid = 5150; name = "pytest.exe"; minutes = 42 })
+        $check = Invoke-Check -Status (New-Status -Runs @($stuck, (New-Run -Task "fine")))
+        Assert-True ((Get-Keys $check) -contains "run-stuck-hung") "a stuck child is a finding ($((Get-Keys $check) -join ','))"
+        Assert-True ((Get-Keys $check) -notcontains "run-stuck-fine") "an empty stuck list is not ($((Get-Keys $check) -join ','))"
+        Assert-True ((@($check.Findings | Where-Object { $_.key -eq "run-stuck-hung" })[0].text) -match "5150") "the finding names the child"
+    }
 
     # ---- the cards -------------------------------------------------------------------------
     Test-Case "a stop handed to the Danisman more than an hour ago is a finding of its own" {
@@ -246,6 +254,14 @@ try {
         Assert-True ((Get-Keys $first) -contains "cards-stopped-broke") "($((Get-Keys $first) -join ','))"
         $second = Invoke-Check -Queue $queue -State $first.State
         Assert-True (@(Get-Keys $second | Where-Object { $_ -like "cards-*" }).Count -eq 0) "($((Get-Keys $second) -join ','))"
+    }
+    Test-Case "a NEW returned card and a NEW awaiting_owner card are findings; on the next look they are not" {
+        $queue = New-Queue -Tasks @((New-Task -Id "sent-back" -State "returned"), (New-Task -Id "for-owner" -State "awaiting_owner"))
+        $first = Invoke-Check -Queue $queue
+        Assert-True ((Get-Keys $first) -contains "cards-returned-sent-back") "a new returned card ($((Get-Keys $first) -join ','))"
+        Assert-True ((Get-Keys $first) -contains "cards-awaiting_owner-for-owner") "a new awaiting_owner card ($((Get-Keys $first) -join ','))"
+        $second = Invoke-Check -Queue $queue -State $first.State
+        Assert-True (@(Get-Keys $second | Where-Object { $_ -like "cards-*" }).Count -eq 0) "seen cards are not new ($((Get-Keys $second) -join ','))"
     }
 
     # ---- the three-hour memory -------------------------------------------------------------
