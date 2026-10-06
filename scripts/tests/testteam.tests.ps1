@@ -353,6 +353,11 @@ Test-Case "a tester's board note is what the Ofis' Test odası reads: 'iş: <job
     $card.state = "broke"
     $result = [pscustomobject]@{ breaking = [pscustomobject]@{ first_failure = [pscustomobject]@{ load = 256; ok = 250; errors = 6; p95_ms = 7982 } } }
     Assert-Equal -Expected "sonuç: broke - saglik (tj-r1-2) - kopma: yük 256, 6 hata / 256, p95 7982 ms" -Actual (Format-TestTeamSeatNote -Card $card -Result $result) -Because "a broken card carries its numbers"
+    # 2026-10-06: a hand-written result's rung without p95_ms stopped a round mid-way.
+    $handWritten = [pscustomobject]@{ breaking = [pscustomobject]@{ first_failure = [pscustomobject]@{ load = 8; ok = 4; errors = 4 } } }
+    Assert-Equal -Expected "sonuç: broke - saglik (tj-r1-2) - kopma: yük 8, 4 hata / 8, p95 ? ms" -Actual (Format-TestTeamSeatNote -Card $card -Result $handWritten) -Because "a missing field is '?', not a thrown round"
+    $report = Format-TestTeamBreakingReport -Round "r1" -Results @([pscustomobject]@{ family = "x"; state = "broke"; breaking = [pscustomobject]@{ what = "w"; tried = @([pscustomobject]@{ load = 8 }); first_failure = [pscustomobject]@{ load = 8 } } })
+    Assert-True -Condition ($report.Markdown -match "ilk kırılan yük 8") -Because "a rung with only its load is still reported: $($report.Markdown)"
     $card.state = "passed"
     Assert-Equal -Expected "sonuç: passed - saglik (tj-r1-2)" -Actual (Format-TestTeamSeatNote -Card $card -Result $result) -Because "a passed card is just its end"
 }
