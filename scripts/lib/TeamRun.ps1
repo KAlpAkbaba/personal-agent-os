@@ -45,33 +45,239 @@ function Test-TeamBranch {
     return $result.Success
 }
 
+function Test-TeamWorktreeHealthy {
+    <#
+    .SYNOPSIS
+        Whether a worktree is whole: its .git file is there, git can read it, and its admin
+        folder has an 'index' and neither 'locked' nor 'index.lock'. A pure check; it removes
+        nothing.
+
+    .DESCRIPTION
+        2026-10-06: a 'git worktree add' killed at 300 s left the folder and its .git file but an
+        admin folder with 'locked' and an empty 'index.lock' and no 'index'; the old ".git is
+        there" check sent a worker into it. Returns Healthy, Reason (Turkish: which condition)
+        and GitDir (the admin folder, $null when git could not name it).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Branch = ""
+    )
+    $answer = { param($ok, $reason, $gitDir) [pscustomobject]@{ Healthy = $ok; Reason = $reason; GitDir = $gitDir } }
+    if (-not (Test-Path -LiteralPath (Join-Path $Path ".git") -PathType Leaf)) { return (& $answer $false "ağaçta .git dosyası yok" $null) }
+    try { $rev = Invoke-TeamGit -WorkingDirectory $Path -Arguments @("rev-parse", "--git-dir") }
+    catch { return (& $answer $false "git rev-parse --git-dir koşamadı: $($_.Exception.Message)" $null) }
+    if (-not $rev.Success) { return (& $answer $false "git rev-parse --git-dir düştü: $($rev.StdErr.Trim())" $null) }
+    $gitDir = $rev.StdOut.Trim() -replace '/', '\'
+    if (-not [System.IO.Path]::IsPathRooted($gitDir)) { $gitDir = Join-Path $Path $gitDir }
+    if (Test-Path -LiteralPath (Join-Path $gitDir "locked")) { return (& $answer $false "yönetim klasöründe 'locked' var" $gitDir) }
+    if (Test-Path -LiteralPath (Join-Path $gitDir "index.lock")) { return (& $answer $false "yönetim klasöründe 'index.lock' var" $gitDir) }
+    if (-not (Test-Path -LiteralPath (Join-Path $gitDir "index"))) { return (& $answer $false "yönetim klasöründe 'index' yok" $gitDir) }
+    return (& $answer $true "" $gitDir)
+}
+
+function New-TeamHostSlowError {
+    <# The fixed-prefix error of a 'worktree add' that failed twice (or whose lock never came): Data['PagentosReason'] = 'host-slow'. #>
+    param([Parameter(Mandatory = $true)][string]$Detail)
+    $exception = New-Object System.Exception ("host yavaş: git worktree add " + $Detail)
+    $exception.Data["PagentosReason"] = "host-slow"
+    return $exception
+}
+
+function Get-TeamWorktreeWork {
+    <#
+    .SYNOPSIS
+        What in a worktree folder could be somebody's work: $null when there is none, else the
+        reason in Turkish. Used only before the repair removes a half-made tree.
+
+    .DESCRIPTION
+        With its index there, plain 'git status --porcelain --untracked-files=all' must be empty.
+        With the index missing (the half-made case) git status reports every file as deleted and
+        untracked, so it is asked against a TEMPORARY index read from HEAD (the locked admin
+        folder is never written); there a ' D' line is a file the killed checkout never wrote,
+        not work, and anything else is. When git cannot be asked at all, the careful path: any
+        file in the folder beside .git keeps the folder.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path, $GitDir)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $lines = $null
+    if ($GitDir -and (Test-Path -LiteralPath (Join-Path $GitDir "index"))) {
+        try {
+            $status = Invoke-TeamGit -WorkingDirectory $Path -Arguments @("status", "--porcelain", "--untracked-files=all")
+            if ($status.Success) { $lines = @($status.StdOut -split "`r?`n" | Where-Object { $_.Trim() }) }
+        }
+        catch { $lines = $null }
+    }
+    elseif ($GitDir) {
+        $tempIndex = Join-Path ([System.IO.Path]::GetTempPath()) ("pagentos-wt-index-" + [guid]::NewGuid().ToString("N"))
+        $previous = $env:GIT_INDEX_FILE
+        try {
+            $env:GIT_INDEX_FILE = $tempIndex
+            $read = Invoke-TeamGit -WorkingDirectory $Path -Arguments @("read-tree", "HEAD")
+            if ($read.Success) {
+                $status = Invoke-TeamGit -WorkingDirectory $Path -Arguments @("status", "--porcelain", "--untracked-files=all")
+                if ($status.Success) { $lines = @($status.StdOut -split "`r?`n" | Where-Object { $_.Trim() -and $_ -notmatch '^ D ' }) }
+            }
+        }
+        catch { $lines = $null }
+        finally {
+            $env:GIT_INDEX_FILE = $previous
+            foreach ($f in @($tempIndex, "$tempIndex.lock")) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
+        }
+    }
+    if ($null -ne $lines) {
+        if (@($lines).Count -gt 0) { return "kirli: $(@($lines).Count) değişiklik" }
+        return $null
+    }
+    $files = @(Get-ChildItem -LiteralPath $Path -Force | Where-Object { $_.Name -ne ".git" })
+    if (@($files).Count -gt 0) { return "kirli: git status koşamadı ve klasörde .git dışında $(@($files).Count) öğe var" }
+    return $null
+}
+
+function Repair-TeamWorktree {
+    <#
+    .SYNOPSIS
+        Clear a half-made worktree so it can be added again - ONLY when all three hold: it is
+        unhealthy, its branch has no commit over Base (no branch counts as 0), and its folder is
+        missing or clean. Anything else throws 'yarım ağaç onarılmadı: ...' and touches nothing.
+
+    .DESCRIPTION
+        The branch is never deleted: with 0 commits it equals Base and is attached again without
+        -b. The admin entry removed by hand is only one under the repository's common git dir
+        whose 'gitdir' file points at this tree's .git.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [string]$Base = "main",
+        [string]$Why = ""
+    )
+    $health = Test-TeamWorktreeHealthy -RepoRoot $RepoRoot -Path $Path -Branch $Branch
+    if ($health.Healthy -and -not $Why) { return }
+    $reason = if ($Why) { $Why } else { $health.Reason }
+    $commits = 0
+    if (Test-TeamBranch -RepoRoot $RepoRoot -Branch $Branch) {
+        $count = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("rev-list", "--count", "$Base..refs/heads/$Branch")
+        if (-not $count.Success) { throw "yarım ağaç onarılmadı: $reason (commit sayısı okunamadı: $($count.StdErr.Trim()))" }
+        $commits = [int]$count.StdOut.Trim()
+    }
+    if ($commits -gt 0) { throw "yarım ağaç onarılmadı: $reason ($commits commit)" }
+    $work = Get-TeamWorktreeWork -Path $Path -GitDir $health.GitDir
+    if ($work) { throw "yarım ağaç onarılmadı: $reason ($work)" }
+
+    try { [void](Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "unlock", $Path)) } catch { }
+    try { [void](Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "remove", "--force", "--force", $Path)) } catch { }
+    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
+    $common = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("rev-parse", "--git-common-dir")
+    if ($common.Success) {
+        $commonDir = $common.StdOut.Trim() -replace '/', '\'
+        if (-not [System.IO.Path]::IsPathRooted($commonDir)) { $commonDir = Join-Path $RepoRoot $commonDir }
+        $admins = Join-Path $commonDir "worktrees"
+        $want = [System.IO.Path]::GetFullPath((Join-Path $Path ".git")).TrimEnd('\')
+        if (Test-Path -LiteralPath $admins) {
+            foreach ($entry in @(Get-ChildItem -LiteralPath $admins -Directory -Force)) {
+                $pointer = Join-Path $entry.FullName "gitdir"
+                if (-not (Test-Path -LiteralPath $pointer)) { continue }
+                $target = ([System.IO.File]::ReadAllText($pointer).Trim()) -replace '/', '\'
+                if ($target -and [System.IO.Path]::IsPathRooted($target) -and
+                    ([System.IO.Path]::GetFullPath($target).TrimEnd('\') -ieq $want)) {
+                    Remove-Item -LiteralPath $entry.FullName -Recurse -Force
+                }
+            }
+        }
+    }
+    [void](Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "prune"))
+}
+
+function Invoke-TeamWorktreeAddLock {
+    <#
+    .SYNOPSIS
+        Run a block holding the machine's one 'git worktree add' lock (the cycle, a test round,
+        an integration and a duty run share one disk; on 6 October their adds piled up past
+        300 s). Global\ first, Local\ when Global\ cannot be opened. A lock not had within the
+        bound throws the 'host yavaş' error.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Body,
+        [int]$TimeoutSeconds = 900
+    )
+    $mutex = $null
+    try { $mutex = New-Object System.Threading.Mutex($false, "Global\PagentOS-git-worktree-add") }
+    catch { $mutex = New-Object System.Threading.Mutex($false, "Local\PagentOS-git-worktree-add") }
+    $held = $false
+    try {
+        try { $held = $mutex.WaitOne($TimeoutSeconds * 1000) }
+        catch [System.Threading.AbandonedMutexException] { $held = $true }
+        if (-not $held) { throw (New-TeamHostSlowError -Detail "(kilit $TimeoutSeconds sn içinde alınamadı)") }
+        return (& $Body)
+    }
+    finally {
+        if ($held) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
+}
+
 function New-TeamWorktree {
     <#
     .SYNOPSIS
-        A branch and its worktree, from a base. Both are left alone when they exist.
+        A branch and its worktree, from a base. Both are left alone when they exist and the
+        worktree is healthy.
+
+    .DESCRIPTION
+        2026-10-06 (card worktree-half-made-heals): a half-made worktree - unhealthy, or its add
+        failed - is repaired (Repair-TeamWorktree: only with 0 commits and nothing in it) and
+        added ONCE more; a second failure throws the 'host yavaş: git worktree add' error with
+        Data['PagentosReason'] = 'host-slow'. The add and the repair hold the machine's
+        'worktree add' lock; the 'already there' answer does not take it.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$Branch,
-        [string]$Base = "main"
+        [string]$Base = "main",
+        [int]$LockTimeoutSeconds = 900
     )
     $path = Get-TeamWorktreePath -RepoRoot $RepoRoot -Branch $Branch
-    $hasBranch = Test-TeamBranch -RepoRoot $RepoRoot -Branch $Branch
     if (Test-Path -LiteralPath (Join-Path $path ".git")) {
-        return [pscustomobject]@{ Path = $path; Branch = $Branch; Created = $false; Note = "the worktree is already there" }
+        if ((Test-TeamWorktreeHealthy -RepoRoot $RepoRoot -Path $path -Branch $Branch).Healthy) {
+            return [pscustomobject]@{ Path = $path; Branch = $Branch; Created = $false; Note = "the worktree is already there" }
+        }
     }
-    $parent = Split-Path -Parent $path
-    if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Force -Path $parent) }
-    if ($hasBranch) {
-        $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "add", $path, $Branch)
-    }
-    else {
-        $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "add", "-b", $Branch, $path, $Base)
-    }
-    if (-not $result.Success) {
-        throw "git worktree add failed for ${Branch}: $($result.StdErr.Trim())"
-    }
-    return [pscustomobject]@{ Path = $path; Branch = $Branch; Created = $true; Note = "" }
+    return (Invoke-TeamWorktreeAddLock -TimeoutSeconds $LockTimeoutSeconds -Body {
+            $add = {
+                $parent = Split-Path -Parent $path
+                if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Force -Path $parent) }
+                try {
+                    if (Test-TeamBranch -RepoRoot $RepoRoot -Branch $Branch) {
+                        $r = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "add", $path, $Branch)
+                    }
+                    else {
+                        $r = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "add", "-b", $Branch, $path, $Base)
+                    }
+                    if ($r.Success) { return "" }
+                    return $r.StdErr.Trim()
+                }
+                catch { return $_.Exception.Message }
+            }
+            # Looked at again inside the lock: another process may have just finished this tree.
+            $why = ""
+            if (Test-Path -LiteralPath (Join-Path $path ".git")) {
+                $health = Test-TeamWorktreeHealthy -RepoRoot $RepoRoot -Path $path -Branch $Branch
+                if ($health.Healthy) {
+                    return [pscustomobject]@{ Path = $path; Branch = $Branch; Created = $false; Note = "the worktree is already there" }
+                }
+                $why = $health.Reason
+            }
+            else {
+                $failure = & $add
+                if (-not $failure) { return [pscustomobject]@{ Path = $path; Branch = $Branch; Created = $true; Note = "" } }
+                $why = "git worktree add düştü: $failure"
+            }
+            Repair-TeamWorktree -RepoRoot $RepoRoot -Path $path -Branch $Branch -Base $Base -Why $why
+            $failure = & $add
+            if ($failure) { throw (New-TeamHostSlowError -Detail "ikinci denemede de düştü (${Branch}): $failure") }
+            return [pscustomobject]@{ Path = $path; Branch = $Branch; Created = $true; Note = "yarım ağaç onarıldı ve yeniden eklendi: $why" }
+        })
 }
 
 function Remove-TeamWorktree {

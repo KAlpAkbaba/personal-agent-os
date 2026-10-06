@@ -196,6 +196,223 @@ Test-Case "a native tool that exits while a process it started holds its output:
     if ($seconds -gt 20) { throw "it waited $([Math]::Round($seconds)) s" }
 }
 
+# ---------------------------------------------------------------------------------------------
+# A half-made worktree heals itself (card worktree-half-made-heals, 2026-10-06): on 6 October
+# twelve cards stopped because 'git worktree add' was killed at 300 s and left either a folder
+# whose admin entry has 'locked' + an empty 'index.lock' and no 'index', or a branch with no
+# folder and a stale admin entry. Every case runs in a sandbox repository under %TEMP%; the real
+# repository is never touched.
+# ---------------------------------------------------------------------------------------------
+
+function New-SandboxRepo {
+    <# A throwaway repository with one commit on main; .claude/ ignored as in the real one. #>
+    $repo = Join-Path $script:TempRoot ("g-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    [void](New-Item -ItemType Directory -Path $repo -Force)
+    foreach ($a in @(@("init", "-q", "-b", "main"), @("config", "user.email", "sandbox@example.invalid"), @("config", "user.name", "sandbox"), @("config", "core.autocrlf", "false"))) {
+        $r = Invoke-TeamGit -WorkingDirectory $repo -Arguments $a
+        if (-not $r.Success) { throw "sandbox git $($a -join ' '): $($r.StdErr)" }
+    }
+    [System.IO.File]::WriteAllText((Join-Path $repo ".gitignore"), ".claude/`n")
+    [System.IO.File]::WriteAllText((Join-Path $repo "a.txt"), "a`n")
+    [void](New-Item -ItemType Directory -Path (Join-Path $repo "d") -Force)
+    [System.IO.File]::WriteAllText((Join-Path $repo "d\b.txt"), "b`n")
+    foreach ($a in @(@("add", "-A"), @("commit", "-q", "-m", "init"))) {
+        $r = Invoke-TeamGit -WorkingDirectory $repo -Arguments $a
+        if (-not $r.Success) { throw "sandbox git $($a -join ' '): $($r.StdErr)" }
+    }
+    return $repo
+}
+
+function Get-SandboxSha {
+    param([string]$Repo, [string]$Ref)
+    $r = Invoke-TeamGit -WorkingDirectory $Repo -Arguments @("rev-parse", "--verify", "--quiet", $Ref)
+    if (-not $r.Success) { return $null }
+    return $r.StdOut.Trim()
+}
+
+function Get-SandboxAdminDir {
+    <# The worktree's admin folder under the common git dir (.git/worktrees/<name>). #>
+    param([string]$Tree)
+    $r = Invoke-TeamGit -WorkingDirectory $Tree -Arguments @("rev-parse", "--git-dir")
+    if (-not $r.Success) { throw "rev-parse --git-dir failed in ${Tree}: $($r.StdErr)" }
+    return ($r.StdOut.Trim() -replace '/', '\')
+}
+
+function Set-HalfMade {
+    <# What a 'git worktree add' killed at 300 s left on 6 October: locked, an empty index.lock, no index. #>
+    param([string]$AdminDir)
+    $index = Join-Path $AdminDir "index"
+    if (Test-Path -LiteralPath $index) { Remove-Item -LiteralPath $index -Force }
+    [System.IO.File]::WriteAllText((Join-Path $AdminDir "locked"), "initializing")
+    [System.IO.File]::WriteAllBytes((Join-Path $AdminDir "index.lock"), [byte[]]@())
+}
+
+Test-Case "wt-a a half-made worktree (locked, empty index.lock, no index, 0 commits, clean) is repaired and healthy" {
+    $repo = New-SandboxRepo
+    $branch = "team/sandbox/worker-a"
+    $first = New-TeamWorktree -RepoRoot $repo -Branch $branch
+    Set-HalfMade -AdminDir (Get-SandboxAdminDir -Tree $first.Path)
+    Assert-True (-not (Test-TeamWorktreeHealthy -RepoRoot $repo -Path $first.Path -Branch $branch).Healthy) "the half-made tree reads as unhealthy"
+    $second = New-TeamWorktree -RepoRoot $repo -Branch $branch
+    Assert-True ($second.Created -eq $true) "the tree was made again (Created); note: <$($second.Note)>"
+    Assert-True ($second.Note -match "onar") "the note says it was repaired; note: <$($second.Note)>"
+    $health = Test-TeamWorktreeHealthy -RepoRoot $repo -Path $second.Path -Branch $branch
+    Assert-True $health.Healthy "the repaired tree is healthy; reason: <$($health.Reason)>"
+    Assert-True (Test-Path -LiteralPath (Join-Path $second.Path "d\b.txt")) "the files are checked out"
+    # Each condition alone makes the tree unhealthy (a check that only sees the three together is not a check).
+    $admin = Get-SandboxAdminDir -Tree $second.Path
+    foreach ($one in @(@("locked", "locked"), @("index.lock", "index.lock"), @("no-index", "index"))) {
+        $index = Join-Path $admin "index"
+        $saved = [System.IO.File]::ReadAllBytes($index)
+        if ($one[0] -eq "no-index") { Remove-Item -LiteralPath $index -Force }
+        else { [System.IO.File]::WriteAllBytes((Join-Path $admin $one[0]), [byte[]]@()) }
+        $alone = Test-TeamWorktreeHealthy -RepoRoot $repo -Path $second.Path -Branch $branch
+        if ($one[0] -eq "no-index") { [System.IO.File]::WriteAllBytes($index, $saved) } else { Remove-Item -LiteralPath (Join-Path $admin $one[0]) -Force }
+        Assert-True (-not $alone.Healthy -and $alone.Reason -match [regex]::Escape("'$($one[1])'")) "'$($one[0])' alone reads as unhealthy and is named; got Healthy=$($alone.Healthy) <$($alone.Reason)>"
+    }
+    Assert-True (Test-TeamWorktreeHealthy -RepoRoot $repo -Path $second.Path -Branch $branch).Healthy "healthy again once each condition is put back"
+}
+
+Test-Case "wt-b a half-made worktree whose branch has a commit is NOT touched" {
+    $repo = New-SandboxRepo
+    $branch = "team/sandbox/worker-b"
+    $tree = (New-TeamWorktree -RepoRoot $repo -Branch $branch).Path
+    [System.IO.File]::WriteAllText((Join-Path $tree "work.txt"), "the worker's work`n")
+    foreach ($a in @(@("add", "work.txt"), @("commit", "-q", "-m", "work"))) { [void](Invoke-TeamGit -WorkingDirectory $tree -Arguments $a) }
+    $sha = Get-SandboxSha -Repo $repo -Ref "refs/heads/$branch"
+    Set-HalfMade -AdminDir (Get-SandboxAdminDir -Tree $tree)
+    $threw = $null
+    try { [void](New-TeamWorktree -RepoRoot $repo -Branch $branch) } catch { $threw = [string]$_.Exception.Message }
+    Assert-True ($null -ne $threw -and $threw -match "yarım ağaç onarılmadı" -and $threw -match "1 commit") "it throws 'yarım ağaç onarılmadı ... 1 commit'; got <$threw>"
+    Assert-True ((Get-SandboxSha -Repo $repo -Ref "refs/heads/$branch") -eq $sha) "the branch still has its commit"
+    Assert-True (Test-Path -LiteralPath (Join-Path $tree "work.txt")) "the folder and its file are where they were"
+}
+
+Test-Case "wt-c a half-made worktree with an untracked file (dirty) is NOT touched" {
+    $repo = New-SandboxRepo
+    $branch = "team/sandbox/worker-c"
+    $tree = (New-TeamWorktree -RepoRoot $repo -Branch $branch).Path
+    $file = Join-Path $tree "not-yet-committed.txt"
+    [System.IO.File]::WriteAllText($file, "half a day of work`n")
+    Set-HalfMade -AdminDir (Get-SandboxAdminDir -Tree $tree)
+    $threw = $null
+    try { [void](New-TeamWorktree -RepoRoot $repo -Branch $branch) } catch { $threw = [string]$_.Exception.Message }
+    Assert-True ($null -ne $threw -and $threw -match "yarım ağaç onarılmadı" -and $threw -match "kirli") "it throws 'yarım ağaç onarılmadı ... kirli'; got <$threw>"
+    Assert-True (Test-Path -LiteralPath $file) "the untracked file is still there"
+}
+
+Test-Case "wt-d a branch with no folder and a stale locked admin entry is attached again without -b, its sha unchanged" {
+    $repo = New-SandboxRepo
+    $branch = "team/sandbox/worker-d"
+    $tree = (New-TeamWorktree -RepoRoot $repo -Branch $branch).Path
+    $admin = Get-SandboxAdminDir -Tree $tree
+    $sha = Get-SandboxSha -Repo $repo -Ref "refs/heads/$branch"
+    Remove-Item -LiteralPath $tree -Recurse -Force
+    [System.IO.File]::WriteAllText((Join-Path $admin "locked"), "initializing")
+    Assert-True (Test-Path -LiteralPath $admin) "the stale admin entry is there before the call"
+    $result = New-TeamWorktree -RepoRoot $repo -Branch $branch
+    Assert-True ($result.Created -eq $true) "the worktree was attached"
+    Assert-True (Test-TeamWorktreeHealthy -RepoRoot $repo -Path $result.Path -Branch $branch).Healthy "the attached tree is healthy"
+    Assert-True ((Get-SandboxSha -Repo $repo -Ref "refs/heads/$branch") -eq $sha) "the branch's sha did not change"
+    $head = (Invoke-TeamGit -WorkingDirectory $result.Path -Arguments @("rev-parse", "--abbrev-ref", "HEAD")).StdOut.Trim()
+    Assert-True ($head -eq $branch) "the tree is on the branch; HEAD is <$head>"
+}
+
+Test-Case "wt-e a healthy worktree is 'already there' and no git write command runs" {
+    $repo = New-SandboxRepo
+    $branch = "team/sandbox/worker-e"
+    [void](New-TeamWorktree -RepoRoot $repo -Branch $branch)
+    $caseRealGit = ${function:Invoke-TeamGit}
+    $caseCalls = New-Object System.Collections.ArrayList
+    function Invoke-TeamGit {
+        param([string]$WorkingDirectory, [string[]]$Arguments, [int]$TimeoutSeconds = 300)
+        [void]$caseCalls.Add(($Arguments -join " "))
+        return (& $caseRealGit -WorkingDirectory $WorkingDirectory -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds)
+    }
+    $result = New-TeamWorktree -RepoRoot $repo -Branch $branch
+    Assert-True ($result.Created -eq $false -and $result.Note -eq "the worktree is already there") "already there; got Created=$($result.Created) <$($result.Note)>"
+    $writes = @($caseCalls | Where-Object { $_ -match '^worktree (add|remove|prune|unlock)|^branch |^read-tree' })
+    Assert-True ($writes.Count -eq 0) "no git write command; ran: $($writes -join ' | ')"
+    Assert-True ($caseCalls.Count -gt 0) "the shadow saw the calls (the case can fail)"
+}
+
+Test-Case "wt-f two processes adding worktrees at once take turns (one machine-wide 'worktree add' lock)" {
+    $repo = New-SandboxRepo
+    $go = Join-Path $repo "go.flag"
+    $child = Join-Path $script:TempRoot ("wt-f-child-" + [guid]::NewGuid().ToString("N").Substring(0, 6) + ".ps1")
+    $childText = @'
+param([string]$Lib, [string]$Repo, [string]$Branch, [string]$Log, [string]$Go)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+. (Join-Path $Lib "NativeProcess.ps1")
+. (Join-Path $Lib "TeamQueue.ps1")
+. (Join-Path $Lib "TeamRun.ps1")
+$script:RealGit = ${function:Invoke-TeamGit}
+function Invoke-TeamGit {
+    param([string]$WorkingDirectory, [string[]]$Arguments, [int]$TimeoutSeconds = 300)
+    $isAdd = ($Arguments.Count -ge 2 -and $Arguments[0] -eq "worktree" -and $Arguments[1] -eq "add")
+    if ($isAdd) { Add-Content -LiteralPath $Log -Value ("start " + [datetime]::UtcNow.Ticks) }
+    try {
+        if ($isAdd) { Start-Sleep -Milliseconds 2500 }
+        return (& $script:RealGit -WorkingDirectory $WorkingDirectory -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds)
+    }
+    finally { if ($isAdd) { Add-Content -LiteralPath $Log -Value ("end " + [datetime]::UtcNow.Ticks) } }
+}
+$deadline = [datetime]::UtcNow.AddSeconds(60)
+while (-not (Test-Path -LiteralPath $Go)) { if ([datetime]::UtcNow -gt $deadline) { exit 3 }; Start-Sleep -Milliseconds 20 }
+$r = New-TeamWorktree -RepoRoot $Repo -Branch $Branch
+if (-not $r.Created) { exit 4 }
+exit 0
+'@
+    [System.IO.File]::WriteAllText($child, $childText)
+    $lib = Join-Path $repoRoot "scripts\lib"
+    $procs = @()
+    $logs = @()
+    foreach ($n in 1, 2) {
+        $log = Join-Path $script:TempRoot ("wt-f-$n-" + [guid]::NewGuid().ToString("N").Substring(0, 6) + ".log")
+        $logs += $log
+        $procs += Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$child`"", "-Lib", "`"$lib`"", "-Repo", "`"$repo`"",
+            "-Branch", "team/sandbox/worker-f$n", "-Log", "`"$log`"", "-Go", "`"$go`"")
+    }
+    Start-Sleep -Seconds 3
+    [System.IO.File]::WriteAllText($go, "go")
+    foreach ($p in $procs) {
+        if (-not $p.WaitForExit(120000)) { try { $p.Kill() } catch { }; throw "a child did not finish in 120 s" }
+    }
+    foreach ($p in $procs) { Assert-True ($p.ExitCode -eq 0) "each child made its worktree; exit codes: $(@($procs | ForEach-Object { $_.ExitCode }) -join ',')" }
+    $spans = @()
+    foreach ($log in $logs) {
+        $lines = @(Get-Content -LiteralPath $log)
+        $start = [long](($lines | Where-Object { $_ -like "start *" } | Select-Object -First 1) -replace '^start ', '')
+        $end = [long](($lines | Where-Object { $_ -like "end *" } | Select-Object -Last 1) -replace '^end ', '')
+        $spans += , @($start, $end)
+    }
+    $overlap = ($spans[0][0] -lt $spans[1][1]) -and ($spans[1][0] -lt $spans[0][1])
+    $ms = [Math]::Round(([Math]::Min($spans[0][1], $spans[1][1]) - [Math]::Max($spans[0][0], $spans[1][0])) / 10000)
+    Assert-True (-not $overlap) "the two adds overlapped by $ms ms"
+}
+
+Test-Case "wt-g an add that fails twice throws 'host yavaş: git worktree add' with Data[PagentosReason]=host-slow, after exactly two tries" {
+    $repo = New-SandboxRepo
+    $caseRealGit = ${function:Invoke-TeamGit}
+    $caseAdds = New-Object System.Collections.ArrayList
+    function Invoke-TeamGit {
+        param([string]$WorkingDirectory, [string[]]$Arguments, [int]$TimeoutSeconds = 300)
+        if ($Arguments.Count -ge 2 -and $Arguments[0] -eq "worktree" -and $Arguments[1] -eq "add") {
+            [void]$caseAdds.Add(($Arguments -join " "))
+            return [pscustomobject]@{ FilePath = "git"; CommandLine = ""; ExitCode = 128; StdOut = ""; StdErr = "fatal: simulated slow host"; Success = $false }
+        }
+        return (& $caseRealGit -WorkingDirectory $WorkingDirectory -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds)
+    }
+    $caught = $null
+    try { [void](New-TeamWorktree -RepoRoot $repo -Branch "team/sandbox/worker-g") } catch { $caught = $_.Exception }
+    Assert-True ($null -ne $caught) "it threw"
+    Assert-True ($caught.Message.StartsWith("host yavaş: git worktree add")) "the message starts with the fixed prefix; got <$($caught.Message)>"
+    Assert-True ([string]$caught.Data["PagentosReason"] -eq "host-slow") "Data[PagentosReason] is host-slow; got <$($caught.Data["PagentosReason"])>"
+    Assert-True ($caseAdds.Count -eq 2) "exactly two adds were tried; tried $($caseAdds.Count): $($caseAdds -join ' | ')"
+}
+
 try { Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction Stop } catch { Write-Host "  (temp folder left: $script:TempRoot)" }
 
 Write-Host ""
