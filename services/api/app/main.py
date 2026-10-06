@@ -100,6 +100,9 @@ from app.location.providers import (
 from app.location.service import LocationService
 from app.logging import configure_logging, get_logger
 from app.mail.poller import MailPoller
+from app.money import ledger as money_ledger
+from app.money.loop import SpendLoop as MoneySpendLoop
+from app.money.routes import router as money_router
 from app.mail.providers import build_mail_provider, build_mail_sender
 from app.mail.routes import device_router as mail_device_router
 from app.mail.routes import router as mail_router
@@ -663,6 +666,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         mail_service,
         enabled=settings.mail_poll_enabled,
         interval_s=settings.mail_poll_interval_s,
+        # money-ledger: the bank's notification mails the poll just indexed, read (read-only).
+        after_poll=money_ledger.after_mail_poll,
     )
     calendar_syncer = CalendarSyncer(
         calendar_service,
@@ -782,6 +787,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # home-stock-list: the "bitmeden" reminder - once an hour, an item whose learnt rhythm says
     # it runs out in a few days is one short notification per cycle.
     household_reminders = HouseholdReminderLoop(lambda: app.state.artifacts.session())
+    # money-ledger: the conversations read for spends every 20 s (booked at once when sure,
+    # asked 90 s after the conversation ends when not).
+    money_spend_loop = MoneySpendLoop(lambda: app.state.artifacts.session())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -833,6 +841,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Twilio credentials a pass does nothing, so health still tells "idle" from "dead".
         await telephony_loop.start()
         await household_reminders.start()
+        await money_spend_loop.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -865,6 +874,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             allowlist_store.unbind()
             await telephony_loop.stop()
+            await money_spend_loop.stop()
             await household_reminders.stop()
             await watch_runner.stop()
             await watch_purge.stop()
@@ -932,6 +942,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.conversation_live = LiveConversations()
     app.state.conversation_cipher = ProfileCipher(settings.voice_profile_secret)
     app.state.household_reminders = household_reminders
+    app.state.money_spend_loop = money_spend_loop
     app.state.experience_scheduler = experience_scheduler
     app.state.mail_poller = mail_poller
     app.state.calendar_syncer = calendar_syncer
@@ -1114,6 +1125,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conversations_router)
     # home-stock-list: the house's stock and the shopping list (/v1/household).
     app.include_router(household_router)
+    # money-ledger: JARVIS's own money ledger (/v1/money); never the bank.
+    app.include_router(money_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -1192,6 +1205,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks[TELEPHONY_HEALTH_NAME] = telephony_loop.health_check()
         # home-stock-list: the hourly reminder pass; advisory like the loops above.
         checks["household_reminders"] = household_reminders.health_check()
+        # money-ledger: the conversation spend scan; advisory like the loops above.
+        checks["money_spend_loop"] = money_spend_loop.health_check()
         # B08 req 646/648/649/650: the safety net answers for itself. Both records have
         # been written for weeks and nothing read either of them; a backup nobody checks is
         # one you find out about on the day you need it.
