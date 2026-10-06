@@ -839,6 +839,17 @@ if (-not $Fast) {
     Assert-ExitCode "team-board tests"
   }
 
+  Invoke-Step "API unit step in parallel (PS5.1, fake uv + pytest -n 2)" {
+    # gate-unit-parallel: the worker count, the -n call, the serial fallback without xdist and
+    # a failure under -n, against the gate itself with a fake uv; then the real pytest -n 2 on
+    # the files whose ids once differed between workers. Grouped: its folder is a GUID, it
+    # opens no port and pytest runs without its cache.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\gate-unit-parallel.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "gate-unit-parallel tests"
+  }
+
   Complete-GateGroup
 
   # Below the group, one by one as before: what shares something with a grouped suite or with

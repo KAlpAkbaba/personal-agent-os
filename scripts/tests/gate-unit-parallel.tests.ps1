@@ -162,6 +162,16 @@ Test-Case "5. the real pytest under -n 2: every worker collects the same ids in 
     Assert-Equal 0 $code ("pytest -n 2 passes:`n" + $tail)
 }
 
+Test-Case "6. the gate runs this suite, inside its parallel suite group (CI is off: the gate is the only runner)" {
+    $text = [System.IO.File]::ReadAllText($gatePath)
+    $start = $text.IndexOf("`n  Start-GateGroup")
+    $end = $text.IndexOf("`n  Complete-GateGroup")
+    $at = $text.IndexOf("scripts\tests\gate-unit-parallel.tests.ps1")
+    Assert-True ($at -ge 0) "scripts/quality-gate.ps1 never names gate-unit-parallel.tests.ps1"
+    Assert-True ($start -ge 0 -and $end -gt $start) "the gate has no Start-GateGroup ... Complete-GateGroup block"
+    Assert-True ($at -gt $start -and $at -lt $end) "the suite is called outside the gate-parallel-suites group (between Start-GateGroup and Complete-GateGroup)"
+}
+
 Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host ("gate-unit-parallel: {0} passed, {1} failed" -f $script:Passes, $script:Failures)
