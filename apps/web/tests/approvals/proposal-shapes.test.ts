@@ -10,10 +10,50 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { parseInlines, parseProposal, type Inline } from "../../app/core/approvals/proposalSections";
-import { ONE_LINE_PAIRS, REAL_SHAPE } from "./fixtures";
+import { FEED_SHAPE, OLD_FEED_SHAPE, ONE_LINE_PAIRS, REAL_SHAPE } from "./fixtures";
 
 function plain(inlines: Inline[]): string {
   return inlines.map((inline) => inline.text).join("");
+}
+
+/**
+ * The rule every file under team/proposals must keep, the files the feeder writes included: '## '
+ * sections read back as written, one "what" section, more than five inlines, no stray '**' and
+ * http links only. A file that breaks it is a red gate.
+ */
+function expectProposalShape(text: string, file: string): void {
+  const parsed = parseProposal(text);
+  // The expected titles are read from the file by a rule that is not the parser's.
+  const headings = text
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("## "))
+    .map((line) => line.slice(3).trim());
+  expect(headings.length, file).toBeGreaterThanOrEqual(3);
+  expect(
+    parsed.sections.map((section) => section.title).filter((title) => title !== ""),
+    file,
+  ).toEqual(headings);
+  expect(parsed.title, file).toMatch(/\S/);
+  expect(
+    parsed.sections.filter((section) => section.role === "what"),
+    file,
+  ).toHaveLength(1);
+  const inlines: Inline[] = parsed.sections.flatMap((section) =>
+    section.blocks.flatMap((block) => (block.kind === "paragraph" ? block.inlines : block.items.flat())),
+  );
+  expect(inlines.length, file).toBeGreaterThan(5);
+  for (const inline of inlines) {
+    expect(inline.text, file).not.toContain("**");
+    if (inline.kind === "link") expect(inline.href, file).toMatch(/^https?:\/\//);
+  }
+  // A proposal with the section has its examples as pairs, both halves written.
+  if (parsed.benefit) {
+    expect(parsed.benefit.pairs.length, file).toBeGreaterThanOrEqual(1);
+    for (const pair of parsed.benefit.pairs) {
+      expect(plain(pair.today), file).toMatch(/\S/);
+      expect(plain(pair.withIt), file).toMatch(/\S/);
+    }
+  }
 }
 
 describe("the shape the researcher really writes", () => {
@@ -58,41 +98,41 @@ describe("the shape the researcher really writes", () => {
     const folder = join(process.cwd(), "..", "..", "team", "proposals");
     const files = readdirSync(folder).filter((name) => name.endsWith(".md"));
     expect(files.length).toBeGreaterThan(0);
-    for (const file of files) {
-      const text = readFileSync(join(folder, file), "utf8");
-      const parsed = parseProposal(text);
-      // The expected titles are read from the file by a rule that is not the parser's.
-      const headings = text
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith("## "))
-        .map((line) => line.slice(3).trim());
-      expect(headings.length, file).toBeGreaterThanOrEqual(3);
-      expect(
-        parsed.sections.map((section) => section.title).filter((title) => title !== ""),
-        file,
-      ).toEqual(headings);
-      expect(parsed.title, file).toMatch(/\S/);
-      expect(
-        parsed.sections.filter((section) => section.role === "what"),
-        file,
-      ).toHaveLength(1);
-      const inlines: Inline[] = parsed.sections.flatMap((section) =>
-        section.blocks.flatMap((block) => (block.kind === "paragraph" ? block.inlines : block.items.flat())),
-      );
-      expect(inlines.length, file).toBeGreaterThan(5);
-      for (const inline of inlines) {
-        expect(inline.text, file).not.toContain("**");
-        if (inline.kind === "link") expect(inline.href, file).toMatch(/^https?:\/\//);
-      }
-      // A proposal with the section has its examples as pairs, both halves written.
-      if (parsed.benefit) {
-        expect(parsed.benefit.pairs.length, file).toBeGreaterThanOrEqual(1);
-        for (const pair of parsed.benefit.pairs) {
-          expect(plain(pair.today), file).toMatch(/\S/);
-          expect(plain(pair.withIt), file).toMatch(/\S/);
-        }
-      }
-    }
+    for (const file of files) expectProposalShape(readFileSync(join(folder, file), "utf8"), file);
+  });
+
+  it("passes the same rule with the owner item the roadmap feeder writes (FEED_SHAPE)", () => {
+    expectProposalShape(FEED_SHAPE, "FEED_SHAPE");
+    const parsed = parseProposal(FEED_SHAPE);
+    expect(parsed.title).toBe("Radicale takvim sunucusu");
+    expect(parsed.sections.map((section) => section.title).filter((title) => title !== "")).toEqual([
+      "Ne",
+      "Roadmap satırı",
+      "Hedef",
+      "Kabul",
+      "Karar",
+    ]);
+    const what = parsed.sections.find((section) => section.role === "what");
+    expect(JSON.stringify(what?.blocks)).toContain("Radicale'yi ev PC'sine kuralım mı?");
+    // The feeder copies the owner's sentence as it was written: bold and a link in it are the
+    // parser's to read, and the file still keeps the rule.
+    expectProposalShape(
+      FEED_SHAPE.replace("Radicale'yi ev", "**Radicale**'yi [ev](https://radicale.org/) "),
+      "FEED_SHAPE with bold and a link",
+    );
+  });
+
+  it("refuses the feeder's old shape: '## Sahibe sorulan' and no 'Ne' is what turned the gate red", () => {
+    expect(parseProposal(OLD_FEED_SHAPE).sections.filter((section) => section.role === "what")).toHaveLength(0);
+    expect(() => expectProposalShape(OLD_FEED_SHAPE, "OLD_FEED_SHAPE")).toThrow(/OLD_FEED_SHAPE/);
+    // The old shape is also one inline short; with a '## Karar' it is not, and only the one-"what"
+    // rule is left to refuse it (cycle d20261006: loosening that rule kept this case green).
+    const withDecision = `${OLD_FEED_SHAPE}\n## Karar\n\nSahip: evet / hayır / ertele.\n`;
+    expect(() => expectProposalShape(withDecision, "OLD_FEED_SHAPE + Karar")).toThrow(
+      /^OLD_FEED_SHAPE \+ Karar: expected \[\] to have a length of 1/,
+    );
+    // The heading renamed is all it takes to pass: the refusal is the 'Ne' rule's.
+    expectProposalShape(withDecision.replace("## Sahibe sorulan", "## Ne"), "OLD_FEED_SHAPE + Karar, Ne");
   });
 });
 

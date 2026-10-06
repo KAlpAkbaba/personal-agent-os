@@ -312,6 +312,76 @@ Test-Case "judge: an item marked needs_owner becomes an awaiting_owner idea with
     Assert-True -Condition (@($problems | Where-Object { $_ -match "already in the queue" }).Count -ge 1) -Because "an idea's id must be free too: $($problems -join '; ')"
 }
 
+function Get-FeedProposalText {
+    <# The proposal the feeder writes for one owner item (no area; goal/acceptance as given). #>
+    param([string]$Id, [string]$Title, [string]$Sentence, [string]$Row, [string]$Goal, [string]$Acceptance, [string]$Date = $feedDate)
+    $owner = [ordered]@{ id = $Id; title = $Title; roadmap_row = $Row; needs_owner = $Sentence; evidence_expected = "PROVEN_AUTOMATED" }
+    if ($Goal) { $owner["goal"] = $Goal }
+    if ($Acceptance) { $owner["acceptance"] = $Acceptance }
+    $made = @(ConvertTo-TeamFeedTasks -Feed (ConvertTo-FeedObjects -Cards @($owner)) -RoadmapRows @(Get-TeamRoadmapRows -Text $roadmapFixture) -Date $Date)
+    Assert-Equal -Expected "owner" -Actual $made[0].Kind -Because "an item with needs_owner is the owner's"
+    return [string]$made[0].ProposalText
+}
+
+function Get-MarkdownHeadings {
+    param([string]$Text)
+    return @(($Text -split "`r?`n") | Where-Object { $_.StartsWith("## ") } | ForEach-Object { $_.Substring(3).Trim() })
+}
+
+Test-Case "proposal: the owner item is written in the researcher's shape - '## Ne' first, then row, goal, acceptance, decision" {
+    # apps/web/tests/approvals/proposal-shapes.test.ts reads every file under team/proposals and
+    # wants exactly one "Ne" section and 3+ '## ' headings; the old '## Sahibe sorulan' turned the
+    # Stage 55 gate red.
+    $text = Get-FeedProposalText -Id "q" -Title "Bir fikir" -Sentence "Soru?" -Row "Yok" -Goal "H" -Acceptance "K"
+    $lines = @($text -split "`n")
+    $order = @("# ", "Kaynak: lead koşusu", "## Ne", "## Roadmap satırı", "## Hedef", "## Kabul", "## Karar")
+    $at = -1
+    foreach ($mark in $order) {
+        $found = -1
+        for ($i = $at + 1; $i -lt $lines.Count; $i++) { if ($lines[$i].StartsWith($mark)) { $found = $i; break } }
+        Assert-True -Condition ($found -gt $at) -Because "'$mark' comes after line $at`: $text"
+        $at = $found
+    }
+    $headings = @(Get-MarkdownHeadings -Text $text)
+    Assert-Equal -Expected "Ne" -Actual $headings[0] -Because "the first section is the one the detail view shows: $($headings -join ' / ')"
+    Assert-True -Condition ($headings.Count -ge 3) -Because "three or more '## ' headings: $($headings -join ' / ')"
+    Assert-Equal -Expected 1 -Actual @($headings | Where-Object { $_ -ceq "Ne" }).Count -Because "one 'Ne' section"
+    Assert-True -Condition ($text -notmatch '\*\*' -and $text -notmatch 'http') -Because "the script adds no bold and no link of its own: $text"
+    $ne = [array]::IndexOf($lines, "## Ne")
+    Assert-Equal -Expected "" -Actual $lines[$ne + 1] -Because "a blank line under the heading"
+    Assert-Equal -Expected "Soru?" -Actual $lines[$ne + 2] -Because "the owner's sentence is the body of '## Ne'"
+    Assert-True -Condition ($lines[$ne + 4].StartsWith("## ")) -Because "and the whole of it: $text"
+    Assert-Equal -Expected "Sahip: evet / hayır / ertele." -Actual $lines[[array]::IndexOf($lines, "## Karar") + 2] -Because "the decision line"
+}
+
+Test-Case "proposal: without goal and acceptance the sections are still there, saying 'Belirtilmedi.'" {
+    $text = Get-FeedProposalText -Id "q" -Title "Bir fikir" -Sentence "Soru?" -Row "" -Goal "" -Acceptance ""
+    $headings = @(Get-MarkdownHeadings -Text $text)
+    Assert-Equal -Expected "Ne|Roadmap satırı|Hedef|Kabul|Karar" -Actual ($headings -join "|") -Because "the same five sections: $text"
+    $lines = @($text -split "`n")
+    foreach ($heading in @("## Roadmap satırı", "## Hedef", "## Kabul")) {
+        Assert-Equal -Expected "Belirtilmedi." -Actual $lines[[array]::IndexOf($lines, $heading) + 2] -Because "'$heading' says it was not given"
+    }
+}
+
+Test-Case "proposal: the web test's FEED_SHAPE fixture is what the script writes, line by line" {
+    # The two halves read each other: the vitest fixture runs the rule, this case runs the script.
+    $fixtures = [IO.File]::ReadAllText((Join-Path $repoRoot "apps\web\tests\approvals\fixtures.ts"), [Text.Encoding]::UTF8)
+    $match = [regex]::Match($fixtures, '(?s)export const FEED_SHAPE = `([^`]*)`;')
+    Assert-True -Condition $match.Success -Because "fixtures.ts has 'export const FEED_SHAPE = ``...``;'"
+    $fixture = $match.Groups[1].Value -replace "`r`n", "`n"
+    $text = Get-FeedProposalText -Id "radicale-calendar-server" -Title "Radicale takvim sunucusu" `
+        -Sentence "Radicale'yi ev PC'sine kuralım mı?" -Row "Ev takvimi kendi sunucumuzda" `
+        -Goal "Takvim verisi evde durur." -Acceptance "Telefon ve web aynı takvimi gösterir." -Date "2026-10-06"
+    Assert-Equal -Expected ((Get-MarkdownHeadings -Text $text) -join "|") -Actual ((Get-MarkdownHeadings -Text $fixture) -join "|") -Because "the same headings"
+    $want = @($text -split "`n"); $have = @($fixture -split "`n")
+    for ($i = 0; $i -lt [math]::Max($want.Count, $have.Count); $i++) {
+        $w = if ($i -lt $want.Count) { $want[$i] } else { "<none>" }
+        $h = if ($i -lt $have.Count) { $have[$i] } else { "<none>" }
+        Assert-Equal -Expected $w -Actual $h -Because "line $($i + 1) of FEED_SHAPE"
+    }
+}
+
 Write-Host ""
 Write-Host "approved ideas and the roadmap's table"
 
