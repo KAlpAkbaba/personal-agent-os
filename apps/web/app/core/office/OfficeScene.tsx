@@ -4,7 +4,7 @@
  * selection and motion preference come in as props. The characters are in officeRobots.tsx.
  */
 
-import type { DrawnSeat } from "./officeModel";
+import { QUEUED_TR, type DrawnSeat } from "./officeModel";
 import { Figure, RoomDecor } from "./officeRobots";
 
 export default function OfficeScene({
@@ -39,8 +39,13 @@ export default function OfficeScene({
             onClick={() => onSelect(seat.seat)}
           >
             {/* cut with an ellipsis at the cell's width; the title attribute keeps it whole */}
-            <span className="office-label" title={seat.label ?? undefined} aria-hidden="true">
-              {seat.label ?? " "}
+            <span
+              className="office-label"
+              title={seat.label ?? undefined}
+              aria-hidden="true"
+              {...(seat.queued ? { style: { color: "var(--muted)" } } : {})}
+            >
+              {seat.label ?? " "}
             </span>
             <Figure
               seat={seat.seat}
@@ -66,6 +71,11 @@ export default function OfficeScene({
                 {seat.runCount !== null && (
                   <span className="office-run-count"> {seat.runCount}</span>
                 )}
+              </span>
+            )}
+            {seat.queued && (
+              <span className="office-badge-static" aria-hidden="true">
+                {QUEUED_TR}
               </span>
             )}
           </button>

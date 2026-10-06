@@ -132,7 +132,9 @@ _OWNED = [
     ("bugün neler oldu", Intent.EXPLAIN, "today"),
     ("bugün ne oldu", Intent.EXPLAIN, "today"),
     ("ne başarısız oldu", Intent.EXPLAIN, "failures"),
-    ("bu hafta ne başarısız oldu", Intent.EXPLAIN, "failures"),
+    # "bu hafta ne başarısız oldu" left this list: a failure question over a span is the
+    # narrative told failures only (ADR-0244 A, test_narrative_failures_router.py).
+    ("en son ne başarısız oldu", Intent.EXPLAIN, "failures"),
     ("son yaptıkların neler", Intent.EXPLAIN, "last_activity"),
     ("hata varsa düzelt", Intent.EXPLAIN, "failures"),
 ]

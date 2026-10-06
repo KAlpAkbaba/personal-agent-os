@@ -2233,6 +2233,12 @@ def record_client_events(
                 # macro the owner NAMED. Both for the same reason as every line here.
                 "repeat_count": intent.repeat_count,
                 "macro_name": intent.macro_name,
+                # watch-voice: the page, the condition, the interval and the name the
+                # owner's WORDS carried ("20 bin liranın altına" wins over the model's).
+                "watch_url": intent.watch_url,
+                "watch_condition": intent.watch_condition,
+                "watch_every_hours": intent.watch_every_hours,
+                "watch_label": intent.watch_label,
                 # B29 req 100/102: the button or control the owner NAMED.
                 "ui_target": intent.ui_target,
                 # B30 req 119-122: the process and the service the owner NAMED.

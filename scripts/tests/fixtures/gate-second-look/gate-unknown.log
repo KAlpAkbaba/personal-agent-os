@@ -1,0 +1,23 @@
+
+=== Required files ===
+
+=== Secret hygiene ===
+FAILED: secret-shaped text in services/api/app/x.py:12
+
+=== Windows agent build + tests ===
+  Failed PagentOS.Agent.Tests.BrowserDispatchTests.ManifestPin [12 ms]
+  Error Message:
+   Assert.Equal() Failure
+FAILED: dotnet test exited with code 1
+
+=== Quality gate summary ===
+
+Step                         Result Seconds WaitSeconds
+----                         ------ ------- -----------
+Required files               PASS       0.1           0
+Secret hygiene               FAIL       3.1           0
+Windows agent build + tests  FAIL     205.9           0
+
+
+Test queue wait, total: 0 s
+QUALITY GATE: FAIL

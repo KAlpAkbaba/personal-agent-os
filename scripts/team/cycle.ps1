@@ -515,6 +515,16 @@ function Get-LimitsDocument {
     }
 }
 
+function Get-FreeWorkerSeat {
+    <# The seat a worker run starting now is given (office-stable-seats): the lowest number no
+       live worker run holds. The run keeps it until it ends, so the Ofis page does not move
+       the others when one finishes. #>
+    $held = @($script:liveRuns | Where-Object { $_.role -eq "worker" -and $null -ne $_.seat } | ForEach-Object { [int]$_.seat })
+    $seat = 1
+    while ($held -contains $seat) { $seat++ }
+    return $seat
+}
+
 function New-CycleStatus {
     param([bool]$Legacy = $false)
     $document = [ordered]@{
@@ -541,6 +551,9 @@ function New-CycleStatus {
                         if ($null -ne $cached.Value) { $entry["progress"] = $cached.Value }
                     }
                 }
+                # Not in the legacy form: a Cloud Core that refuses `model` refuses `seat` too.
+                $runSeat = Get-TeamProperty -InputObject $_ -Name "seat" -Default $null
+                if (-not $Legacy -and $null -ne $runSeat) { $entry["seat"] = [int]$runSeat }
                 $entry
             })
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
@@ -858,16 +871,14 @@ try {
         if ($tempRoot) {
             $runTemp = Join-Path $tempRoot ("{0}-{1}-{2}" -f $taskLabel, $Role, [guid]::NewGuid().ToString("N").Substring(0, 8))
         }
-        # The run's seat on the team's board: its role, and for a worker the smallest number no
-        # live worker run holds - kept for the run's life (the board knows worker-1..9). The seat
-        # is not part of the status document (the status route refuses unknown run fields).
-        $seat = $Role
-        if ($Role -eq "worker") {
-            $held = @($script:liveRuns | Where-Object { $_.role -eq "worker" } | ForEach-Object { [string]$_.seat })
-            $seat = ""
-            for ($n = 1; $n -le 9; $n++) { if ($held -notcontains "worker-$n") { $seat = "worker-$n"; break } }
-        }
-        $boardEnvironment = @{ PAGENTOS_TEAM_SEAT = $seat; PAGENTOS_TEAM_TASK = $taskLabel }
+        # The run's seat (office-stable-seats): for a worker the smallest number no live worker
+        # run holds, kept for the run's life - the status document carries it as `seat` and the
+        # Ofis page draws the run there. On the team's board the seat is `worker-<n>` (the board
+        # knows worker-1..9); a run of another role sits on its role and carries no number.
+        $seat = if ($Role -eq "worker") { Get-FreeWorkerSeat } else { $null }
+        $boardSeat = $Role
+        if ($Role -eq "worker") { $boardSeat = $(if ($seat -le 9) { "worker-$seat" } else { "" }) }
+        $boardEnvironment = @{ PAGENTOS_TEAM_SEAT = $boardSeat; PAGENTOS_TEAM_TASK = $taskLabel }
         if ($useApi) {
             $boardEnvironment["PAGENTOS_TEAM_URL"] = $QueueUrl
             $boardEnvironment["PAGENTOS_TEAM_TOKEN_FILE"] = $QueueToken

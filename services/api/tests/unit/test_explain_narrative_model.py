@@ -281,8 +281,10 @@ def test_the_failure_question_without_a_model_lists_no_completed_work_end_to_end
     assert FAIL_RESEARCH in record.speech and "Tamamlananlar" not in record.speech
 
 
-#: the owner's own spellings. The router gives every one of them to the explain
-#: ``failures`` family, which speaks the LATEST failure - not the narrative.
+#: the owner's own spellings. The router gives the ones with a period or in the plural
+#: ('bu hafta', 'bugün', 'neler') to the narrative told the failures only (ADR-0244 A);
+#: the bare singular 'ne başarısız oldu' stays with the explain ``failures`` family,
+#: which speaks the LATEST failure.
 OWNER_FAILURE_QUESTIONS = (
     "ne başarısız oldu",
     "bu hafta ne başarısız oldu",
@@ -293,19 +295,23 @@ OWNER_FAILURE_QUESTIONS = (
 
 @pytest.mark.parametrize("question", OWNER_FAILURE_QUESTIONS)
 def test_the_owners_spelling_is_answered_without_the_model_whoever_owns_it(db, question):
-    """NOT a claim that the owner's sentence is narrated: through the real router it is
-    not (see the ADR draft; the decision is the router's, outside this task). What holds
-    on either side of that decision, and is asserted with nothing substituted: the answer
-    names a failure, lists no completed work, and a provider is asked only when the
-    router made the question a narrative - and then for the failures alone."""
+    """Through the real router, nothing substituted. A question with a period or in the
+    plural is a narrative told the failures only: it names the period's failures, or -
+    when the period has none ('bugün' in the seed) - says so with the rule text and never
+    asks the model. The bare singular stays with the explain ``failures`` family: it names
+    the latest failure and asks no provider. No branch lists completed work."""
     provider = _Provider(f"İki iş olmadı: {FAIL_RESEARCH}; {FAIL_MAIL}.")
     record = explain_to_briefing(db, question, now=NOW, chat_provider=provider)
-    assert FAIL_RESEARCH in record.speech or FAIL_MAIL in record.speech
     assert "Tamamlananlar" not in record.speech
     if record.briefing.query.kind == QUERY_NARRATIVE:
         assert record.briefing.facts["failures_only"] is True
-        assert all('"tamamlanan": []' in asked for asked in provider.questions)
+        if record.speech == NO_FAILURES_TEXT:
+            assert provider.questions == [], "no failure never reaches the provider"
+        else:
+            assert FAIL_RESEARCH in record.speech or FAIL_MAIL in record.speech
+            assert all('"tamamlanan": []' in asked for asked in provider.questions)
     else:
+        assert FAIL_RESEARCH in record.speech or FAIL_MAIL in record.speech
         assert provider.questions == []
 
 

@@ -20,6 +20,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_RESEARCH,
     SUBSYSTEM_ROUTINE,
     SUBSYSTEM_VOICE,
+    SUBSYSTEM_WATCH,
 )
 
 #: the broker's own refusal class when no enrolled device can run a command (app/broker).
@@ -39,6 +40,8 @@ _SUBSYSTEM_TR = {
     SUBSYSTEM_DOCUMENTS: "belge",
     SUBSYSTEM_DEPLOYMENT: "yayın",
     SUBSYSTEM_CLOUD_CORE: "bulut çekirdeği",
+    # watch-voice: the owner's word for a watch over a page.
+    SUBSYSTEM_WATCH: "nöbet",
 }
 
 

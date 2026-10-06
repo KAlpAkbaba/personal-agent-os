@@ -1,0 +1,58 @@
+
+=== Required files ===
+
+=== Secret hygiene ===
+Secret hygiene: 0 findings in 2114 tracked files
+
+=== API lint (ruff) ===
+All checks passed!
+
+=== API unit tests ===
+TEST SIRASI: ONAY ts-0a1b2c3d4e5f (heavy) after 0 s
+........................................................................ [  2%]
+...................................F.................................... [  4%]
+.....................................................F..........E....... [  6%]
+........................................................................ [100%]
+================================== FAILURES ===================================
+____________________ test_task_id_defaults_to_none_in_logs ____________________
+
+    def test_task_id_defaults_to_none_in_logs() -> None:
+>       assert task_id_var.get() is None
+E       AssertionError: assert 't-42' is None
+
+tests\unit\test_logging_context.py:31: AssertionError
+______________________ test_route_matches[misheard-2] _________________________
+E       assert 'note' == 'watch'
+=================================== ERRORS ====================================
+_________________ ERROR at setup of test_ledger_explain_over_real_runs ________
+E       sqlalchemy.exc.OperationalError: connection refused
+=========================== short test summary info ===========================
+FAILED tests/unit/test_logging_context.py::test_task_id_defaults_to_none_in_logs - AssertionError: assert 't-42' is None
+FAILED tests/unit/test_voice_routes.py::test_route_matches[misheard-2] - assert 'note' == 'watch'
+FAILED tests/unit/test_voice_routes.py::test_route_matches[misheard-3] - assert 'note' == 'watch'
+ERROR tests/unit/test_ledger_explain.py::test_ledger_explain_over_real_runs - sqlalchemy.exc.OperationalError: connection refused
+3 failed, 4312 passed, 12 skipped, 1 error in 1843.22s (0:30:43)
+FAILED: pytest (unit) exited with code 1
+
+=== Windows agent build + tests ===
+  Passed!  - Failed:     0, Passed:  1055, Skipped:     0, Total:  1055
+
+=== API integration tests ===
+TEST SIRASI: ONAY ts-1a2b3c4d5e6f (database,heavy) after 0 s
+........................................................................ [100%]
+212 passed in 301.10s (0:05:01)
+
+=== Quality gate summary ===
+
+Step                         Result Seconds WaitSeconds
+----                         ------ ------- -----------
+Required files               PASS       0.1           0
+Secret hygiene               PASS       3.2           0
+API lint (ruff)              PASS       1.9           0
+API unit tests               FAIL    1850.4           0
+Windows agent build + tests  PASS     211.0           0
+API integration tests        PASS     305.7           0
+
+
+Test queue wait, total: 0 s
+QUALITY GATE: FAIL

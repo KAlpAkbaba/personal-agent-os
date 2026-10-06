@@ -73,6 +73,8 @@ FAMILY_TR: dict[str, str] = {
     "scene": "3B sahne",
     "state": "Anlık durum",
     "voice": "Ses yönlendirme",
+    # watch-voice: the owner's watches over public pages.
+    "watch": "Nöbetler",
     "weather": "Hava durumu",
 }
 

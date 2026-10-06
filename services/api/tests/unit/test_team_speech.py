@@ -58,7 +58,7 @@ def _busy_view():
         "tasks": [
             _task("t-secret-1", "Ofis sayfası: iki sütun, kartlar", "in_progress"),
             _task("t-secret-2", "Sesli özet - tek paragraf", "in_progress"),
-            _task("t-secret-3", "Eski görev döndü", "returned"),
+            _task("t-secret-3", "Eski görev döndü", "stopped"),
         ]
     }
     status = _status(_run("t-secret-1", 1), _run("t-secret-2", 2))
@@ -112,7 +112,7 @@ def test_tool_answers_from_a_file_store_through_the_real_handler(tmp_path: Path)
     root = tmp_path / "team"
     root.mkdir()
     (root / "queue.json").write_text(
-        json.dumps({"version": 1, "tasks": [_task("t1", "Gerçek iş", "returned")]}),
+        json.dumps({"version": 1, "tasks": [_task("t1", "Gerçek iş", "stopped")]}),
         encoding="utf-8",
     )
     ctx = SimpleNamespace(live={"team_store": team_store.FileStore(root), "team_root": root})
