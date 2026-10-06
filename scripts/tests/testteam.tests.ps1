@@ -245,6 +245,13 @@ Test-Case "jobs are dealt to the four testers in turn, one scenario family a job
     $threw = $false
     try { [void](New-TestTeamCards -Round "r1" -Jobs $twice) } catch { $threw = $true }
     Assert-True -Condition $threw -Because "one family is one job"
+    # test-lead.md: a family with no scenario file is an improvise job; its tester writes one.
+    $new = @(New-TestTeamCards -Round "r1" -Jobs @([pscustomobject]@{ family = "ev-stoku"; scenario = $null; improvise = $true; why = "yeni" }))
+    Assert-Equal -Expected "" -Actual ([string]@($new)[0].scenario) -Because "no file yet: the tester writes it"
+    Assert-True -Condition (@($new)[0].improvise) -Because "the job is to improvise"
+    $threw = $false
+    try { [void](New-TestTeamCards -Round "r1" -Jobs @([pscustomobject]@{ family = "x"; scenario = $null; improvise = $false })) } catch { $threw = $true }
+    Assert-True -Condition $threw -Because "a scripted job with no file names nothing to run"
 }
 
 Test-Case "a failure becomes a software card with steps, expected, actual, the scenario, the screenshot and the staging sha; two alike are one" {

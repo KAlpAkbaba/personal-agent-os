@@ -17,7 +17,9 @@ request goes through `scripts/testteam/run-scenario.ps1`, which refuses any othe
 
 Your card names: `id`, `tester`, `family`, `scenario`, `improvise`, `result_file`.
 
-1. Run the scripted scenario:
+1. Run the scripted scenario. When your card's `scenario` is EMPTY (a family with no file yet),
+   first write that family's scenario file in your round folder from the job's `why` (the
+   format is in run-scenario.ps1's help) and run it as the scripted scenario:
    `powershell -NoProfile -File scripts/testteam/run-scenario.ps1 -Scenario <scenario> -Card <id> -OutDir <folder of result_file>`
    (exit 0 passed, 1 a step failed, 3 the breaking ladder broke, 2 refused).
 2. When `improvise` is true, spend part of the job on combinations INSIDE the test frame:

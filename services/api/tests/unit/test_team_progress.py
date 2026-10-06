@@ -65,17 +65,18 @@ def _matrix(rows: list[tuple[str, str]]) -> str:
 # ------------------------------------------------------------------ the real documents
 
 
-def test_the_real_roadmap_jarvis_table_is_16_rows_4_have_5_partial_7_missing_41_percent():
+def test_the_real_roadmap_jarvis_table_is_16_rows_4_have_9_partial_3_missing_53_percent():
     # 2026-10-05: the owner's five JARVIS rows (calls him, home stock, follows him outside,
     # verifies what he hears, his conversations) - 12 rows at 62% became 17 at 47%; the same day the
     # owner cut the workshop, the holograms and the NEVER row (15 rows, 43%), then added his
-    # money: 16 rows, 6.5 of 16 = 41%.
+    # money: 16 rows, 6.5 of 16 = 41%. 2026-10-06: the release 72884b71 moved four rows to PARTIAL
+    # (mail accounts, calls him, the house's stock, his conversations): 8.5 of 16 = 53%.
     jarvis = progress.parse_jarvis((REPO / progress.ROADMAP).read_text(encoding="utf-8"))
     assert jarvis is not None
-    assert (jarvis["have"], jarvis["partial"], jarvis["missing"], jarvis["never"]) == (4, 5, 7, 0)
+    assert (jarvis["have"], jarvis["partial"], jarvis["missing"], jarvis["never"]) == (4, 9, 3, 0)
     assert jarvis["counted"] == 16
     assert jarvis["unknown"] == []
-    assert jarvis["percent"] == 41
+    assert jarvis["percent"] == 53
     assert len(jarvis["rows"]) == 16
     assert jarvis["rows"][0]["state"] == "have"
     assert all(row["state"] != "never" for row in jarvis["rows"])
@@ -110,7 +111,7 @@ def test_the_real_matrix_is_750_rows_711_done_95_percent_and_20_percent_proven_r
 def test_the_whole_answer_reads_the_tree_and_names_the_release():
     answer = progress.progress(REPO, as_of="a" * 40)
     assert answer["as_of"] == "a" * 40
-    assert answer["jarvis"]["percent"] == 41
+    assert answer["jarvis"]["percent"] == 53
     assert answer["v1"]["done"] == 711
     assert "0,5" in answer["rule"]
 
@@ -213,7 +214,7 @@ def owner(tmp_path):
 
 def test_the_office_answer_carries_progress_from_the_tree(owner):
     body = owner.get("/v1/team/office").json()
-    assert body["progress"]["jarvis"]["percent"] == 41
+    assert body["progress"]["jarvis"]["percent"] == 53
     assert body["progress"]["v1"]["total"] == 750
     assert "agents" in body
 
