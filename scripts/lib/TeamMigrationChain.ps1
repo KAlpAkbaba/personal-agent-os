@@ -196,17 +196,15 @@ function Get-TeamMigrationChainPlan {
     foreach ($item in $ordered) {
         $number++
         $place = Get-TeamMigrationLeaf -Path ([string]$item.File.Path)
+        # A name or id without the NNNN prefix (money_ledger.py) keeps it: only the parent decides the chain.
         $leaf = [regex]::Match($place.Leaf, '^((?:\d{8}_)?)(\d{4})(_.+\.py)$')
         $id = [regex]::Match($item.Revision, '^(\d{4})(_.+)$')
-        if (-not $leaf.Success -or -not $id.Success) {
-            return (New-TeamMigrationPlan -Action "stop" -Tip $tip -Reason ("göç adı NNNN_ biçiminde değil: " + $item.File.Path))
-        }
         $digits = $number.ToString("0000")
-        $newRevision = $digits + $id.Groups[2].Value
+        $newRevision = if ($id.Success) { $digits + $id.Groups[2].Value } else { $item.Revision }
         if ($newRevision.Length -gt $script:TeamMigrationIdLimit) {
             return (New-TeamMigrationPlan -Action "stop" -Tip $tip -Reason ("revision id $($script:TeamMigrationIdLimit) karakteri aşıyor: $newRevision"))
         }
-        $newPath = $place.Folder + $leaf.Groups[1].Value + $digits + $leaf.Groups[3].Value
+        $newPath = if ($leaf.Success) { $place.Folder + $leaf.Groups[1].Value + $digits + $leaf.Groups[3].Value } else { [string]$item.File.Path -replace '\\', '/' }
         if ($newRevision -cne $item.Revision -or $newPath -cne ([string]$item.File.Path -replace '\\', '/') -or $previous -cne $item.Down) { $changed = $true }
         $steps += [pscustomobject]@{ Item = $item; OldPath = ([string]$item.File.Path -replace '\\', '/'); NewPath = $newPath; NewRevision = $newRevision; NewDown = $previous }
         $previous = $newRevision

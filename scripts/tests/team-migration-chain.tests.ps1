@@ -178,6 +178,25 @@ Test-Case "main's migration is never renumbered, and an integration branch with 
     Assert-True -Condition ($plan.Reason -like "entegrasyon dalı zaten iki uçlu*") -Because $plan.Reason
 }
 
+Test-Case "a file name without NNNN (money_ledger.py): on the tip already is none; off the tip only the ids move, the name stays" {
+    $house = New-File -Path ($versions + "20261004_0067_household_stock.py") -Text (New-MigrationText -Revision "0067_household_stock" -Down "0066_watches" -Tables @("household_items"))
+    $onTip = New-File -Path ($versions + "money_ledger.py") -Text (New-MigrationText -Revision "0068_money_ledger" -Down "0067_household_stock" -Tables @("money_entries"))
+    $plan = Get-TeamMigrationChainPlan -Existing (@(Get-MainFiles) + $house) -New @($onTip)
+    Assert-Equal -Expected "none" -Actual $plan.Action -Because "right tip, right number: $($plan.Reason)"
+    $offTip = New-File -Path ($versions + "money_ledger.py") -Text (New-MigrationText -Revision "0067_money_ledger" -Down "0066_watches" -Tables @("money_entries"))
+    $plan = Get-TeamMigrationChainPlan -Existing (@(Get-MainFiles) + $house) -New @($offTip)
+    Assert-Equal -Expected "rechain" -Actual $plan.Action -Because $plan.Reason
+    Assert-Equal -Expected ($versions + "money_ledger.py") -Actual $plan.Renames[0].NewPath -Because "a name without NNNN is kept"
+    Assert-Equal -Expected "0068_money_ledger" -Actual $plan.Renames[0].NewRevision -Because "the revision's NNNN moves"
+    Assert-True -Condition ($plan.Renames[0].Text -match 'down_revision: str \| None = "0067_household_stock"') -Because "on the tip: $($plan.Renames[0].Text)"
+    $plain = New-File -Path ($versions + "ledger_plain.py") -Text (New-MigrationText -Revision "ledger_plain" -Down "0066_watches" -Tables @("ledger_plain"))
+    $plan = Get-TeamMigrationChainPlan -Existing (@(Get-MainFiles) + $house) -New @($plain)
+    Assert-Equal -Expected "rechain" -Actual $plan.Action -Because $plan.Reason
+    Assert-Equal -Expected "ledger_plain>0067_household_stock" -Actual "$($plan.Renames[0].NewRevision)>$($plan.Renames[0].NewDown)" -Because "an id without NNNN keeps its id, only its parent moves"
+    $chain = @(@(Get-MainFiles) + $house + (New-File -Path $plan.Renames[0].NewPath -Text $plan.Renames[0].Text))
+    Assert-Equal -Expected "ledger_plain" -Actual (@(Get-TeamMigrationHeads -Files $chain) -join ",") -Because "one head"
+}
+
 # ============================================================================ Merge-TeamBranch
 
 Write-Host ""
@@ -324,6 +343,24 @@ try {
         Assert-True -Condition (-not $merge.Merged -and $merge.Conflict) -Because "stopped"
         Assert-True -Condition ($merge.Detail -like "göç zinciri: tek uç testi kırmızı: *test_the_migration_chain_has_exactly_one_head") -Because $merge.Detail
         Assert-Equal -Expected $before -Actual (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")) -Because "taken back"
+        Assert-Equal -Expected $tip -Actual (Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "refs/heads/team/c1/worker-transcripts")) -Because "the task branch never moved"
+    }
+
+    Test-Case "end to end: a check that THROWS (uv timed out, uv missing) takes the rechained merge back too" {
+        $root = New-Sandbox
+        [void](New-SandboxBranch -Root $root -Name "team/c1/worker-wake" -Files @($wake))
+        $tip = New-SandboxBranch -Root $root -Name "team/c1/worker-transcripts" -Files @($transcripts, (New-File -Path $testPath -Text $testText))
+        [void](Merge-Sandbox -Root $root -Branch "team/c1/worker-wake")
+        $tree = Join-Path $root ".claude\worktrees\integrate\c1"
+        $before = Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")
+        $throws = { param($tree) throw "native tool timed out after 900 s" }
+        $merge = $null
+        try { $merge = Merge-Sandbox -Root $root -Branch "team/c1/worker-transcripts" -Check $throws }
+        catch { throw "Merge-TeamBranch let the check's exception out: $($_.Exception.Message)" }
+        Assert-True -Condition (-not $merge.Merged -and $merge.Conflict) -Because "stopped"
+        Assert-True -Condition ($merge.Detail -like "göç zinciri: tek uç testi koşulamadı: *native tool timed out after 900 s") -Because $merge.Detail
+        Assert-Equal -Expected $before -Actual (Invoke-SandboxGit -Root $tree -Arguments @("rev-parse", "HEAD")) -Because "taken back"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $tree -Arguments @("status", "--porcelain")) -Because "clean"
         Assert-Equal -Expected $tip -Actual (Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "refs/heads/team/c1/worker-transcripts")) -Because "the task branch never moved"
     }
 

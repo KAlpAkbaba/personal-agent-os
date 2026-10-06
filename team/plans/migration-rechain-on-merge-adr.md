@@ -52,3 +52,13 @@ tests/integration kapıda zaten koşar - bu daralma bilerek yapıldı.
   (Alembic Converger önerisi reddedildi).
 - `.github/workflows/ci.yml` alan dışı: yeni suite'in oraya eklenmesi lead'in işi
   (test_ci_covers_every_suite.py onu okur).
+
+## Ek (denetim geri dönüşü, returns=1)
+
+- Yeniden zincirleme ya da tek uç kontrolü istisna fırlatırsa (uv 900 s'de zaman aşımı, uv.exe
+  yok, dosya yazılamadı) Merge-TeamBranch bunu yakalar: merge geri alınır (reset --hard + göç ve
+  test klasörlerinde git clean), Merged=$false, Conflict=$true, Detail "göç zinciri: tek uç testi
+  koşulamadı: <ileti>". Döngü ölmez, entegrasyon dalı ilerlemiş kalmaz.
+- NNNN_ önekli olmayan dosya adı (money_ledger.py) ya da revision id'si artık durdurmaz: ad/id
+  olduğu gibi kalır, yalnız NNNN önekli olanlar yeniden numaralanır; zinciri belirleyen
+  down_revision her durumda uca bağlanır. Zaten doğru uçtaysa Action 'none' (bugünkü yol).

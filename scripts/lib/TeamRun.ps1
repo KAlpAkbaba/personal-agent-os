@@ -142,11 +142,18 @@ function Merge-TeamBranch {
     $before = (Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("rev-parse", "HEAD")).StdOut.Trim()
     $merge = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--no-ff", "-m", $message, $Branch)
     if ($merge.Success) {
-        $chain = Invoke-TeamMergeRechain -TreePath $tree.Path -Branch $Branch -Base $Base -Message $message `
-            -UvPath $UvPath -MigrationCheck $MigrationCheck
+        try {
+            $chain = Invoke-TeamMergeRechain -TreePath $tree.Path -Branch $Branch -Base $Base -Message $message `
+                -UvPath $UvPath -MigrationCheck $MigrationCheck
+        }
+        catch {
+            # uv timed out or is missing, a file could not be written: the merge must not stay behind.
+            $chain = [pscustomobject]@{ Stop = $true; Reason = ("tek uç testi koşulamadı: " + $_.Exception.Message); Rechained = @(); Detail = "" }
+        }
         if ($chain.Stop) {
             # Taken back to where it was: the task branch never moved, the integration branch is unchanged.
             [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("reset", "--hard", "--quiet", $before))
+            [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("clean", "-fdq", "--", ":(glob)**/alembic/versions/**", "services/api/tests"))
             return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = ("göç zinciri: " + $chain.Reason); Rechained = @() }
         }
         return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; Integration = $integration; Detail = $chain.Detail; Rechained = @($chain.Rechained) }
