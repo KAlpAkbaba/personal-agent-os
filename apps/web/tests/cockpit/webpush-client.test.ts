@@ -12,14 +12,26 @@ import {
   currentBrowserSubscription,
   deleteSubscription,
   fetchVapidPublicKey,
+  homeScreenState,
   listSubscriptions,
   notificationPermission,
   postSubscription,
   pushSupport,
+  readHomeScreenInput,
   registerAndSubscribe,
   unsubscribeBrowser,
   urlBase64ToUint8Array,
 } from "../../app/lib/cockpit/webpush";
+
+// Real user-agent strings, one per device the owner might open the settings page on.
+const UA = {
+  iphone17: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  iphone163: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.3 Mobile/15E148 Safari/604.1",
+  iphone164: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1",
+  ipadDesktop: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  androidChrome: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36",
+  windowsChrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+} as const;
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -192,6 +204,65 @@ describe("pushSupport", () => {
     vi.stubGlobal("navigator", { serviceWorker: {} });
     vi.stubGlobal("window", { PushManager: FakePushManager });
     expect(pushSupport()).toBe("supported");
+  });
+});
+
+// ------------------------------------------------------------- homeScreenState / readHomeScreenInput
+
+describe("homeScreenState", () => {
+  const tab = { standalone: false, displayModeStandalone: false, maxTouchPoints: 5 };
+
+  it("an iPhone Safari tab on iOS 17 needs the Home Screen, not 'unsupported'", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.iphone17 })).toBe("ios_needs_home_screen");
+  });
+
+  it("an iPhone opened from the Home Screen (navigator.standalone) goes on with today's flow", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.iphone17, standalone: true })).toBe("ios_home_screen");
+  });
+
+  it("display-mode: standalone alone also counts as the Home Screen app", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.iphone17, displayModeStandalone: true })).toBe("ios_home_screen");
+  });
+
+  it("iOS 16.3 is too old for web push, even from the Home Screen", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.iphone163 })).toBe("ios_too_old");
+    expect(homeScreenState({ ...tab, userAgent: UA.iphone163, standalone: true })).toBe("ios_too_old");
+  });
+
+  it("iOS 16.4 is the first version that is not too old", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.iphone164 })).toBe("ios_needs_home_screen");
+  });
+
+  it("an iPad with the desktop UA (Macintosh + touch points) in a tab needs the Home Screen; unknown version is not 'too old'", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.ipadDesktop, maxTouchPoints: 5 })).toBe("ios_needs_home_screen");
+  });
+
+  it("a real Mac (Macintosh, no touch points) is not iOS", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.ipadDesktop, maxTouchPoints: 0 })).toBe("not_ios");
+  });
+
+  it("Android Chrome is not iOS", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.androidChrome })).toBe("not_ios");
+  });
+
+  it("Windows Chrome is not iOS", () => {
+    expect(homeScreenState({ ...tab, userAgent: UA.windowsChrome, maxTouchPoints: 0 })).toBe("not_ios");
+  });
+});
+
+describe("readHomeScreenInput", () => {
+  it("falls back to safe defaults with no navigator/window at all (SSR)", () => {
+    vi.stubGlobal("navigator", undefined);
+    vi.stubGlobal("window", undefined);
+    expect(readHomeScreenInput()).toEqual({ userAgent: "", standalone: false, displayModeStandalone: false, maxTouchPoints: 0 });
+  });
+
+  it("reads navigator.standalone and the display-mode media query", () => {
+    const matchMedia = vi.fn().mockReturnValue({ matches: true });
+    vi.stubGlobal("navigator", { userAgent: UA.iphone17, standalone: true, maxTouchPoints: 5 });
+    vi.stubGlobal("window", { matchMedia });
+    expect(readHomeScreenInput()).toEqual({ userAgent: UA.iphone17, standalone: true, displayModeStandalone: true, maxTouchPoints: 5 });
+    expect(matchMedia).toHaveBeenCalledWith("(display-mode: standalone)");
   });
 });
 

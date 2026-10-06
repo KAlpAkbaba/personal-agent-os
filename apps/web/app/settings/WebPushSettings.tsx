@@ -6,8 +6,12 @@
  * push rung) happens without any web UI at all.
  *
  * Four honest states (task brief), checked in this order because each rules out the
- * ones after it:
+ * ones after it - after one iPhone step that comes first:
  *
+ * 0. `needs_home_screen` / `ios_too_old` — on iOS a Safari tab has no Push API at all;
+ *    web push lives only in the web app added to the Home Screen (iOS 16.4+). There the
+ *    missing `PushManager` means "not added yet", so the card says how to add it instead
+ *    of "unsupported", and asks the server nothing (`homeScreenState`, webpush.ts).
  * 1. `unsupported` — this browser has no Push API at all (no button can fix that).
  * 2. `no_server_key` — the Cloud Core has no VAPID key configured yet (an owner action
  *    on the server, `scripts/cloud/new-vapid-key.ps1` — not something clicking here does).
@@ -29,16 +33,20 @@ import {
   currentBrowserSubscription,
   deleteSubscription,
   fetchVapidPublicKey,
+  homeScreenState,
   listSubscriptions,
   notificationPermission,
   postSubscription,
   pushSupport,
+  readHomeScreenInput,
   registerAndSubscribe,
   unsubscribeBrowser,
 } from "../lib/cockpit/webpush";
 
-type Phase =
+export type Phase =
   | { kind: "checking" }
+  | { kind: "needs_home_screen" }
+  | { kind: "ios_too_old" }
   | { kind: "unsupported" }
   | { kind: "no_server_key" }
   | { kind: "denied" }
@@ -47,7 +55,10 @@ type Phase =
   | { kind: "working" }
   | { kind: "error"; message: string };
 
-async function resolvePhase(): Promise<Phase> {
+export async function resolvePhase(): Promise<Phase> {
+  const home = homeScreenState(readHomeScreenInput());
+  if (home === "ios_needs_home_screen") return { kind: "needs_home_screen" };
+  if (home === "ios_too_old") return { kind: "ios_too_old" };
   if (pushSupport() === "unsupported") return { kind: "unsupported" };
   const permission: NotificationPermissionState = notificationPermission();
   const [keyState, existing] = await Promise.all([fetchVapidPublicKey(), currentBrowserSubscription()]);
@@ -58,6 +69,9 @@ async function resolvePhase(): Promise<Phase> {
 }
 
 const PHASE_LABEL: Record<string, string> = {
+  needs_home_screen:
+    "iPhone'da push bildirimi yalnız Ana Ekrana eklenmiş uygulamada çalışır: Safari'de Paylaş → Ana Ekrana Ekle, sonra Çekirdek'i ana ekrandan açıp Ayarlar → Push bildirimleri'ne gel.",
+  ios_too_old: "iPhone'da push bildirimi iOS 16.4 ve üstü ister; cihaz güncellenmeden açılamaz.",
   unsupported: "Bu tarayıcı push bildirimlerini desteklemiyor.",
   no_server_key: "Sunucuda henüz push anahtarı yapılandırılmamış (sahip eylemi).",
   denied: "Bu tarayıcıda bildirim izni reddedilmiş; geri açmak tarayıcının site izinleri menüsünden yapılır.",
@@ -114,6 +128,28 @@ export function WebPushSettings() {
     }
   }, [refresh]);
 
+  return <WebPushSettingsView phase={phase} onEnable={() => void enable()} onDisable={() => void disable()} />;
+}
+
+const LABELLED_PHASES: ReadonlySet<Phase["kind"]> = new Set([
+  "needs_home_screen",
+  "ios_too_old",
+  "unsupported",
+  "no_server_key",
+  "denied",
+  "subscribed",
+]);
+
+/** The card's markup for one phase - split out so it renders without a browser. */
+export function WebPushSettingsView({
+  phase,
+  onEnable,
+  onDisable,
+}: {
+  phase: Phase;
+  onEnable: () => void;
+  onDisable: () => void;
+}) {
   return (
     <section className="panel" data-panel="webpush-settings">
       <h3 className="panel-title">
@@ -128,18 +164,18 @@ export function WebPushSettings() {
       {phase.kind === "checking" && <p className="muted">Kontrol ediliyor…</p>}
       {phase.kind === "working" && <p className="muted">İşleniyor…</p>}
       {phase.kind === "error" && <p className="muted" data-webpush-error>{phase.message}</p>}
-      {(phase.kind === "unsupported" || phase.kind === "no_server_key" || phase.kind === "denied" || phase.kind === "subscribed") && (
-        <p className="muted" data-webpush-state={phase.kind}>
+      {LABELLED_PHASES.has(phase.kind) && (
+        <p className="muted" data-webpush-state={phase.kind} data-phase={phase.kind}>
           {PHASE_LABEL[phase.kind]}
         </p>
       )}
       {phase.kind === "subscribed" && (
-        <button type="button" className="core-chip" onClick={() => void disable()} data-webpush-disable>
+        <button type="button" className="core-chip" onClick={onDisable} data-webpush-disable>
           Kapat
         </button>
       )}
       {phase.kind === "not_subscribed" && (
-        <button type="button" className="core-chip" onClick={() => void enable()} data-webpush-enable>
+        <button type="button" className="core-chip" onClick={onEnable} data-webpush-enable>
           Bildirimlere izin ver ve aç
         </button>
       )}
