@@ -19,7 +19,7 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 pin = RELEASE, reconcile OK, şema `0070_household_stock`. QUALIFICATION Stage 57 (test ekibi döngüyle başlar, PM entegrasyon
 çakışmasını çözer, döngü donmaz). SIRADAKİ (sahip kararı 2026-10-06): projeyi tamamen K:'ye (Samsung 990 PRO NVMe) taşı - E:
 USB HDD, günün bütün takılmalarının kökü (memory project-lives-on-usb-hdd). verify-mode integrate/d20261006'da (448d4f05,
-göç 0071_claim_verifications) yayın bekliyor. Geçici nöbetçi %USERPROFILE%\.pagentos-team	eam-feed-wrapper.ps1 içinde.**
+göç 0071_claim_verifications) yayın bekliyor. Geçici nöbetçi %USERPROFILE%\.pagentos-team\team-feed-wrapper.ps1 içinde.**
 **ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:
 `team-account.txt` = `.claude-hesap2`). %LOCALAPPDATA% altına bu oturumdan yazılan dosyalar Claude masaüstünün MSIX klasörüne
 yönleniyor, Görev Zamanlayıcı göremiyor (0xFFFD0000). Exit 3 = kilit çalışan döngüde (doğru). Görev `-MaxHours 12` geçiriyor (2026-10-04 04:55).**
