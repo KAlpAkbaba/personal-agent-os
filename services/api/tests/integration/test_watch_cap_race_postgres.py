@@ -48,9 +48,7 @@ def _alembic() -> AlembicConfig:
 
 @pytest.fixture(autouse=True)
 def public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "app.research.destination.resolve_hostname", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("app.research.destination.resolve_hostname", lambda host: ["93.184.216.34"])
 
 
 @pytest.fixture()
