@@ -279,6 +279,8 @@ function Send-StagingDownNote {
     $board = if ($BoardPath) { $BoardPath } else { Join-Path $PSScriptRoot "board.ps1" }
     try {
         $all = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$board`"", "post", "-Seat", "test-lead", "-Task", "test-team", "-Kind", "bilgi", "-Text", "`"$Text`"")
+        # The scheduled task has no PAGENTOS_TEAM_URL: the board is the queue the task names.
+        if ($QueueUrl) { $all += @("-Url", $QueueUrl, "-TokenFile", "`"$QueueToken`"") }
         $process = Start-Process -FilePath $powershell -ArgumentList $all -NoNewWindow -PassThru
         if (-not $process.WaitForExit(60000)) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     }

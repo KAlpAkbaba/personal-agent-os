@@ -494,14 +494,18 @@ Test-Case "(10) staging not answering: the cycle runs without -TestTeam, exits a
         $days = @((Get-Date).ToString("yyyyMMdd"), (Get-Date).AddMinutes(2).ToString("yyyyMMdd")) | Select-Object -Unique
         foreach ($day in $days) { Set-Content -LiteralPath (Join-Path $reports "d$day.md") -Encoding UTF8 -Value "# report d$day" }
         $url = "http://127.0.0.1:$(Get-ClosedPort)/v1/system/health"
+        # The scheduled task has no PAGENTOS_TEAM_URL: the board's address is the queue the task names.
+        $token = Join-Path $work "queue.token"
         $run = Start-Tick -Work $work -Arguments @("-FeedPath", ('"' + $feed + '"'), "-CyclePath", ('"' + $cycle + '"'), "-LogPath", ('"' + $log + '"'),
-            "-DailyId", "-ReportsRoot", ('"' + $reports + '"'), "-StagingHealthUrl", $url)
+            "-DailyId", "-ReportsRoot", ('"' + $reports + '"'), "-StagingHealthUrl", $url,
+            "-QueueUrl", "https://queue.invalid", "-QueueToken", ('"' + $token + '"'))
         $result = Wait-Tick -Tick $run
         Assert-Equal -Expected 0 -Actual $result.ExitCode -Because ("a risk, not a failure: " + $result.Out + $result.Err)
         $line = Get-CycleLine -Calls $calls
         Assert-True -Condition ($line -notmatch "-TestTeam") -Because "staging down: no test round asked for: $line"
         $board = Read-Log -Path (Join-Path $work "board.log")
         Assert-True -Condition ($board -match "^post " -and $board -match "-Seat test-lead" -and $board -match "-Kind bilgi" -and $board.Contains($url)) -Because "one board note names staging: $board"
+        Assert-True -Condition ($board.Contains("-Url https://queue.invalid") -and $board.Contains("-TokenFile $token")) -Because "the note goes to the queue's board, not to an unset PAGENTOS_TEAM_URL: $board"
         Assert-True -Condition ((Read-Log -Path $log).Contains($url)) -Because "the tick's log names staging: $(Read-Log -Path $log)"
         $report = ($days | ForEach-Object { [System.IO.File]::ReadAllText((Join-Path $reports "d$_.md")) }) -join "`n"
         Assert-True -Condition ($report.Contains($url) -and $report -match "(?m)^## Riskler") -Because "the cycle's report has a risk line: $report"

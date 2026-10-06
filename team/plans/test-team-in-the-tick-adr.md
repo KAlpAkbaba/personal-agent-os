@@ -19,6 +19,10 @@ parameter. The five test seats showed "iş bekliyor" all day beside a healthy st
   test ekibi olmadan çalıştı") goes to the tick log, to the board (seat test-lead, task test-team,
   kind bilgi), and - with `-DailyId`, once the cycle has ended - under "## Riskler (tick)" in the
   cycle's report. Never a failure: the tick's exit code stays the cycle's.
+- The board note is sent to the queue the tick was given (`-Url $QueueUrl -TokenFile $QueueToken`,
+  the address cycle.ps1 gives its agents as PAGENTOS_TEAM_URL): the scheduled task's environment
+  has no PAGENTOS_TEAM_URL, and without the arguments board.ps1 said UYARI and the note was lost.
+  A tick without `-QueueUrl` leaves board.ps1 to its own defaults.
 - Every other argument the tick forwards is unchanged, word for word; `-TestTeam` sits after
   `-Base` and before the queue arguments.
 - The scheduled task and the wrapper are not changed: the default already turns the round on.
