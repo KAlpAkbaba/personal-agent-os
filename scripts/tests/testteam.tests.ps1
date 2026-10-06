@@ -272,6 +272,29 @@ Test-Case "a failure becomes a software card with steps, expected, actual, the s
     Assert-Equal -Expected 0 -Actual @($schemaProblems).Count -Because "a normal card of the queue: $($schemaProblems -join '; ')"
 }
 
+Test-Case "a forwarded card carries a first area from its family's known code paths; an unknown family carries none" {
+    # 2026-10-06 21:02: the first automatic round forwarded 19 cards with NO area; seven moved to
+    # 'assigned' as they were and the whole team stopped. The Proje Yöneticisi widens a first
+    # area; it does not invent one.
+    $expected = [ordered]@{
+        "nobet" = "services/api/app/watch/"; "ev-stoku" = "services/api/app/household/"
+        "alarm" = "services/api/app/alarms/"; "dil-dayanikliligi" = "services/api/app/voice/understanding/"
+    }
+    foreach ($family in @($expected.Keys)) {
+        $failure = [pscustomobject]@{
+            card = "tj-r1-1"; tester = "tester-1"; family = $family; scenario = "scripts/testteam/scenarios/$family.json"
+            step = "adım"; steps = @("GET /v1/x"); expected = "200"; actual = "500"; screenshot = ""
+        }
+        $task = ConvertTo-TestTeamFailureTask -Failure $failure -Round "r1" -Now "2026-10-06T21:02:00Z"
+        Assert-True -Condition (@($task.area) -contains $expected[$family]) -Because "$family -> $($expected[$family]); got: $(@($task.area) -join ', ')"
+        Assert-Equal -Expected "proposed" -Actual $task.state -Because "the area is a first one; the Proje Yöneticisi still decides"
+        $problems = @(Test-TeamQueue -Queue ([pscustomobject]@{ version = 1; tasks = @($task) }))
+        Assert-Equal -Expected 0 -Actual @($problems).Count -Because "a normal card of the queue: $($problems -join '; ')"
+    }
+    $unknown = [pscustomobject]@{ card = "tj-r1-9"; tester = "tester-1"; family = "bilinmeyen"; scenario = "x.json"; step = "a"; steps = @(); expected = "1"; actual = "2"; screenshot = "" }
+    Assert-Equal -Expected 0 -Actual @((ConvertTo-TestTeamFailureTask -Failure $unknown -Round "r1").area).Count -Because "no known path: no invented area"
+}
+
 Test-Case "a failure's id does not hang on how the scenario path was spelled" {
     # The inspector, 2026-10-05: an absolute and a relative path of one scenario were two cards.
     $base = [pscustomobject]@{ family = "nobet"; step = "nöbet listesi"; actual = "500"; scenario = "scripts/testteam/scenarios/watches.json" }

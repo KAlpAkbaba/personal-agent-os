@@ -172,6 +172,47 @@ Test-Case "refused: two tasks in work on one area, or on an area inside the othe
     Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $waiting).Count -Because "a task at a gate is not in work"
 }
 
+Test-Case "one task's problem is that task's: it is set aside, once; only the queue's own problems stop everything" {
+    # 2026-10-06 21:02-21:16: seven test-team cards in 'assigned' without an area, and every
+    # cycle refused the WHOLE queue for over an hour - every worker seat asleep.
+    $bad = New-Task -Id "test-fail-nobet-1" -State "assigned" -Area @()
+    $good = New-Task -Id "task-two" -Area @("src/b")
+    $queue = New-Queue -Tasks @($bad, $good)
+    $found = Get-TeamQueueProblems -Queue $queue
+    Assert-Equal -Expected 0 -Actual @($found.Queue).Count -Because "not a problem of the queue: $(@($found.Queue) -join '; ')"
+    Assert-Equal -Expected "test-fail-nobet-1" -Actual (@($found.Tasks.Keys) -join ",") -Because "the problem is that task's"
+    $aside = @(Set-TeamTasksAside -Queue $queue -Problems $found -Now ([datetime]"2026-10-06T21:02:00Z"))
+    Assert-Equal -Expected "test-fail-nobet-1" -Actual (@($aside | ForEach-Object { $_.Id }) -join ",") -Because "it alone is set aside"
+    Assert-Equal -Expected "stopped" -Actual $bad.state -Because "set aside = stopped"
+    Assert-True -Condition ([string]$bad.reason -like "alan yok: önce dosya alanı*") -Because "the reason says what is missing: $($bad.reason)"
+    Assert-True -Condition ([string]$bad.reason -match "names its file area") -Because "and the rule: $($bad.reason)"
+    Assert-Equal -Expected "approved" -Actual $good.state -Because "the rest is not touched"
+    Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $queue).Count -Because "the queue keeps the protocol now: $((Test-TeamQueue -Queue $queue) -join '; ')"
+    Assert-Equal -Expected 0 -Actual @(Set-TeamTasksAside -Queue $queue -Problems (Get-TeamQueueProblems -Queue $queue)).Count -Because "written once: a stopped task is not set aside again"
+
+    $branch = New-Queue -Tasks @((New-Task -Id "bad-branch" -State "stopped" -Branch "feat/hand-gestures-stage1"))
+    Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $branch).Count -Because "a stopped task is held to the queue's rules only"
+
+    foreach ($case in @(
+            @{ Name = "an id used twice"; Tasks = @((New-Task -Id "same-id"), (New-Task -Id "same-id" -Area @("src/b"))); Says = "used twice" },
+            @{ Name = "a task without an id"; Tasks = @((New-Task -Id "")); Says = "an id is" },
+            @{ Name = "a cycle in depends_on"; Tasks = @(
+                    (New-Task -Id "dep-a" -Area @("src/a") | Add-Member -NotePropertyName depends_on -NotePropertyValue @("dep-b") -PassThru),
+                    (New-Task -Id "dep-b" -Area @("src/b") | Add-Member -NotePropertyName depends_on -NotePropertyValue @("dep-a") -PassThru)); Says = "a cycle in depends_on" })) {
+        $whole = Get-TeamQueueProblems -Queue (New-Queue -Tasks $case.Tasks)
+        Assert-True -Condition (@(@($whole.Queue) | Where-Object { $_ -match [regex]::Escape($case.Says) }).Count -ge 1) -Because "$($case.Name) is the queue's problem: $(@($whole.Queue) -join '; ')"
+    }
+}
+
+Test-Case "a move into work without an area is refused, in Turkish" {
+    $bare = New-Task -Id "test-fail-alarm-1" -State "approved" -Area @()
+    foreach ($state in @("assigned", "in_progress", "returned")) {
+        Assert-Equal -Expected "alan yok: önce dosya alanı" -Actual (Get-TeamMoveRefusal -Task $bare -State $state) -Because "into '$state' without an area"
+    }
+    Assert-Equal -Expected $null -Actual (Get-TeamMoveRefusal -Task $bare -State "awaiting_owner") -Because "a gate needs no area"
+    Assert-Equal -Expected $null -Actual (Get-TeamMoveRefusal -Task (New-Task -Id "with-area" -Area @("src/a")) -State "assigned") -Because "with an area it may"
+}
+
 Write-Host ""
 Write-Host "what a state means for the cycle"
 
@@ -2282,12 +2323,48 @@ try {
         Assert-True -Condition ([string](Get-TaskById -Queue $run.Queue -Id "stuck-one").reason -like "Danışman'a iletildi: *") -Because "the duty decided"
     }
 
-    Test-Case "a queue that breaks the protocol runs nothing" {
-        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned" -Branch "feat/hand-gestures-stage1"))
+    Test-Case "a queue that breaks the protocol runs nothing: an id used twice stops everything" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-one" -Area @("src/b")))
         $run = Invoke-Cycle -Root $root -Scenario "approve"
         Assert-Equal -Expected 2 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
         Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
-        Assert-True -Condition ($run.StdOut -match "not a team branch") -Because $run.StdOut
+        Assert-True -Condition ($run.StdOut -match "used twice") -Because $run.StdOut
+    }
+
+    Test-Case "one task that breaks the protocol is set aside with its reason, once; the rest of the queue runs" {
+        # 2026-10-06 21:02-21:16: seven test-team cards in 'assigned' without an area; the cycle
+        # said "the queue breaks the protocol; nothing was run" for over an hour.
+        $root = New-Sandbox -Tasks @(
+            (New-Task -Id "test-fail-nobet-1" -State "assigned" -Area @()),
+            (New-Task -Id "bad-branch" -State "approved" -Area @("src/c") -Branch "feat/hand-gestures-stage1"),
+            (New-Task -Id "task-two"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the rest ran: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { [string]$_.task -match "test-fail-nobet-1|bad-branch" }).Count -Because "nobody was started for a task set aside"
+        $aside = Get-TaskById -Queue $run.Queue -Id "test-fail-nobet-1"
+        Assert-Equal -Expected "stopped" -Actual $aside.state -Because "set aside"
+        Assert-True -Condition ([string]$aside.reason -like "alan yok: önce dosya alanı*") -Because "with its reason: $($aside.reason)"
+        Assert-Equal -Expected "stopped" -Actual (Get-TaskById -Queue $run.Queue -Id "bad-branch").state -Because "every task with a problem of its own"
+        Assert-True -Condition ($run.Report -match "test-fail-nobet-1 .*alan yok") -Because "the report's stopped list names it: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "Danışman'a iletildi: kenara alındı: test-fail-nobet-1") -Because "the Danışman's line: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue it left keeps the protocol"
+        $written = [string]$aside.updated_at
+        $second = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2"
+        Assert-Equal -Expected 0 -Actual $second.ExitCode -Because ($second.StdOut + $second.StdErr)
+        Assert-Equal -Expected $written -Actual ([string](Get-TaskById -Queue $second.Queue -Id "test-fail-nobet-1").updated_at) -Because "the reason is written once"
+        Assert-True -Condition ($second.Report -notmatch "kenara alındı: test-fail-nobet-1") -Because "and not said again"
+    }
+
+    Test-Case "an approved task without an area is not moved into work: it stops with 'alan yok: önce dosya alanı'" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "test-fail-alarm-1" -State "approved" -Area @()), (New-Task -Id "task-two"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $bare = Get-TaskById -Queue $run.Queue -Id "test-fail-alarm-1"
+        Assert-Equal -Expected "stopped" -Actual $bare.state -Because "never 'assigned' without an area"
+        Assert-True -Condition ([string]$bare.reason -like "alan yok: önce dosya alanı*") -Because $bare.reason
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the rest ran"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue it left keeps the protocol"
     }
 
     Test-Case "the researcher's proposals wait for the owner, and are queued once" {
@@ -3146,7 +3223,7 @@ try {
         # A broken card arrives with the stop: the store cannot be read again afterwards, so what
         # the report says of task-one is what the cycle's OWN copy says (the inspector's PROBE-Z).
         $broken = New-Task -Id "task-three" -Area @("src/third")
-        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("task-three")
         $outage = [pscustomobject]@{ task_put_when_runs = [pscustomobject]@{ runs = 1; status = 503 } }
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2"))) -Faults $outage `
             -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
@@ -3185,7 +3262,7 @@ try {
         $stopped = New-Task -Id "task-two" -State "stopped" -Area @("src/other")
         $stopped.updated_at = "2026-09-30T09:00:00Z"
         $broken = New-Task -Id "task-three" -Area @("src/third")
-        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("task-three")
         $second = New-Task -Id "task-two" -Area @("src/other")
         $second.created_at = "2026-09-30T00:00:01Z"
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"), $second) -Late @($stopped, $broken) -LateAfter 1
@@ -3360,7 +3437,7 @@ try {
         $stopped = New-Task -Id "task-one" -State "stopped"
         $stopped.updated_at = "2026-09-30T09:00:00Z"
         $broken = New-Task -Id "task-three" -Area @("src/third")
-        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("task-three")
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($stopped, $broken) -LateOnRun "inspector:task-one" -LateAfterGets 1
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
@@ -3521,7 +3598,7 @@ try {
 
     Test-Case "a queue that breaks the protocol while the cycle runs changes nothing: the cycle finishes on the copy it has, and says so" {
         $broken = New-Task -Id "task-two" -Area @("src/other")
-        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("task-two")
         $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($broken) -LateAfter 1
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
@@ -3531,7 +3608,23 @@ try {
         Assert-Equal -Expected "approved" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the broken card was neither run nor written"
         $notes = @($run.Report -split "`n" | Where-Object { $_ -match "kuyruk yeniden okunamadı" })
         Assert-Equal -Expected 1 -Actual @($notes).Count -Because "said once, not once per pass: $($run.Report)"
-        Assert-True -Condition ($notes[0] -match "no-such-task") -Because "with the reason: $($notes[0])"
+        Assert-True -Condition ($notes[0] -match "depend on itself") -Because "with the reason: $($notes[0])"
+    }
+
+    Test-Case "a card that arrives in the store mid-cycle in work without an area is set aside there, with its reason; the cycle goes on reading the store" {
+        # 2026-10-06 21:02-21:16: the cards were moved to 'assigned' while cycles ran.
+        $bare = New-Task -Id "test-fail-nobet-1" -State "assigned" -Area @()
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($bare) -LateAfter 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "merged" -Actual (@($state.tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the cycle's own task was finished"
+        $aside = @($state.tasks | Where-Object { $_.id -eq "test-fail-nobet-1" })[0]
+        Assert-Equal -Expected "stopped" -Actual $aside.state -Because "set aside in the store: $($run.Report)"
+        Assert-True -Condition ([string]$aside.reason -like "alan yok: önce dosya alanı*") -Because "with its reason: $($aside.reason)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { [string]$_.task -eq "test-fail-nobet-1" }).Count -Because "nobody was started for it"
+        Assert-True -Condition ($run.Report -notmatch "kuyruk yeniden okunamadı") -Because "the store was read: $($run.Report)"
     }
 
     Test-Case "in API mode the live status goes through PUT /v1/team/queue/status: the same documents, the limit's wait included, and the end with no run" {
