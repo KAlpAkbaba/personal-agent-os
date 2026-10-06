@@ -127,6 +127,66 @@ def test_a_short_noun_phrase_is_kept(client, name) -> None:
     assert added.status_code == 200, added.text
 
 
+#: Inspector's return (4f75814b): short sentences that were kept as item names, one per verb
+#: mood, plus "var"/"yok" and a question - Turkish ends a sentence on its verb.
+SHORT_SENTENCES = [
+    "süt al",  # imperative
+    "süt alsana",
+    "Süt getirin",
+    "süt alsak",  # conditional
+    "süt alsam",
+    "süt alırız",  # aorist with a person
+    "süt alır mısın",
+    "süt alınmalı",  # passive necessity
+    "süt almalı",
+    "süt almayı unutma",  # negative imperative
+    "süt almak",
+    "süt aldık",
+    "süt alalım",
+    "listeye süt yaz",
+    "süt yok",
+    "süt var",
+    "süt var mı",
+    "evde süt kalmadı mı",
+]
+
+
+@pytest.mark.parametrize("name", SHORT_SENTENCES)
+def test_a_short_sentence_is_not_an_item_name(client, name) -> None:
+    assert parse.name_problem(name) == parse.NAME_NOT_UNDERSTOOD, name
+    message = _refused(client.post("/v1/household/list", json={"name": name}))
+    assert message == parse.NAME_NOT_UNDERSTOOD
+    assert _items(client) == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "alabalık",  # starts like the verb "al"
+        "bal",
+        "kaymak",  # ends like an infinitive
+        "taze sarımsak",  # ends like a conditional
+        "kremalı bisküvi",  # "-malı" not on the last word
+        "koyun eti",
+        "yaz meyvesi",  # "yaz" (write) is a verb only as the last word
+        "bakla",
+        "alüminyum folyo",
+        "aldehit",
+    ],
+)
+def test_goods_that_look_like_verbs_are_kept(name) -> None:
+    assert parse.name_problem(name) is None, name
+
+
+def test_every_vocabulary_item_is_a_name() -> None:
+    """The refusal must never refuse a thing the voice path itself knows."""
+    names = [*parse._ITEMS]
+    for nominative, compound in parse._WORDS.values():
+        names += [nominative, compound, f"taze {nominative}", f"tam yağlı {compound}"]
+    refused = [n for n in names if parse.name_problem(n) is not None]
+    assert refused == []
+
+
 # ------------------------------------------------------------------ (3) the suffixes
 
 
