@@ -59,13 +59,16 @@ def _app_and_headers(
 
 class Meeting:
     """The first ``n`` statements matching ``pattern`` wait until all ``n`` have run, or until
-    ``wait_s``; later matches pass at once. ``arrived`` is how many met."""
+    ``wait_s``; later matches pass at once. ``arrived`` is how many met; ``released_seeing``
+    is, per released statement, how many had arrived when it was let go - ``[n] * n`` when the
+    window was really held, fewer for one that timed out (a fixed route's lock)."""
 
     def __init__(self, pattern: str, n: int, wait_s: float) -> None:
         self.pattern = re.compile(pattern, re.IGNORECASE | re.DOTALL)
         self.n = n
         self.wait_s = wait_s
         self.arrived = 0
+        self.released_seeing: list[int] = []
         self.cond = threading.Condition()
 
     def after_cursor_execute(self, conn, cursor, statement, parameters, context, many) -> None:  # noqa: ANN001, PLR0913
@@ -77,6 +80,7 @@ class Meeting:
             self.arrived += 1
             self.cond.notify_all()
             self.cond.wait_for(lambda: self.arrived >= self.n, timeout=self.wait_s)
+            self.released_seeing.append(self.arrived)
 
 
 @contextmanager
@@ -103,14 +107,16 @@ def fire_together(
     meet_after: str | None = None,
     meet_wait_s: float = 3.0,
     timeout_s: float = 60.0,
+    on_meeting: Callable[[Meeting], None] | None = None,
 ) -> list[httpx.Response]:
     """Send ``n`` requests to ``path`` at the same moment; their responses, in request order.
 
     ``target`` is ``owner_client(settings)`` (its app and its owner ``Authorization`` are
     used) or a bare app with ``headers``. ``json`` is one body for every request, or
     ``json(i)`` a body per request (25 different watch labels). ``meet_after`` (optional): a
-    regular expression on the SQL of the route's read; see the module text. Call it from a
-    synchronous test; it runs its own event loop.
+    regular expression on the SQL of the route's read; see the module text. ``on_meeting``
+    (optional) is given the ``Meeting`` afterwards, to count how its window was released.
+    Call it from a synchronous test; it runs its own event loop.
     """
     if n < 2:
         raise ValueError("fire_together needs at least two requests to make a race")
@@ -138,4 +144,6 @@ def fire_together(
     if meeting is not None and meeting.arrived == 0:
         # A stale pattern would quietly turn the held window back into a timing race.
         raise AssertionError(f"meet_after matched no statement of {method} {path}: {meet_after!r}")
+    if meeting is not None and on_meeting is not None:
+        on_meeting(meeting)
     return responses

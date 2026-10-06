@@ -18,7 +18,7 @@ from fastapi import Request
 from sqlalchemy import text
 
 from app.config import Settings
-from tests.integration.concurrency import fire_together
+from tests.integration.concurrency import Meeting, fire_together
 from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
@@ -116,10 +116,24 @@ def test_meet_after_holds_every_request_inside_the_window_after_its_read(setting
         return await asyncio.to_thread(run)
 
     client.app.add_api_route(PROBE, window, methods=["POST"])
+    meetings: list[Meeting] = []
 
-    responses = fire_together(client, "POST", PROBE, json={}, n=N, meet_after="two-devices-window")
+    responses = fire_together(
+        client,
+        "POST",
+        PROBE,
+        json={},
+        n=N,
+        meet_after="two-devices-window",
+        meet_wait_s=20.0,
+        on_meeting=meetings.append,
+    )
 
     assert [r.status_code for r in responses] == [200] * N
+    # The count that holds the strict xfails: every one of the N reads was let go only once
+    # all N had arrived (inspector, 2026-10-06: with the wait removed the old peak check
+    # stayed green and the watch-cap xfail passed 2 runs in 3).
+    assert [m.released_seeing for m in meetings] == [[N] * N]
     assert probe.peak == N
 
 

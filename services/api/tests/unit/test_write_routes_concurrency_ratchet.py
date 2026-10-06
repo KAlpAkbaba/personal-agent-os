@@ -24,6 +24,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 API = Path(__file__).resolve().parents[2]
 APP = API / "app"
 INTEGRATION = API / "tests" / "integration"
@@ -295,10 +297,16 @@ def write_routes_in(source: str, where: str = "<source>") -> set[str]:
                 isinstance(decorator, ast.Call)
                 and isinstance(decorator.func, ast.Attribute)
                 and decorator.func.attr in WRITE_METHODS
-                and isinstance(decorator.func.value, ast.Name)
-                and decorator.func.value.id in prefixes
             ):
                 continue
+            # Every write decorator counts: one on an imported router or an attribute
+            # (``@Box.router.post``) would otherwise be a write route nobody asks about.
+            owner = decorator.func.value
+            if not (isinstance(owner, ast.Name) and owner.id in prefixes):
+                raise AssertionError(
+                    f"{where}:{decorator.lineno}: a router this guard cannot read: "
+                    f"{ast.unparse(owner)} (make it with APIRouter(...) in this module)"
+                )
             first = decorator.args[0] if decorator.args else None
             if isinstance(first, ast.Constant) and isinstance(first.value, str):
                 path = first.value
@@ -313,13 +321,11 @@ def write_routes_in(source: str, where: str = "<source>") -> set[str]:
     return routes
 
 
-def all_write_routes() -> set[str]:
+def all_write_routes(folder: Path = APP) -> set[str]:
+    """Every module is read: a text filter on "APIRouter" skipped one that imports its router."""
     routes: set[str] = set()
-    for path in sorted(APP.rglob("*.py")):
-        source = path.read_text("utf-8")
-        if "APIRouter" not in source:
-            continue
-        routes |= write_routes_in(source, str(path.relative_to(API)))
+    for path in sorted(folder.rglob("*.py")):
+        routes |= write_routes_in(path.read_text("utf-8"), path.relative_to(folder).as_posix())
     return routes
 
 
@@ -460,6 +466,36 @@ def patch(): ...
         "PUT /v1/other",
         "PATCH /v1/things",
     }
+
+
+def test_a_write_route_on_a_router_this_module_did_not_make_is_an_error() -> None:
+    """Inspector's M4 (2026-10-06): ``from app.household.routes import router`` and an
+    ``@router.post`` in a new module went unseen and unasked. A write decorator on a name the
+    guard cannot trace to an ``APIRouter(...)`` in the same module stops the guard."""
+    imported = """
+from app.household.routes import router
+@router.post("/{item_id}/gorunmez")
+def hidden(item_id: str): ...
+"""
+    with pytest.raises(AssertionError, match="a router this guard cannot read"):
+        write_routes_in(imported, "app/household/zz_x.py")
+    attribute = """
+from fastapi import APIRouter
+class Box:
+    router = APIRouter()
+@Box.router.put("/v1/box")
+def put(): ...
+"""
+    with pytest.raises(AssertionError, match="a router this guard cannot read"):
+        write_routes_in(attribute)
+
+
+def test_every_app_module_is_read_not_only_those_that_name_apirouter(tmp_path) -> None:
+    (tmp_path / "zz_x.py").write_text(
+        'from app.household.routes import router\n@router.post("/x")\ndef x(): ...\n', "utf-8"
+    )
+    with pytest.raises(AssertionError, match="a router this guard cannot read"):
+        all_write_routes(tmp_path)
 
 
 def test_a_new_write_route_without_a_test_is_red_with_a_turkish_message() -> None:
