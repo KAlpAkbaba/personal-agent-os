@@ -30,6 +30,7 @@ NEGATED = [
     "Sabah rutinini iptal etmeyiniz.",
     "Bunu hafızandan silmeyin.",
     "Alarmı sakın sil.",
+    "Alarmı silmeyi unut.",  # forget about deleting it: the verbal noun asks for no act
 ]
 
 
@@ -60,7 +61,12 @@ def test_a_bare_kaldir_with_nothing_before_it_is_no_alarm(said: str) -> None:
         ("sabah rutinini iptal et", Intent.ROUTINE_CANCEL),
         ("Bunu hafızandan sil.", Intent.MEMORY_FORGET),
         ("Beni kaldır.", Intent.ALARM_CREATE),  # the bare wake: "kaldır" with the one it wakes
+        ("Yarın yedide kaldır.", Intent.ALARM_CREATE),  # no thing named: still the wake
         ("Saat yedide beni uyandır.", Intent.ALARM_CREATE),
+        # "don't forget to wake me" asks for the act: the verbal noun is no negation
+        ("Saat yedide beni uyandırmayı unutma.", Intent.ALARM_CREATE),
+        ("Alarmı iptal edin.", Intent.ALARM_CANCEL),
+        ("Sakin ol, alarmı sil.", Intent.ALARM_CANCEL),  # "sakin" is calm, not "sakın"
     ],
 )
 def test_the_positive_forms_still_act(said: str, intent: Intent) -> None:
