@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.household import service
+from app.household import parse, service
 from app.household.models import HouseholdItem
 from app.identity.dependencies import require_owner_session
 
@@ -71,6 +71,18 @@ async def _payload(request: Request) -> dict[str, Any]:
     return payload
 
 
+def _typed(payload: dict[str, Any], *, quantity: bool) -> None:
+    """A typed name must be a short noun phrase and a typed quantity a positive amount - the
+    voice path's parser only ever hands those over; a form or a script can send anything."""
+    name = payload.get("name")
+    problem = parse.name_problem(name) if isinstance(name, str) and name.strip() else None
+    amount = payload.get("quantity")
+    if problem is None and quantity and isinstance(amount, str):
+        problem = parse.quantity_problem(amount)
+    if problem is not None:
+        raise _refused(service.HouseholdRefused(problem))
+
+
 def _item_id(raw: str) -> uuid.UUID:
     try:
         return uuid.UUID(raw)
@@ -99,6 +111,7 @@ async def read_household(request: Request) -> dict[str, Any]:
 @router.post("/v1/household/items")
 async def set_item_level(request: Request) -> dict[str, Any]:
     payload = await _payload(request)
+    _typed(payload, quantity=False)
     artifacts = request.app.state.artifacts
 
     def run() -> dict[str, Any]:
@@ -120,6 +133,7 @@ async def set_item_level(request: Request) -> dict[str, Any]:
 @router.post("/v1/household/list")
 async def add_list_item(request: Request) -> dict[str, Any]:
     payload = await _payload(request)
+    _typed(payload, quantity=True)
     artifacts = request.app.state.artifacts
 
     def run() -> dict[str, Any]:
