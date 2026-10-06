@@ -2195,6 +2195,58 @@ try {
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue was never broken: $((Test-TeamQueue -Queue $run.Queue) -join '; ')"
     }
 
+    # duty-waits-survive-restart (2026-10-06): a held return lived only in the cycle's memory; the
+    # cycle restarted at 15:00 and nothing reopened conversation-followups when money-ledger merged.
+    # The next cycle reads the hold back from the stopped task's reason in the store.
+    $heldReason = "Proje Yöneticisi: Testi ekle (alan çakışması: busy-one; o iş bitince)"
+
+    Test-Case "duty wait from the store: a cycle started with a held return keeps it stopped while its holder is in work - not handed to the Proje Yöneticisi again" {
+        $gate = New-Task -Id "idea-gate" -State "awaiting_owner" -Area @("src/other")
+        $busy = New-Task -Id "busy-one" -State "returned" -Area @("src/area")
+        $busy | Add-Member -NotePropertyName depends_on -NotePropertyValue @("idea-gate")
+        $root = New-Sandbox -Tasks @((New-Stopped -Reason $heldReason), $busy, $gate)
+        $run = Invoke-DutyCycle -Root $root -Decisions @((New-Decision -Reason "yanlışlıkla ikinci karar"))
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "" -Actual (Get-Roles -Run $run) -Because "the hold was read back: no duty run, no worker beside the holder: $($run.Report)"
+        $task = Get-TaskById -Queue $run.Queue -Id "stuck-one"
+        Assert-Equal -Expected "stopped|$heldReason|2026-10-03T10:00:00Z" -Actual ("{0}|{1}|{2}" -f $task.state, $task.reason, $task.updated_at) -Because "untouched while held"
+    }
+
+    Test-Case "duty wait from the store: a held return read at cycle start is made when its holder leaves the work (merged) in that cycle" {
+        $busy = New-Task -Id "busy-one" -State "returned" -Area @("src/area") -Branch "team/c1/worker-busy-one"
+        $root = New-Sandbox -Tasks @((New-Stopped -Reason $heldReason), $busy)
+        [void](Invoke-SandboxGit -Root $root -Arguments @("branch", "team/c1/worker-busy-one", "main"))
+        $run = Invoke-DutyCycle -Root $root
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $order = @($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ","
+        Assert-Equal -Expected "worker:busy-one,inspector:busy-one,worker:stuck-one,inspector:stuck-one" -Actual $order -Because "the holder first, then the held return, and no duty run: $($run.Report)"
+        Assert-Equal -Expected "merged,merged" -Actual ("{0},{1}" -f (Get-TaskById -Queue $run.Queue -Id "busy-one").state, (Get-TaskById -Queue $run.Queue -Id "stuck-one").state) -Because $run.Report
+    }
+
+    Test-Case "duty wait from the store: a held return whose holders are already merged or gone is made at once, with the Proje Yöneticisi's reason" {
+        $reason = "Proje Yöneticisi: Testi ekle (alan çakışması: done-one, gone-one; o iş bitince)"
+        $root = New-Sandbox -Tasks @((New-Stopped -Reason $reason), (New-Task -Id "done-one" -State "merged" -Area @("src/area")))
+        $run = Invoke-DutyCycle -Root $root
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $order = @($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ","
+        Assert-Equal -Expected "worker:stuck-one,inspector:stuck-one" -Actual $order -Because "returned at once, not handed to the duty: $($run.Report)"
+        Assert-True -Condition ([bool]@($run.Calls)[0].came_back) -Because "the worker's card says why it came back"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "stuck-one").state -Because $run.Report
+    }
+
+    Test-Case "duty wait from the store: a stopped task without the held-return suffix (or without the Proje Yöneticisi's prefix) is not read as a hold" {
+        $plain = New-Stopped -Reason "Proje Yöneticisi: Testi ekle"
+        $other = New-Stopped -Id "stuck-two" -Area @("src/b") -Reason "inceleme durdu (alan çakışması: gone-one; o iş bitince)"
+        $root = New-Sandbox -Tasks @($plain, $other)
+        $run = Invoke-DutyCycle -Root $root
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "lead" -Actual (Get-Roles -Run $run) -Because "both go to the duty as any stop does (it wrote no decision): $($run.Report)"
+        foreach ($expected in @(@("stuck-one", "Proje Yöneticisi: Testi ekle"), @("stuck-two", "inceleme durdu (alan çakışması: gone-one; o iş bitince)"))) {
+            $task = Get-TaskById -Queue $run.Queue -Id $expected[0]
+            Assert-Equal -Expected "stopped|$($expected[1])" -Actual ("{0}|{1}" -f $task.state, $task.reason) -Because "untouched"
+        }
+    }
+
     Test-Case "duty: a task stopped AGAIN after the duty sent it back is handed again; a task handed three times in one cycle is left to the Danışman" {
         $root = New-Sandbox -Tasks @((New-Stopped))
         $run = Invoke-DutyCycle -Root $root -Decisions @((New-Decision -Reason "Yeniden dene")) -Scenario "return"
