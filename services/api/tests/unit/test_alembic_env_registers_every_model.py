@@ -2,13 +2,14 @@
 
 Autogenerate compares Base.metadata with the database, so a models module env.py forgets
 makes its tables look like tables to DROP. The hand-kept list had drifted: on 2026-10-06 it
-imported 21 modules while the tree held 45, and 46 tables (conversations, mail_accounts,
-household_items, goals, ...) were invisible to autogenerate. env.py now calls
-``app.registry.register_models()``; this test pins that the discovered set IS the tree.
+imported 21 modules besides app.models while the tree held 46, and 46 tables
+(conversations, mail_accounts, household_items, goals, ...) were invisible to autogenerate.
+env.py now calls ``app.registry.register_models()``; this test pins that the discovered set IS the tree.
 """
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from app.models import Base
@@ -65,4 +66,40 @@ def test_env_py_imports_no_app_module_by_hand() -> None:
     text = ENV_PY.read_text(encoding="utf-8")
     by_hand = [line for line in text.splitlines() if line.lstrip().startswith("import app.")]
     assert not by_hand, f"env.py'de elle yazılmış model içe aktarımı kaldı: {by_hand}"
-    assert "register_models()" in text
+
+
+def test_env_py_calls_register_models_before_reading_the_metadata() -> None:
+    # A statement, not text: the header comment names register_models() too, so a
+    # substring check stayed green with the call deleted (inspector, 2026-10-06) and
+    # every table but app.models' would have looked like a table to DROP.
+    tree = ast.parse(ENV_PY.read_text(encoding="utf-8"))
+    imported = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "app.registry"
+        and any(alias.name == "register_models" and alias.asname is None for alias in node.names)
+        for node in tree.body
+    )
+    assert imported, "env.py 'from app.registry import register_models' satırını kaybetti"
+    calls = [
+        index
+        for index, node in enumerate(tree.body)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "register_models"
+    ]
+    assert calls, (
+        "env.py modül düzeyinde register_models() çağırmıyor: autogenerate yalnız "
+        "app.models tablolarını görür, gerisini SİLİNECEK sanar"
+    )
+    # the migrations run from the module-level `if context.is_offline_mode():`
+    runs = [
+        index
+        for index, node in enumerate(tree.body)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Call)
+        and isinstance(node.test.func, ast.Attribute)
+        and node.test.func.attr == "is_offline_mode"
+    ]
+    assert runs, "env.py'de göçleri koşan modül düzeyi if bloğu yok"
+    assert calls[0] < runs[0], "register_models() göçler koşulduktan SONRA çağrılıyor"

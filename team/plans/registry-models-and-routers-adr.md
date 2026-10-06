@@ -7,8 +7,8 @@ Kart: registry-models-and-routers (döngü d20261006). Öneri: team/proposals/20
 İki elle tutulan liste her paralel dalın aynı yerine satır ekletiyordu ve entegrasyonda
 çakışıyordu (6 Ekim: conversation-transcripts, home-stock-list, mail-accounts-connect):
 `alembic/env.py`'deki `import app.X.models` satırları ve `main.py` create_app'teki
-`app.include_router` satırları. Ayrıca env.py listesi kaymıştı: ağaçta 45 models modülü
-varken 21'i içe aktarılıyordu; 46 tablo (conversations, mail_accounts, household_items,
+`app.include_router` satırları. Ayrıca env.py listesi kaymıştı: ağaçta 46 models modülü (app.models dahil)
+varken app.models dışında 21'i içe aktarılıyordu; 46 tablo (conversations, mail_accounts, household_items,
 goals, research_*, webpush_subscriptions ...) autogenerate'e görünmüyordu - bir sonraki
 `alembic revision --autogenerate` bunları DROP olarak önerirdi.
 
@@ -36,7 +36,9 @@ yeni bağımlılık, örtük uç türetme (Risk 1) ve 30 satırlık işi yapan b
 - `test_route_table_snapshot.py::MAIN_INCLUDE_ROUTER_CEILING = 56`: main.py'deki çağrı sayısı
   bunu aşamaz; satırlar taşındıkça sabit düşürülür, asla yükseltilmez.
 - Yeni models modülü env.py'ye satır istemez; `test_alembic_env_registers_every_model.py`
-  ağaçtaki küme ile keşif kümesini ve her eşlenmiş sınıfın modülünü denetler.
+  ağaçtaki küme ile keşif kümesini, her eşlenmiş sınıfın modülünü ve env.py'nin
+  `register_models()`'ı modül düzeyinde DEYİM olarak (AST, göçleri koşan `if`'ten önce) çağırdığını
+  denetler - metin araması yorumla tatmin oluyordu (denetçi, 2026-10-06).
 
 ## Kapsam dışı / bilinen sınırlar
 
@@ -47,5 +49,5 @@ yeni bağımlılık, örtük uç türetme (Risk 1) ve 30 satırlık işi yapan b
   `understanding/exemplars.json`.
 - Açılış maliyeti: create_app ortalaması 23,0 -> 46,5 ms (5 koşu; routes modülleri zaten
   yüklü, maliyet dosya sistemi yürüyüşü ~21 ms).
-- env.py artık 45 modülün hepsini yükler; bir models modülü ağır/yan etkili bir içe aktarma
+- env.py artık 46 modülün hepsini yükler; bir models modülü ağır/yan etkili bir içe aktarma
   eklerse göç komutları da onu yükler (bugün birim testi hepsini yüklüyor, yeşil).

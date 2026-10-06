@@ -5,7 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 # EVERY module's models must be on Base.metadata. Autogenerate compares it
 # against the database, so an unregistered module's tables look like tables to
-# DROP. They are no longer listed here by hand (the list had drifted: 21 of 45
+# DROP. They are no longer listed here by hand (the list had drifted: 21 of 46
 # modules on 2026-10-06): register_models() imports every app module named
 # `models` or `*_models`, and tests/unit/test_alembic_env_registers_every_model.py
 # pins that set to the tree. A new package needs no line here. The migrations
