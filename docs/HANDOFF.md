@@ -15,10 +15,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `b30df6c547ebc8afb826441ac56091688aba2c3f` (2026-10-05 00:32 UTC = 03:32 yerel, api-green), LKG `321e43b0`,
-pin = RELEASE, reconcile OK, şema `0066_watches`. QUALIFICATION Stage 54 (2026-10-04 entegrasyonu: staging, nöbet motoru,
-tarayıcı koruması, oto-yayın, limitten devam, ilerleme şeridi, pano konuşması). Ana kopya `team/nightly/lead` (= main). Kapıda
-bekleyen YOK. test-team artık staging-stack'i beklemiyor. Ekip hesap3'te; hesap geçişi için tek seferlik görev
+**ÜRETİM: main `2568bfc5d8e675c21e75818d1bdb17d8e6affd0f` (2026-10-06 02:36 UTC = 05:36 yerel, api-green), LKG `dd999f88`,
+pin = RELEASE, reconcile OK, şema `0066_watches`. QUALIFICATION Stage 55 (koltuk paneli ilerlemesi, bekleyen koltuğun
+etiketi, test ekibi - d20261005 entegrasyonundan öne alındı). Ana kopya `team/nightly/lead` (= main). Sıradaki: integrate/d20261005'in
+geri kalanı (test-team artık main'de). Kapı kendi DB'sinde: `pagentos_gate` + PAGENTOS_DATABASE_URL. Kapı ana kopyadaki
+izlenmeyen team/proposals dosyalarını okur (proposal-shapes.test.ts kırmızısı) - kapıdan önce bak. Git Bash "/tmp yok" derse:
+`mount | grep tmp`, gösterilen klasörü oluştur (kart run-temp-keeps-git-bash-tmp). Ekip varsayilan (1.) hesapta; hesap geçişi için tek seferlik görev
 `PagentOS Team Account Switch` + `%USERPROFILE%\.pagentos-team\switch-account.ps1 -Account .claude-hesapN`. Ön kontrole ekle:
 `uv run ruff check .`, test_multi_device_invariant.py, installer-strictmode.tests.ps1, provision.tests.ps1.**
 **ZAMANLAYICI (2026-10-04): ekip görevi `C:\Users\alpak\.pagentos-team\team-tick-wrapper.ps1`'i çalıştırır (hesap dosyası yanında:

@@ -1436,3 +1436,24 @@ lead wired owner-trials-wiring's two area requests (trial events in the ledger v
 | 54.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: b30df6c…`, `api-green schema at 0066_watches (database matches the tree)`; recovery supervisor pinned to the full sha by the Danışman, then `RECONCILE OK: api-green is canonical (release b30df6c…)` |
 | 54.2 | The integration's own suites | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 261/261, `scripts/tests/team-integrate.tests.ps1` 93/93, `scripts/tests/staging.tests.ps1` 33/33, `scripts/tests/team-release.tests.ps1` 59/59 (the last three now gate and CI steps); web 2343/2343 |
 | 54.3 | The watch runner ships switched off | `PROVEN_AUTOMATED` | `services/api/app/config.py` `watch_runner_enabled = False` until the redirect guard is proven live; `services/api/tests/unit/test_watch_service.py` |
+
+## Stage 55 — the Ofis seat panel's run progress, the waiting seat's label, and the test team (ADR-0214 addendum 26)
+
+Released 2026-10-06 02:36 UTC (05:36 local) as main `2568bfc5d8e675c21e75818d1bdb17d8e6affd0f` (api-green; previous
+`dd999f88…` kept as last known good; no migration, schema stays `0066_watches`). The test team (card `test-team`, cycle
+d20261005) was taken out of the day's integration and released beside the run progress at the owner's request. Gate on
+`9bc51163` (tree-equal), the gate on its own database `pagentos_gate` (workers' Postgres tests migrate the shared dev
+database). The five starts before were red on: the config defaults test reading `PAGENTOS_DATABASE_URL`; the new
+`testteam.tests.ps1` missing from the gate and CI lists; Git Bash's `/tmp` mounted on a deleted team-run temp folder (card
+`run-temp-keeps-git-bash-tmp`); the feed test still naming the four rows the owner's JARVIS-only roadmap removed; and one
+120 s wait of the misheard collector's PowerShell child (stdin now `DEVNULL`). The last gate's one red is
+`apps/web/tests/approvals/proposal-shapes.test.ts` reading ten UNCOMMITTED researcher proposals in the gate checkout; on the
+committed tree it is 8/8.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 55.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 2568bfc…`, `api-green schema at 0066_watches (database matches the tree)`; recovery supervisor pinned to the full sha, then `RECONCILE OK: api-green is canonical (release 2568bfc…)` |
+| 55.2 | A seat's measured progress reaches the panel | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 263/263 (progress case, two mutations RED); `services/api/tests/unit/test_team_office.py`; `services/api/tests/unit/test_team_status_bounds.py`; `apps/web/tests/office/run-progress.test.tsx` |
+| 55.3 | A waiting seat names the seat it waits for, in Turkish case | `PROVEN_AUTOMATED` | `apps/web/tests/office/run-progress.test.tsx` (waitText, accusative) |
+| 55.4 | The test team's round, seats and Test odası | `PROVEN_AUTOMATED` | `scripts/tests/testteam.tests.ps1` 30/30 (now a gate and CI step); `services/api/tests/unit/test_team_board.py`; `apps/web/tests/office/test-room.test.tsx` |
+| 55.5 | The rest of the gate | `PROVEN_AUTOMATED` | unit 16085 passed; `scripts/tests/team-feed.tests.ps1` 80/80; `scripts/tests/team-integrate.tests.ps1` 93/93; web 2358/2359 (the one red above) |
