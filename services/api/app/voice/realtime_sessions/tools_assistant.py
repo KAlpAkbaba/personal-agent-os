@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.logging import get_logger
 from app.voice import capabilities as caps
+from app.voice.realtime_sessions import carryover
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
@@ -148,6 +149,15 @@ def _owner_memory_block(ctx: ToolContext) -> str:
         return ""
 
 
+def _session_row(ctx: ToolContext) -> Any:
+    """This session's row in the handler's own transaction (None without a database)."""
+    if getattr(ctx, "db", None) is None:
+        return None
+    from app.voice.realtime_sessions.models import RealtimeSessionRow
+
+    return ctx.db.get(RealtimeSessionRow, ctx.session_id)
+
+
 def assistant_chat(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ADR-0173 addendum: free conversation in the local mode. The question is the owner's own
     sentence from THIS turn's record (set only in a local session, only when the router
@@ -170,6 +180,11 @@ def assistant_chat(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         }
     provider = ctx.live.get("chat_provider") or chat.build_chat_provider(ctx.live.get("settings"))
     session = str(ctx.session_id)
+    row = _session_row(ctx)
+    carry = row is not None and carryover.enabled(ctx.db)
+    if carry and ctx.context.get("carried_from"):
+        # card conversation-carryover (B): this session continues one on another device
+        chat.seed_carried(chat.MEMORY, session, row.transcript_summary or "")
     now_tr = ctx.now.astimezone().strftime("%d.%m.%Y %H:%M")
     answer = provider.answer(
         question,
@@ -181,6 +196,12 @@ def assistant_chat(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     )
     if answer.ok:
         chat.MEMORY.remember(session, question, answer.speech)
+        if carry:
+            from app.voice.realtime_sessions.service import MAX_SUMMARY_CHARS
+
+            row.transcript_summary = chat.summary_of(
+                chat.MEMORY.history(session), limit=MAX_SUMMARY_CHARS
+            )
     return {
         "speech": answer.speech,
         "answered": answer.ok,

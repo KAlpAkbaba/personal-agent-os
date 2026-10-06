@@ -24,6 +24,7 @@ _BOOL_FIELDS = (
     "read_urls",
     "read_footnotes",
     "barge_in",
+    "conversation_carryover",
 )
 
 
@@ -39,6 +40,10 @@ class VoicePreferences:
     read_urls: bool = False
     read_footnotes: bool = False
     barge_in: bool = True
+    # card conversation-carryover: a new voice session continues the previous one (its
+    # summary and open plan) when it was active in the last 30 minutes. Off = nothing is
+    # carried, the local mode seeds nothing, a closed session's research is not forwarded.
+    conversation_carryover: bool = True
     # Names of fields the owner has set explicitly; these are immune to inferred
     # updates. Persisted alongside the values so the override rule survives reloads.
     owner_set: list[str] = field(default_factory=list)

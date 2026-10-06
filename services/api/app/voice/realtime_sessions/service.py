@@ -71,6 +71,7 @@ from app.voice.realtime_bench import (
     build_report,
     events_from_client_reports,
 )
+from app.voice.realtime_sessions import carryover
 from app.voice.realtime_sessions.models import (
     REALTIME_STATE_ACTIVE,
     REALTIME_STATE_CLOSED,
@@ -468,10 +469,35 @@ def _session_config(
             voice_profile=ctx.get("voice_profile"),
             memory_block=memory_block,
             pronunciation=pronunciation,
+            carried_from=ctx.get("carried_from"),
         ),
         tools=tuple(registry.manifest()),
         voice=ctx.get("voice"),
     )
+
+
+def _carry_previous(
+    db: Session, row: RealtimeSessionRow, prefs: Any, *, now: datetime
+) -> dict[str, Any] | None:
+    """Card conversation-carryover: a NEW session continues the most recent summarised one
+    the owner was in during the last 30 minutes, on whatever device (``carryover``). The
+    summary (cut to the same bound the ``summary`` event writes) and an open plan are copied
+    onto the new row; ``carried_from`` names where they came from - ids and a label, never
+    text. Nothing at all when the owner switched it off."""
+    if not getattr(prefs, "conversation_carryover", True):
+        return None
+    previous = carryover.find_previous(db, exclude_id=row.id, now=now)
+    if previous is None:
+        return None
+    carried_from = carryover.record(db, previous)
+    row.transcript_summary = (previous.transcript_summary or "").strip()[:MAX_SUMMARY_CHARS]
+    ctx = dict(row.context_json or {})
+    ctx["carried_from"] = carried_from
+    plan = (previous.context_json or {}).get("plan")
+    if plan:
+        ctx["plan"] = dict(plan)
+    _set_context(row, ctx)
+    return carried_from
 
 
 def create_session(
@@ -541,6 +567,7 @@ def create_session(
     db.add(row)
     db.flush()
     prefs = voice_service.load_preferences(db)
+    carried_from = _carry_previous(db, row, prefs, now=now)
     config = _session_config(
         row,
         registry=registry,
@@ -570,6 +597,7 @@ def create_session(
             "selection": selection or {},
             "voice": voice,
             "voice_profile": voice_profile,
+            **({"carried_from": carried_from} if carried_from else {}),
         },
     )
     _audit(
@@ -1456,6 +1484,45 @@ def find_running_tool_call_by_task_id(
     return None
 
 
+#: Card conversation-carryover (C): the one line that leads a finished research told to a
+#: live session other than the one that started it.
+EARLIER_RESEARCH_DONE_TR = "Daha önce başlattığın araştırma bitti:"
+
+
+def _lead_with(text: Any, line: str) -> Any:
+    return f"{line}\n{text}" if isinstance(text, str) and text else text
+
+
+def _forward_to_live(
+    db: Session,
+    origin: RealtimeSessionRow,
+    payload: dict[str, Any],
+    sideband: SidebandPusher,
+    *,
+    now: datetime,
+    trace_id: str | None,
+) -> tuple[RealtimeSessionRow | None, bool]:
+    """Tell a closed session's finished work to the owner's live session, if there is one."""
+    live = carryover.find_live(db, exclude_id=origin.id, now=now)
+    if live is None or not carryover.enabled(db):
+        return None, False
+    told = dict(payload)
+    if isinstance(told.get("result"), dict):
+        result = dict(told["result"])
+        for key in ("speech", "spoken_result"):
+            result[key] = _lead_with(result.get(key), EARLIER_RESEARCH_DONE_TR)
+        told["result"] = result
+    if isinstance(told.get("error"), dict):
+        error = dict(told["error"])
+        key = "speech" if error.get("speech") else "message"
+        error[key] = _lead_with(error.get(key), EARLIER_RESEARCH_DONE_TR)
+        told["error"] = error
+    lctx = dict(live.context_json or {})
+    delivered = _deliver(db, live, lctx, sideband, SB_TOOL_COMPLETED, told, trace_id=trace_id)
+    _set_context(live, lctx)
+    return live, delivered
+
+
 def complete_tool_call_system(
     db: Session,
     row: RealtimeSessionRow,
@@ -1465,6 +1532,8 @@ def complete_tool_call_system(
     error: dict[str, Any] | None,
     sideband: SidebandPusher,
     trace_id: str | None = None,
+    forward_when_closed: bool = False,
+    now: datetime | None = None,
 ) -> dict[str, Any] | None:
     """A durable backend job (never an owner HTTP request) completes a long-running
     tool call it did not originate as a live media leg — e.g. the research pipeline's
@@ -1483,8 +1552,14 @@ def complete_tool_call_system(
     have somewhere to deliver it. Returns ``None`` — logged, never raised — when the
     call is missing or already resolved: the caller is a background sweeper/activity
     and must not fail its own run over a voice session detail.
+
+    ``forward_when_closed`` (card conversation-carryover, the research announcer): when the
+    session that started the work is no longer live but the owner is in ANOTHER live session
+    active inside the carryover window, the same ``tool_completed`` frame - its speech led by
+    one "Daha önce başlattığın araştırma bitti:" line - goes to that session. The durable
+    record stays on this call either way. ``now`` is the caller's one clock for a pass.
     """
-    now = utcnow()
+    now = now or utcnow()
     call = get_tool_call(db, row.id, call_id)
     if call is None or call.status != TOOL_STATUS_RUNNING:
         return None
@@ -1528,8 +1603,13 @@ def complete_tool_call_system(
     }
     delivered = False
     still_live = row.state not in (REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED)
+    forwarded_to: RealtimeSessionRow | None = None
     if still_live:
         delivered = _deliver(db, row, ctx, sideband, SB_TOOL_COMPLETED, payload, trace_id=trace_id)
+    elif forward_when_closed:
+        forwarded_to, delivered = _forward_to_live(
+            db, row, payload, sideband, now=now, trace_id=trace_id
+        )
     _set_context(row, ctx)
     row.updated_at = now
     _audit(
@@ -1546,6 +1626,7 @@ def complete_tool_call_system(
             "running_ms": int((now - _aware(call.created_at, now)).total_seconds() * 1000),
             "system": True,
             "session_live": still_live,
+            **({"forwarded_to": str(forwarded_to.id)} if forwarded_to is not None else {}),
         },
     )
     db.commit()

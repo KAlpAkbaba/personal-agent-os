@@ -27,6 +27,7 @@ from app.research.models import (
     ResearchReportRow,
     ResearchRunRow,
 )
+from app.voice.models import VoiceProfile
 from app.voice.realtime_sessions.models import (
     REALTIME_STATE_ACTIVE,
     REALTIME_STATE_CLOSED,
@@ -75,6 +76,7 @@ def session_factory():
         AuditEvent.__table__,
         ResearchRunRow.__table__,
         ResearchReportRow.__table__,
+        VoiceProfile.__table__,
     ):
         table.create(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -90,7 +92,9 @@ def session_factory():
     return scope
 
 
-def _seed_session(scope, *, state: str = REALTIME_STATE_ACTIVE) -> uuid.UUID:
+def _seed_session(
+    scope, *, state: str = REALTIME_STATE_ACTIVE, updated_at: datetime = NOW
+) -> uuid.UUID:
     with scope() as session:
         row = RealtimeSessionRow(
             id=uuid.uuid4(),
@@ -105,7 +109,7 @@ def _seed_session(scope, *, state: str = REALTIME_STATE_ACTIVE) -> uuid.UUID:
             transcript_summary="",
             created_at=NOW,
             expires_at=NOW + timedelta(hours=1),
-            updated_at=NOW,
+            updated_at=updated_at,
         )
         session.add(row)
         session.commit()
@@ -252,6 +256,68 @@ def test_completion_is_recorded_even_when_the_session_has_since_closed(session_f
     call = _get_call(session_factory, "r6")
     assert call.status == TOOL_STATUS_SUCCEEDED
     assert sideband.frames == []  # nothing live to push to; recorded regardless
+
+
+def _ready_closed_call(scope, call_id: str) -> uuid.UUID:
+    task_id = uuid.uuid4()
+    origin = _seed_session(scope, state=REALTIME_STATE_CLOSED)
+    _seed_call(scope, origin, call_id=call_id, task_id=str(task_id))
+    _seed_run(scope, task_id, stage=STAGE_READY)
+    _seed_report(scope, task_id)
+    return origin
+
+
+def test_a_closed_sessions_research_is_told_to_the_owners_live_session(session_factory) -> None:
+    """Card conversation-carryover (C): the owner started a research at home and hung up;
+    by the time it finished they were talking to JARVIS at the office. The finished
+    research is told to THAT live session; the durable record stays on the call that
+    started it."""
+    origin = _ready_closed_call(session_factory, "r-live")
+    live = _seed_session(session_factory, updated_at=NOW - timedelta(minutes=5))
+    sideband = RecordingSideband(deliver=True)
+    announcer = ResearchToolCallAnnouncer(session_factory, sideband)
+
+    assert announcer.sweep_once(now=NOW) == 1
+    assert len(sideband.frames) == 1
+    frame = sideband.frames[0][1]
+    assert frame["event"] == "tool_completed"
+    assert frame["session_id"] == str(live) and frame["session_id"] != str(origin)
+    speech = frame["payload"]["result"]["speech"]
+    assert speech.startswith("Daha önce başlattığın araştırma bitti")
+    assert frame["payload"]["result"]["spoken_result"].startswith("Daha önce başlattığın")
+    assert frame["payload"]["call_id"] == "r-live" and frame["payload"]["status"] == "succeeded"
+    # the durable record is the origin's call, unprefixed
+    call = _get_call(session_factory, "r-live")
+    assert call.session_id == origin and call.status == TOOL_STATUS_SUCCEEDED
+    assert not call.result_json["speech"].startswith("Daha önce")
+
+
+def test_a_closed_sessions_research_is_not_forwarded_when_the_owner_switched_it_off(
+    session_factory,
+) -> None:
+    with session_factory() as session:
+        session.add(
+            VoiceProfile(label="owner", narration_settings_json={"conversation_carryover": False})
+        )
+        session.commit()
+    _ready_closed_call(session_factory, "r-off")
+    _seed_session(session_factory, updated_at=NOW - timedelta(minutes=5))
+    sideband = RecordingSideband(deliver=True)
+    announcer = ResearchToolCallAnnouncer(session_factory, sideband)
+
+    assert announcer.sweep_once(now=NOW) == 1
+    assert sideband.frames == []
+    assert _get_call(session_factory, "r-off").status == TOOL_STATUS_SUCCEEDED
+
+
+def test_a_live_session_outside_the_window_is_not_told(session_factory) -> None:
+    _ready_closed_call(session_factory, "r-stale")
+    _seed_session(session_factory, updated_at=NOW - timedelta(minutes=45))
+    sideband = RecordingSideband(deliver=True)
+    announcer = ResearchToolCallAnnouncer(session_factory, sideband)
+
+    assert announcer.sweep_once(now=NOW) == 1
+    assert sideband.frames == []
 
 
 def test_pending_ids_lists_what_the_sweep_has_not_yet_reached(session_factory) -> None:
