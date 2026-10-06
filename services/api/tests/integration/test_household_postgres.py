@@ -32,11 +32,12 @@ from app.household import reminders, service
 from app.household.models import HouseholdEvent, HouseholdItem
 from app.notifications.models import NotificationRow
 from tests.integration.conftest import owner_client
+from tests.integration.migration_ids import revision_named
 
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-REVISION = "0070_household_stock"
+REVISION = revision_named("household_stock")
 DAY0 = datetime(2026, 9, 1, 9, 0, tzinfo=UTC)
 
 #: column -> (data_type, character_maximum_length, is_nullable), as information_schema says.
