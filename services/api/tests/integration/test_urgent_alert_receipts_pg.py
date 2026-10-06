@@ -44,7 +44,9 @@ from tests.integration.migration_ids import parent_of, revision_named
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-REVISION = revision_named("urgent_alert_receipts")
+# The file is ``urgent_alert_receipts.py`` (the card's area names it so, no date prefix);
+# revision_named matches ``_<suffix>.py``, so the suffix starts after the first word.
+REVISION = revision_named("alert_receipts")
 RECEIPT = "rReceiptIdIntegration000000001"
 LINK_BASE = "https://home-pc.tail1234.ts.net"
 KIND = policy.KIND_SECURITY_CRITICAL
