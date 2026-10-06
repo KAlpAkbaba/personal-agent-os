@@ -379,6 +379,49 @@ Test-Case "prompt: it names the file, the count, the rows, the limits, the order
     Assert-True -Condition ($bare -match "Do NOT edit docs/ROADMAP.md") -Because "and is told so"
 }
 
+# 2026-10-06: two feed runs (5.75 + 5.88 USD) were refused whole because the prompt said "ONE
+# sentence" and the judge counted 400 characters on one line. The prompt's limits are read from
+# the judge's own variables here, so the two halves cannot drift apart again.
+Test-Case "prompt: it states the judge's needs_owner limit, read from the judge's own number" {
+    $queue = New-Queue -Tasks @((New-Task -Id "busy-one" -State "assigned" -Area @("src/busy")))
+    $card = New-TeamFeedCard -Queue $queue -RoadmapText $roadmapFixture -FeedFile "team/plans/feed-$feedDate-1.json" -MaxNew 3 -Date $feedDate
+    Assert-True -Condition ($card.Contains("at most $script:TeamFeedOwnerSentenceMax characters")) -Because "the prompt names the judge's limit ($script:TeamFeedOwnerSentenceMax)"
+    Assert-True -Condition ($card.Contains("ONE line")) -Because "the prompt says the sentence is on one line"
+    $saved = $script:TeamFeedOwnerSentenceMax
+    try {
+        $script:TeamFeedOwnerSentenceMax = 401
+        $moved = New-TeamFeedCard -Queue $queue -RoadmapText $roadmapFixture -FeedFile "team/plans/feed-$feedDate-1.json" -MaxNew 3 -Date $feedDate
+        Assert-True -Condition ($moved.Contains("at most 401 characters")) -Because "the prompt's number is the judge's variable, not a second copy"
+        Assert-True -Condition (-not $moved.Contains("400 characters")) -Because "no mention of the limit is a hand-written copy: every one follows the variable"
+    }
+    finally { $script:TeamFeedOwnerSentenceMax = $saved }
+}
+
+Test-Case "prompt: it names every rule the judge refuses on - cards and owner items counted apart, titles, the note, the area, depends_on" {
+    $card = New-TeamFeedCard -Queue (New-Queue) -RoadmapText $roadmapFixture -FeedFile "team/plans/feed-$feedDate-1.json" -MaxNew 3 -Date $feedDate
+    foreach ($part in @(
+            "at most max_new cards", "at most max_new owner items", "differs only in upper or lower case",
+            "no brackets inside the note", "at most $script:TeamMaxAreaEntries entries",
+            "every id in depends_on is in the queue or in this file")) {
+        Assert-True -Condition ($card.Contains($part)) -Because "the prompt has '$part'"
+    }
+    Assert-True -Condition (-not $card.Contains("at most max_new items")) -Because "'items' alone hides that cards and owner items are counted apart"
+}
+
+Test-Case "judge: needs_owner refusals say what was measured; 400 characters on one line pass" {
+    $long = New-Card -Id "card-long"; $long.Remove("area"); $long["needs_owner"] = ("a" * 611) + "."
+    $problems = @(Get-FeedProblems -Cards @($long))
+    $said = @($problems | Where-Object { $_ -match "needs_owner is one sentence" })
+    Assert-Equal -Expected 1 -Actual @($said).Count -Because "refused: $($problems -join '; ')"
+    Assert-True -Condition ($said[0] -match "needs_owner is one sentence" -and $said[0] -match "\b612 characters") -Because "the refusal says 612: $($said[0])"
+    $lines = New-Card -Id "card-lines"; $lines.Remove("area"); $lines["needs_owner"] = "One.`nTwo.`nThree."
+    $problems = @(Get-FeedProblems -Cards @($lines))
+    $said = @($problems | Where-Object { $_ -match "needs_owner is one sentence" })
+    Assert-True -Condition (@($said).Count -eq 1 -and $said[0] -match "\b3 lines") -Because "the refusal says 3 lines: $($problems -join '; ')"
+    $edge = New-Card -Id "card-edge"; $edge.Remove("area"); $edge["needs_owner"] = ("a" * ($script:TeamFeedOwnerSentenceMax - 1)) + "."
+    Assert-Equal -Expected 0 -Actual @(Get-FeedProblems -Cards @($edge)).Count -Because "exactly $script:TeamFeedOwnerSentenceMax characters is inside the limit: $((Get-FeedProblems -Cards @($edge)) -join '; ')"
+}
+
 Test-Case "the feeder's scripts say which encoding they are in, never name main as a branch to write and never push" {
     foreach ($relative in @("scripts\team\feed.ps1", "scripts\lib\TeamFeed.ps1", "scripts\tests\team-feed.tests.ps1")) {
         $bytes = [System.IO.File]::ReadAllBytes((Join-Path $repoRoot $relative))
