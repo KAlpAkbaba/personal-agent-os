@@ -305,7 +305,9 @@ function Format-TestTeamBreakingReport {
         $tried = @(Get-TeamProperty -InputObject $breaking -Name "tried" -Default @())
         $ladder = (@($tried) | ForEach-Object { "{0}:{1}/{2}" -f $_.load, $_.ok, ([int]$_.ok + [int]$_.errors) }) -join ", "
         $first = Get-TeamProperty -InputObject $breaking -Name "first_failure"
-        $who = "{0} ({1}, {2})" -f $result.family, $result.tester, $result.card
+        # StrictMode: a result a tester wrote by hand (an improvised run) may carry no tester or card
+        # (2026-10-06: the first real round died here, after every tester had finished).
+        $who = "{0} ({1}, {2})" -f [string](Get-TeamProperty -InputObject $result -Name "family" -Default "?"), [string](Get-TeamProperty -InputObject $result -Name "tester" -Default "?"), [string](Get-TeamProperty -InputObject $result -Name "card" -Default "?")
         # A scenario whose steps already failed: its ladder measures that failure, not a load.
         if ([string](Get-TeamProperty -InputObject $result -Name "state" -Default "") -eq "failed") {
             [void]$lines.Add(("- ölçüm geçersiz {0}: {1} - senaryonun adımları kaldı, merdiven o hatayı ölçtü (merdiven: {2})" -f $who, $what, $ladder))

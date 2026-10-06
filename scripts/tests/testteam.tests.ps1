@@ -339,6 +339,12 @@ Test-Case "the breaking-point report is short, names the first failing load with
     $report = Format-TestTeamBreakingReport -Round "r1" -Results $failedToo
     Assert-True -Condition ($report.Note -match "yük 32" -and $report.Note -notmatch "yük 2 ") -Because "the headline is the real breaking point: $($report.Note)"
     Assert-True -Condition ($report.Markdown -match "ölçüm geçersiz") -Because "the failed scenario's ladder is said, and why it does not count: $($report.Markdown)"
+    # 2026-10-06: an improvised result a tester wrote by hand has no tester or card; the round
+    # died here after every tester had finished, and no report was written.
+    $handWritten = @([pscustomobject]@{ family = "nobet"; state = "broke"; breaking = [pscustomobject]@{
+                tried = @([pscustomobject]@{ load = 8; ok = 6; errors = 2; p95_ms = 40 }); first_failure = [pscustomobject]@{ load = 8; ok = 6; errors = 2; p95_ms = 40 }; what = "POST /v1/watches" } }) + $results
+    $report = Format-TestTeamBreakingReport -Round "r1" -Results $handWritten
+    Assert-True -Condition ($report.Markdown -match "nobet \(\?, \?\)") -Because "a result without tester and card is reported, not thrown: $($report.Markdown)"
 }
 
 Test-Case "a tester's board note is what the Ofis' Test odası reads: 'iş: <job>', then 'sonuç: <state> - <job> - kopma: ...'" {
