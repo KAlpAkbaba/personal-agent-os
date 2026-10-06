@@ -93,6 +93,28 @@ def pytest_runtest_teardown(item, nextitem):
             cached.cache_clear()
 
 
+#: Tests that cannot run beside another, marked ``serial_tail``: the gate runs the unit suite
+#: under xdist with ``-m "not serial_tail"`` and then these serially. A serial run runs them in
+#: place, as before. Each id carries why (found in the gate's parallel run of 2026-10-06).
+SERIAL_TAIL = {
+    "tests/unit/test_contract_falsification.py::test_hiding_a_contract_actually_fails_its_guard": (
+        "its mutation proof deletes packages/protocol/realtime-session-contract.json from the "
+        "shared tree; test_compose_web_shell and test_every_shared_artifact_is_registered read "
+        "that file and failed beside it"
+    ),
+    "tests/unit/test_team_guards_runner.py::"
+    "test_red_hung_and_missing_are_three_wordings_and_the_exit_codes_are_three": (
+        "a PowerShell guard must finish inside -HangSeconds 2; beside eight busy workers its "
+        "start alone took longer and 'red' came back 'hung'"
+    ),
+}
+
+
+def pytest_itemcollected(item):
+    if item.nodeid in SERIAL_TAIL:
+        item.add_marker(pytest.mark.serial_tail)
+
+
 def pytest_collection_modifyitems(config, items):
     shard = parse_shard(os.environ.get(SHARD_ENV))
     if shard is None:

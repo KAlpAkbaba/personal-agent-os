@@ -479,7 +479,13 @@ Invoke-Step "API unit tests" -Kinds heavy {
     $machine = "{0} cores, {1:0.0} GB free, {2} GB floor" -f [Environment]::ProcessorCount, ($freeBytes / 1GB), $floorGb
     if ($workers -ge 2) {
       Write-Host "API unit tests: $workers xdist workers ($machine)"
-      & $uv run pytest tests/unit -q -n $workers --dist load
+      & $uv run pytest tests/unit -q -n $workers --dist load -m "not serial_tail"
+      $parallelExit = $LASTEXITCODE
+      # The tests that cannot run beside another (tests/conftest.py SERIAL_TAIL, each with its
+      # reason), serially after the parallel part - also when it failed: their result is evidence.
+      Write-Host "API unit tests: the serial tail (tests/conftest.py SERIAL_TAIL)"
+      & $uv run pytest tests/unit -q -m serial_tail
+      if ($parallelExit -ne 0) { $global:LASTEXITCODE = $parallelExit }
     } else {
       $why = if (-not $xdist) { "pytest-xdist is not installed" } else { "the machine has room for fewer than two xdist workers, or PAGENTOS_GATE_UNIT_WORKERS says so" }
       Write-Host "API unit tests: serial ($why; $machine)"

@@ -69,31 +69,35 @@ function Import-GateFunction {
 }
 
 # A fake uv: records each call's arguments (one line per call) and answers "import xdist" with
-# FAKE_UV_XDIST_EXIT; every other call exits FAKE_UV_PYTEST_EXIT.
+# FAKE_UV_XDIST_EXIT, the serial tail ("-m serial_tail") with FAKE_UV_TAIL_EXIT; every other
+# call exits FAKE_UV_PYTEST_EXIT.
 $fakeBin = Join-Path $sandbox "bin"
 New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $fakeBin "uv.cmd"), @'
 @echo off
 echo %*>>"%FAKE_UV_LOG%"
 echo %* | findstr /C:"import xdist" >nul && exit /b %FAKE_UV_XDIST_EXIT%
+echo %* | findstr /C:"-m serial_tail" >nul && exit /b %FAKE_UV_TAIL_EXIT%
 exit /b %FAKE_UV_PYTEST_EXIT%
 '@, (New-Object System.Text.ASCIIEncoding))
 
 function Invoke-GateUnitStep {
-    param([int]$XdistExit, [int]$PytestExit, [string]$Workers = "")
+    param([int]$XdistExit, [int]$PytestExit, [string]$Workers = "", [int]$TailExit = -1)
+    if ($TailExit -lt 0) { $TailExit = $PytestExit }
     $log = Join-Path $sandbox ([guid]::NewGuid().ToString("N").Substring(0, 8) + ".log")
-    $saved = @{ PATH = $env:PATH; L = $env:FAKE_UV_LOG; X = $env:FAKE_UV_XDIST_EXIT; P = $env:FAKE_UV_PYTEST_EXIT; W = $env:PAGENTOS_GATE_UNIT_WORKERS }
+    $saved = @{ PATH = $env:PATH; L = $env:FAKE_UV_LOG; X = $env:FAKE_UV_XDIST_EXIT; P = $env:FAKE_UV_PYTEST_EXIT; W = $env:PAGENTOS_GATE_UNIT_WORKERS; T = $env:FAKE_UV_TAIL_EXIT }
     try {
         $env:PATH = $fakeBin + ";" + $env:PATH
         $env:FAKE_UV_LOG = $log
         $env:FAKE_UV_XDIST_EXIT = [string]$XdistExit
         $env:FAKE_UV_PYTEST_EXIT = [string]$PytestExit
+        $env:FAKE_UV_TAIL_EXIT = [string]$TailExit
         $env:PAGENTOS_GATE_UNIT_WORKERS = $Workers
         $out = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File $gatePath -Fast -NoTestSlots -OnlyStep "API unit tests" 2>&1 | ForEach-Object { [string]$_ })
         $code = $LASTEXITCODE
     } finally {
         $env:PATH = $saved.PATH; $env:FAKE_UV_LOG = $saved.L; $env:FAKE_UV_XDIST_EXIT = $saved.X
-        $env:FAKE_UV_PYTEST_EXIT = $saved.P; $env:PAGENTOS_GATE_UNIT_WORKERS = $saved.W
+        $env:FAKE_UV_PYTEST_EXIT = $saved.P; $env:PAGENTOS_GATE_UNIT_WORKERS = $saved.W; $env:FAKE_UV_TAIL_EXIT = $saved.T
     }
     $calls = if (Test-Path -LiteralPath $log) { @([System.IO.File]::ReadAllLines($log) | ForEach-Object { $_.Trim() }) } else { @() }
     return [pscustomobject]@{ Out = $out; Code = $code; Calls = $calls; Pytest = @($calls | Where-Object { $_ -match '\bpytest\b' }) }
@@ -136,12 +140,25 @@ Test-Case "1b. the memory floor comes from team/cycle-settings.json test_memory_
     Assert-Equal 6 (Get-GateUnitWorkerCount -Cores 28 -FreeBytes ([int64]20 * 1GB) -XdistPresent $true -FloorGb 8) "(20 - 8) / 2 = 6"
 }
 
-Test-Case "2. the real gate with xdist present calls pytest with -n <workers> on tests/unit" {
+Test-Case "2. the real gate with xdist present calls pytest with -n <workers> on tests/unit without the serial tail, then the tail serially" {
     $run = Invoke-GateUnitStep -XdistExit 0 -PytestExit 0 -Workers "3"
     Assert-Equal 0 $run.Code ("the gate passes; output:`n" + ($run.Out -join "`n"))
-    Assert-Equal 1 @($run.Pytest).Count ("one pytest call; calls: " + ($run.Calls -join " | "))
-    Assert-True ($run.Pytest[0] -match 'pytest tests/unit .*-n 3\b') ("pytest is called with -n 3: " + $run.Pytest[0])
+    Assert-Equal 2 @($run.Pytest).Count ("two pytest calls; calls: " + ($run.Calls -join " | "))
+    Assert-True ($run.Pytest[0] -match 'pytest tests/unit .*-n 3\b' -and $run.Pytest[0] -match '-m "?not serial_tail') ("the parallel part: -n 3, the serial tail left out: " + $run.Pytest[0])
+    Assert-True ($run.Pytest[1] -match 'pytest tests/unit .*-m serial_tail' -and $run.Pytest[1] -notmatch '\s-n\s') ("the tail: serially, only the tail: " + $run.Pytest[1])
     Assert-True (@($run.Out | Where-Object { $_ -match 'API unit tests: 3 xdist workers' }).Count -eq 1) "the step names its worker count"
+}
+
+Test-Case "4b. a failing serial tail fails the step even when the parallel part passed" {
+    $run = Invoke-GateUnitStep -XdistExit 0 -PytestExit 0 -TailExit 1 -Workers "3"
+    Assert-Equal 1 $run.Code ("the gate fails; calls: " + ($run.Calls -join " | "))
+    Assert-True (@($run.Out | Where-Object { $_ -match 'FAILED: pytest \(unit' }).Count -ge 1) "the step's FAILED line names pytest (unit)"
+}
+
+Test-Case "4c. a failing parallel part fails the step even when the serial tail passed" {
+    $run = Invoke-GateUnitStep -XdistExit 0 -PytestExit 1 -TailExit 0 -Workers "3"
+    Assert-Equal 1 $run.Code ("the gate fails; calls: " + ($run.Calls -join " | "))
+    Assert-Equal 2 @($run.Pytest).Count ("the tail still runs after a red parallel part (its result is evidence too): " + ($run.Calls -join " | "))
 }
 
 Test-Case "3. the real gate WITHOUT xdist runs pytest serially and says why" {
@@ -222,6 +239,26 @@ def pytest_sessionfinish(session):
     Assert-Equal 1 $line.Count ("the probe printed its count:`n" + $tail)
     $live = [int]([regex]::Match($line[0], '\d+').Value)
     Assert-True ($live -le 2) ("$live FastAPI apps of 25 tests are still alive after the session (at most the last test's may be)")
+}
+
+Test-Case "8. every SERIAL_TAIL id of tests/conftest.py exists and is marked serial_tail, and -m 'not serial_tail' leaves exactly those out" {
+    # A renamed tail test would silently run beside the others again: the ids are collected.
+    $uv = (Get-Command uv -ErrorAction SilentlyContinue)
+    $uvPath = if ($uv) { $uv.Source } else { Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe" }
+    Push-Location $apiRoot
+    try {
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        $ids = @(& $uvPath run python -c "import tests.conftest as c; print('\n'.join(sorted(c.SERIAL_TAIL)))" 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        Assert-True ($ids.Count -ge 1) "tests/conftest.py has no SERIAL_TAIL"
+        $files = @($ids | ForEach-Object { ($_ -split '::')[0] } | Sort-Object -Unique)
+        $tail = @(& $uvPath run pytest @files --collect-only -q -p no:cacheprovider -m serial_tail 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' } | Sort-Object)
+        $rest = @(& $uvPath run pytest @files --collect-only -q -p no:cacheprovider -m "not serial_tail" 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
+        $all = @(& $uvPath run pytest @files --collect-only -q -p no:cacheprovider 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
+        $ErrorActionPreference = $prev
+    } finally { Pop-Location }
+    Assert-Equal ($ids -join "|") ($tail -join "|") "the tests marked serial_tail are exactly SERIAL_TAIL (a missing one was renamed or deleted)"
+    Assert-Equal $all.Count ($rest.Count + $tail.Count) "the parallel part and the tail together are every test of those files"
+    foreach ($id in $ids) { Assert-True ($rest -notcontains $id) "$id is left out of the parallel part" }
 }
 
 Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
