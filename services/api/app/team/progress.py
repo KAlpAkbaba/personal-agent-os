@@ -165,6 +165,177 @@ def parse_matrix(text: str) -> dict[str, Any] | None:
     }
 
 
+# ------------------------------------------------------------------ the proof
+# (proof-from-test-rounds-and-trials)
+#
+# The owner, 2026-10-06: "kanıt kısmı neden ilerlemiyor". The v1.0 matrix's PROOF column is a
+# document nobody edits per run; the JARVIS rows are proven by what is stored in the Cloud Core:
+# a test round's per-row result on staging (scripts/testteam/test-round.ps1 posts it) and the
+# owner's trials on the queue's tasks (the Dene list, app.team.trials).
+
+PROOF_RULE = (
+    "Staging'de kanıtlı: satırın şu anki yayında koşan son test turu geçti (kalan senaryo yok). "
+    "Gerçekte kanıtlı: satırın sahip tarafından karara bağlanan son denemesi 'oldu'. "
+    "'Asla / donanım' satırı sayılmaz."
+)
+ROUND_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")  # test-round.ps1's -Round
+_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+ROUND_KEYS = {"round", "staging_sha", "at", "rows"}
+ROW_KEYS = {"row", "passed", "failed", "families"}
+ROUND_ROWS_MAX = 100
+ROW_NAME_MAX = 300
+_TRIAL_DECIDED = ("oldu", "olmadi")  # app.team.trials PASSED / FAILED
+
+
+def _count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def round_problems(doc: Any) -> list[str]:
+    """Why ``doc`` is not a round's proof the store may keep; empty when it is."""
+    if not isinstance(doc, dict):
+        return ["a round's proof is an object"]
+    problems = [f"unknown key {key!r}" for key in sorted(set(doc) - ROUND_KEYS)]
+    problems += [f"missing key {key!r}" for key in sorted(ROUND_KEYS - set(doc))]
+    if not isinstance(doc.get("round"), str) or not ROUND_ID.fullmatch(doc["round"]):
+        problems.append(f"round matches {ROUND_ID.pattern}")
+    if not isinstance(doc.get("staging_sha"), str) or not _SHA.fullmatch(doc["staging_sha"]):
+        problems.append("staging_sha is a commit sha, 7-40 lower-case hex")
+    if not isinstance(doc.get("at"), str) or not _STAMP.fullmatch(doc["at"]):
+        problems.append("at is UTC, YYYY-MM-DDTHH:MM:SSZ")
+    rows = doc.get("rows")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= ROUND_ROWS_MAX:
+        return problems + [f"rows is a list of 1-{ROUND_ROWS_MAX} rows"]
+    for at, row in enumerate(rows):
+        where = f"rows[{at}]"
+        if not isinstance(row, dict):
+            problems.append(f"{where} is an object")
+            continue
+        problems += [f"{where}: unknown key {key!r}" for key in sorted(set(row) - ROW_KEYS)]
+        name = row.get("row")
+        if not isinstance(name, str) or not name.strip() or len(name) > ROW_NAME_MAX:
+            problems.append(f"{where}.row is a roadmap row name, 1-{ROW_NAME_MAX} characters")
+        if not (_count(row.get("passed")) and _count(row.get("failed"))):
+            problems.append(f"{where}: passed and failed are whole numbers, 0 or more")
+        elif row["passed"] + row["failed"] == 0:
+            problems.append(f"{where}: a row no scenario ran on proves nothing")
+        families = row.get("families", [])
+        if not isinstance(families, list) or not all(isinstance(f, str) for f in families):
+            problems.append(f"{where}.families is a list of names")
+    return problems
+
+
+def _norm(text: Any) -> str:
+    return _plain(str(text)).casefold().strip(" .:;-—")
+
+
+def _names_row(row: str, ref: Any) -> bool:
+    """``ref`` (a round's row, a task's roadmap_row) names the JARVIS row ``row``: the same
+    words, or one is the other's leading words ending at a word boundary - never half a word."""
+    a, b = _norm(row), _norm(ref)
+    if not a or not b:
+        return False
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return long_ == short or (long_.startswith(short) and not long_[len(short)].isalnum())
+
+
+def _same_release(sha: Any, release: str | None) -> bool:
+    if release is None:
+        return True
+    a, b = str(sha).lower(), release.lower()
+    return len(min(a, b, key=len)) >= 7 and (a.startswith(b) or b.startswith(a))
+
+
+def _latest_round(name: str, rounds: list[Any], release: str | None) -> dict[str, Any] | None:
+    found: list[tuple[str, str, dict[str, Any]]] = []
+    for doc in rounds:
+        if round_problems(doc) or not _same_release(doc["staging_sha"], release):
+            continue
+        passed = sum(r["passed"] for r in doc["rows"] if _names_row(name, r["row"]))
+        failed = sum(r["failed"] for r in doc["rows"] if _names_row(name, r["row"]))
+        if passed + failed:
+            found.append(
+                (
+                    doc["at"],
+                    doc["round"],
+                    {
+                        "round": doc["round"],
+                        "sha": doc["staging_sha"],
+                        "at": doc["at"],
+                        "passed": passed,
+                        "failed": failed,
+                    },
+                )
+            )
+    return max(found, key=lambda f: (f[0], f[1]))[2] if found else None
+
+
+def _latest_trial(name: str, queue: dict[str, Any]) -> dict[str, Any] | None:
+    found: list[tuple[str, dict[str, Any]]] = []
+    for task in queue.get("tasks", []) if isinstance(queue, dict) else []:
+        if not isinstance(task, dict) or not _names_row(name, task.get("roadmap_row", "")):
+            continue
+        for trial in task.get("owner_trials") or []:
+            if not isinstance(trial, dict) or trial.get("verdict") not in _TRIAL_DECIDED:
+                continue
+            at = str(trial.get("at") or "")
+            found.append(
+                (
+                    at,
+                    {
+                        "task_id": task.get("id"),
+                        "trial_id": trial.get("id"),
+                        "verdict": trial["verdict"],
+                        "at": at or None,
+                    },
+                )
+            )
+    return max(found, key=lambda f: f[0])[1] if found else None
+
+
+def proof(
+    jarvis: dict[str, Any] | None,
+    rounds: list[Any],
+    queue: dict[str, Any],
+    *,
+    release: str | None,
+) -> dict[str, Any] | None:
+    """Each counted JARVIS row's two proofs. Staging-proven: the latest round on ``release``
+    (any release when it is ``None``) that ran the row has no failed scenario. Real-proven: the
+    row's latest decided owner trial is "oldu". ``None`` when the table could not be read."""
+    if jarvis is None:
+        return None
+    rows = []
+    for row in jarvis["rows"]:
+        if row["state"] == "never":
+            continue
+        staging = _latest_round(row["name"], rounds, release)
+        trial = _latest_trial(row["name"], queue)
+        rows.append(
+            {
+                "name": row["name"],
+                "state": row["state"],
+                "staging": staging,
+                "staging_proven": bool(staging and staging["failed"] == 0),
+                "trial": trial,
+                "real_proven": bool(trial and trial["verdict"] == "oldu"),
+            }
+        )
+    staging_proven = sum(r["staging_proven"] for r in rows)
+    real_proven = sum(r["real_proven"] for r in rows)
+    return {
+        "counted": len(rows),
+        "staging_proven": staging_proven,
+        "real_proven": real_proven,
+        "percent_staging": percent(staging_proven, len(rows)),
+        "percent_real": percent(real_proven, len(rows)),
+        "release": release,
+        "rows": rows,
+        "rule": PROOF_RULE,
+    }
+
+
 def _read(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
@@ -172,14 +343,23 @@ def _read(path: Path) -> str | None:
         return None
 
 
-def progress(root: Path, *, as_of: str | None) -> dict[str, Any]:
-    """The strip's answer for the tree at ``root``; ``as_of`` is the release sha (or ``None``)."""
+def progress(
+    root: Path,
+    *,
+    as_of: str | None,
+    rounds: list[Any] | None = None,
+    queue: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The strip's answer for the tree at ``root``; ``as_of`` is the release sha (or ``None``);
+    ``rounds`` are the stored test rounds' proofs and ``queue`` the team queue (its trials)."""
     roadmap = _read(root / ROADMAP)
     matrix = _read(root / MATRIX)
+    jarvis = parse_jarvis(roadmap) if roadmap is not None else None
     return {
-        "jarvis": parse_jarvis(roadmap) if roadmap is not None else None,
+        "jarvis": jarvis,
         "order": parse_order(roadmap) if roadmap is not None else None,
         "v1": parse_matrix(matrix) if matrix is not None else None,
+        "proof": proof(jarvis, rounds or [], queue or {}, release=as_of),
         "rule": RULE,
         "as_of": as_of,
     }
@@ -187,6 +367,7 @@ def progress(root: Path, *, as_of: str | None) -> dict[str, Any]:
 
 __all__ = [
     "MATRIX",
+    "PROOF_RULE",
     "ROADMAP",
     "RULE",
     "parse_jarvis",
@@ -194,4 +375,6 @@ __all__ = [
     "parse_order",
     "percent",
     "progress",
+    "proof",
+    "round_problems",
 ]
