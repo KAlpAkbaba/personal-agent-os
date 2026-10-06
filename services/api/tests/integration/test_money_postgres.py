@@ -41,11 +41,12 @@ from app.money.models import (
 )
 from app.notifications.models import NotificationRow
 from tests.integration.conftest import owner_client
+from tests.integration.migration_ids import revision_named
 
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-REVISION = "0071_money_ledger"
+REVISION = revision_named("money_ledger")
 T0 = datetime(2026, 10, 6, 11, 0, tzinfo=UTC)
 TABLES = ("money_entries", "money_balances", "money_bank_notices", "money_questions", "money_scans")
 BANK_SENDER = "bilgilendirme@garantibbva.com.tr"

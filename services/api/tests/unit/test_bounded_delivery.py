@@ -288,6 +288,8 @@ def test_every_background_loop_the_app_starts_can_be_seen_in_health() -> None:
         "telephony_loop": "telephony_calls",
         # home-stock-list: the hourly reminder pass.
         "household_reminders": "household_reminders",
+        # money-ledger: the spend-question pass.
+        "money_spend_loop": "money_spend_loop",
     }
     started = _started_loops()
 

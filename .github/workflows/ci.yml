@@ -243,6 +243,8 @@ jobs:
           powershell -NoProfile -File scripts\tests\team-gate-second-look.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-liveness.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-duty-integration.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-guards-after-merge.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-watchdog.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\staging.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\maintenance-reboot.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\host-snapshot.tests.ps1 && ^
