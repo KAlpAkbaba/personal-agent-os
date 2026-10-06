@@ -134,6 +134,8 @@ _SUFFIXES: Final[tuple[str, ...]] = (
     "lerimiz",
     "larini",
     "lerini",
+    "larin",
+    "lerin",
     "imizi",
     "umuzu",
     "sini",
@@ -154,6 +156,8 @@ _SUFFIXES: Final[tuple[str, ...]] = (
     "nu",
     "yi",
     "yu",
+    "in",
+    "un",
     "i",
     "u",
 )
@@ -646,6 +650,118 @@ def parse_words(words: list[str]) -> HouseholdCommand | None:
     return _parse_read(words, folded) or _parse_level(words, folded)
 
 
+# --------------------------------------------------------------------------- typed input
+
+MAX_NAME_CHARS: Final = 40
+NAME_NOT_UNDERSTOOD: Final = (
+    "Bunu ürün adı olarak anlayamadım; kısa bir ürün adı yaz (örneğin 'süt' ya da "
+    "'tuvalet kağıdı')."
+)
+QUANTITY_NOT_POSITIVE: Final = (
+    "Miktar sıfırdan büyük bir sayı olmalı, istersen birimiyle (örneğin 'iki paket' ya da "
+    "'3 litre')."
+)
+
+#: Number words a typed quantity may be built of ("on iki", "yüz elli"); "yarım" is half.
+_COUNT_WORDS: Final = frozenset(
+    {*_NUMBERS, "yirmi", "otuz", "kirk", "elli", "altmis", "yetmis", "seksen", "doksan", "yuz"}
+)
+#: A digit amount with an optional unit glued on ("3", "1,5", "500gr"); no sign.
+_DIGIT_AMOUNT: Final = re.compile(r"(\d+(?:[.,]\d+)?)([^\W\d_]*)")
+#: Finite-verb endings (folded) that no shop item ends in: the progressive ("gidiyorum"), the
+#: first-person past ("unuttum"), future ("alacağım") and necessity ("almalıyım"). The bare
+#: participles are left out on purpose: "kuru yemiş", "içecek" are goods.
+_VERB_ENDING: Final = re.compile(
+    r"(?:[iu]yor(?:um|uz|sun|sunuz|lar|du|dum|duk|mus)?"
+    r"|..[dt][iu]m"
+    r"|[ae]c[ae]g[iu][mz]"
+    r"|m[ae]l[iu]y[iu][mz])$"
+)
+#: The verbs the voice path reads; a name holding one is a sentence, not a thing.
+_VERBS: Final = (
+    _LOW_WORDS
+    | _OUT_WORDS
+    | _BOUGHT_WORDS
+    | _ADD_VERBS
+    | _REMOVE_VERBS
+    | _READ_VERBS
+    | _GO_VERB
+    | _NEED
+    | _NEED_BUY
+    | _SHALL_BUY
+    | _POLITE
+)
+#: Verb stems (folded) a shopping sentence ends on: buy, bring, add, write, forget, look.
+_VERB_STEMS: Final = ("al", "getir", "ekle", "yaz", "unut", "bak", "iste")
+#: What follows such a stem in a finite or verbal-noun form (folded, vowels loosely
+#: harmonised): an optional passive, then the imperative (bare, "-sana", "-in"), the
+#: conditional ("-sak"), optative ("-alım"), aorist with a person ("-ırız"), necessity
+#: ("-malı"), future, past, the verbal nouns ("-mayı", "-mak", "-mam") or the negative ("-ma").
+_STEM_ENDING: Final = (
+    r"(?:[iu]?n|[iu]l)?"
+    r"(?:"
+    r"|m[ae]"
+    r"|s[ae]n[ae]|s[iu]n|y?[iu]n(?:[iu]z)?"
+    r"|s[ae](?:m|n|k|n[iu]z)?"
+    r"|y?[ae](?:y[iu]m|l[iu]m)"
+    r"|[aeiu]?r(?:[iu]m|[iu]z|s[iu]n|s[iu]n[iu]z|l[ae]r)?"
+    r"|m[ae]l[iu](?:y[iu][mz])?"
+    r"|y?[ae]c[ae](?:k|g[iu][mz])"
+    r"|[dt][iu](?:m|k|n|n[iu]z|l[ae]r)?"
+    r"|m[ae]y[iu]|m[ae]k|m[ae]m(?:[iu]z)?"
+    r")"
+)
+_STEM_VERB: Final = re.compile(rf"(?:{'|'.join(_VERB_STEMS)}){_STEM_ENDING}")
+#: Words that make a phrase a statement or a question about a thing: "süt var", "süt yok mu".
+_PREDICATE: Final = frozenset({"var", "yok", "mi", "mu"})
+
+
+def name_problem(raw: str) -> str | None:
+    """Why a typed item name is not one (a Turkish sentence), or None: a name is a short noun
+    phrase - at most MAX_NAME_CHARS letters and MAX_ITEM_WORDS words, and no verb. Turkish
+    ends a sentence on its verb, so a verb stem counts on the last word only ("yaz meyvesi"
+    is a thing, "listeye süt yaz" is not)."""
+    words = _clean_words(raw)
+    if len(" ".join(raw.split())) > MAX_NAME_CHARS or len(words) > MAX_ITEM_WORDS:
+        return NAME_NOT_UNDERSTOOD
+    if parse_words(words) is not None:  # "süt bitti", "listeye süt ekle", "markete gidiyorum"
+        return NAME_NOT_UNDERSTOOD
+    folded = [fold(w) for w in words]
+    if not folded:
+        return None
+    if any(f in _PREDICATE or _VERB_ENDING.search(f) for f in folded):
+        return NAME_NOT_UNDERSTOOD
+    last = folded[-1]
+    if last in _VERBS or _STEM_VERB.fullmatch(last):
+        return NAME_NOT_UNDERSTOOD
+    return None
+
+
+def quantity_problem(raw: str) -> str | None:
+    """Why a typed quantity is not a positive amount, or None: a number above zero (digits or
+    Turkish number words) and at most one unit word after it - "iki paket", "1,5 litre", "2kg"."""
+    words = raw.split()
+    if not words:
+        return None
+    first = _DIGIT_AMOUNT.fullmatch(words[0])
+    if first is not None:
+        if float(first.group(1).replace(",", ".")) <= 0:
+            return QUANTITY_NOT_POSITIVE
+        rest = words[1:]
+        if first.group(2) and rest:
+            return QUANTITY_NOT_POSITIVE
+    else:
+        count = 0
+        while count < len(words) and fold(words[count]) in _COUNT_WORDS:
+            count += 1
+        if count == 0:
+            return QUANTITY_NOT_POSITIVE
+        rest = words[count:]
+    if len(rest) > 1 or not all(re.fullmatch(r"[^\W\d_]+", w) for w in rest):
+        return QUANTITY_NOT_POSITIVE
+    return None
+
+
 def parse_tokens(tokens: tuple[str, ...]) -> HouseholdCommand | None:
     """The router's entry: its normalized tokens (lower-case; an apostrophe kept)."""
     return parse_words(_clean_words(" ".join(tokens)))
@@ -669,7 +785,9 @@ __all__ = [
     "fold",
     "item_key",
     "known_item",
+    "name_problem",
     "parse_sentence",
     "parse_tokens",
     "parse_words",
+    "quantity_problem",
 ]

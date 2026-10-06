@@ -75,6 +75,8 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "telephony_calls",
     # home-stock-list: the hourly reminder pass. Advisory.
     "household_reminders",
+    # money-ledger: the spend-question pass. Advisory.
+    "money_spend_loop",
     # B07 req 679: the retention POLICY itself, readable. A policy nobody can see is a
     # policy nobody can check.
     "audit_retention",
@@ -146,6 +148,7 @@ def test_health_ok_shape(monkeypatch) -> None:
             "watch_purge",
             "telephony_calls",
             "household_reminders",
+            "money_spend_loop",
             "audit_retention",
             "backup",
         ):

@@ -1,6 +1,6 @@
 # ruff: noqa: E501 - the fake docker below is one literal program
 """Unit tests: the REAL ``scripts/voice/tts-measure.ps1`` under Windows PowerShell 5.1
-(tts-freya-measure; team/plans/tts-freya-measure-adr.md).
+(tts-freya-measure; team/plans/tts-freya-measure-adr.md; -Engine antalia: tts-antalia-measure).
 
 docker is replaced by a fake executable (``-Docker``, the script's one overridable path): a
 ``.cmd`` that runs ``fake_docker.py`` written here. The fake logs every call, answers ``build``,
@@ -267,3 +267,40 @@ def test_script_refuses_a_host_outside_the_allow_list(tmp_path: Path) -> None:
 
 def test_script_text_has_no_stderr_merge() -> None:
     assert "2>&1" not in SCRIPT.read_text(encoding="utf-8")
+
+
+# ---- -Engine antalia (tts-antalia-measure): the second candidate beside FreyaTTS
+
+
+@pytest.mark.parametrize("mode", ["file", "command"])
+def test_script_engine_antalia_writes_its_own_names_and_folder(tmp_path: Path, mode: str) -> None:
+    run = _run(tmp_path, "-Engine", "antalia", "-Label", "ev-pc", mode=mode)
+    assert run.code == 0, run.out + run.err
+    names = sorted(p.name for p in run.evidence.iterdir())
+    assert names == ["tts-antalia-measure.json", "tts-antalia-measure.md", "tts-measure-compare.md"]
+    report = json.loads((run.evidence / "tts-antalia-measure.json").read_text(encoding="utf-8"))
+    assert report["model"]["engine"] == "antalia"
+    [machine] = report["machines"]
+    assert machine["sentences_ok"] == 20 and machine["rtf_pooled"] == 0.8
+    wavs = run.localappdata / "PagentOS" / "tts-measure" / "antalia" / "ev-pc"
+    assert sorted(p.name for p in wavs.glob("*.wav")) == [f"{i:02d}.wav" for i in range(1, 21)]
+    assert not (run.localappdata / "PagentOS" / "tts-measure" / "ev-pc").exists()
+    [build] = [c for c in run.calls if c[0] == "build"]
+    tag = build[build.index("-t") + 1]
+    assert tag.startswith("pagentos-antalia-measure:") and len(tag.split(":")[1]) == 12
+    assert Path(build[-1]).parts[-2:] == ("tts-measure", "antalia")
+    [synth] = [c for c in run.calls if c[0] == "run" and "synth" in c]
+    assert synth[synth.index("--network") + 1] == "none"
+    assert "pagentos-antalia-weights:/models:ro" in synth
+    assert synth[synth.index("--seed") + 1] == "20260803"
+    compare = (run.evidence / "tts-measure-compare.md").read_text(encoding="utf-8")
+    assert "| freya | ev-pc | - |" in compare  # no FreyaTTS evidence here: 'ölçülmedi'
+
+
+def test_script_engine_antalia_weight_hash_mismatch_exits_nonzero_without_evidence(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path, "-Engine", "antalia", "-Label", "ev-pc", fake="mismatch")
+    assert run.code != 0
+    assert list(run.evidence.iterdir()) == []
+    assert "weight_hash_mismatch" in run.out + run.err

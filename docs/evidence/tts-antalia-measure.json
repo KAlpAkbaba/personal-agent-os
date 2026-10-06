@@ -1,0 +1,472 @@
+{
+  "schema_version": "1.0",
+  "model": {
+    "engine": "antalia",
+    "name": "Antalia 1",
+    "code_commit": "20f9bfeaaefefb3ef723c292fe2bb0306e08823d",
+    "weight_revisions": {
+      "cloud0day3/antalia-1": "eaec2aad2da8c0db5fc359734470874dae82c603",
+      "nvidia/bigvgan_v2_24khz_100band_256x": "c329ede9e9bbc100ddf5c91e2330a61921262370"
+    },
+    "vocoder_code_commit": "7d2b454564a6c7d014227f635b7423881f14bdac"
+  },
+  "machines": [
+    {
+      "label": "ev-pc",
+      "cpu": "Intel(R) Core(TM) i7-14700KF",
+      "threads": 28,
+      "cpus_limit": null,
+      "proxy_for": null,
+      "image": "pagentos-antalia-measure:4daf05ee583f sha256:c7d4eb1e5c94eb128e8f816650c48fa6cc23b7f7de92bacc3dcbe688bf570797",
+      "synthesis_network": "none",
+      "seed": 20260803,
+      "steps": 32,
+      "streamed": false,
+      "load_ms": 7333.9,
+      "sentences_ok": 20,
+      "sentences_failed": 0,
+      "failures": [],
+      "rtf_pooled": 25.2308,
+      "rtf_p50": 19.5524,
+      "rtf_p95": 39.6949,
+      "first_audio_ms_p50": 67637.4,
+      "first_audio_ms_p95": 160628.0,
+      "peak_rss_mb": 2864.4,
+      "retries_total": 0,
+      "voiced_check_share": 0.0,
+      "malformed_lines": 0,
+      "wav_dir": "C:\\Users\\alpak\\AppData\\Local\\PagentOS\\tts-measure\\antalia\\ev-pc",
+      "sentences": [
+        {
+          "index": 1,
+          "chars": 41,
+          "audio_ms": 4245.3,
+          "synth_ms": 160628.0,
+          "first_audio_ms": 160628.0,
+          "rtf": 37.8367,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 2,
+          "chars": 37,
+          "audio_ms": 4266.7,
+          "synth_ms": 98976.3,
+          "first_audio_ms": 98976.3,
+          "rtf": 23.1974,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 3,
+          "chars": 32,
+          "audio_ms": 3605.3,
+          "synth_ms": 64585.0,
+          "first_audio_ms": 64585.0,
+          "rtf": 17.9139,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 4,
+          "chars": 34,
+          "audio_ms": 3818.7,
+          "synth_ms": 151582.9,
+          "first_audio_ms": 151582.9,
+          "rtf": 39.6949,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 5,
+          "chars": 25,
+          "audio_ms": 3392.0,
+          "synth_ms": 242707.0,
+          "first_audio_ms": 242707.0,
+          "rtf": 71.5528,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 6,
+          "chars": 29,
+          "audio_ms": 3189.3,
+          "synth_ms": 98857.0,
+          "first_audio_ms": 98857.0,
+          "rtf": 30.9965,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 7,
+          "chars": 24,
+          "audio_ms": 3765.3,
+          "synth_ms": 67637.4,
+          "first_audio_ms": 67637.4,
+          "rtf": 17.9633,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 8,
+          "chars": 19,
+          "audio_ms": 3680.0,
+          "synth_ms": 134322.3,
+          "first_audio_ms": 134322.3,
+          "rtf": 36.5006,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 9,
+          "chars": 26,
+          "audio_ms": 3402.7,
+          "synth_ms": 66531.0,
+          "first_audio_ms": 66531.0,
+          "rtf": 19.5524,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 10,
+          "chars": 27,
+          "audio_ms": 3221.3,
+          "synth_ms": 72065.8,
+          "first_audio_ms": 72065.8,
+          "rtf": 22.3717,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 11,
+          "chars": 32,
+          "audio_ms": 3840.0,
+          "synth_ms": 99931.3,
+          "first_audio_ms": 99931.3,
+          "rtf": 26.0238,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 12,
+          "chars": 37,
+          "audio_ms": 3754.7,
+          "synth_ms": 76500.4,
+          "first_audio_ms": 76500.4,
+          "rtf": 20.3746,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 13,
+          "chars": 30,
+          "audio_ms": 3861.3,
+          "synth_ms": 73870.9,
+          "first_audio_ms": 73870.9,
+          "rtf": 19.1311,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 14,
+          "chars": 35,
+          "audio_ms": 3754.7,
+          "synth_ms": 59139.5,
+          "first_audio_ms": 59139.5,
+          "rtf": 15.7508,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 15,
+          "chars": 18,
+          "audio_ms": 2709.3,
+          "synth_ms": 58839.2,
+          "first_audio_ms": 58839.2,
+          "rtf": 21.7175,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 16,
+          "chars": 32,
+          "audio_ms": 3434.7,
+          "synth_ms": 51046.2,
+          "first_audio_ms": 51046.2,
+          "rtf": 14.8619,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 17,
+          "chars": 31,
+          "audio_ms": 3381.3,
+          "synth_ms": 59999.6,
+          "first_audio_ms": 59999.6,
+          "rtf": 17.7445,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 18,
+          "chars": 23,
+          "audio_ms": 3082.7,
+          "synth_ms": 52816.2,
+          "first_audio_ms": 52816.2,
+          "rtf": 17.1331,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 19,
+          "chars": 32,
+          "audio_ms": 3456.0,
+          "synth_ms": 48911.8,
+          "first_audio_ms": 48911.8,
+          "rtf": 14.1527,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 20,
+          "chars": 27,
+          "audio_ms": 3338.7,
+          "synth_ms": 57485.8,
+          "first_audio_ms": 57485.8,
+          "rtf": 17.218,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        }
+      ]
+    },
+    {
+      "label": "cpx32-bicimi",
+      "cpu": "Intel(R) Core(TM) i7-14700KF",
+      "threads": 4,
+      "cpus_limit": 4.0,
+      "proxy_for": "CPX32",
+      "image": "pagentos-antalia-measure:4daf05ee583f sha256:c7d4eb1e5c94eb128e8f816650c48fa6cc23b7f7de92bacc3dcbe688bf570797",
+      "synthesis_network": "none",
+      "seed": 20260803,
+      "steps": 32,
+      "streamed": false,
+      "load_ms": 3830.6,
+      "sentences_ok": 20,
+      "sentences_failed": 0,
+      "failures": [],
+      "rtf_pooled": 8.048,
+      "rtf_p50": 8.062,
+      "rtf_p95": 8.3868,
+      "first_audio_ms_p50": 28457.6,
+      "first_audio_ms_p95": 32926.1,
+      "peak_rss_mb": 3240.1,
+      "retries_total": 0,
+      "voiced_check_share": 0.0,
+      "malformed_lines": 0,
+      "wav_dir": "C:\\Users\\alpak\\AppData\\Local\\PagentOS\\tts-measure\\antalia\\cpx32-bicimi",
+      "sentences": [
+        {
+          "index": 1,
+          "chars": 41,
+          "audio_ms": 4245.3,
+          "synth_ms": 32926.1,
+          "first_audio_ms": 32926.1,
+          "rtf": 7.7559,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 2,
+          "chars": 37,
+          "audio_ms": 4266.7,
+          "synth_ms": 35298.6,
+          "first_audio_ms": 35298.6,
+          "rtf": 8.273,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 3,
+          "chars": 32,
+          "audio_ms": 3605.3,
+          "synth_ms": 28525.4,
+          "first_audio_ms": 28525.4,
+          "rtf": 7.9121,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 4,
+          "chars": 34,
+          "audio_ms": 3818.7,
+          "synth_ms": 30940.7,
+          "first_audio_ms": 30940.7,
+          "rtf": 8.1024,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 5,
+          "chars": 25,
+          "audio_ms": 3392.0,
+          "synth_ms": 27346.4,
+          "first_audio_ms": 27346.4,
+          "rtf": 8.062,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 6,
+          "chars": 29,
+          "audio_ms": 3189.3,
+          "synth_ms": 25851.8,
+          "first_audio_ms": 25851.8,
+          "rtf": 8.1058,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 7,
+          "chars": 24,
+          "audio_ms": 3765.3,
+          "synth_ms": 31038.1,
+          "first_audio_ms": 31038.1,
+          "rtf": 8.2432,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 8,
+          "chars": 19,
+          "audio_ms": 3680.0,
+          "synth_ms": 28417.8,
+          "first_audio_ms": 28417.8,
+          "rtf": 7.7222,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 9,
+          "chars": 26,
+          "audio_ms": 3402.7,
+          "synth_ms": 27423.0,
+          "first_audio_ms": 27423.0,
+          "rtf": 8.0592,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 10,
+          "chars": 27,
+          "audio_ms": 3221.3,
+          "synth_ms": 24982.2,
+          "first_audio_ms": 24982.2,
+          "rtf": 7.7553,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 11,
+          "chars": 32,
+          "audio_ms": 3840.0,
+          "synth_ms": 29466.1,
+          "first_audio_ms": 29466.1,
+          "rtf": 7.6735,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 12,
+          "chars": 37,
+          "audio_ms": 3754.7,
+          "synth_ms": 28673.9,
+          "first_audio_ms": 28673.9,
+          "rtf": 7.6368,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 13,
+          "chars": 30,
+          "audio_ms": 3861.3,
+          "synth_ms": 30621.8,
+          "first_audio_ms": 30621.8,
+          "rtf": 7.9304,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 14,
+          "chars": 35,
+          "audio_ms": 3754.7,
+          "synth_ms": 29496.3,
+          "first_audio_ms": 29496.3,
+          "rtf": 7.8558,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 15,
+          "chars": 18,
+          "audio_ms": 2709.3,
+          "synth_ms": 22007.3,
+          "first_audio_ms": 22007.3,
+          "rtf": 8.1229,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 16,
+          "chars": 32,
+          "audio_ms": 3434.7,
+          "synth_ms": 28457.6,
+          "first_audio_ms": 28457.6,
+          "rtf": 8.2853,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 17,
+          "chars": 31,
+          "audio_ms": 3381.3,
+          "synth_ms": 28065.0,
+          "first_audio_ms": 28065.0,
+          "rtf": 8.3001,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 18,
+          "chars": 23,
+          "audio_ms": 3082.7,
+          "synth_ms": 27368.3,
+          "first_audio_ms": 27368.3,
+          "rtf": 8.878,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 19,
+          "chars": 32,
+          "audio_ms": 3456.0,
+          "synth_ms": 28984.7,
+          "first_audio_ms": 28984.7,
+          "rtf": 8.3868,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        },
+        {
+          "index": 20,
+          "chars": 27,
+          "audio_ms": 3338.7,
+          "synth_ms": 27123.6,
+          "first_audio_ms": 27123.6,
+          "rtf": 8.124,
+          "retries": 0,
+          "voiced_check_ms": 0.0
+        }
+      ]
+    }
+  ],
+  "verdict_tr": "ev-pc: gerçek zamana ulaşılamadı (havuzlanmış RTF 25,23 ≥ 1). cpx32-bicimi: gerçek zamana ulaşılamadı (havuzlanmış RTF 8,05 ≥ 1). Ses kalitesi burada değerlendirilmez; ona sahibin kulağı karar verir."
+}

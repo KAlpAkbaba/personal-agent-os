@@ -21,7 +21,7 @@ import { Figure } from "./officeRobots";
 export const TEST_SEATS = ["test-lead", "tester-1", "tester-2", "tester-3", "tester-4"] as const;
 export type TestSeatId = (typeof TEST_SEATS)[number];
 
-export type TestSeatState = "working" | "waiting" | "failed" | "broke";
+export type TestSeatState = "working" | "waiting" | "failed" | "broke" | "error";
 
 export type TestSeat = {
   seat: TestSeatId;
@@ -33,7 +33,8 @@ export type TestSeat = {
 
 const JOB = /^iş:\s*(.+)$/;
 // "sonuç: <state> - <job> - <breaking>": the parts are split on " - " (a card id has hyphens).
-const RESULT = /^sonuç:\s*(passed|failed|broke)\b(.*)$/;
+// "error": the tester's own run could not do its job (a crash, a refused scenario) - a real problem.
+const RESULT = /^sonuç:\s*(passed|failed|broke|error)\b(.*)$/;
 const TO_ADVISOR = /^Danışman'a\b/;
 
 /** Amber testers, a teal test lead: the test team's own colours on the office's figures. */
@@ -92,8 +93,10 @@ export function testRoomFromBoard(notes: BoardNote[], _now: Date): TestSeat[] {
 
 /** The office's mood rules (officeMood.ts) on a test seat. */
 export function testMoodOf(seat: TestSeat, now: Date): Mood {
-  if (seat.state === "failed") return "angry";
-  if (seat.state === "broke") return "sad";
+  // The owner, 2026-10-06: a tester that FINDS a bug did its job - sad, not angry. Angry is for a
+  // real problem of the tester itself, as on the software seats; long work is tired, as there.
+  if (seat.state === "error") return "angry";
+  if (seat.state === "failed" || seat.state === "broke") return "sad";
   if (seat.state === "working") {
     const since = seat.since ? new Date(seat.since).getTime() : Number.NaN;
     if (Number.isNaN(since)) return "focused";
@@ -107,6 +110,7 @@ const STATE_TR: Record<TestSeatState, string> = {
   waiting: "iş bekliyor",
   failed: "hata buldu",
   broke: "kopma noktası buldu",
+  error: "kendi işinde sorun",
 };
 
 /** The spoken name of a test seat: "Test çalışanı 1: iş bekliyor, dinleniyor". */

@@ -98,8 +98,13 @@ export default function OfficePanel({
                   </li>
                 ))}
               </ul>
+              {panel.progress.inspecting && <p>Denetliyor</p>}
+              <p>{`Son hareket: ${panel.progress.movement}`}</p>
+              {panel.progress.stuck && <p role="status">{panel.progress.stuck}</p>}
               {panel.progress.lastChange && (
-                <p className="muted">Son değişiklik: {panel.progress.lastChange}</p>
+                <p className="muted">
+                  <small>{`${panel.progress.changeLabel}: ${panel.progress.lastChange}`}</small>
+                </p>
               )}
             </div>
           )}

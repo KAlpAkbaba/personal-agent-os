@@ -26,6 +26,24 @@
       "label": "ev sahibi görüntüsü şemayla uyuşmuyor"
     },
     {
+      "id": "capability-family-names",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_capability_list.py",
+      "label": "yetenek ailesinin Türkçe adı yok"
+    },
+    {
+      "id": "loops-in-health",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_bounded_delivery.py",
+      "label": "arka plan döngüsü sağlık yanıtında yok"
+    },
+    {
+      "id": "staging-isolation",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_staging_isolation.py",
+      "label": "staging üretimden ayrık değil"
+    },
+    {
       "id": "script-syntax",
       "kind": "powershell",
       "path": "scripts/tests/script-syntax.tests.ps1",

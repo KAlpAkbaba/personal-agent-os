@@ -12,7 +12,10 @@
       * Read-TeamGuardList   the list, or a refusal with the reason in Turkish;
       * Get-TeamGuardCommand what is started for one guard - the command the quality gate
                              uses for the same file, on the WORKTREE's copy of it;
-      * Invoke-TeamGuards    the run: one guard after another, one row per entry.
+      * Invoke-TeamGuards    the run: one guard after another, one row per entry;
+      * Get-TeamGuardLastMerge, New-TeamGuardRuffRow, Get-TeamGuardAfterMergeLines
+                             the run right after a merge into an integration branch: the list
+                             plus ruff, a red one naming the card merged last.
 
     The list:   { version: 1, guards: [ { id, kind: 'pytest' | 'powershell', path, label } ] }
     The result: { at, sha, seconds, status: 'green' | 'red',
@@ -150,6 +153,16 @@ function Get-TeamGuardCommand {
         [string]$Python = ""
     )
     $file = Join-Path $Worktree (([string]$Guard.path) -replace "/", "\")
+    if ([string]$Guard.kind -eq "ruff") {
+        # `uv run ruff check .` of the gate's 'API lint (ruff)' step, on the interpreter that holds
+        # ruff; no cache: the run leaves the tree as it found it.
+        return [pscustomobject]@{
+            FilePath         = $Python
+            Arguments        = @("-m", "ruff", "check", ".", "--no-cache")
+            WorkingDirectory = $file
+            File             = $file
+        }
+    }
     if ([string]$Guard.kind -eq "pytest") {
         $apiRoot = Join-Path $Worktree "services\api"
         return [pscustomobject]@{
@@ -198,7 +211,11 @@ function Get-TeamGuardDetail {
     #>
     param([Parameter(Mandatory = $true)][string]$Kind, [string]$Text = "")
     $lines = @($Text -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $pattern = if ($Kind -eq "pytest") { '^(FAILED|ERROR) ' } else { '^FAIL(ED)?\b' }
+    $pattern = switch ($Kind) {
+        "pytest" { '^(FAILED|ERROR) ' }
+        "ruff" { ':\d+:\d+: [A-Z]+\d+' }
+        default { '^FAIL(ED)?\b' }
+    }
     $failing = @($lines | Where-Object { $_ -cmatch $pattern })
     if (@($failing).Count -eq 0) { $failing = @($lines | Select-Object -Last 3) }
     $detail = (@($failing) -join "`n")
@@ -218,7 +235,7 @@ function Invoke-TeamGuardProcess {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = [string]$Command.WorkingDirectory
-    $encoding = if ($Kind -eq "pytest") { [System.Text.Encoding]::UTF8 } else { Get-TeamGuardConsoleEncoding }
+    $encoding = if ($Kind -eq "powershell") { Get-TeamGuardConsoleEncoding } else { [System.Text.Encoding]::UTF8 }
     $psi.StandardOutputEncoding = $encoding
     $psi.StandardErrorEncoding = $encoding
     # The run leaves the tree as it found it: no __pycache__ beside the worktree's sources.
@@ -269,7 +286,8 @@ function Invoke-TeamGuards {
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
         $outcome = "missing"
         $detail = ""
-        if (Test-Path -LiteralPath $command.File -PathType Leaf) {
+        $pathType = if ([string]$guard.kind -eq "ruff") { "Container" } else { "Leaf" }
+        if (Test-Path -LiteralPath $command.File -PathType $pathType) {
             $ran = Invoke-TeamGuardProcess -Command $command -Kind ([string]$guard.kind) -HangSeconds $HangSeconds
             if ($ran.Hung) { $outcome = "hung" }
             elseif ($ran.ExitCode -eq 0) { $outcome = "green" }
@@ -306,4 +324,56 @@ function Get-TeamGuardLine {
         "missing" { return "koruyucu dosyası bu ağaçta yok ($($Row.path)): $($Row.label)" }
     }
     return ""
+}
+
+# ------------------------------------------------------------------ after a merge (card guards-after-every-merge)
+# 2026-10-06: most reds that restarted the 95-minute gate were guards of this list (and ruff),
+# each red only once two cards met on the integration branch, found 40-60 minutes in. They run
+# right after a merge instead, and a red one names the card merged last.
+
+$script:TeamGuardRuffPath = "services/api"
+
+function New-TeamGuardRuffRow {
+    <#
+    .SYNOPSIS
+        The ruff row a run after a merge adds to the list: the gate's 'API lint (ruff)' step. Not
+        a kind the LIST may name (Read-TeamGuardList keeps its two): the step adds it itself.
+    #>
+    return [pscustomobject]@{ id = "ruff"; kind = "ruff"; path = $script:TeamGuardRuffPath; label = "ruff (uv run ruff check .): satır uzunluğu ya da kural ihlali" }
+}
+
+function Get-TeamGuardLastMerge {
+    <#
+    .SYNOPSIS
+        The task branch merged last into the tree's branch: { branch, merge, tip }, or $null.
+
+    .DESCRIPTION
+        The newest first-parent merge whose subject is the cycle's own "merge: team/<...> into
+        <...>" (Merge-TeamBranch). main's "before the gate" merge and the lead's wiring commit
+        after it are not a card's, and are passed over.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Worktree)
+    $log = Invoke-TeamGuardGit -Worktree $Worktree -Arguments @("log", "--first-parent", "--merges", "-n", "200", "--format=%H %P%x09%s", "HEAD")
+    if (-not $log) { return $null }
+    foreach ($line in @($log -split "`r?`n")) {
+        $parts = $line.Split("`t", 2)
+        if (@($parts).Count -lt 2) { continue }
+        if ($parts[1] -cnotmatch '^merge: (team/\S+) into \S+') { continue }
+        $branch = $Matches[1]
+        $shas = @($parts[0].Trim().Split(" ") | Where-Object { $_ })
+        if (@($shas).Count -lt 3) { continue }
+        return [pscustomobject]@{ branch = $branch; merge = $shas[0]; tip = $shas[2] }
+    }
+    return $null
+}
+
+function Get-TeamGuardAfterMergeLines {
+    <# What a run after a merge says: one green line, or one line per row that is not green - each with the card merged last. #>
+    param([Parameter(Mandatory = $true)]$Result, $LastMerge = $null)
+    $who = if ($null -ne $LastMerge) { [string]$LastMerge.branch } else { "bilinmiyor (dalda iş birleştirmesi yok)" }
+    $rows = @($Result.rows)
+    if ([string]$Result.status -eq "green") {
+        return @("birleştirmeden sonra koruyucular yeşil: $(@($rows).Count) koruyucu, $($Result.seconds) sn (son birleşen: $who)")
+    }
+    return @($rows | Where-Object { $_.outcome -ne "green" } | ForEach-Object { "$(Get-TeamGuardLine -Row $_) [$($_.id)] - son birleşen: $who" })
 }

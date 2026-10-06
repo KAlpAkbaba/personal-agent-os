@@ -151,6 +151,7 @@ from app.research import runs_service
 from app.research.browser_gateway import FakeBrowserGateway
 from app.research.models import (
     STAGE_READY,
+    ClaimVerificationRow,
     ResearchCandidateRow,
     ResearchEvidenceRow,
     ResearchFocusRow,
@@ -347,6 +348,7 @@ TABLES = (
     ResearchReportRow.__table__,
     ResearchFocusRow.__table__,
     ResearchOwnerStateRow.__table__,
+    ClaimVerificationRow.__table__,
     WakeAlarm.__table__,
     AmbientPolicyRow.__table__,
     Routine.__table__,
@@ -1798,6 +1800,11 @@ def contract_arguments(
         args = {"level": level} if level else {}
     elif tool == "research.start":
         args = {"topic": text}
+    elif tool == "research.verify":
+        # Card verify-mode: the claim as the owner said it; the tool strips the trigger.
+        args = {"claim": text}
+    elif tool == "research.verify_recall":
+        args = {"query": text}
     elif tool == "executive.start":
         args = {"directive": text}
     elif tool == "alarm.create":
@@ -2372,9 +2379,10 @@ def _run_case(case: UtteranceCase, harness: Harness | None) -> CaseResult:
         # tool allowed to create a research task, by design — it delegates to the SAME
         # M13 pipeline research.start uses (module docstring: "never a second research
         # engine"), so a summary run creating a real ``research_runs`` row is the
-        # correct behaviour, not a forbidden side effect.
+        # correct behaviour, not a forbidden side effect. Card verify-mode: research.verify
+        # checks a claim through the same pipeline, by design.
         if (
-            case.expected_tool not in ("research.start", "news.summarize")
+            case.expected_tool not in ("research.start", "news.summarize", "research.verify")
             and h.research_task_ids() != tasks_before
         ):
             result.problems.append("a research task was created")

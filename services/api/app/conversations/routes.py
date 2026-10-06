@@ -2,7 +2,8 @@
 
 POST starts one (``mode`` manual|home), ``/{id}/stop`` stops it, ``/{id}/segments`` adds a line
 (``content`` + an optional derived ``embedding`` + ``is_owner``; a body with a key naming audio
-in any case or as part of the key - ``Audio``, ``audio_data``, ``pcm16`` - is refused, and a
+in any case or as part of the key - ``Audio``, ``audio_data``, ``pcm16`` - is refused, so is a
+``content`` carrying the sound itself (a ``data:`` URL, a long base64 run, an audio magic), and a
 line with an embedding is checked against the owner's enrolled voice profile),
 ``/{id}/speakers/{n}/name`` is 'bu Ahmet', ``/people`` lists the named people,
 ``/people/{id}/consent`` is 'Ahmet izin verdi', DELETE ``/people/{id}`` deletes a person and
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -50,9 +52,31 @@ AUDIO_KEY_PARTS = (
 )
 
 
+#: ...and the sound may also ride inside the line itself (test team, 2026-10-06: a
+#: ``data:audio/wav;base64,...`` content answered 201): a ``data:`` URL, a base64 run no
+#: sentence has (200+ characters, no space), or a base64 run opening with an audio file's
+#: magic - RIFF, ID3, OggS, fLaC, EBML (webm/mkv), #!AMR, and an m4a/mp4/3gp ``ftyp`` box
+#: (``GZ0eX``: four bytes in, after a box size that is a multiple of 4) - long enough to be
+#: bytes, not a word. Inspector, first pass: the ``base64`` CLI / MIME shape wraps at 76 (PEM
+#: at 64) so no line reaches 200 - two wrapped lines of 40+ base64 characters and a third
+#: line's start are a block no sentence has (a sentence line has spaces). Both run shapes
+#: start only where a run starts, so a line of 199-character runs is scanned once, not
+#: once per character (11 ms -> under 1 ms a 4000-character line).
+EMBEDDED_AUDIO = re.compile(
+    r"(?i:data:\s*[\w.+-]+/[\w.+-]+\s*[;,])"
+    r"|(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{200,}"
+    r"|(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{40,}={0,2}[ \t]*\r?\n[ \t]*){2}[A-Za-z0-9+/_-]{8}"
+    r"|(?:UklGR|SUQz|T2dnU|ZkxhQ|GkXfo|IyFBTV|GZ0eX)[A-Za-z0-9+/_-]{8,}"
+)
+
+
 def _names_audio(key: object) -> bool:
     folded = str(key).lower()
     return any(part in folded for part in AUDIO_KEY_PARTS)
+
+
+def _carries_audio(content: object) -> bool:
+    return isinstance(content, str) and EMBEDDED_AUDIO.search(content) is not None
 
 
 def _stamp(value: datetime | None) -> str | None:
@@ -274,7 +298,7 @@ async def stop_conversation(conversation_id: str, request: Request) -> dict[str,
 async def add_segment(conversation_id: str, request: Request) -> dict[str, Any]:
     key = _key(conversation_id)
     payload = await _payload(request)
-    if any(_names_audio(name) for name in payload):
+    if any(_names_audio(name) for name in payload) or _carries_audio(payload.get("content")):
         raise HTTPException(
             422,
             {

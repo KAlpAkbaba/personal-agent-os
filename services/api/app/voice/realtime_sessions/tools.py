@@ -91,6 +91,7 @@ from app.voice.realtime_sessions.tools_macros import MACRO_TOOL_NAMES, register_
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_media import register_media_tools
 from app.voice.realtime_sessions.tools_memory import register_memory_tools
+from app.voice.realtime_sessions.tools_money import MONEY_TOOL_NAMES, register_money_tools
 from app.voice.realtime_sessions.tools_native import (
     NATIVE_TOOL_NAMES,
     register_native_tools,
@@ -104,6 +105,7 @@ from app.voice.realtime_sessions.tools_routines import register_routine_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
 from app.voice.realtime_sessions.tools_selfdev import register_selfdev_tools
 from app.voice.realtime_sessions.tools_team import register_team_tools
+from app.voice.realtime_sessions.tools_verify import register_verify_tools
 from app.voice.realtime_sessions.tools_watch import (
     WATCH_CLARIFYING_TOOL_NAMES,
     register_watch_tools,
@@ -1091,6 +1093,10 @@ WATCH_CLARIFYING_TOOLS: frozenset[str] = frozenset(WATCH_CLARIFYING_TOOL_NAMES)
 #: not a receipt.
 HOUSEHOLD_CLARIFYING_TOOLS: frozenset[str] = frozenset(HOUSEHOLD_TOOL_NAMES)
 
+#: money-ledger: "Ne kadar efendim?" (a cash spend without an amount) is a question, not a
+#: receipt.
+MONEY_CLARIFYING_TOOLS: frozenset[str] = frozenset(MONEY_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -1143,6 +1149,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | MACRO_CLARIFYING_TOOLS
             | WATCH_CLARIFYING_TOOLS
             | HOUSEHOLD_CLARIFYING_TOOLS
+            | MONEY_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -2726,6 +2733,8 @@ def default_registry() -> ToolRegistry:
     register_team_tools(reg)
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode's voice tools.
     register_news_tools(reg)
+    # Card verify-mode: "bunu doğrula: ..." and "geçen hafta neyi doğrulamıştık".
+    register_verify_tools(reg)
     # ADR-0112: the owner's own media. The device could open YouTube all along -- the
     # alarm does it every morning -- but nothing let the OWNER ask, so the request fell
     # through to capability.propose and was written down instead of done.
@@ -2748,6 +2757,8 @@ def default_registry() -> ToolRegistry:
     register_godseye_tools(reg)
     # home-stock-list: the house's stock and the shopping list ("ne almam lazım").
     register_household_tools(reg)
+    # money-ledger: JARVIS's own money ledger ("hesabımda ne kadar var"); never the bank.
+    register_money_tools(reg)
     # B16 req 31-38/61-62: the owner's voice over their own MEMORY. `app.memory` has
     # been complete since M5 - policy, evidence, versions, audit, retrieval, REST - and
     # nothing under app/voice/ imported one line of it, so nothing the owner SAID could
