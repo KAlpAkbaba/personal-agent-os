@@ -1,7 +1,7 @@
 """Conversations as text: conversations, their lines, named people, the 'evde dinle' switch.
 
 Revision ID: 0069_conversation_transcripts
-Revises: 0066_watches
+Revises: 0068_mail_accounts
 Create Date: 2026-10-05
 
 Chains from ``0066_watches`` -- the chain tip of the base this card started on; re-pointed at

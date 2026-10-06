@@ -83,6 +83,10 @@ from app.voice.realtime_sessions.tools_genesis import (
 # rutin?" - it takes an id and refuses a bad one by name. Importing the name tuple here
 # just to have it would be a constant nothing reads.
 from app.voice.realtime_sessions.tools_godseye import register_godseye_tools
+from app.voice.realtime_sessions.tools_household import (
+    HOUSEHOLD_TOOL_NAMES,
+    register_household_tools,
+)
 from app.voice.realtime_sessions.tools_macros import MACRO_TOOL_NAMES, register_macro_tools
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_media import register_media_tools
@@ -1083,6 +1087,9 @@ MACRO_CLARIFYING_TOOLS: frozenset[str] = frozenset(MACRO_TOOL_NAMES)
 #: watch-voice: "Hangi sayfayı izleyeyim?" (no page anywhere, the free local mode) and
 #: "Hangi nöbeti kaldırayım: ...?" are one missing-slot question each, not receipts.
 WATCH_CLARIFYING_TOOLS: frozenset[str] = frozenset(WATCH_CLARIFYING_TOOL_NAMES)
+#: home-stock-list: "Hangi ürün efendim?" (an item the owner did not name) is a question,
+#: not a receipt.
+HOUSEHOLD_CLARIFYING_TOOLS: frozenset[str] = frozenset(HOUSEHOLD_TOOL_NAMES)
 
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
@@ -1135,6 +1142,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | NATIVE_CLARIFYING_TOOLS
             | MACRO_CLARIFYING_TOOLS
             | WATCH_CLARIFYING_TOOLS
+            | HOUSEHOLD_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -2738,6 +2746,8 @@ def default_registry() -> ToolRegistry:
     register_watch_tools(reg)
     # ADR-0197: God's Eye View in the owner's browser.
     register_godseye_tools(reg)
+    # home-stock-list: the house's stock and the shopping list ("ne almam lazım").
+    register_household_tools(reg)
     # B16 req 31-38/61-62: the owner's voice over their own MEMORY. `app.memory` has
     # been complete since M5 - policy, evidence, versions, audit, retrieval, REST - and
     # nothing under app/voice/ imported one line of it, so nothing the owner SAID could

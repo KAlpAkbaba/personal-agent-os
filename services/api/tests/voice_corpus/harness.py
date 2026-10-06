@@ -96,6 +96,7 @@ from app.genesis.catalogue import GenesisInterfaceCatalogue, set_catalogue
 from app.genesis.models import GenesisCatalogueRow, GenesisRun
 from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
+from app.household.models import HouseholdEvent, HouseholdItem
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -383,6 +384,9 @@ TABLES = (
     MemoryAuditEvent.__table__,
     Entity.__table__,
     EntityEdge.__table__,
+    # home-stock-list: a level or a list edit writes a real row through the real service.
+    HouseholdItem.__table__,
+    HouseholdEvent.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
