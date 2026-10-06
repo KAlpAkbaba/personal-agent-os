@@ -18,11 +18,8 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config as AlembicConfig
 from sqlalchemy import create_engine, delete, event, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
@@ -33,17 +30,10 @@ from app.watch.models import Watch, WatchReading
 
 pytestmark = pytest.mark.integration
 
-API_ROOT = Path(__file__).resolve().parents[2]
 REQUESTS = 32
 WINDOW_S = 0.2
 NOON = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 REFUSAL = f"En çok {service.MAX_WATCHES} nöbet tutulabilir; önce birini kaldır."
-
-
-def _alembic() -> AlembicConfig:
-    cfg = AlembicConfig(str(API_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(API_ROOT / "alembic"))
-    return cfg
 
 
 @pytest.fixture(autouse=True)
@@ -53,8 +43,8 @@ def public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture()
 def engine() -> Iterator[Engine]:
-    command.upgrade(_alembic(), "head")
-    # One connection per request, so no request waits for the pool instead of the database.
+    # The schema is at head already (conftest's migrated_database). One connection per
+    # request, so no request waits for the pool instead of the database.
     eng = create_engine(Settings().database_url, pool_size=REQUESTS + 2, max_overflow=0)
 
     def clear() -> None:
