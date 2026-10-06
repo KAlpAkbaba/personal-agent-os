@@ -132,6 +132,14 @@ services:
       PAGENTOS_TELEPHONY_OWNER_NUMBER: ${PAGENTOS_TELEPHONY_OWNER_NUMBER:-}
       PAGENTOS_TELEPHONY_FROM_NUMBER: ${PAGENTOS_TELEPHONY_FROM_NUMBER:-}
       PAGENTOS_TELEPHONY_PUBLIC_BASE_URL: ${PAGENTOS_TELEPHONY_PUBLIC_BASE_URL:-}
+      # urgent-alert-wire: the phone rings through silent mode for IMPORTANT notifications
+      # (Pushover priority=2). The app token and the user key are SECRETS, installed with
+      # scripts/cloud/set-cloud-secret.ps1 (stdin only, never argv); the link root (the Cloud
+      # Core's https://<host>.<tailnet>.ts.net) goes into /opt/pagentos/.env. All OPTIONAL:
+      # absent means the Kokpit says "bağlı değil" and the ladder is as it was.
+      PAGENTOS_URGENT_ALERT_PUSHOVER_APP_TOKEN: ${PAGENTOS_URGENT_ALERT_PUSHOVER_APP_TOKEN:-}
+      PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY: ${PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY:-}
+      PAGENTOS_URGENT_ALERT_LINK_BASE: ${PAGENTOS_URGENT_ALERT_LINK_BASE:-}
       # Production is never "dev": the simulated provider is barred from selection here.
       PAGENTOS_ENVIRONMENT: ${PAGENTOS_ENVIRONMENT:-prod}
       # The web shell is reached over the tailnet; set to the real private origin(s).

@@ -42,10 +42,19 @@ PRIORITIES: Final[tuple[str, ...]] = (PRIORITY_URGENT, PRIORITY_NORMAL, PRIORITY
 #: req 389, in order. Each rung is a way to reach the owner sooner than the one after it.
 #: `inbox` is last and always succeeds, because the row is already there.
 CHANNEL_TOAST: Final[str] = "toast"
+#: urgent-alert-wire: the phone rings through silent mode and Do Not Disturb (Pushover
+#: priority=2) - after the desk, before everything that only buzzes. Important rows only.
+CHANNEL_ALARM: Final[str] = "alarm"
 CHANNEL_SOUND: Final[str] = "sound"
 CHANNEL_PUSH: Final[str] = "push"
 CHANNEL_INBOX: Final[str] = "inbox"
-LADDER: Final[tuple[str, ...]] = (CHANNEL_TOAST, CHANNEL_SOUND, CHANNEL_PUSH, CHANNEL_INBOX)
+LADDER: Final[tuple[str, ...]] = (
+    CHANNEL_TOAST,
+    CHANNEL_ALARM,
+    CHANNEL_SOUND,
+    CHANNEL_PUSH,
+    CHANNEL_INBOX,
+)
 
 
 class NotificationRow(Base):
@@ -113,6 +122,7 @@ Index("ix_notifications_unread", NotificationRow.read_at, NotificationRow.create
 
 
 __all__ = [
+    "CHANNEL_ALARM",
     "CHANNEL_INBOX",
     "CHANNEL_PUSH",
     "CHANNEL_SOUND",

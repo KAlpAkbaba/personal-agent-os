@@ -286,6 +286,8 @@ def test_every_background_loop_the_app_starts_can_be_seen_in_health() -> None:
         "watch_purge": "watch_purge",
         # jarvis-calls-owner: the no-answer retry and the important-event calls.
         "telephony_loop": "telephony_calls",
+        # urgent-alert-wire: the alarm receipts' loop (seen / unseen / read elsewhere).
+        "urgent_alert_loop": "urgent_alert_receipts",
         # home-stock-list: the hourly reminder pass.
         "household_reminders": "household_reminders",
         # money-ledger: the spend-question pass.
@@ -314,6 +316,7 @@ def test_the_health_map_actually_carries_those_keys() -> None:
         "watch_runner",
         "watch_purge",
         "telephony_calls",
+        "urgent_alert_receipts",
     ):
         assert key in ALL_CHECKS
 

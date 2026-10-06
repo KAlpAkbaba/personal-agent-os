@@ -73,6 +73,8 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "watch_purge",
     # jarvis-calls-owner: the call loop (no-answer retry, important-event calls). Advisory.
     "telephony_calls",
+    # urgent-alert-wire: the alarm receipts' loop (seen / unseen / read elsewhere). Advisory.
+    "urgent_alert_receipts",
     # home-stock-list: the hourly reminder pass. Advisory.
     "household_reminders",
     # money-ledger: the spend-question pass. Advisory.
@@ -147,6 +149,7 @@ def test_health_ok_shape(monkeypatch) -> None:
             "watch_runner",
             "watch_purge",
             "telephony_calls",
+            "urgent_alert_receipts",
             "household_reminders",
             "money_spend_loop",
             "audit_retention",
