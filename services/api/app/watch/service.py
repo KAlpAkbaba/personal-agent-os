@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.research.destination import DestinationPolicyError, validate_fetch_target
@@ -31,6 +31,8 @@ MAX_WATCHES: Final = 20
 MIN_HOURS: Final = 1
 MAX_HOURS: Final = 168
 LINE_WIDTH: Final = 120
+#: The advisory lock every watch creation takes on PostgreSQL; fixed, any value no one else uses.
+CAP_LOCK_KEY: Final = 0x5741_5443  # "WATC"
 
 
 class WatchRefused(ValueError):
@@ -142,6 +144,15 @@ def _selector(raw: object) -> str | None:
     return selector
 
 
+def _hold_the_cap(db: Session) -> None:
+    """Makes the count and the insert one turn on PostgreSQL: the transaction takes an advisory
+    lock that only the caller's commit or rollback releases. Without it two requests that both
+    counted 19 both inserted (the test team: 32 at once from empty made 21). SQLite writes
+    serially and has no such lock."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": CAP_LOCK_KEY})
+
+
 def create_watch(
     db: Session,
     *,
@@ -160,6 +171,7 @@ def create_watch(
         "selector": _selector(selector),
         "url": _url(url),
     }
+    _hold_the_cap(db)
     count = db.execute(select(func.count()).select_from(Watch)).scalar_one()
     if count >= MAX_WATCHES:
         raise WatchRefused(f"En çok {MAX_WATCHES} nöbet tutulabilir; önce birini kaldır.")
