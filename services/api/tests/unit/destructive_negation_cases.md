@@ -9,9 +9,9 @@ Beklenen her satırda aynıdır: cümle hiçbir silen/iptal eden niyete gitmez. 
 | memory_forget | generated | m.forget.1 | Bunu unut. | Bunu unutma. | silen araca gitmez |
 | memory_forget | generated | m.forget.1 | Bunu unut. | Bunu unutmayın. | silen araca gitmez |
 | memory_forget | generated | m.forget.1 | Bunu unut. | Bunu unutmayınız. | silen araca gitmez |
-| memory_forget | generated | b51.memory_forget.1 | Bunu hafızandan sil. | Bunu hafızandan silme. | AÇIK: negation-fix-cancel-verb-stems |
-| memory_forget | generated | b51.memory_forget.1 | Bunu hafızandan sil. | Bunu hafızandan silmeyin. | AÇIK: negation-fix-cancel-verb-stems |
-| memory_forget | generated | b51.memory_forget.1 | Bunu hafızandan sil. | Bunu hafızandan silmeyiniz. | AÇIK: negation-fix-cancel-verb-stems |
+| memory_forget | generated | b51.memory_forget.1 | Bunu hafızandan sil. | Bunu hafızandan silme. | silen araca gitmez |
+| memory_forget | generated | b51.memory_forget.1 | Bunu hafızandan sil. | Bunu hafızandan silmeyin. | silen araca gitmez |
+| memory_forget | generated | b51.memory_forget.1 | Bunu hafızandan sil. | Bunu hafızandan silmeyiniz. | silen araca gitmez |
 | research_cancel | generated | d.research_cancel.1 | Araştırmayı iptal et. | Araştırmayı iptal etme. | silen araca gitmez |
 | research_cancel | generated | d.research_cancel.1 | Araştırmayı iptal et. | Araştırmayı iptal etmeyin. | silen araca gitmez |
 | research_cancel | generated | d.research_cancel.1 | Araştırmayı iptal et. | Araştırmayı iptal etmeyiniz. | AÇIK: negation-fix-research-cancel |
@@ -24,21 +24,21 @@ Beklenen her satırda aynıdır: cümle hiçbir silen/iptal eden niyete gitmez. 
 | research_cancel | generated | d.research_cancel.4 | Araştırmadan vazgeç. | Araştırmadan vazgeçme. | AÇIK: negation-fix-research-cancel |
 | research_cancel | generated | d.research_cancel.4 | Araştırmadan vazgeç. | Araştırmadan vazgeçmeyin. | AÇIK: negation-fix-research-cancel |
 | research_cancel | generated | d.research_cancel.4 | Araştırmadan vazgeç. | Araştırmadan vazgeçmeyiniz. | AÇIK: negation-fix-research-cancel |
-| routine_cancel | generated | r.cancel.1 | Sabah rutinini iptal et. | Sabah rutinini iptal etme. | AÇIK: negation-fix-cancel-verb-stems |
-| routine_cancel | generated | r.cancel.1 | Sabah rutinini iptal et. | Sabah rutinini iptal etmeyin. | AÇIK: negation-fix-cancel-verb-stems |
-| routine_cancel | generated | r.cancel.1 | Sabah rutinini iptal et. | Sabah rutinini iptal etmeyiniz. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | r.collision.alarm_cancel | Sabah alarmımı iptal et. | Sabah alarmımı iptal etme. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | r.collision.alarm_cancel | Sabah alarmımı iptal et. | Sabah alarmımı iptal etmeyin. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | r.collision.alarm_cancel | Sabah alarmımı iptal et. | Sabah alarmımı iptal etmeyiniz. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.1 | Alarmı iptal et. | Alarmı iptal etme. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.1 | Alarmı iptal et. | Alarmı iptal etmeyin. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.1 | Alarmı iptal et. | Alarmı iptal etmeyiniz. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.2 | Sabah alarmını iptal et. | Sabah alarmını iptal etme. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.2 | Sabah alarmını iptal et. | Sabah alarmını iptal etmeyin. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.2 | Sabah alarmını iptal et. | Sabah alarmını iptal etmeyiniz. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.3 | Alarmı kaldır. | Alarmı kaldırma. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.3 | Alarmı kaldır. | Alarmı kaldırmayın. | AÇIK: negation-fix-cancel-verb-stems |
-| alarm_cancel | generated | a.cancel.3 | Alarmı kaldır. | Alarmı kaldırmayınız. | AÇIK: negation-fix-cancel-verb-stems |
+| routine_cancel | generated | r.cancel.1 | Sabah rutinini iptal et. | Sabah rutinini iptal etme. | silen araca gitmez |
+| routine_cancel | generated | r.cancel.1 | Sabah rutinini iptal et. | Sabah rutinini iptal etmeyin. | silen araca gitmez |
+| routine_cancel | generated | r.cancel.1 | Sabah rutinini iptal et. | Sabah rutinini iptal etmeyiniz. | silen araca gitmez |
+| alarm_cancel | generated | r.collision.alarm_cancel | Sabah alarmımı iptal et. | Sabah alarmımı iptal etme. | silen araca gitmez |
+| alarm_cancel | generated | r.collision.alarm_cancel | Sabah alarmımı iptal et. | Sabah alarmımı iptal etmeyin. | silen araca gitmez |
+| alarm_cancel | generated | r.collision.alarm_cancel | Sabah alarmımı iptal et. | Sabah alarmımı iptal etmeyiniz. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.1 | Alarmı iptal et. | Alarmı iptal etme. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.1 | Alarmı iptal et. | Alarmı iptal etmeyin. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.1 | Alarmı iptal et. | Alarmı iptal etmeyiniz. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.2 | Sabah alarmını iptal et. | Sabah alarmını iptal etme. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.2 | Sabah alarmını iptal et. | Sabah alarmını iptal etmeyin. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.2 | Sabah alarmını iptal et. | Sabah alarmını iptal etmeyiniz. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.3 | Alarmı kaldır. | Alarmı kaldırma. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.3 | Alarmı kaldır. | Alarmı kaldırmayın. | silen araca gitmez |
+| alarm_cancel | generated | a.cancel.3 | Alarmı kaldır. | Alarmı kaldırmayınız. | silen araca gitmez |
 | calendar_cancel | generated | d.cancel_event.2 | Perşembeki toplantıyı iptal et. | Perşembeki toplantıyı iptal etme. | silen araca gitmez |
 | calendar_cancel | generated | d.cancel_event.2 | Perşembeki toplantıyı iptal et. | Perşembeki toplantıyı iptal etmeyin. | silen araca gitmez |
 | calendar_cancel | generated | d.cancel_event.2 | Perşembeki toplantıyı iptal et. | Perşembeki toplantıyı iptal etmeyiniz. | AÇIK: negation-fix-calendar-cancel |
