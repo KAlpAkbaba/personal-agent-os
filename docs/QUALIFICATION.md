@@ -1457,3 +1457,26 @@ committed tree it is 8/8.
 | 55.3 | A waiting seat names the seat it waits for, in Turkish case | `PROVEN_AUTOMATED` | `apps/web/tests/office/run-progress.test.tsx` (waitText, accusative) |
 | 55.4 | The test team's round, seats and Test odası | `PROVEN_AUTOMATED` | `scripts/tests/testteam.tests.ps1` 30/30 (now a gate and CI step); `services/api/tests/unit/test_team_board.py`; `apps/web/tests/office/test-room.test.tsx` |
 | 55.5 | The rest of the gate | `PROVEN_AUTOMATED` | unit 16085 passed; `scripts/tests/team-feed.tests.ps1` 80/80; `scripts/tests/team-integrate.tests.ps1` 93/93; web 2358/2359 (the one red above) |
+
+## Stage 56 — the 2026-10-05/06 integration: mail accounts, conversations as text, the house's stock, JARVIS calls the owner, the urgent-alert rung, the stuck-run check, the test team on the Ofis floor
+
+Released 2026-10-06 08:40 UTC (11:40 local) as main `72884b718546727cd68a8b3709b0f2afaef586ce` (api-blue; previous
+`2568bfc5…` kept as last known good). Migrations `0068_mail_accounts`, `0069_conversation_transcripts`,
+`0070_household_stock`, one chain (the Danışman re-pointed the two that were written on `0066_watches`). 22 cards released.
+Integration conflicts of six approved cards resolved by the Danışman (rule (d); the owner moved this to the Proje Yöneticisi
+the same day, card `pm-resolves-integration-conflicts`). The pre-check found eleven cross-cutting guards the merged cards had
+not met (loop health, capability names, the negation guard for the list removal, an error class in Turkish, Twilio's words
+in an owner error, the staging accounts secret, a hand-listed polite form, two suites missing from gate/CI, the Postgres
+baseline), all fixed on the branch. Full gate on `5d00ca7c`: every step green but three the environment broke (integration on
+a dev server out of connections; web build and lint on a `node_modules` junction to another worktree). The connections were the
+integration suite's own leak - `owner_client` built an app per test and nothing closed its pools (275 at the end, 82 after the
+fix in `services/api/tests/integration/conftest.py`). `6be2c812`: web build/lint/unit and the database steps (dev stack,
+alembic, integration 232/232) PASS.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 56.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: 72884b7…`, `api-blue schema at 0070_household_stock (database matches the tree)`; recovery supervisor pinned to the full sha, `RECONCILE OK: api-blue is canonical (release 72884b7…)` |
+| 56.2 | The three new tables on real Postgres | `PROVEN_AUTOMATED` | `services/api/tests/integration/test_mail_accounts_postgres.py`, `test_conversations_postgres.py`, `test_household_postgres.py` (23/23 on a scratch database, then in the integration step) |
+| 56.3 | The integration suite stays inside the server's connections | `PROVEN_AUTOMATED` | `services/api/tests/integration/conftest.py` `release_idle_pools`: peak 82 (was 275), 232/232 |
+| 56.4 | The test team sits on the Ofis floor | `PROVEN_AUTOMATED` | `apps/web/tests/office/test-room.test.tsx` (the five seats inside `.office-floor`, once each; RED when drawn outside) |
+| 56.5 | The cross-cutting guards | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_bounded_delivery.py`, `test_capability_list.py`, `test_destructive_negation_guard.py`, `test_owner_error_language.py`, `test_staging_isolation.py`, `test_understanding_rules_read_lemmas.py`, `test_ci_covers_every_suite.py` |

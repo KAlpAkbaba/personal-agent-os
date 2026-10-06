@@ -245,6 +245,13 @@ Test-Case "jobs are dealt to the four testers in turn, one scenario family a job
     $threw = $false
     try { [void](New-TestTeamCards -Round "r1" -Jobs $twice) } catch { $threw = $true }
     Assert-True -Condition $threw -Because "one family is one job"
+    # test-lead.md: a family with no scenario file is an improvise job; its tester writes one.
+    $new = @(New-TestTeamCards -Round "r1" -Jobs @([pscustomobject]@{ family = "ev-stoku"; scenario = $null; improvise = $true; why = "yeni" }))
+    Assert-Equal -Expected "" -Actual ([string]@($new)[0].scenario) -Because "no file yet: the tester writes it"
+    Assert-True -Condition (@($new)[0].improvise) -Because "the job is to improvise"
+    $threw = $false
+    try { [void](New-TestTeamCards -Round "r1" -Jobs @([pscustomobject]@{ family = "x"; scenario = $null; improvise = $false })) } catch { $threw = $true }
+    Assert-True -Condition $threw -Because "a scripted job with no file names nothing to run"
 }
 
 Test-Case "a failure becomes a software card with steps, expected, actual, the scenario, the screenshot and the staging sha; two alike are one" {
@@ -332,6 +339,12 @@ Test-Case "the breaking-point report is short, names the first failing load with
     $report = Format-TestTeamBreakingReport -Round "r1" -Results $failedToo
     Assert-True -Condition ($report.Note -match "yük 32" -and $report.Note -notmatch "yük 2 ") -Because "the headline is the real breaking point: $($report.Note)"
     Assert-True -Condition ($report.Markdown -match "ölçüm geçersiz") -Because "the failed scenario's ladder is said, and why it does not count: $($report.Markdown)"
+    # 2026-10-06: an improvised result a tester wrote by hand has no tester or card; the round
+    # died here after every tester had finished, and no report was written.
+    $handWritten = @([pscustomobject]@{ family = "nobet"; state = "broke"; breaking = [pscustomobject]@{
+                tried = @([pscustomobject]@{ load = 8; ok = 6; errors = 2; p95_ms = 40 }); first_failure = [pscustomobject]@{ load = 8; ok = 6; errors = 2; p95_ms = 40 }; what = "POST /v1/watches" } }) + $results
+    $report = Format-TestTeamBreakingReport -Round "r1" -Results $handWritten
+    Assert-True -Condition ($report.Markdown -match "nobet \(\?, \?\)") -Because "a result without tester and card is reported, not thrown: $($report.Markdown)"
 }
 
 Test-Case "a tester's board note is what the Ofis' Test odası reads: 'iş: <job>', then 'sonuç: <state> - <job> - kopma: ...'" {

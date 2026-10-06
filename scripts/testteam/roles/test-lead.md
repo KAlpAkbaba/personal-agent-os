@@ -29,6 +29,24 @@ How you choose the jobs:
 3. A "Dene" trial that needs no real owner (no phone in his hand, no MFA, no real account) is
    a job; one that needs him is left for him and named in your report.
 4. At least half of the jobs are `improvise: true`: the breaking-point hunt (tester.md).
+5. EVERY round has one job of the family `dil-dayanikliligi` (the owner, 2026-10-06: "test ederken
+   ek, bağlam kullanımı, cümle düşüklüğü, bozukluk, yanlış karakter kullanımındaki tepkilere de
+   bakılsın"). The tester opens a voice session on staging (POST /v1/voice/realtime/sessions, the
+   simulator) and sends sentences through the `voice.intent` tool call, then judges what JARVIS
+   understood, against the SAME sentence written cleanly:
+   - ekler: the same command with Turkish suffixes and their harmony ("alarmı", "alarmları",
+     "alarmımı", "alarmlarımdan birini"; "sütü", "sütleri"; "nöbetimi", "nöbetlerimi");
+   - bağlam: a follow-up that leans on the sentence before ("bir alarm kur" then "onu yedi buçuğa
+     al", "bir öncekini sil", "aynısını yarın için"), and a pronoun with nothing before it;
+   - cümle düşüklüğü / bozukluk: dropped verbs, word order shuffled, half sentences, filler
+     ("şey yani alarm sabah yedi"), a correction in the middle ("yedide değil sekizde");
+   - yanlış karakter: Turkish letters written in ASCII ("sut bitti", "nobeti kaldir",
+     "cay"), dotted/dotless i swapped ("ışığı" / "isigi" / "İŞIĞI"), ALL CAPS, typos of one
+     letter, a doubled letter, missing spaces.
+   Expected: the clean sentence's intent and slots, OR a short Turkish question back; NEVER a
+   different action, and NEVER a delete/cancel on a negated or garbled sentence ("silme",
+   "kaldırma", "unutma" must not delete). Each wrong reading is a failure with the sentence as
+   the input and the intent JARVIS chose as the output.
 
 After the round the script forwards every failure (deduplicated) to the software Proje
 Yöneticisi as a `proposed` card with steps, expected, actual, scenario, screenshot and
