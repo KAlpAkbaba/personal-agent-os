@@ -81,9 +81,7 @@ def test_granite_fp32_768_wide_is_truncated_to_256_and_renormalised():
 def test_granite_int8_alias_is_truncated_with_its_own_model_id():
     embedder = LocalEmbedder(model_name=GRANITE_INT8, model_factory=_fixed(768))
     assert embedder.truncated is True
-    assert (
-        embedder.model_id == "local-ibm-granite/granite-embedding-311m-multilingual-r2-int8@256"
-    )
+    assert embedder.model_id == "local-ibm-granite/granite-embedding-311m-multilingual-r2-int8@256"
     assert len(embedder.embed("Ekranlar 15 dakika sonra kapansın")) == 256
 
 
@@ -194,9 +192,7 @@ def _pinned_tree(tmp_path: Path, spec, monkeypatch, *, corrupt: str | None = Non
         target = snapshot / pinned.path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-        files.append(
-            providers.PinnedFile(pinned.path, hashlib.sha256(data).hexdigest(), len(data))
-        )
+        files.append(providers.PinnedFile(pinned.path, hashlib.sha256(data).hexdigest(), len(data)))
     if corrupt is not None:
         target = snapshot / corrupt
         data = target.read_bytes()

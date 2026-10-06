@@ -37,6 +37,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Final
 from unittest.mock import patch
@@ -50,6 +51,7 @@ from app.memory.providers import (
     PROVIDER_LOCAL,
     EmbedderReport,
     ModelFactory,
+    _fastembed_factory,
     build_embedder,
 )
 from app.voice.realtime_sessions.models import RealtimeSessionRow
@@ -436,21 +438,31 @@ class BuiltEngine:
     asked: list[str]
 
 
-def production_engine(*, model_factory: ModelFactory | None = None) -> BuiltEngine:
+def production_engine(
+    *,
+    model_factory: ModelFactory | None = None,
+    model_name: str = DEFAULT_LOCAL_MODEL,
+    threads: int | None = None,
+) -> BuiltEngine:
     """The engine ``create_app`` configures (ADR-0245): ``build_embedder`` with the provider
     'local' and the default local model, then ``configure_understanding`` with the SHIPPED
     exemplars, built inline. The default engine the process had before is restored, so the
     engine reaches a case only through ``run_stt_case(engine=...)``.
 
     ``model_factory`` is the model loader's seam (a test makes it raise); a refusal raises
-    ``ProductionEngineUnavailable`` with the reason.
+    ``ProductionEngineUnavailable`` with the reason. ``model_name`` / ``threads`` measure
+    another local model with the same engine (memory-embedding-granite-measure); the
+    default is production's model.
     """
     settings = Settings(
         memory_embedding_provider=PROVIDER_LOCAL,
-        memory_local_embedding_model=DEFAULT_LOCAL_MODEL,
+        memory_local_embedding_model=model_name,
         understanding_semantic_enabled=True,
     )
-    embedder, report = build_embedder(settings, model_factory=model_factory)
+    factory = model_factory
+    if factory is None and threads is not None:
+        factory = partial(_fastembed_factory, threads=threads)
+    embedder, report = build_embedder(settings, model_factory=factory)
     if report.active != PROVIDER_LOCAL or not report.semantic:
         raise ProductionEngineUnavailable(
             f"the local embedder could not be built (the deterministic one would serve): "

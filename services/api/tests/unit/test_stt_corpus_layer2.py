@@ -25,8 +25,8 @@ import pytest
 
 from app.memory.providers import DEFAULT_LOCAL_MODEL
 from app.voice.understanding import combine, policy
-from tests.voice_corpus import stt_harness
 from tests.unit import test_stt_utterance_corpus as no_engine_suite
+from tests.voice_corpus import stt_harness
 from tests.voice_corpus.stt_corpus import ORIGIN_REAL, STT_CORPUS_VERSION
 from tests.voice_corpus.stt_harness import (
     LAYER2_REPORT_KEYS,
