@@ -342,8 +342,14 @@ try {
         "--consent", $(if ($consent) { "yes" } else { "no" }), "--synthetic", $(if ($SyntheticVoices) { "yes" } else { "no" }),
         "--models", $Models)) 300 -WorkingDirectory $apiDir
     if ($merge.ExitCode -ne 0) { Stop-Measure 6 ("speaker_measure merge failed: " + ($merge.StdOut + $merge.StdErr).Trim()) }
-    Write-Host $merge.StdOut.Trim()
-    Write-Host "evidence: $(Join-Path $EvidenceDir 'speaker-measure.md'); listening: $listenDir"
+    # the verdict is Turkish and the child wrote UTF-8: through Console.Out with a UTF-8 encoding
+    # (5.1's host writer keeps its start-up code page on a redirected stdout, as stt-compare notes)
+    $previousEncoding = $null
+    try { $previousEncoding = [Console]::OutputEncoding; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { $previousEncoding = $null }
+    [Console]::Out.WriteLine($merge.StdOut.Trim())
+    [Console]::Out.Flush()
+    if ($null -ne $previousEncoding) { try { [Console]::OutputEncoding = $previousEncoding } catch { } }
+    Write-Host "evidence:$(Join-Path $EvidenceDir 'speaker-measure.md'); listening: $listenDir"
 }
 finally {
     if ($work -and -not (Remove-CoreFolder -Path $work)) {
