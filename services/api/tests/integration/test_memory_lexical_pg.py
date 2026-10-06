@@ -28,7 +28,7 @@ from app.memory.runtime import MemoryRuntime
 from app.memory.service import MemoryLinks
 from app.memory.types import Actor, MemoryClass
 from tests.integration.conftest import API_ROOT
-from tests.integration.migration_ids import head, parent_of, revision_named
+from tests.integration.migration_ids import parent_of, revision_named
 
 pytestmark = pytest.mark.integration
 
@@ -228,8 +228,10 @@ def test_pg_trgm_ships_with_the_image(runtime: MemoryRuntime) -> None:
 def test_migration_goes_up_down_and_up(runtime: MemoryRuntime) -> None:
     cfg = AlembicConfig(str(API_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(API_ROOT / "alembic"))
+    # test_migrations.py's pattern: no "this is the head" claim - a later migration must not
+    # turn this test red; going below this one undoes the later ones and `upgrade head` redoes them.
     mine = revision_named("text_trgm")
-    assert head() == mine, "the trgm migration is not the head; downgrading would undo others"
+    command.upgrade(cfg, "head")
     try:
         command.downgrade(cfg, parent_of(mine))
         with runtime.session() as session:
