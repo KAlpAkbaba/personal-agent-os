@@ -90,7 +90,9 @@ def test_no_method_and_path_is_served_twice() -> None:
         for verb in verbs.split(","):
             counts[(verb, path)] += 1
     twice = sorted(key for key, n in counts.items() if n > 1)
-    assert not twice, f"aynı yöntem+yol iki kez bağlı (sıra hangisinin cevap verdiğini seçer): {twice}"
+    assert not twice, (
+        f"aynı yöntem+yol iki kez bağlı (sıra hangisinin cevap verdiğini seçer): {twice}"
+    )
 
 
 def test_main_py_gets_no_new_include_router_line() -> None:

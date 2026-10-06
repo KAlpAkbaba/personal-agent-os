@@ -1,4 +1,4 @@
-"""app.registry's discovery rules, on a throw-away package built in tmp (registry-models-and-routers).
+"""app.registry's discovery rules, on a throw-away package in tmp (registry-models-and-routers).
 
 The registry replaces two hand-kept lists (alembic/env.py's model imports, main.py's
 include_router lines) that every parallel branch edited at the same place. Its rules:
@@ -112,8 +112,19 @@ def test_discovering_models_imports_nothing_and_registering_imports_only_them(
     assert _loaded(fake_package) == set()
     registry.register_models(fake_package)
     # helpers/notmodels/models_extra and the tests/scripts models were never executed
-    assert _loaded(fake_package) == {"models", "alpha.models", "beta.deep.models", "gamma.mission_models"}
-    for never in ("alpha.helpers", "gamma.notmodels", "gamma.models_extra", "tests.models", "scripts.models"):
+    assert _loaded(fake_package) == {
+        "models",
+        "alpha.models",
+        "beta.deep.models",
+        "gamma.mission_models",
+    }
+    for never in (
+        "alpha.helpers",
+        "gamma.notmodels",
+        "gamma.models_extra",
+        "tests.models",
+        "scripts.models",
+    ):
         assert f"{fake_package}.{never}" not in sys.modules, never
 
 
@@ -128,7 +139,9 @@ def test_only_an_explicit_routers_list_is_bound_in_declared_order(fake_package: 
 
 
 def test_routers_must_be_api_routers(fake_package: str, tmp_path: Path) -> None:
-    (tmp_path / fake_package / "zeta" / "routes.py").write_text("ROUTERS = ['not a router']\n", encoding="utf-8")
+    (tmp_path / fake_package / "zeta" / "routes.py").write_text(
+        "ROUTERS = ['not a router']\n", encoding="utf-8"
+    )
     with pytest.raises(TypeError, match="ROUTERS"):
         registry.discover_routers(fake_package)
 
@@ -150,7 +163,9 @@ def test_discovered_routers_are_served(fake_package: str) -> None:
     assert client.get("/silent/ping").status_code == 404
 
 
-def test_the_real_application_binds_what_the_registry_discovers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_real_application_binds_what_the_registry_discovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Through create_app(), not a test app: a ROUTERS router is served by the real object."""
     extra = APIRouter(prefix="/v1/registry-probe")
 

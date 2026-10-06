@@ -121,6 +121,7 @@ from app.operator.mission_routes import router as operator_mission_router
 from app.operator.service import OperatorService, register_operator_service
 from app.operator.vision import build_vision_provider
 from app.presence.routes import router as presence_router
+from app.registry import include_discovered_routers
 from app.release.routes import router as release_router
 from app.release.version import release_model
 from app.research import service as research_service
@@ -1114,6 +1115,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conversations_router)
     # home-stock-list: the house's stock and the shopping list (/v1/household).
     app.include_router(household_router)
+    # registry-models-and-routers: a NEW router is declared as ROUTERS in its own routes.py
+    # and bound here; no new include_router line above (test_route_table_snapshot's ratchet).
+    include_discovered_routers(app)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

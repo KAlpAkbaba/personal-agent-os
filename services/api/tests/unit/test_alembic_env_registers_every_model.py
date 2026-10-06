@@ -1,4 +1,4 @@
-"""alembic/env.py registers EVERY models module, found rather than listed (registry-models-and-routers).
+"""alembic/env.py registers EVERY models module, found not listed (registry-models-and-routers).
 
 Autogenerate compares Base.metadata with the database, so a models module env.py forgets
 makes its tables look like tables to DROP. The hand-kept list had drifted: on 2026-10-06 it
@@ -51,7 +51,13 @@ def test_every_mapped_table_comes_from_a_registered_module() -> None:
     unmapped = set(Base.metadata.tables) - mapped_tables
     assert not unmapped, f"eşlenmemiş tablo (modülü bilinmiyor): {sorted(unmapped)}"
     # the tables the hand-kept list had lost are registered now
-    for table in ("conversations", "mail_accounts", "household_items", "goals", "webpush_subscriptions"):
+    for table in (
+        "conversations",
+        "mail_accounts",
+        "household_items",
+        "goals",
+        "webpush_subscriptions",
+    ):
         assert table in Base.metadata.tables, table
 
 
