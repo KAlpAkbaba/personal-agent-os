@@ -13,8 +13,11 @@ Boundaries, on purpose:
 * Raw HTTP through an injectable ``send``, like every other vendor call in this repository
   (``app/research/synthesis.py``): no SDK dependency in the production image, and a test never
   touches the network.
-* The conversation is kept in MEMORY, per session, a few turns deep, and never written to the
-  database - the turn record carries the current sentence only until the next one replaces it.
+* The conversation is kept in MEMORY, per session, a few turns deep. Its only durable form is
+  the session row's bounded ``transcript_summary`` - the same column and the same bound the
+  paid session's ``summary`` event writes - so a new session on another device can carry it
+  on (card conversation-carryover); the owner's ``conversation_carryover`` switch turns both
+  the write and the carry off.
 * The model id carries no date suffix. "claude-3-5-haiku-20241022" was retired under a running
   system on this very day and answered 404 (research run d2c374eb); the alias is what the
   vendor keeps serving.
@@ -293,6 +296,36 @@ class ChatMemory:
 
 
 MEMORY = ChatMemory()
+
+#: Card conversation-carryover (B): a new session's history is seeded with the previous
+#: session's summary as ONE owner turn plus a short acknowledgement - the Messages API has
+#: no system role inside ``messages`` and its first turn must be the user's.
+CARRIED_PREFIX: Final = "[Önceki konuşmanın özeti, başka bir oturumdan]\n"
+CARRIED_ACK: Final = "Anladım efendim, kaldığımız yerden sürdürürüm."
+
+
+def seed_carried(memory: ChatMemory, session_id: str, summary: str) -> None:
+    """Put a carried summary at the head of an EMPTY session history."""
+    if summary.strip() and not memory.history(session_id):
+        memory.remember(session_id, CARRIED_PREFIX + summary.strip(), CARRIED_ACK)
+
+
+def summary_of(turns: list[dict[str, str]], *, limit: int) -> str:
+    """The session's turns as the plain text the ``summary`` column holds, newest kept.
+
+    A seeded summary is rendered as itself (not as an owner sentence), so a conversation
+    carried twice reads as one text instead of nesting its own prefix."""
+    lines: list[str] = []
+    for message in turns:
+        content = str(message.get("content") or "").strip()
+        if message.get("role") == "user" and content.startswith(CARRIED_PREFIX.strip()):
+            lines.append(content[len(CARRIED_PREFIX.strip()) :].strip())
+        elif message.get("role") == "assistant" and content == CARRIED_ACK:
+            continue
+        elif content:
+            who = "Sahip" if message.get("role") == "user" else "Asistan"
+            lines.append(f"{who}: {content}")
+    return "\n".join(line for line in lines if line)[-limit:]
 
 
 def owner_humor(db: Any) -> str:

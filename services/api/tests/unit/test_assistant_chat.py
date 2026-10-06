@@ -191,6 +191,85 @@ def test_the_chat_tool_answers_nothing_without_a_local_question(wired) -> None: 
     assert body["result"]["speech"] == ""  # nothing is read aloud
 
 
+def _local_chat_session(client, runtime, fake: _FakeChat, questions: list[str]) -> str:
+    sid = _create(client, transport=TRANSPORT_TEXT)["session_id"]
+    for turn, question in enumerate(questions, start=1):
+        said = _say(client, sid, question, turn=turn)
+        assert said["resolved_intents"][0]["tool"] == "assistant.chat"
+        assert _tool(client, sid, "assistant.chat")["status"] == "succeeded"
+    return sid
+
+
+def _summary_of(runtime, sid: str) -> str:
+    from app.voice.realtime_sessions.models import RealtimeSessionRow
+
+    with runtime.session() as db:
+        return db.get(RealtimeSessionRow, uuid.UUID(sid)).transcript_summary
+
+
+def _wire_local(wired) -> tuple[Any, Any, _FakeChat]:  # noqa: F811
+    client, _identity, runtime, *_rest, engine = wired
+    from sqlalchemy.orm import sessionmaker
+
+    local = LocalRouterRealtimeProvider()
+    runtime.providers[local.name] = local
+    fake = _FakeChat()
+    runtime.register_live(chat_provider=fake)
+    voice = client.app.state.voice  # the real preferences route, on this test's engine
+    voice._engine = engine
+    voice._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    return client, runtime, fake
+
+
+def test_the_local_conversation_carries_to_the_next_session(wired) -> None:  # noqa: F811
+    """Card conversation-carryover (B): the local mode's chat history lived in one process,
+    keyed by one session id; another device was another session and an empty history."""
+    from app.voice.realtime_sessions.service import MAX_SUMMARY_CHARS
+
+    client, runtime, fake = _wire_local(wired)
+    first = _local_chat_session(
+        client, runtime, fake, ["Kuantum bilgisayar nedir?", "Peki ne işe yarar?"]
+    )
+    summary = _summary_of(runtime, first)
+    assert "Kuantum bilgisayar nedir?" in summary and "Yanıt: Peki ne işe yarar?" in summary
+    assert len(summary) <= MAX_SUMMARY_CHARS
+    assert client.post(f"/v1/voice/realtime/sessions/{first}/close", json={}).status_code == 200
+
+    asked_before = len(fake.asked)
+    _local_chat_session(client, runtime, fake, ["Nerede kalmıştık?"])
+    question, history = fake.asked[asked_before]
+    assert question == "Nerede kalmıştık?"
+    carried = " ".join(m["content"] for m in history)
+    assert "Kuantum bilgisayar nedir?" in carried
+    assert history[0]["role"] == "user"  # the Messages API's first turn is the owner's
+
+
+def test_the_local_summary_stays_bounded_over_a_long_conversation(wired) -> None:  # noqa: F811
+    from app.voice.realtime_sessions.service import MAX_SUMMARY_CHARS
+
+    client, runtime, fake = _wire_local(wired)
+    long = "uzun soru " * 150  # 1500 characters a question
+    sid = _local_chat_session(client, runtime, fake, [long + "bir", long + "iki"])
+    summary = _summary_of(runtime, sid)
+    assert len(summary) == MAX_SUMMARY_CHARS
+    assert summary.endswith("Yanıt: " + (long + "iki").strip())  # the newest turn is kept
+
+
+def test_the_local_conversation_is_not_carried_when_switched_off(wired) -> None:  # noqa: F811
+    client, runtime, fake = _wire_local(wired)
+    response = client.patch("/v1/voice/preferences", json={"conversation_carryover": False})
+    assert response.status_code == 200, response.text
+    first = _local_chat_session(client, runtime, fake, ["Kuantum bilgisayar nedir?"])
+    assert client.post(f"/v1/voice/realtime/sessions/{first}/close", json={}).status_code == 200
+    # the local mode's own gate (B), not only create_session's (A): switched off, the
+    # chat's text is never written to the session row at all (ADR KVKK note)
+    assert _summary_of(runtime, first) == ""
+
+    asked_before = len(fake.asked)
+    _local_chat_session(client, runtime, fake, ["Nerede kalmıştık?"])
+    assert fake.asked[asked_before][1] == []
+
+
 @pytest.mark.parametrize("model", ["claude-haiku-4-5"])
 def test_the_shipped_chat_model_is_an_alias_not_a_dated_id(model: str) -> None:
     from app.config import Settings

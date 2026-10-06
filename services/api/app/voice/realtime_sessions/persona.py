@@ -14,6 +14,7 @@ from typing import Any
 from app.actions.receipt import FAKE_COMPLETION_PHRASES
 from app.voice.preferences import VoicePreferences
 from app.voice.wit import HUMOR_OFF, WIT_TR, normalize_humor
+from app.voice.realtime_sessions.carryover import continuation_line
 
 PERSONA_TR = (
     "Sen PagentOS'un sesli asistanısın: sahibinin kişisel yönetici asistanı. "
@@ -303,6 +304,7 @@ def build_instructions(
     voice_profile: str | None = None,
     memory_block: str = "",
     pronunciation: Mapping[str, str] | None = None,
+    carried_from: dict[str, Any] | None = None,
 ) -> str:
     """Assemble the session instructions (Turkish persona + defaults + state).
 
@@ -361,6 +363,10 @@ def build_instructions(
     pron = pronunciation_block(pronunciation)
     if pron:
         parts.append(pron)
+    # card conversation-carryover: a NEW session continuing an earlier one says so in one
+    # line, directly before the summary it introduces.
+    if transcript_summary and carried_from:
+        parts.append(continuation_line(carried_from))
     if transcript_summary:
         parts.append("Önceki konuşmanın özeti: " + transcript_summary.strip())
     # B17 req 39/40: LAST, and after the summary on purpose. What the owner said two

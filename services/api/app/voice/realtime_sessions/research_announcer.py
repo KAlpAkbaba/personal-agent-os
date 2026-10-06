@@ -148,6 +148,10 @@ class ResearchToolCallAnnouncer:
                         error=error,
                         sideband=self._sideband,
                         trace_id=None,
+                        # card conversation-carryover (C): the owner may have hung up here
+                        # and be talking to JARVIS on another device by now
+                        forward_when_closed=True,
+                        now=moment,
                     )
                 except Exception:  # noqa: BLE001 - one bad call must not stall the batch
                     logger.exception(

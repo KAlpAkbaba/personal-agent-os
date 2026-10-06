@@ -80,6 +80,7 @@ class PreferencesUpdate(BaseModel):
     read_footnotes: bool | None = None
     barge_in: bool | None = None
     humor: str | None = Field(default=None, pattern="^(dry|off)$")
+    conversation_carryover: bool | None = None
     source: str = Field(default="owner", pattern="^(owner|inferred)$")
 
 
