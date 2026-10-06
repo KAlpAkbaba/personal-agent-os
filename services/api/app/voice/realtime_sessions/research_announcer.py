@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from app.logging import get_logger
 from app.loops import LoopHeartbeat
 from app.notifications import delivery
-from app.research import runs_service
+from app.research import runs_service, verify
 from app.research.models import STAGE_FAILED, TERMINAL_STAGES
 from app.research.result import build_insufficient_terminal_payload, build_tool_terminal_payload
 from app.voice.realtime_sessions.models import TOOL_STATUS_RUNNING, RealtimeToolCall
@@ -49,10 +49,14 @@ DEFAULT_BATCH = 20
 #: The tool name a pending call must carry to be a candidate (docs/M18_ACTION_CONTRACT.md
 #: research.start; app.voice.realtime_sessions.tools.default_registry).
 RESEARCH_START_TOOL = "research.start"
+#: Card verify-mode: a verify starts the same run; what is announced is its VERDICT.
+RESEARCH_VERIFY_TOOL = "research.verify"
+ANNOUNCED_TOOLS = (RESEARCH_START_TOOL, RESEARCH_VERIFY_TOOL)
 
 
 class ResearchToolCallAnnouncer:
-    """Drains RUNNING ``research.start`` tool calls whose research run has finished."""
+    """Drains RUNNING ``research.start`` / ``research.verify`` tool calls whose research run
+    has finished."""
 
     def __init__(
         self,
@@ -83,7 +87,7 @@ class ResearchToolCallAnnouncer:
         stmt = (
             select(RealtimeToolCall)
             .where(
-                RealtimeToolCall.name == RESEARCH_START_TOOL,
+                RealtimeToolCall.name.in_(ANNOUNCED_TOOLS),
                 RealtimeToolCall.status == TOOL_STATUS_RUNNING,
                 RealtimeToolCall.announce_quarantined_at.is_(None),
             )
@@ -123,7 +127,15 @@ class ResearchToolCallAnnouncer:
                 run = runs_service.get_run(session, tid)
                 if run is None or run.stage not in TERMINAL_STAGES:
                     continue
-                result, error = self._terminal_payload(session, tid, run.stage, run.error)
+                if call.name == RESEARCH_VERIFY_TOOL:
+                    # The verdict, its source and the counter-argument - never the research
+                    # summary: the owner asked "is it true", not "what is there".
+                    result = verify.settle_task(session, tid, now=moment)
+                    error = None
+                    if result is None:
+                        continue
+                else:
+                    result, error = self._terminal_payload(session, tid, run.stage, run.error)
                 session_row = self._session_row(session, call)
                 if session_row is None:
                     continue

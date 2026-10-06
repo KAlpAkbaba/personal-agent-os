@@ -311,6 +311,34 @@ async def get_research_focus(request: Request) -> dict[str, Any]:
     return await asyncio.to_thread(load)
 
 
+@router.get("/verifications")
+async def list_verifications(
+    request: Request,
+    q: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Card verify-mode: what the owner asked to verify, newest first - by words (``q``,
+    Turkish-folded, every word a prefix of a claim word) and by time ([since, until)). A READ
+    that also settles verifications whose run has finished, so the list never shows a
+    finished check as pending only because the announcer has not passed yet."""
+    from app.research import verify
+
+    artifacts = _artifacts(request)
+    bounded = max(1, min(limit, verify.RECALL_LIMIT))
+
+    def load() -> list[dict[str, Any]]:
+        with artifacts.session() as session:
+            if verify.settle_pending(session, now=datetime.now(UTC)):
+                session.commit()
+            rows = verify.search(session, text=(q or "").strip() or None, since=since, until=until)
+            return [verify.row_as_dict(r) for r in rows[:bounded]]
+
+    items = await asyncio.to_thread(load)
+    return {"items": items, "count": len(items)}
+
+
 @router.post("/{task_id}/focus")
 async def set_research_focus(request: Request, task_id: uuid.UUID) -> dict[str, Any]:
     """The owner selected a research in the UI. That IS the focus.
