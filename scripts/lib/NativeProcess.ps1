@@ -136,6 +136,9 @@ function Invoke-NativeProcess {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Arguments,
         [int[]]$SuccessExitCodes = @(0),
         [int]$TimeoutSeconds = 120,
+        # Once the process has exited, how long its output may stay open (a child it started can
+        # hold the pipes after it is gone). Then the call throws instead of waiting for ever.
+        [int]$OutputGraceSeconds = 30,
         [string]$WorkingDirectory
     )
 
@@ -175,6 +178,13 @@ function Invoke-NativeProcess {
         throw "native tool timed out after $TimeoutSeconds s: $FilePath $commandLine"
     }
 
+    # 2026-10-06: Git for Windows' bash.exe is a launcher - it can exit while the bash it started still
+    # holds stdout; reading to the end then waited for ever and froze the team cycle three times in
+    # one afternoon (Read-TeamGitBashMount at a run's end). The output is waited for, not for ever.
+    if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($stdoutTask, $stderrTask), $OutputGraceSeconds * 1000)) {
+        try { $process.Dispose() } catch { }
+        throw "native tool exited but its output stayed open for $OutputGraceSeconds s (a process it started still holds it): $FilePath $commandLine"
+    }
     $stdout = $stdoutTask.GetAwaiter().GetResult()
     $stderr = $stderrTask.GetAwaiter().GetResult()
     $exitCode = $process.ExitCode
