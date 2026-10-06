@@ -514,6 +514,16 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "household.list_add",
         "household.list_remove",
         "household.list_read",
+        # verify-mode: a claim checked against sources, and its answer recalled.
+        "research.verify",
+        "research.verify_recall",
+        # money-ledger: the balance, the spends, the spend question's answers, undo, cash.
+        "money.balance",
+        "money.spent",
+        "money.spend_yes",
+        "money.spend_no",
+        "money.undo",
+        "money.cash",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

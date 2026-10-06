@@ -261,6 +261,15 @@ _TIERS: Final[dict[str, str]] = {
     "household.level": TIER_SENSITIVE,
     "household.list_add": TIER_SENSITIVE,
     "household.list_remove": TIER_SENSITIVE,
+    # money-ledger: his balance and spends are private (a read is SENSITIVE like mail.inbox);
+    # an answer, an undo and a cash spend write his ledger - small and undoable, still a write.
+    # None of them moves money or reaches a bank.
+    "money.balance": TIER_SENSITIVE,
+    "money.spent": TIER_SENSITIVE,
+    "money.spend_yes": TIER_SENSITIVE,
+    "money.spend_no": TIER_SENSITIVE,
+    "money.undo": TIER_SENSITIVE,
+    "money.cash": TIER_SENSITIVE,
     "routine.cancel": TIER_SENSITIVE,
     "routine.create": TIER_SENSITIVE,
     "routine.pause": TIER_SENSITIVE,

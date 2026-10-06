@@ -58,6 +58,8 @@ FAMILY_TR: dict[str, str] = {
     "household": "Ev stoku ve alışveriş listesi",
     "location": "Konum",
     "mail": "Posta",
+    # money-ledger: his balance and spends, read-only.
+    "money": "Para defteri",
     "macro": "Hareketler",
     "media": "Müzik ve ses",
     "memory": "Hafıza",

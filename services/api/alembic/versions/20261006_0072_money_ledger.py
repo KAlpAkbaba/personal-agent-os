@@ -1,7 +1,7 @@
 """JARVIS's own money ledger: entries, balances, the bank mails read, the questions, the scans.
 
-Revision ID: 0071_money_ledger
-Revises: 0070_household_stock
+Revision ID: 0072_money_ledger
+Revises: 0071_claim_verifications
 Create Date: 2026-10-06
 
 Written on ``0070_household_stock`` (the head of team/nightly/lead when the card started).
@@ -29,8 +29,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0071_money_ledger"
-down_revision: str | None = "0070_household_stock"
+revision: str = "0072_money_ledger"
+down_revision: str | None = "0071_claim_verifications"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

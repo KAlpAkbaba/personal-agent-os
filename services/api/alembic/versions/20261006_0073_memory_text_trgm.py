@@ -1,7 +1,7 @@
 """The memory's word leg: pg_trgm and two GIN indexes on ``memories.text``.
 
-Revision ID: 0071_memory_text_trgm
-Revises: 0070_household_stock
+Revision ID: 0073_memory_text_trgm
+Revises: 0072_money_ledger
 Create Date: 2026-10-06
 
 Card memory-lexical-turkish-rrf. Written on ``0070_household_stock`` (main's head); the
@@ -28,8 +28,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0071_memory_text_trgm"
-down_revision: str | None = "0070_household_stock"
+revision: str = "0073_memory_text_trgm"
+down_revision: str | None = "0072_money_ledger"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

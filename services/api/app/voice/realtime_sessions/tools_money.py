@@ -212,60 +212,86 @@ def register_money_tools(reg: ToolRegistry) -> ToolRegistry:
     amount = {"type": "string", "maxLength": 40}
     category = {"type": "string", "enum": list(categories.CATEGORIES)}
     empty = {"type": "object", "properties": {}, "additionalProperties": False}
-    specs = (
-        (
-            TOOL_MONEY_BALANCE,
-            "Bankanın bildirim postalarından bilinen son bakiyeyi, postanın saatiyle söyler: "
-            "'hesabımda ne kadar var', 'bakiyem ne kadar'. Bankaya bağlanmaz, para hareketi "
-            "yapmaz. Dönen 'speech' metnini aynen oku.",
-            empty,
-            money_balance,
-        ),
-        (
-            TOOL_MONEY_SPENT,
-            "Bu ayki harcamaları söyler: 'bu ay ne kadar harcadım', 'bu ay markete ne "
-            "harcadım'. 'category' söylendiyse kategori. Dönen 'speech' metnini aynen oku.",
-            {"type": "object", "properties": {"category": category}, "additionalProperties": False},
-            money_spent,
-        ),
-        (
-            TOOL_MONEY_SPEND_YES,
-            "Sahibin 'X liralık bir harcama yaptınız mı?' sorusuna 'evet' yanıtı: sorulan "
-            "tutarı, ya da söylediği tutarı ('evet ama 750' -> amount '750') deftere yazar. "
-            "Dönen 'speech' metnini aynen oku.",
-            {"type": "object", "properties": {"amount": amount}, "additionalProperties": False},
-            money_spend_yes,
-        ),
-        (
-            TOOL_MONEY_SPEND_NO,
-            "Sahibin harcama sorusuna 'hayır' yanıtı: deftere bir şey yazılmaz. Dönen "
-            "'speech' metnini aynen oku.",
-            empty,
-            money_spend_no,
-        ),
-        (
-            TOOL_MONEY_UNDO,
-            "Az önce deftere yazılan harcamayı geri alır: 'harcamayı geri al'. Para hareketi "
-            "değildir, yalnız defter kaydıdır. Dönen 'speech' metnini aynen oku.",
-            empty,
-            money_undo,
-        ),
-        (
-            TOOL_MONEY_CASH,
-            "Nakit bir harcamayı deftere yazar: 'markete iki yüz lira nakit verdim'. 'amount' "
-            "TL tutarı, 'category' söylendiyse yeri. Dönen 'speech' metnini aynen oku.",
-            {
+    reg.register(
+        ToolSpec(
+            name=TOOL_MONEY_BALANCE,
+            description=(
+                "Bankanın bildirim postalarından bilinen son bakiyeyi, postanın saatiyle söyler: "
+                "'hesabımda ne kadar var', 'bakiyem ne kadar'. Bankaya bağlanmaz, para hareketi "
+                "yapmaz. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters=empty,
+            handler=money_balance,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MONEY_SPENT,
+            description=(
+                "Bu ayki harcamaları söyler: 'bu ay ne kadar harcadım', 'bu ay markete ne "
+                "harcadım'. 'category' söylendiyse kategori. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"category": category},
+                "additionalProperties": False,
+            },
+            handler=money_spent,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MONEY_SPEND_YES,
+            description=(
+                "Sahibin 'X liralık bir harcama yaptınız mı?' sorusuna 'evet' yanıtı: sorulan "
+                "tutarı, ya da söylediği tutarı ('evet ama 750' -> amount '750') deftere yazar. "
+                "Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"amount": amount},
+                "additionalProperties": False,
+            },
+            handler=money_spend_yes,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MONEY_SPEND_NO,
+            description=(
+                "Sahibin harcama sorusuna 'hayır' yanıtı: deftere bir şey yazılmaz. Dönen "
+                "'speech' metnini aynen oku."
+            ),
+            parameters=empty,
+            handler=money_spend_no,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MONEY_UNDO,
+            description=(
+                "Az önce deftere yazılan harcamayı geri alır: 'harcamayı geri al'. Para hareketi "
+                "değildir, yalnız defter kaydıdır. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters=empty,
+            handler=money_undo,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MONEY_CASH,
+            description=(
+                "Nakit bir harcamayı deftere yazar: 'markete iki yüz lira nakit verdim'. 'amount' "
+                "TL tutarı, 'category' söylendiyse yeri. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
                 "type": "object",
                 "properties": {"amount": amount, "category": category},
                 "additionalProperties": False,
             },
-            money_cash,
-        ),
-    )
-    for name, description, parameters, handler in specs:
-        reg.register(
-            ToolSpec(name=name, description=description, parameters=parameters, handler=handler)
+            handler=money_cash,
         )
+    )
     return reg
 
 
