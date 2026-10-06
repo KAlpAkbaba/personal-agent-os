@@ -32,6 +32,7 @@ from typing import Any, Final, Protocol
 import httpx
 
 from app.logging import get_logger
+from app.voice.wit import HUMOR_DRY, HUMOR_OFF, WIT_TR, normalize_humor
 
 logger = get_logger("app.assistant_chat")
 
@@ -113,6 +114,7 @@ class ChatProvider(Protocol):
         history: list[dict[str, str]],
         now_tr: str,
         about_owner: str = "",
+        humor: str = HUMOR_DRY,
     ) -> ChatAnswer: ...
 
 
@@ -160,6 +162,7 @@ class AnthropicChatProvider:
         history: list[dict[str, str]],
         now_tr: str,
         about_owner: str = "",
+        humor: str = HUMOR_DRY,
     ):
         messages = [
             *({"role": m["role"], "content": m["content"]} for m in history),
@@ -170,17 +173,19 @@ class AnthropicChatProvider:
         # ADR-0190: what this system knows about its owner rides in the SYSTEM prompt, not
         # in the question - it is context, never something the owner said, and the model
         # must not be able to read it back as their words.
-        system = SYSTEM_PROMPT_TR
+        # Personality, dry wit: the SAME rule the realtime persona carries (app.voice.wit),
+        # after the prompt's own boundaries and before what is known about the owner.
+        blocks = [SYSTEM_PROMPT_TR]
+        if normalize_humor(humor) != HUMOR_OFF:
+            blocks.append(WIT_TR)
         if about_owner.strip():
             known = about_owner.strip()[:MAX_ABOUT_OWNER_CHARS]
-            system = "\n\n".join(
-                (
-                    SYSTEM_PROMPT_TR,
-                    "Sahibin hakkında bildiklerin (kendi kayıtlarından; "
-                    "sahibin bu turda söylediği değil):",
-                    known,
-                )
-            )
+            blocks += [
+                "Sahibin hakkında bildiklerin (kendi kayıtlarından; "
+                "sahibin bu turda söylediği değil):",
+                known,
+            ]
+        system = "\n\n".join(blocks)
         body = {
             "model": self._model,
             "max_tokens": MAX_TOKENS,
@@ -201,11 +206,12 @@ class AnthropicChatProvider:
         history: list[dict[str, str]],
         now_tr: str,
         about_owner: str = "",
+        humor: str = HUMOR_DRY,
     ) -> ChatAnswer:
         if not self.configured:
             return ChatAnswer(SPEECH_NOT_CONFIGURED, False, ERROR_CHAT_UNAVAILABLE)
         url, headers, body = self.request(
-            question, history=history, now_tr=now_tr, about_owner=about_owner
+            question, history=history, now_tr=now_tr, about_owner=about_owner, humor=humor
         )
         status, payload = 0, {}
         for attempt in (1, 2):
@@ -289,6 +295,33 @@ class ChatMemory:
 MEMORY = ChatMemory()
 
 
+def owner_humor(db: Any) -> str:
+    """The owner's ``humor`` preference, read without writing; 'dry' when it cannot be read.
+
+    Read-only on purpose: ``app.voice.service.load_preferences`` creates the profile row and
+    commits, which a tool handler inside the turn's transaction must not do. Never raising,
+    like the owner-memory block beside it - a conversation that stopped because a preference
+    could not be read would make the switch worse than having none.
+    """
+    if db is None:
+        return HUMOR_DRY
+    try:
+        from sqlalchemy import select
+
+        from app.voice.models import VoiceProfile
+        from app.voice.service import OWNER_LABEL
+
+        settings = db.execute(
+            select(VoiceProfile.narration_settings_json)
+            .where(VoiceProfile.label == OWNER_LABEL)
+            .limit(1)
+        ).scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("assistant_chat_humor_read_failed", error=f"{type(exc).__name__}: {exc}")
+        return HUMOR_DRY
+    return normalize_humor((settings or {}).get("humor") if isinstance(settings, dict) else None)
+
+
 def build_chat_provider(settings: Any) -> ChatProvider:
     return AnthropicChatProvider(
         str(getattr(settings, "anthropic_api_key", "") or ""),
@@ -310,9 +343,11 @@ __all__ = [
     "MAX_TURNS",
     "MEMORY",
     "SYSTEM_PROMPT_TR",
+    "WIT_TR",
     "AnthropicChatProvider",
     "ChatAnswer",
     "ChatMemory",
     "ChatProvider",
     "build_chat_provider",
+    "owner_humor",
 ]

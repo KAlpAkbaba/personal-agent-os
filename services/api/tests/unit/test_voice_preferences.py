@@ -57,3 +57,53 @@ def test_validation_rejects_bad_speed_and_locale() -> None:
 def test_unknown_field_rejected() -> None:
     with pytest.raises(VoiceError):
         VoicePreferences().apply_update({"nope": 1}, source="owner")
+
+
+# ------------------------------------------------------------ humor (persona-dry-wit)
+
+
+def test_humor_defaults_to_dry() -> None:
+    p = VoicePreferences()
+    assert p.humor == "dry"
+    assert p.to_narration_settings()["humor"] == "dry"
+
+
+def test_owner_turns_humor_off_and_it_is_marked_explicit() -> None:
+    p = VoicePreferences()
+    p.apply_update({"humor": "off"}, source="owner")
+    assert p.humor == "off"
+    assert "humor" in p.owner_set
+
+
+def test_inferred_humor_never_overrides_the_owners_off() -> None:
+    p = VoicePreferences()
+    p.apply_update({"humor": "off"}, source="owner")
+    p.apply_update({"humor": "dry"}, source="inferred")
+    assert p.humor == "off"
+
+
+@pytest.mark.parametrize("value", ["kahkaha", "", None, 1, "DRY"])
+def test_an_unknown_humor_value_falls_back_to_dry(value) -> None:
+    assert VoicePreferences(humor=value).humor == "dry"
+    p = VoicePreferences()
+    p.apply_update({"humor": value}, source="owner")
+    assert p.humor == "dry"
+    restored = VoicePreferences.from_row(locale="tr-TR", narration_settings={"humor": value})
+    assert restored.humor == "dry"
+
+
+def test_humor_round_trips_through_the_row() -> None:
+    p = VoicePreferences()
+    p.apply_update({"humor": "off"}, source="owner")
+    restored = VoicePreferences.from_row(
+        locale="tr-TR", narration_settings=p.to_narration_settings()
+    )
+    assert restored.humor == "off"
+    assert "humor" in restored.owner_set
+
+
+def test_a_row_written_before_humor_existed_reads_as_dry() -> None:
+    restored = VoicePreferences.from_row(
+        locale="tr-TR", narration_settings={"read_urls": True, "owner_set": ["read_urls"]}
+    )
+    assert restored.humor == "dry"

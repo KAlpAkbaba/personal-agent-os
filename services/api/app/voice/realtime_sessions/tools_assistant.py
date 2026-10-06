@@ -178,6 +178,7 @@ def assistant_chat(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         # ADR-0190: the owner-memory block reached the PAID model's persona and nothing
         # else, so the local mode's own conversation did not know who it was talking to.
         about_owner=_owner_memory_block(ctx),
+        **({"humor": "off"} if chat.owner_humor(ctx.db) == "off" else {}),
     )
     if answer.ok:
         chat.MEMORY.remember(session, question, answer.speech)
