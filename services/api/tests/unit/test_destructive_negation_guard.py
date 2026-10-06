@@ -132,6 +132,12 @@ DESTRUCTIVE_TOOLS: Final[dict[str, Destructive]] = {
     "watch_forget_all": Destructive(
         (("w.forget.1", "Nöbetleri unut."), ("w.forget.2", "Bütün nöbetleri sil."))
     ),
+    "household_list_remove": Destructive(
+        (
+            ("household.remove.1", "Listeden sütü çıkar."),
+            ("household.remove.2", "Çayı listeden sil."),
+        )
+    ),
     "native_uninstall": Destructive(
         (
             ("nativeapps.uninstall.canonical", "Kurulumu kaldır."),

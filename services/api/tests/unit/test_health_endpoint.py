@@ -73,6 +73,8 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "watch_purge",
     # jarvis-calls-owner: the call loop (no-answer retry, important-event calls). Advisory.
     "telephony_calls",
+    # home-stock-list: the hourly reminder pass. Advisory.
+    "household_reminders",
     # B07 req 679: the retention POLICY itself, readable. A policy nobody can see is a
     # policy nobody can check.
     "audit_retention",
@@ -143,6 +145,7 @@ def test_health_ok_shape(monkeypatch) -> None:
             "watch_runner",
             "watch_purge",
             "telephony_calls",
+            "household_reminders",
             "audit_retention",
             "backup",
         ):

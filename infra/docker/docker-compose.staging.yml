@@ -161,6 +161,7 @@ services:
       PAGENTOS_TEMPORAL_TASK_QUEUE: pagentos-staging
       PAGENTOS_WORKER_MODE: embedded
       PAGENTOS_VOICE_PROFILE_SECRET: staging-only-voice-profile # staging-only
+      PAGENTOS_ACCOUNTS_TOKEN_SECRET: staging-only-accounts-token # staging-only
       # Local mode works free: the deterministic simulator answers a voice session. A real
       # realtime vendor is reachable ONLY with a separate TEST key given as
       # PAGENTOS_STAGING_VOICE_OPENAI_API_KEY - never the owner's production key.

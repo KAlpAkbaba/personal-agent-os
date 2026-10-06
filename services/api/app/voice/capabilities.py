@@ -54,6 +54,8 @@ FAMILY_TR: dict[str, str] = {
     "eye": "Kamera",
     "file": "Dosya arama",
     "godseye": "Dünya gözü",
+    # home-stock-list: the house's stock and the shopping list.
+    "household": "Ev stoku ve alışveriş listesi",
     "location": "Konum",
     "mail": "Posta",
     "macro": "Hareketler",

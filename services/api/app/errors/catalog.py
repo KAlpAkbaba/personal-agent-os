@@ -51,6 +51,9 @@ def _m(what: str, remedy: str = "") -> OwnerMessage:
 #: class token -> Turkish. Sorted by token so a reader can find one, and so a diff that adds
 #: a class is one line in an obvious place.
 TR: dict[str, OwnerMessage] = {
+    "account_unknown": _m(
+        "Bu hesap bağlı değil", "Ayarlar > Hesaplar'dan yeniden bağlayabilirsin."
+    ),
     "all_providers_failed": _m(
         "Tanımlı sağlayıcıların hepsi denendi ve hiçbiri yanıt vermedi",
         "Biraz sonra yeniden denenebilir.",

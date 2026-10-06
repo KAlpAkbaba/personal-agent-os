@@ -2147,7 +2147,6 @@ _WATCH_DELETE_STEMS: Final[tuple[str, ...]] = (*_CANCEL_VERB_STEMS, "unut")
 #: The create verbs, exact imperative forms: "nöbet tutacağım" is the owner's night shift.
 _WATCH_CREATE_VERB_FORMS: Final[tuple[str, ...]] = (
     "kur",
-    "kurun",
     "tut",
     "tutun",
     "oluştur",

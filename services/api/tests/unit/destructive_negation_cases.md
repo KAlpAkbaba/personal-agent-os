@@ -93,6 +93,9 @@ Beklenen her satırda aynıdır: cümle hiçbir silen/iptal eden niyete gitmez. 
 | watch_forget_all | generated | w.forget.2 | Bütün nöbetleri sil. | Bütün nöbetleri silme. | silen araca gitmez |
 | watch_forget_all | generated | w.forget.2 | Bütün nöbetleri sil. | Bütün nöbetleri silmeyin. | silen araca gitmez |
 | watch_forget_all | generated | w.forget.2 | Bütün nöbetleri sil. | Bütün nöbetleri silmeyiniz. | silen araca gitmez |
+| household_list_remove | generated | household.remove.2 | Çayı listeden sil. | Çayı listeden silme. | silen araca gitmez |
+| household_list_remove | generated | household.remove.2 | Çayı listeden sil. | Çayı listeden silmeyin. | silen araca gitmez |
+| household_list_remove | generated | household.remove.2 | Çayı listeden sil. | Çayı listeden silmeyiniz. | silen araca gitmez |
 | native_uninstall | generated | nativeapps.uninstall.canonical | Kurulumu kaldır. | Kurulumu kaldırma. | AÇIK: negation-fix-native-uninstall |
 | native_uninstall | generated | nativeapps.uninstall.canonical | Kurulumu kaldır. | Kurulumu kaldırmayın. | AÇIK: negation-fix-native-uninstall |
 | native_uninstall | generated | nativeapps.uninstall.canonical | Kurulumu kaldır. | Kurulumu kaldırmayınız. | AÇIK: negation-fix-native-uninstall |

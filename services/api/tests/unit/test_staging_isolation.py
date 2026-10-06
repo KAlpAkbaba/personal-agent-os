@@ -862,6 +862,7 @@ EXPECTED_ENV: dict[str, dict[str, str]] = {
         "PAGENTOS_TEMPORAL_TASK_QUEUE": "pagentos-staging",
         "PAGENTOS_WORKER_MODE": "embedded",
         "PAGENTOS_VOICE_PROFILE_SECRET": "staging-only-voice-profile",
+        "PAGENTOS_ACCOUNTS_TOKEN_SECRET": "staging-only-accounts-token",
         "PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED": "true",
         "PAGENTOS_VOICE_OPENAI_API_KEY": "${PAGENTOS_STAGING_VOICE_OPENAI_API_KEY:-}",
         "PAGENTOS_MAIL_SEND_ENABLED": "false",

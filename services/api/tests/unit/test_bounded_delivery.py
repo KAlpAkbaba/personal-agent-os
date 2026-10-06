@@ -286,6 +286,8 @@ def test_every_background_loop_the_app_starts_can_be_seen_in_health() -> None:
         "watch_purge": "watch_purge",
         # jarvis-calls-owner: the no-answer retry and the important-event calls.
         "telephony_loop": "telephony_calls",
+        # home-stock-list: the hourly reminder pass.
+        "household_reminders": "household_reminders",
     }
     started = _started_loops()
 

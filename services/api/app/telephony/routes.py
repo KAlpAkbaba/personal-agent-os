@@ -19,6 +19,7 @@ from pydantic import Field
 
 from app.alarms.audio_store import AudioStore
 from app.identity.dependencies import require_owner_session
+from app.logging import get_logger
 from app.notifications.service import QUIET_FROM, QUIET_UNTIL
 from app.telephony import policy
 from app.telephony.provider import TelephonyError
@@ -28,6 +29,8 @@ from app.telephony.service import (
     TelephonyNotConfigured,
     mask_number,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/v1/telephony", tags=["telephony"], dependencies=[Depends(require_owner_session)]
@@ -73,10 +76,10 @@ async def test_call(request: Request) -> dict[str, Any]:
         raise HTTPException(
             status_code=409, detail="Telefon araması bağlı değil (Twilio bilgileri eksik)."
         ) from None
-    except TelephonyError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Twilio aramayı kabul etmedi ({exc})."
-        ) from None
+    except TelephonyError:
+        # The provider's own words stay in the log; the owner gets a sentence.
+        logger.warning("telephony_test_call_refused", exc_info=True)
+        raise HTTPException(status_code=502, detail="Twilio aramayı kabul etmedi.") from None
     return outcome.as_dict()
 
 
