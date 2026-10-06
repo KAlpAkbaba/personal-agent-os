@@ -15,6 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
+from app.accounts.routes import callback_router as accounts_callback_router
+from app.accounts.routes import router as accounts_router
+from app.accounts.service import AccountsService
+from app.accounts.wiring import AccountDirectory, build_account_calendar, build_account_mail
 from app.alarms.audio_store import AudioStore, get_audio_store
 from app.alarms.greeting_audio import build_greeting_tts
 from app.alarms.routes import audio_router as alarms_audio_router
@@ -36,7 +40,11 @@ from app.briefing.service import BriefingService
 from app.broker.routes import router as broker_router
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import router as broker_ws_router
-from app.calendar.providers import build_calendar_provider, build_calendar_writer
+from app.calendar.providers import (
+    MultiAccountCalendarProvider,
+    build_calendar_provider,
+    build_calendar_writer,
+)
 from app.calendar.routes import router as calendar_router
 from app.calendar.service import CalendarService
 from app.calendar.syncer import CalendarSyncer
@@ -396,9 +404,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # providers, built from settings — never a fake in production (module docstrings of
     # app.mail.providers / app.calendar.providers). With nothing configured the provider
     # (and therefore the service) is honest about `account_missing`.
-    mail_service = MailService(build_mail_provider(settings), build_mail_sender(settings))
+    # Card mail-accounts-connect: the owner's Gmail / Microsoft 365 accounts, connected on
+    # Ayarlar > Hesaplar over OAuth + PKCE. With no OAuth client configured the env
+    # account above is used exactly as before (app.accounts.wiring).
+    accounts_service = AccountsService(settings)
+    account_directory = AccountDirectory(accounts_service, dispatch_session_factory)
+    account_mail_provider, account_mail_sender = build_account_mail(
+        settings, account_directory, build_mail_provider(settings), build_mail_sender(settings)
+    )
+    account_calendar_provider = build_account_calendar(
+        settings, account_directory, build_calendar_provider(settings)
+    )
+    mail_service = MailService(account_mail_provider, account_mail_sender)
     calendar_service = CalendarService(
-        build_calendar_provider(settings),
+        account_calendar_provider,
         build_calendar_writer(settings),
         # B46 (req 354): the owner's cancel policy - refuse unless they chose confirm.
         cancel_policy=settings.calendar_cancel_policy,
@@ -644,6 +663,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         calendar_service,
         enabled=settings.calendar_sync_enabled,
         interval_s=settings.calendar_sync_interval_s,
+        accounts=(
+            account_calendar_provider
+            if isinstance(account_calendar_provider, MultiAccountCalendarProvider)
+            else None
+        ),
     )
     routine_clock = _build_routine_clock()
 
@@ -915,6 +939,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.selfdev_service = selfdev_service
     app.state.mail_service = mail_service
     app.state.calendar_service = calendar_service
+    app.state.accounts_service = accounts_service
+    app.state.accounts_session_factory = dispatch_session_factory
     app.state.app_factory_service = app_factory_service
     app.state.creative3d_service = creative3d_service
     app.state.creative_service = creative_service
@@ -1000,6 +1026,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # router applies.
     app.include_router(mail_router)
     app.include_router(calendar_router)
+    # Card mail-accounts-connect: Ayarlar > Hesaplar (owner-gated) and the OAuth callback
+    # (authorised by its single-use hashed state alone - app.accounts.routes).
+    app.include_router(accounts_router)
+    app.include_router(accounts_callback_router)
     app.include_router(documents_router)
     # B35: the self-development queue's REST surface (the Cockpit and the worker).
     app.include_router(selfdev_router)

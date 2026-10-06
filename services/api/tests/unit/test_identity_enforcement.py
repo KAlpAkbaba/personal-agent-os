@@ -177,6 +177,12 @@ EXPECTED_OPEN = {
     # proves a tailnet peer gets 403). Deliberately not owner-gated.
     ("POST", "/v1/devices/drain"),
     ("POST", "/v1/devices/undrain"),
+    # Card mail-accounts-connect: where Google / Microsoft send the owner's browser back
+    # after consent - a top-level navigation that carries no owner session. Its authority
+    # is the single-use, hashed, 15-minute OAuth ``state`` an owner-gated
+    # POST /v1/accounts/connect issued (app.accounts.service); a forged, replayed or late
+    # state is refused before any request leaves the process. Deliberately open.
+    ("GET", "/v1/accounts/oauth/callback"),
 }
 
 

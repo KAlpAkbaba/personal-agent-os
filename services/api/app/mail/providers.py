@@ -67,13 +67,19 @@ class MailMessage:
     in_reply_to: str | None = None
     references: tuple[str, ...] = ()
     thread_key: str = ""
+    #: The owner's name for the account this message came to ("İş", "Kişisel") - set by
+    #: ``app.mail.accounts.MultiAccountMailProvider``; empty for the single env account.
+    account: str = ""
+    #: The account's stable key (``mail_accounts.id``; "" the env account) - what the
+    #: index and a reply's draft are keyed by, so a rename changes nothing stored.
+    account_key: str = ""
 
     @property
     def snippet(self) -> str:
         return " ".join(self.body_text.split())[:200]
 
     def as_summary(self) -> dict[str, Any]:
-        return {
+        out = {
             "message_id": self.message_id,
             "folder": self.folder,
             "from_name": self.from_name,
@@ -85,6 +91,9 @@ class MailMessage:
             "has_attachments": self.has_attachments,
             "thread_key": self.thread_key,
         }
+        if self.account:
+            out["account"] = self.account
+        return out
 
     def as_full(self) -> dict[str, Any]:
         return {
@@ -111,6 +120,31 @@ class DraftInput:
     body: str
     in_reply_to: str | None = None
     references: tuple[str, ...] = ()
+    #: The account KEY the draft goes from (``MailDraftRow.account_key``); "" the env
+    #: account, None a draft from before accounts.
+    account: str | None = None
+
+
+def build_email_message(draft: DraftInput, mail_from: str) -> EmailMessage:
+    """The one MIME assembly every sender uses (SMTP, Gmail API, Microsoft Graph)."""
+    msg = EmailMessage()
+    if mail_from:
+        msg["From"] = mail_from
+    msg["To"] = ", ".join(draft.to)
+    if draft.cc:
+        msg["Cc"] = ", ".join(draft.cc)
+    msg["Subject"] = draft.subject
+    if draft.in_reply_to:
+        msg["In-Reply-To"] = draft.in_reply_to
+    if draft.references:
+        msg["References"] = " ".join(draft.references)
+    # A real server may assign its own; generating one here (RFC 5322 §3.6.4, via the
+    # stdlib) means ``MailService.send`` always has SOMETHING to record as the sent
+    # message's identity, never an empty string standing in for "unknown".
+    domain = (mail_from.rsplit("@", 1)[-1]) or "pagentos.local"
+    msg["Message-ID"] = make_msgid(domain=domain)
+    msg.set_content(draft.body, charset="utf-8")
+    return msg
 
 
 # ------------------------------------------------------------------------ protocols
@@ -680,22 +714,7 @@ class SmtpMailSender:
         self._timeout = timeout
 
     def send(self, draft: DraftInput) -> str:
-        msg = EmailMessage()
-        msg["From"] = self._mail_from
-        msg["To"] = ", ".join(draft.to)
-        if draft.cc:
-            msg["Cc"] = ", ".join(draft.cc)
-        msg["Subject"] = draft.subject
-        if draft.in_reply_to:
-            msg["In-Reply-To"] = draft.in_reply_to
-        if draft.references:
-            msg["References"] = " ".join(draft.references)
-        # A real server may assign its own; generating one here (RFC 5322 §3.6.4, via the
-        # stdlib) means ``MailService.send`` always has SOMETHING to record as the sent
-        # message's identity, never an empty string standing in for "unknown".
-        domain = (self._mail_from.rsplit("@", 1)[-1]) or "pagentos.local"
-        msg["Message-ID"] = make_msgid(domain=domain)
-        msg.set_content(draft.body, charset="utf-8")
+        msg = build_email_message(draft, self._mail_from)
 
         conn = smtplib.SMTP(self._host, self._port, timeout=self._timeout)
         try:

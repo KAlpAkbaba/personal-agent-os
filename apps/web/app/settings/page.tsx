@@ -38,6 +38,7 @@ import { AmbientPanel, VoiceQualificationPanel } from "../core/panels/CockpitPan
 import { useCorePreferences } from "../core/usePreferences";
 import { TelephonySettings } from "./TelephonySettings";
 import { WebPushSettings } from "./WebPushSettings";
+import { AccountsLinkPanel } from "./accounts/AccountsLinkPanel";
 
 /** Each policy route, and the surface that actually sets what it reports. */
 const POLICIES: { id: string; title: string; path: string; ownedBy: string }[] = [
@@ -161,6 +162,8 @@ export default function SettingsPage() {
           </button>
         </div>
       </section>
+
+      <AccountsLinkPanel />
 
       <WebPushSettings />
       <TelephonySettings />

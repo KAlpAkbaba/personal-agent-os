@@ -27,12 +27,19 @@ MIN_SYNC_INTERVAL_S = 60.0
 class CalendarSyncer:
     """Throttles ``CalendarService.sync`` + ``remind_due`` on a clock that ticks far faster."""
 
-    def __init__(self, service: Any, *, enabled: bool, interval_s: float) -> None:
+    def __init__(
+        self, service: Any, *, enabled: bool, interval_s: float, accounts: Any = None
+    ) -> None:
         self._service = service
         self._enabled = enabled
         self._interval_s = max(MIN_SYNC_INTERVAL_S, float(interval_s))
         self._last_run_at: datetime | None = None
         self._last_result: dict[str, Any] | None = None
+        #: Card mail-accounts-connect: the ``MultiAccountCalendarProvider`` the service reads
+        #: through, when the owner's accounts are connected - each pass reports every
+        #: account by name ("ok" or the class of its failure).
+        self._accounts = accounts
+        self._last_accounts: dict[str, str] = {}
 
     @property
     def interval_s(self) -> float:
@@ -67,16 +74,22 @@ class CalendarSyncer:
             logger.warning("calendar_reminders_failed", error_class=type(exc).__name__)
             session.rollback()
             result["reminders"] = {"status": "failed", "error_class": type(exc).__name__}
+        if self._accounts is not None:
+            self._last_accounts = dict(getattr(self._accounts, "last_status", {}) or {})
+            result["accounts"] = dict(self._last_accounts)
         self._last_result = result
         return result
 
     def health_check(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "enabled": self._enabled,
             "interval_s": self._interval_s,
             "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
             "last_result": self._last_result,
         }
+        if self._accounts is not None:
+            out["accounts"] = dict(self._last_accounts)
+        return out
 
 
 __all__ = ["MIN_SYNC_INTERVAL_S", "CalendarSyncer"]

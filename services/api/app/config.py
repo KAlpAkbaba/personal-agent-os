@@ -476,6 +476,20 @@ class Settings(BaseSettings):
     # B46 (req 358, 361): the calendar mirror + reminders on the routine clock.
     calendar_sync_enabled: bool = True
     calendar_sync_interval_s: float = 120.0
+    # Card mail-accounts-connect (the owner, 2026-10-05): Gmail and Microsoft 365 accounts
+    # connected from the web page over OAuth 2.0 + PKCE - no password anywhere. The client
+    # ids/secrets are the OWNER's (a Google Cloud OAuth client, a Microsoft Entra app
+    # registration); empty means that button says what to create. The public base is the
+    # Cloud Core's tailnet HTTPS address the redirect URL is built from. The token secret
+    # derives the Fernet key the stored tokens are encrypted with; its dev default is
+    # refused for any non-loopback base (app.accounts.service).
+    accounts_public_base_url: str = ""
+    accounts_token_secret: str = "pagentos-dev-accounts-token-secret"
+    accounts_google_client_id: str = ""
+    accounts_google_client_secret: str = ""
+    accounts_microsoft_client_id: str = ""
+    accounts_microsoft_client_secret: str = ""
+    accounts_microsoft_tenant: str = "common"
 
     # B34 req 674: the managed file mutation surface (write/append/edit/rename/move/copy/
     # delete-to-Recycle-Bin, each journaled and undoable). ONE host flag closes the whole
