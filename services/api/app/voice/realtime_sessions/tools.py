@@ -100,6 +100,7 @@ from app.voice.realtime_sessions.tools_routines import register_routine_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
 from app.voice.realtime_sessions.tools_selfdev import register_selfdev_tools
 from app.voice.realtime_sessions.tools_team import register_team_tools
+from app.voice.realtime_sessions.tools_verify import register_verify_tools
 from app.voice.realtime_sessions.tools_weather import (
     WEATHER_TOOL_NAMES,
     register_weather_tools,
@@ -2709,6 +2710,8 @@ def default_registry() -> ToolRegistry:
     register_team_tools(reg)
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode's voice tools.
     register_news_tools(reg)
+    # Card verify-mode: "bunu doğrula: ..." and "geçen hafta neyi doğrulamıştık".
+    register_verify_tools(reg)
     # ADR-0112: the owner's own media. The device could open YouTube all along -- the
     # alarm does it every morning -- but nothing let the OWNER ask, so the request fell
     # through to capability.propose and was written down instead of done.

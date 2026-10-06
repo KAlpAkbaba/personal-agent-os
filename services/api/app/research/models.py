@@ -19,6 +19,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     String,
@@ -251,7 +252,50 @@ class ResearchOwnerStateRow(Base):
     )
 
 
+VERIFICATION_PENDING = "pending"
+VERIFICATION_SETTLED = "settled"
+
+
+class ClaimVerificationRow(Base):
+    """Card verify-mode: one "bunu doğrula: ..." the owner said, and what was found.
+
+    Written ``pending`` when ``research.verify`` starts the run; settled (verdict, sources,
+    counter-argument, the sentence spoken) when the run is terminal. Kept for recall by text
+    and by date ("geçen hafta neyi doğrulamıştık"). Migration 0067_claim_verifications.
+    """
+
+    __tablename__ = "claim_verifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    said: Mapped[str] = mapped_column(String(2000), nullable=False)
+    claim: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=VERIFICATION_PENDING)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    #: dogru | yanlis | kismen | belirsiz (app.research.verify); NULL while pending.
+    verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: [{url, title, published_at, quote, stance}], at most five, decisive only.
+    sources_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONColumn, nullable=False, default=list
+    )
+    counter_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
+    spoken: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'settled')", name="ck_claim_verifications_status"),
+        Index("ix_claim_verifications_created_at", "created_at"),
+        Index("ix_claim_verifications_task_id", "task_id"),
+    )
+
+
 __all__ = [
+    "VERIFICATION_PENDING",
+    "VERIFICATION_SETTLED",
+    "ClaimVerificationRow",
     "FOCUS_FOLLOWUP_REFERENCE",
     "FOCUS_OWNER_SELECTED_BY_VOICE",
     "FOCUS_OWNER_SELECTED_IN_UI",

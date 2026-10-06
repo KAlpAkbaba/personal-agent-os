@@ -249,6 +249,8 @@ _TIERS: Final[dict[str, str]] = {
     # B31 req 203/204: pausing and resuming change what the machine is doing.
     "research.pause": TIER_SENSITIVE,
     "research.resume": TIER_SENSITIVE,
+    # Card verify-mode: a verify starts the same crawl on an owner device research.start does.
+    "research.verify": TIER_SENSITIVE,
     # B14 req 287-291. Four of the five change state, so four are SENSITIVE. `routine.create`
     # in particular deserves it more than most tools here: it is the one that installs
     # something which will act on the owner's behalf UNATTENDED, every morning, until they
@@ -344,6 +346,8 @@ _TIERS: Final[dict[str, str]] = {
     "macro.list": TIER_OPEN,
     "research.finding_detail": TIER_OPEN,
     "research.sources": TIER_OPEN,
+    # Card verify-mode: reading back what was verified changes nothing, like memory.search.
+    "research.verify_recall": TIER_OPEN,
     "scene.inspect": TIER_OPEN,
     "state.now": TIER_OPEN,
     "voice.intent": TIER_OPEN,

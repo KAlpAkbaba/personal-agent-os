@@ -5578,6 +5578,65 @@ def _news_refusal_cases() -> list[UtteranceCase]:
     ]
 
 
+def _verify_cases() -> list[UtteranceCase]:
+    """Card verify-mode: five ways the owner puts a claim to the test (each starts the M13
+    research run and is RUNNING until the verdict is announced), one recall, and two
+    near-misses that must never start a check - agreement is not a request, and a trigger
+    word with no claim behind it verifies nothing. No ASR variants: the claim is free text and
+    its folded forms are the router's unit tests' business (test_verify_mode.py)."""
+    triggers = [
+        ("v.verify.1", "Bunu doğrula: Ay'ın yüzeyinde su buzu var."),
+        ("v.verify.2", "Şunu kontrol et: asgari ücret 2026'da iki kez arttı"),
+        ("v.verify.3", "Everest'in 8849 metre olduğu doğru mu?"),
+        ("v.verify.4", "Türkiye'nin başkenti Ankara mı, doğrula"),
+        ("v.verify.5", "Teyit et: İstanbul'un nüfusu 16 milyonu geçti"),
+    ]
+    cases = [
+        UtteranceCase(
+            case_id=case_id,
+            utterance=text,
+            expected_intent="verify_claim",
+            expected_tool="research.verify",
+            expected_response=RESPONSE_RUNNING,
+            forbidden_tools=("research.start",),
+            side_effects=SIDE_EFFECTS_NONE,
+            category="research",
+            source="canonical",
+        )
+        for case_id, text in triggers
+    ]
+    cases.append(
+        UtteranceCase(
+            case_id="v.verify.recall.1",
+            utterance="Geçen hafta neyi doğrulamıştık?",
+            expected_intent="verify_recall",
+            expected_tool="research.verify_recall",
+            forbidden_tools=("research.verify", "research.start"),
+            category="research",
+            source="canonical",
+        )
+    )
+    cases.extend(
+        UtteranceCase(
+            case_id=case_id,
+            utterance=text,
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            forbidden_tools=("research.verify", "research.start"),
+            side_effects=SIDE_EFFECTS_NONE,
+            category="research",
+            source="canonical",
+            notes="verify-mode near-miss",
+        )
+        for case_id, text in (
+            ("v.verify.near.1", "Doğru söylüyorsun."),
+            ("v.verify.near.2", "Bunu kontrol et."),
+        )
+    )
+    return cases
+
+
 def _news_cases() -> list[UtteranceCase]:
     return [
         *_news_open_cases(),
@@ -8016,6 +8075,7 @@ def all_cases() -> list[UtteranceCase]:
         *_memory_cases(),
         *_daily_cases(),
         *_research_cases(),
+        *_verify_cases(),
         *_alarm_create_cases(),
         *_alarm_control_cases(),
         *_alarm_wake_song_cases(),

@@ -127,6 +127,10 @@ class Intent(StrEnum):
     MEMORY_CORRECT = "memory_correct"  # hayır, öyle değil, düzelt
     MEMORY_PIN = "memory_pin"  # bunu sabitle
     MEMORY_WHY = "memory_why"  # bunu neden hatırlıyorsun
+    # Card verify-mode: the owner puts a claim he heard to the test, and asks later what was
+    # found. Only his own sentence triggers it (app.research.verify.verify_request_kind).
+    VERIFY_CLAIM = "verify_claim"  # bunu doğrula: ... / ... olduğu doğru mu?
+    VERIFY_RECALL = "verify_recall"  # geçen hafta neyi doğrulamıştık / X hakkında ne bulmuştuk
     STOP = "stop"  # dur / kes / sus / yeter / durdur / duraklat / bekle
     RESUME = "resume"  # devam / kaldığın yerden / sürdür
     REPEAT = "repeat"  # tekrar (oku) / yeniden oku / bir daha
@@ -566,6 +570,8 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.MEDIA_PLAY: "media.play",
     Intent.MEDIA_STOP: "media.stop",
     Intent.NEWS_SUMMARIZE: "news.summarize",
+    # Card verify-mode: a verify starts a research run (a task is created), like a summary.
+    Intent.VERIFY_CLAIM: "research.verify",
     # M27 (spec §5): planning and executing a creative-tool edit is a real mutation
     # (a file is produced, compared and stored) - the same class every other family
     # above gets. CREATIVE_OPEN is an ACTION too, even when it ends in an honest
@@ -655,6 +661,8 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # B16 req 32/61. Both read and neither mutates.
     Intent.MEMORY_SEARCH: "memory.search",
     Intent.MEMORY_WHY: "memory.why",
+    # Card verify-mode: what was verified before, read back; nothing changes.
+    Intent.VERIFY_RECALL: "research.verify_recall",
     Intent.DISPLAY_QUERY: "display.status",
     # ADR-0079 §12: "why did / didn't you" and "what is the policy now" are answered from
     # the live decision, the presence assertion, the holdoffs and the ledger - a query.
@@ -7842,6 +7850,14 @@ def memory_query_of(text: str) -> str:
     return " ".join(rest.replace("?", " ").split()).strip(" .,;:!")
 
 
+def _verify_kind(text: str) -> str | None:
+    """"claim" / "recall" / None for a verify sentence (card verify-mode); the rule lives with
+    the verdict core so the router and the tool can never read the trigger differently."""
+    from app.research.verify import verify_request_kind
+
+    return verify_request_kind(text)
+
+
 def research_topic_of(text: str) -> str | None:
     """The TOPIC of a new research request, in the owner's own words: "yapay zeka ile ilgili
     son haberleri araştır" -> "yapay zeka ile ilgili son haberleri"; "Yapay zeka hakkında
@@ -7851,7 +7867,17 @@ def research_topic_of(text: str) -> str | None:
     ``research.start`` and writes the topic itself. The free local mode has no model - the
     router is the only reader of the sentence - so a research asked for aloud started
     nothing. The router already knew the sentence was a new research
-    (:func:`classify_research_shape`); this gives the tool the one argument it needs."""
+    (:func:`classify_research_shape`); this gives the tool the one argument it needs.
+
+    Card verify-mode (local mode): a verify's claim IS the topic of the research it starts,
+    and a recall's sentence is what ``research.verify_recall`` reads its subject and dates
+    from - so both travel in this one field, and no new turn-record field is needed."""
+    verify_kind = _verify_kind(text or "")
+    if verify_kind is not None:
+        from app.research.verify import normalise_claim
+
+        spoken = normalise_claim(text) if verify_kind == "claim" else text.strip()
+        return spoken[:500] or None
     _, tokens, _ = normalize_transcript(text)
     if classify_research_shape(tokens) != RESEARCH_CLASS_NEW:
         return None
@@ -8914,6 +8940,16 @@ def _resolve_intent_rules(
             scope=SCOPE_CONVERSATION,
             matched="hareket adı",
             macro_name=stored,
+            **base,
+        )
+    # 0b-verify. Card verify-mode: "bunu doğrula: ..." carries a claim, and a claim may hold
+    #     any family's noun or verb ("... alarmı kapattı", "... uygulamayı açtı"), so it is
+    #     read right after the macro block. A recall ("doğrulamıştık") before nothing else.
+    if verify_kind := _verify_kind(text):
+        return ResolvedIntent(
+            Intent.VERIFY_CLAIM if verify_kind == "claim" else Intent.VERIFY_RECALL,
+            scope=SCOPE_CONVERSATION,
+            matched="doğrula",
             **base,
         )
 
