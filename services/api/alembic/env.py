@@ -3,35 +3,19 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-# EVERY module's models must be imported here. Autogenerate compares
-# Base.metadata against the database, so an unregistered module's tables look
-# like tables to DROP. The migrations remain authoritative for PostgreSQL-only
-# constructs (CHECK constraints, the pgvector hnsw index, BigInteger identity):
-# the ORM models stay portable so the service layer unit-tests on SQLite, which
-# is why `alembic check` reports those as differences by design.
-import app.alarms.models  # noqa: F401 - register M18.3 wake_alarms/ambient_policy on Base.metadata
-import app.artifacts.models  # noqa: F401 - register artifact/task tables on Base.metadata
-import app.broker.models  # noqa: F401 - register broker tables on Base.metadata
-import app.evolution.models  # noqa: F401 - register evolution tables on Base.metadata
-import app.identity.models  # noqa: F401 - register identity tables on Base.metadata
-import app.macros.models  # noqa: F401 - register ADR-0196 voice_macros on Base.metadata
-import app.media.models  # noqa: F401 - register ADR-0112 owner_media_playbacks
-import app.memory.models  # noqa: F401 - register memory tables on Base.metadata
-import app.mobile.models  # noqa: F401 - register push_registrations on Base.metadata
-import app.narration.models  # noqa: F401 - register narration tables on Base.metadata
-import app.operator.mission_models  # noqa: F401 - register B39 operator_missions
-import app.operator.models  # noqa: F401 - register M19 object_focus on Base.metadata
-import app.routines.models  # noqa: F401 - register M18 routine tables on Base.metadata
-import app.security.models  # noqa: F401 - register security tables on Base.metadata
-import app.selfhealing.models  # noqa: F401 - register self-healing tables on Base.metadata
-import app.team.models  # noqa: F401 - register ADR-0222 team_state on Base.metadata
-import app.voice.misheard.models  # noqa: F401 - register the misheard notebook's table
-import app.voice.models  # noqa: F401 - register voice tables on Base.metadata
-import app.voice.realtime_sessions.models  # noqa: F401 - register M12 realtime tables
-import app.watch.models  # noqa: F401 - register watch-engine's watches/watch_readings
-import app.webtask.models  # noqa: F401 - register ADR-0207 web_tasks on Base.metadata
+# EVERY module's models must be on Base.metadata. Autogenerate compares it
+# against the database, so an unregistered module's tables look like tables to
+# DROP. They are no longer listed here by hand (the list had drifted: 21 of 46
+# modules on 2026-10-06): register_models() imports every app module named
+# `models` or `*_models`, and tests/unit/test_alembic_env_registers_every_model.py
+# pins that set to the tree. A new package needs no line here. The migrations
+# remain authoritative for PostgreSQL-only constructs (CHECK constraints, the
+# pgvector hnsw index, BigInteger identity): the ORM models stay portable so the
+# service layer unit-tests on SQLite, which is why `alembic check` reports those
+# as differences by design.
 from app.config import get_settings
 from app.models import Base
+from app.registry import register_models
 
 config = context.config
 
@@ -41,6 +25,7 @@ if config.config_file_name is not None:
 # Runtime settings (env vars / .env) win over the alembic.ini fallback.
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
+register_models()
 target_metadata = Base.metadata
 
 

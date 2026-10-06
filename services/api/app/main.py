@@ -112,7 +112,6 @@ from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.money import ledger as money_ledger
 from app.money.loop import SpendLoop as MoneySpendLoop
-from app.money.routes import router as money_router
 from app.narration.routes import router as narration_router
 from app.nativefactory.interrupted import fail_interrupted_builds
 from app.nativefactory.routes import router as native_router
@@ -124,6 +123,7 @@ from app.operator.mission_routes import router as operator_mission_router
 from app.operator.service import OperatorService, register_operator_service
 from app.operator.vision import build_vision_provider
 from app.presence.routes import router as presence_router
+from app.registry import include_discovered_routers
 from app.release.routes import router as release_router
 from app.release.version import release_model
 from app.research import service as research_service
@@ -1125,8 +1125,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conversations_router)
     # home-stock-list: the house's stock and the shopping list (/v1/household).
     app.include_router(household_router)
-    # money-ledger: JARVIS's own money ledger (/v1/money); never the bank.
-    app.include_router(money_router)
+    # registry-models-and-routers: a NEW router is declared as ROUTERS in its own routes.py
+    # and bound here; no new include_router line above (test_route_table_snapshot's ratchet).
+    include_discovered_routers(app)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
