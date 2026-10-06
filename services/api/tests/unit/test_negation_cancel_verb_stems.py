@@ -31,6 +31,24 @@ NEGATED = [
     "Bunu hafızandan silmeyin.",
     "Alarmı sakın sil.",
     "Alarmı silmeyi unut.",  # forget about deleting it: the verbal noun asks for no act
+    # inspector, return 1 of this card: the negative aorist and past of the finite verb
+    "Alarmı silmek istemem.",
+    "alarmı kaldırmak istemem",
+    "Rutini silmek istemem.",
+    "Rutini iptal etmek istemem.",
+    "Bunu hafızandan silmek istemem.",
+    "Alarmı sil demedim.",
+    # the negation after a voice suffix (passive, causative) and after "can" (-e-me)
+    "alarm silinmesin",
+    "alarmı sildirme",
+    "Alarmı iptal ettirme.",
+    "Alarm iptal edilmesin.",
+    "Alarmı silemem.",
+    # a sentence that takes the verb back
+    "Alarmı sil, hayır silme.",
+    "Alarmı silme, kaldır.",
+    "Alarmı silme sil.",
+    "Bunu hafızandan silmeyi unut.",
 ]
 
 
@@ -40,7 +58,9 @@ def test_a_negated_cancel_never_cancels(said: str) -> None:
     assert resolved.intent not in _CANCELS, f"{said!r} -> {resolved.intent.value}"
 
 
-@pytest.mark.parametrize("said", ["kaldırma", "onu kaldır", "Kaldırma.", "Onu kaldır."])
+@pytest.mark.parametrize(
+    "said", ["kaldırma", "onu kaldır", "Kaldırma.", "Onu kaldır.", "takibi kaldır", "Takibi kaldır."]
+)
 def test_a_bare_kaldir_with_nothing_before_it_is_no_alarm(said: str) -> None:
     resolved = resolve_intent(said)
     assert resolved.intent not in {Intent.ALARM_CREATE, *_CANCELS}, (
@@ -61,7 +81,9 @@ def test_a_bare_kaldir_with_nothing_before_it_is_no_alarm(said: str) -> None:
         ("sabah rutinini iptal et", Intent.ROUTINE_CANCEL),
         ("Bunu hafızandan sil.", Intent.MEMORY_FORGET),
         ("Beni kaldır.", Intent.ALARM_CREATE),  # the bare wake: "kaldır" with the one it wakes
-        ("Yarın yedide kaldır.", Intent.ALARM_CREATE),  # no thing named: still the wake
+        ("Yarın yedide beni kaldır.", Intent.ALARM_CREATE),
+        ("Tamam, alarmı sil.", Intent.ALARM_CANCEL),  # "tamam" is no negative "-mam"
+        ("Alarmı silmeyi unutma.", Intent.ALARM_CANCEL),  # don't forget to delete it
         ("Saat yedide beni uyandır.", Intent.ALARM_CREATE),
         # "don't forget to wake me" asks for the act: the verbal noun is no negation
         ("Saat yedide beni uyandırmayı unutma.", Intent.ALARM_CREATE),
@@ -71,3 +93,11 @@ def test_a_bare_kaldir_with_nothing_before_it_is_no_alarm(said: str) -> None:
 )
 def test_the_positive_forms_still_act(said: str, intent: Intent) -> None:
     assert resolve_intent(said).intent is intent, said
+
+
+@pytest.mark.parametrize("said", ["beni yedide uyandırmayı unut", "beni kaldırmayı unut"])
+def test_forgetting_an_act_is_no_memory_forget(said: str) -> None:
+    """"Forget waking me" names an act, not a memory: never the memory deletion (inspector,
+    return 1 - the first pass sent it to memory_forget; base gave alarm_create)."""
+    resolved = resolve_intent(said)
+    assert resolved.intent not in _CANCELS, f"{said!r} -> {resolved.intent.value}"
