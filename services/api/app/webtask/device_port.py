@@ -17,6 +17,9 @@ command and answers it.
   task stops there (``capability_missing``).
 * A URL is validated in full here (names resolved) before it is sent; the device
   validates again before it acts.
+* A task whose target is the CLOUD (card cloud-task-loop-core, S1) opens the cloud
+  worker's ``research`` profile instead: headless Chromium, READ / NAVIGATE /
+  REVERSIBLE_WRITE only, and the owner's allow-list as it is when the round starts.
 
 Not exercised against a real device in PR-B: the acceptance tasks run on the fake
 browser. This module is held by its own unit tests against a recording command client,
@@ -49,12 +52,16 @@ from app.webtask.types import (
     ACTION_SCROLL,
     ACTION_SELECT,
     CAPABILITY_OF,
+    CLOUD_RISKS,
     RISK_ORDER,
+    TARGET_CLOUD,
     Observation,
     Step,
 )
 
 PROFILE_OWNER: Final = "owner"
+#: The cloud worker's only profile (``services/browser/browser_agent/cloud/policy.py``).
+PROFILE_RESEARCH: Final = "research"
 CAPABILITY_OBSERVE: Final = "browser.observe"
 CAPABILITY_SESSION_OPEN: Final = "browser.session_open"
 CAPABILITY_TAB_NEW: Final = "browser.tab_new"
@@ -119,12 +126,16 @@ class DeviceTaskBrowser:
         trace_id: str = "",
         timeout_s: float = DEFAULT_TIMEOUT_S,
         heartbeat: Any = None,
+        target: str = "",
+        owner_allow_list: tuple[str, ...] = (),
     ) -> None:
         self._client = command_client
         self._device_id = device_id
         self._trace_id = trace_id
         self._timeout_s = timeout_s
         self._heartbeat = heartbeat
+        self._target = target
+        self._owner_allow_list = tuple(owner_allow_list)
 
     # ------------------------------------------------------------- plumbing
 
@@ -140,6 +151,28 @@ class DeviceTaskBrowser:
         )
         return _result(outcome)
 
+    def _session_open(self, session_id: str) -> dict[str, Any]:
+        if self._target == TARGET_CLOUD:
+            # The cloud worker's own profile in a headless Chromium (it has none of the
+            # owner's sessions), no class above a reversible write, and the owner's list
+            # as it is now: the worker refuses a write off it (contract S2/S3).
+            return {
+                "session_id": session_id,
+                "profile": PROFILE_RESEARCH,
+                "policy": {"allowed_risk_classes": list(CLOUD_RISKS), "visible": False},
+                "channel": "chromium",
+                "cloud_task": True,
+                "owner_allow_list": list(self._owner_allow_list),
+            }
+        return {
+            "session_id": session_id,
+            "profile": PROFILE_OWNER,
+            # Every class the loop may be ALLOWED to reach after the owner's word; what
+            # each click may actually be is its own ``risk_ceiling``.
+            "policy": {"allowed_risk_classes": list(RISK_ORDER), "visible": True},
+            "channel": "chrome",
+        }
+
     def _ensure_session(self, task_id: str, key: str) -> str:
         session_id = session_id_for(task_id)
         pair = (str(self._device_id), session_id)
@@ -147,16 +180,7 @@ class DeviceTaskBrowser:
             if pair in _OPEN:
                 return session_id
         opened = self._send(
-            CAPABILITY_SESSION_OPEN,
-            {
-                "session_id": session_id,
-                "profile": PROFILE_OWNER,
-                # Every class the loop may be ALLOWED to reach after the owner's word; what
-                # each click may actually be is its own ``risk_ceiling``.
-                "policy": {"allowed_risk_classes": list(RISK_ORDER), "visible": True},
-                "channel": "chrome",
-            },
-            f"{key}:session_open",
+            CAPABILITY_SESSION_OPEN, self._session_open(session_id), f"{key}:session_open"
         )
         if opened.get("created", True):
             # Never the owner's own tab: the task works in one it opened.

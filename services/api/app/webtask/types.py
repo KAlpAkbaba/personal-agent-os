@@ -29,6 +29,20 @@ RISK_ORDER: Final[tuple[str, ...]] = (
 )
 #: What runs on the owner's first word (his decision of 2026-09-19, unchanged here).
 FREE_RISKS: Final = frozenset({RISK_READ, RISK_NAVIGATE, RISK_REVERSIBLE_WRITE})
+#: What reads and moves: no write, so no allow-list is asked.
+NO_WRITE_RISKS: Final = frozenset({RISK_READ, RISK_NAVIGATE})
+#: The classes a task may reach in the CLOUD (ADR-0213 addendum; card cloud-task-loop-core):
+#: a reversible write on a site the owner listed, and nothing that sends or cannot be
+#: undone - the most restrictive safe option, pending the owner's review.
+CLOUD_RISKS: Final[tuple[str, ...]] = (RISK_READ, RISK_NAVIGATE, RISK_REVERSIBLE_WRITE)
+
+# ------------------------------------------------------------------ where a task runs
+
+#: ``app.execution.rule.Target``'s values, as a task's state carries them. "" is a task
+#: started before targets existed: the owner's Chrome, as it always was.
+TARGET_CLOUD: Final = "cloud"
+TARGET_OWNER_CHROME: Final = "owner_chrome"
+TARGET_DEVICE: Final = "device"
 
 
 def risk_rank(risk: str) -> int:

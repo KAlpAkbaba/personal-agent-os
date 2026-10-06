@@ -24,7 +24,11 @@ The order of the rules is the order of what must never happen:
    (decisions 1 and 2) - a click, and a fill, a choice or a tick judged from the element
    the same way - and a page that carries instruction-like text is gated one class
    higher than its element. The word opens the control that was READ BACK: the same
-   name wired to something else is another control, and is read back again.
+   name wired to something else is another control, and is read back again;
+9. in the CLOUD (ADR-0213 addendum) a write runs only on a site on the owner's allow-list
+   (``app.execution.allowlist_store``, read at every step), and what sends or cannot be
+   undone never runs there, listed or not. Not "pure" in one respect: the list is the
+   owner's, and it is read where it lives.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from app.execution import allowlist_store
 from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.webtask import risk as risk_rules
 from app.webtask.sites import denied, host_of, site_of
@@ -55,11 +60,14 @@ from app.webtask.types import (
     ASK_PAYMENT,
     ASK_QUESTION,
     ASK_SENSITIVE_FIELD,
+    CLOUD_RISKS,
     EXPECTATIONS,
     FREE_RISKS,
     NEEDS_REF,
+    NO_WRITE_RISKS,
     RISK_HIGH_IMPACT,
     RISK_READ,
+    TARGET_CLOUD,
     Element,
     Observation,
     Step,
@@ -79,7 +87,14 @@ REFUSE_URL_NOT_FROM_OWNER_OR_PAGE: Final = "url_not_from_owner_or_page"
 REFUSE_DESTINATION: Final = "destination_refused"
 REFUSE_DISABLED: Final = "element_disabled"
 REFUSE_MISSING_ARGUMENT: Final = "missing_argument"
+#: Rule 9 (the cloud). The first is ``app.execution.allowlist_store``'s own reason.
+REFUSE_NOT_ON_OWNER_ALLOW_LIST: Final = "not_on_owner_allow_list"
+REFUSE_DENY_LISTED_SITE: Final = "deny_listed_site"
+REFUSE_CLOUD_RISK: Final = "cloud_risk_not_allowed"
 REFUSALS: Final[tuple[str, ...]] = (
+    REFUSE_NOT_ON_OWNER_ALLOW_LIST,
+    REFUSE_DENY_LISTED_SITE,
+    REFUSE_CLOUD_RISK,
     REFUSE_UNKNOWN_ACTION,
     REFUSE_NO_EXPECTATION,
     REFUSE_BAD_EXPECTATION,
@@ -136,6 +151,9 @@ class TaskContext:
     #: Hosts the owner named for this task beyond the ones in the goal.
     allowed_hosts: tuple[str, ...] = ()
     grant: Grant | None = None
+    #: Where the task runs (``app.webtask.types.TARGET_*``). "" is the owner's Chrome, as
+    #: before; ``cloud`` brings rule 9.
+    target: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,9 +352,33 @@ def _ask(kind: str, message: str, **kwargs: Any) -> Decision:
     return Decision(kind=DECISION_ASK, ask_kind=kind, message=message, **kwargs)
 
 
-def _refuse(reason: str) -> Decision:
+def _refuse(reason: str, message: str = "", risk: str = RISK_READ) -> Decision:
     assert reason in REFUSALS, reason
-    return Decision(kind=DECISION_REFUSE, reason=reason)
+    return Decision(kind=DECISION_REFUSE, reason=reason, message=message, risk=risk)
+
+
+#: Rule 9's words to the owner.
+NOT_ON_LIST_TR: Final = "Bu sitede bulutta yazamam; Onay Merkezi'nden siteyi izin listesine ekle."
+CLOUD_RISK_TR: Final = (
+    "Bulutta bir şey göndermem ve geri alınamayan bir işlem yapmam; bu adım sizin Chrome'unuzda."
+)
+DENY_LISTED_TR: Final = "Bu site yasaklı listede; bulutta burada işlem yapmam."
+
+
+def _cloud_refusal(risk: str, url: str) -> Decision | None:
+    """Rule 9: in the cloud, a write runs only on a site the owner listed, and what sends
+    or cannot be undone never runs - even on a listed site (ADR-0213 addendum; the most
+    restrictive safe option, pending the owner's review). Reading and moving ask nothing."""
+    if risk in NO_WRITE_RISKS:
+        return None
+    if risk not in CLOUD_RISKS:
+        return _refuse(REFUSE_CLOUD_RISK, CLOUD_RISK_TR, risk)
+    allowed, why = allowlist_store.acting_allowed(url)
+    if allowed:
+        return None
+    if why == allowlist_store.DENY_LISTED:
+        return _refuse(REFUSE_DENY_LISTED_SITE, DENY_LISTED_TR, risk)
+    return _refuse(REFUSE_NOT_ON_OWNER_ALLOW_LIST, NOT_ON_LIST_TR, risk)
 
 
 def decide(step: Step, observation: Observation, context: TaskContext) -> Decision:
@@ -414,6 +456,10 @@ def decide(step: Step, observation: Observation, context: TaskContext) -> Decisi
         )
     if observation.flagged and step.action not in (ACTION_BACK, ACTION_SCROLL):
         risk = one_class_higher(risk)
+    if context.target == TARGET_CLOUD:
+        refused = _cloud_refusal(risk, observation.url)
+        if refused is not None:
+            return refused
     if risk in FREE_RISKS:
         return Decision(kind=DECISION_ALLOW, risk=risk, risk_ceiling=risk)
 

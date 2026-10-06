@@ -471,3 +471,57 @@ def test_after_one_unenforced_write_no_further_write_reaches_that_device() -> No
         risk_ceiling="REVERSIBLE_WRITE",
     )
     assert sent(c)[-1][0] == "browser.click"
+
+
+# ------------------------------------------------------------------ the cloud (S1)
+#
+# Card cloud-task-loop-core: a task whose target is the CLOUD opens the cloud worker's own
+# research profile in a headless Chromium, asks for no more than READ, NAVIGATE and
+# REVERSIBLE_WRITE, and hands the worker the owner's allow-list as it is now. Every other
+# target opens the owner's Chrome exactly as before, without the two new keys.
+
+
+def test_a_cloud_task_opens_the_research_profile_with_the_owners_list() -> None:
+    c = client()
+    DeviceTaskBrowser(
+        c,
+        device_id=DEVICE,
+        trace_id="trace-1",
+        target="cloud",
+        owner_allow_list=("example.com", "magaza.example.org"),
+    ).observe(task_id=TASK, key="k1")
+
+    name, opened = sent(c)[0]
+    assert name == "browser.session_open"
+    assert opened == {
+        "session_id": SESSION,
+        "profile": "research",
+        "policy": {
+            "allowed_risk_classes": ["READ", "NAVIGATE", "REVERSIBLE_WRITE"],
+            "visible": False,
+        },
+        "channel": "chromium",
+        "cloud_task": True,
+        "owner_allow_list": ["example.com", "magaza.example.org"],
+    }
+
+
+def test_an_empty_owner_list_is_still_sent_as_a_list() -> None:
+    c = client()
+    DeviceTaskBrowser(c, device_id=DEVICE, target="cloud").observe(task_id=TASK, key="k1")
+    opened = sent(c)[0][1]
+    assert opened["cloud_task"] is True and opened["owner_allow_list"] == []
+
+
+@pytest.mark.parametrize("target", ["", "owner_chrome", "device"])
+def test_every_other_target_opens_the_owners_chrome_as_before(target: str) -> None:
+    c = client()
+    DeviceTaskBrowser(
+        c, device_id=DEVICE, target=target, owner_allow_list=("example.com",)
+    ).observe(task_id=TASK, key="k1")
+    assert sent(c)[0][1] == {
+        "session_id": SESSION,
+        "profile": "owner",
+        "policy": {"allowed_risk_classes": list(RISK_ORDER), "visible": True},
+        "channel": "chrome",
+    }

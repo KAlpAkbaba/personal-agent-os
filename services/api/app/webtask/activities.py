@@ -24,14 +24,18 @@ from temporalio import activity
 from app.artifacts.runtime import build_artifact_context
 from app.config import get_settings
 from app.devices.commands import DeviceCommandClient
+from app.execution import allowlist_store
 from app.webtask import service
 from app.webtask.device_port import DeviceTaskBrowser
 from app.webtask.loop import Ports
 from app.webtask.model_planner import ModelPlanner
 from app.webtask.planner import ChainPlanner, NoModelPlanner, RuleTablePlanner, TaskPlanner
+from app.webtask.types import TARGET_CLOUD
 
 #: Tests replace this to drive a real workflow over a fake browser and a scripted planner.
-PortsFactory = Callable[[uuid.UUID, uuid.UUID | None, Callable[[], None]], Ports]
+#: Called with (task id, device id, heartbeat, target) - the target as the row's state
+#: carries it (``app.webtask.types.TARGET_*``, "" for the owner's Chrome).
+PortsFactory = Callable[[uuid.UUID, uuid.UUID | None, Callable[[], None], str], Ports]
 _ports_factory: PortsFactory | None = None
 
 
@@ -59,7 +63,7 @@ def default_planner() -> TaskPlanner:
 
 
 def _default_ports(
-    task_id: uuid.UUID, device_id: uuid.UUID | None, heartbeat: Callable[[], None]
+    task_id: uuid.UUID, device_id: uuid.UUID | None, heartbeat: Callable[[], None], target: str
 ) -> Ports:
     if device_id is None:
         raise service.WebTaskError("no_device", "the task names no device")
@@ -68,6 +72,9 @@ def _default_ports(
         device_id=device_id,
         trace_id=f"webtask-{task_id}",
         heartbeat=heartbeat,
+        target=target,
+        # The owner's list as it is NOW: an add or a removal applies from the next round.
+        owner_allow_list=allowlist_store.effective_sites() if target == TARGET_CLOUD else (),
     )
     return Ports(browser=browser, planner=default_planner(), clock=time.monotonic)
 
@@ -96,11 +103,17 @@ async def web_task_round_activity(task_id: str) -> dict[str, Any]:
 
     def _run() -> dict[str, Any]:
         tid = uuid.UUID(task_id)
-        with _factory()() as db:
+        factory = _factory()
+        # The owner's allow-list rows live in the database, and only the API process binds
+        # the store (``create_app``). The worker process runs the rounds - the gate's rule 9
+        # and the cloud session's list - so it binds it here; unbound it would read the
+        # empty seed alone and refuse every cloud write the owner allowed.
+        allowlist_store.bind(factory)
+        with factory() as db:
             row = service.get_task(db, tid)
             build = _ports_factory or _default_ports
             try:
-                ports = build(tid, row.device_id, heartbeat)
+                ports = build(tid, row.device_id, heartbeat, service.load(row).target)
             except service.WebTaskError as exc:
                 failed = service.fail_db(db, tid, reason=exc.reason, detail=str(exc))
                 return service.outcome(failed) if failed is not None else {"status": "failed"}

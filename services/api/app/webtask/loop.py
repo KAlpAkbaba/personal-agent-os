@@ -71,6 +71,8 @@ LOOP_SAME_STEP: Final = 2
 #: The same state this many times, whatever the step, is a loop too.
 LOOP_SAME_STATE: Final = 3
 MAX_TRAIL: Final = 60
+#: ``app.webtask.model_planner.ModelPlanner.name``: a round it answered is a paid call.
+PLANNER_MODEL: Final = "model"
 
 PAGE_AUTH_WALL: Final = "auth_wall"
 PAGE_CAPTCHA: Final = "captcha"
@@ -137,6 +139,13 @@ class TaskState:
     observation_fresh: bool = False
     #: How many device commands were issued, for idempotency keys that never repeat.
     commands: int = 0
+    #: Where the task runs (``app.webtask.types.TARGET_*``); "" = the owner's Chrome, as
+    #: before targets. The gate reads it: in the cloud a write needs the owner's list.
+    target: str = ""
+    #: Rounds a planner was asked for a step, and how many of them the MODEL answered -
+    #: the measure of what a task costs (the rules cost nothing).
+    planner_calls: int = 0
+    planner_model_calls: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -158,6 +167,9 @@ class TaskState:
             "observation": self.observation.as_dict() if self.observation else None,
             "observation_fresh": self.observation_fresh,
             "commands": self.commands,
+            "target": self.target,
+            "planner_calls": self.planner_calls,
+            "planner_model_calls": self.planner_model_calls,
         }
 
     @classmethod
@@ -182,6 +194,9 @@ class TaskState:
             observation=Observation.from_result(observation) if observation else None,
             observation_fresh=bool(raw.get("observation_fresh")),
             commands=int(raw.get("commands") or 0),
+            target=str(raw.get("target") or ""),
+            planner_calls=int(raw.get("planner_calls") or 0),
+            planner_model_calls=int(raw.get("planner_model_calls") or 0),
         )
 
 
@@ -343,6 +358,7 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
         answers=tuple(state.answers),
         allowed_hosts=tuple(state.allowed_hosts),
         grant=None,
+        target=state.target,
     )
 
     planner_name = ""
@@ -371,9 +387,11 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
                 source=str(state.grant.get("source") or ""),
                 facts=dict(confirmed.facts),
             ),
+            target=state.target,
         )
         planner_name = "confirmed"
     else:
+        state.planner_calls += 1
         try:
             planned = ports.planner.plan(
                 PlanRequest(
@@ -393,6 +411,8 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
         planner_name = str(
             getattr(ports.planner, "last_used", "") or getattr(ports.planner, "name", "")
         )
+        if planner_name == PLANNER_MODEL:
+            state.planner_model_calls += 1
 
     element = observation.by_ref(step.ref) if step.action in NEEDS_REF else None
     decision = gate.decide(step, observation, context)
@@ -433,6 +453,10 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
     if decision.kind == gate.DECISION_REFUSE:
         state.failed_streak += 1
         state.hint = f"the step was refused: {decision.reason}"
+        if decision.message:
+            # A refusal the owner can lift himself (a site off his cloud allow-list) is
+            # said to him; the planner hears the reason and plans again or ends honestly.
+            state.message = decision.message
         _record(state, entry(ROUND_REFUSED, detail=decision.reason))
         state.round_index += 1
         return _streak(state)
