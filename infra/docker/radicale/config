@@ -1,0 +1,31 @@
+# Radicale - the owner's own CalDAV server (radicale-stack-ops; ADR in
+# team/plans/radicale-stack-ops-adr.md until the lead numbers it).
+#
+# Baked into the image at /usr/local/etc/radicale/config (root-owned, read-only), so the
+# container needs no bind for it: /etc/radicale holds only the users file.
+
+[server]
+# Inside the container only: neither the fragment nor production publishes the port; the api
+# reaches http://radicale:5232 over the compose network. The dev stack maps 127.0.0.1:15232.
+hosts = 0.0.0.0:5232
+# 10 MB. The default is 100 MB, and unauthenticated XML parsing is Radicale's DoS history.
+max_content_length = 10000000
+
+[auth]
+type = htpasswd
+htpasswd_filename = /etc/radicale/users
+htpasswd_encryption = bcrypt
+delay = 1
+
+[rights]
+type = owner_only
+
+[storage]
+filesystem_folder = /data
+
+[web]
+# The owner never uses Radicale's web UI; GET / still answers (the healthcheck reads it).
+type = none
+
+[logging]
+level = warning
