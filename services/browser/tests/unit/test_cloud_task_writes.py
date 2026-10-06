@@ -107,11 +107,20 @@ def test_a_cloud_task_without_a_list_is_refused() -> None:
     assert error.error_class == ErrorClass.SECURITY_SCOPE_ERROR
 
 
-def test_a_list_without_cloud_task_is_refused() -> None:
-    payload = _cloud_open()
-    del payload["cloud_task"]
+@pytest.mark.parametrize(
+    "flag",
+    [pytest.param({}, id="no-cloud_task"), pytest.param({"cloud_task": False}, id="false")],
+)
+def test_a_list_without_cloud_task_is_refused(flag: dict[str, Any]) -> None:
+    # READ + NAVIGATE only: the refusal must come from the stray list itself, not from a
+    # class the session may not hold (the inspector's m6 survived the three-class version).
+    payload = _cloud_open(policy={"allowed_risk_classes": ["READ", "NAVIGATE"]}, **flag)
+    if not flag:
+        del payload["cloud_task"]
     error = _refusal(cloud_policy.clamp_command, "browser.session_open", payload)
-    assert error.error_class == ErrorClass.SECURITY_SCOPE_ERROR
+    assert error.error_class == ErrorClass.SECURITY_SCOPE_ERROR and error.retryable is False
+    assert "refused" not in (error.evidence or {})
+    assert "owner_allow_list belongs to a cloud task only" in str(error)
 
 
 def test_the_owners_profile_is_still_not_reachable_from_the_cloud() -> None:

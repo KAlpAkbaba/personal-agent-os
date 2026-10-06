@@ -23,6 +23,8 @@ WORKER = BROWSER / "worker.py"
 CLAMP = BROWSER / "cloud" / "policy.py"
 WORKER_ALLOWLIST = BROWSER / "cloud_allowlist.py"
 CORE_ALLOWLIST = REPO / "services" / "api" / "app" / "execution" / "allowlist.py"
+CORE_EDITOR = REPO / "services" / "api" / "app" / "execution" / "allowlist_store.py"
+CORE_SITES = REPO / "services" / "api" / "app" / "webtask" / "sites.py"
 CORE_TYPES = REPO / "services" / "api" / "app" / "webtask" / "types.py"
 DEVICE_PORT = REPO / "services" / "api" / "app" / "webtask" / "device_port.py"
 
@@ -92,6 +94,40 @@ def test_the_clamp_names_the_classes_as_cloud_core_does() -> None:
     names = re.findall(r'RISK_[A-Z_]+: Final = "([A-Z_]+)"', CORE_TYPES.read_text("utf-8"))
     assert {"READ", "NAVIGATE", "REVERSIBLE_WRITE"} <= set(names)
     assert "policy.RiskClass.REVERSIBLE_WRITE" in clamp
+
+
+def _table(path: Path, name: str) -> object:
+    """A module-level ``frozenset({...})`` / ``re.compile("...")`` constant, read by ast
+    (the worker's package is not importable from this venv, and neither should be run)."""
+    for node in ast.parse(path.read_text("utf-8")).body:
+        target = getattr(node, "target", None) or (getattr(node, "targets", None) or [None])[0]
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and getattr(target, "id", "") == name:
+            value = node.value
+            if isinstance(value, ast.Call):
+                value = value.args[0]
+            return ast.literal_eval(value)
+    raise AssertionError(f"{path.name} has no {name}")  # pragma: no cover
+
+
+# The cloud clamp refuses a whole cloud session_open on one entry it judges malformed, so
+# its copy of the editor's rule must not be NARROWER than the editor (a site the editor
+# lists would stop every cloud task). Each table of the worker's copy against its source.
+TABLES = (
+    ("_SECOND_LEVEL", CORE_SITES),
+    ("_SECOND_LEVEL", CORE_EDITOR),
+    ("_COUNTRY_WITH_SECOND_LEVEL", CORE_SITES),
+    ("_OPEN_TLDS", CORE_EDITOR),
+    ("_LABEL", CORE_EDITOR),
+)
+
+
+@pytest.mark.parametrize(("name", "source"), TABLES, ids=[f"{n}-{p.stem}" for n, p in TABLES])
+def test_the_workers_site_rule_is_the_editors_table_for_table(name: str, source: Path) -> None:
+    assert _table(WORKER_ALLOWLIST, name) == _table(source, name)
+
+
+def test_the_api_halves_agree_on_the_second_level_table() -> None:
+    assert _table(CORE_SITES, "_SECOND_LEVEL") == _table(CORE_EDITOR, "_SECOND_LEVEL")
 
 
 @pytest.mark.parametrize("field", FIELDS)

@@ -49,4 +49,13 @@ audibility; what the owner hears is the voice card's and the post-release trial'
 - The status line of BROWSER_CAPABILITIES.md says v1.9 and keeps the literal
   "Status: contract **v1.8**" in a parenthesis, because `test_browser_contract_v18.py`
   (outside this card's area) asserts it; the lead may relax that assertion and drop the
-  parenthesis.
+  parenthesis. (Inspector's return 3: that sentence exists only for the v18 test. Fix,
+  asked by ALAN_ISTEGI: v18 asserts its own annex heading `- **v1.8 (` instead of the
+  status line, and the sentence leaves the document - the same move at v1.10 otherwise.)
+- The worker's registrable-domain rule is a COPY of the editor's tables
+  (`app/execution/allowlist_store.py`, `app/webtask/sites.py`); `test_browser_contract_v19`
+  reads all of them by ast and requires them equal, table for table. A narrower copy would
+  refuse every cloud `session_open` of an owner whose list holds the missing ending.
+  Known, deliberate difference: the worker's `valid_site` accepts an all-digit name
+  (`127.0.0.1`, the real-Chromium fixture's host) that the editor refuses; it is the
+  harmless direction (the api half sends only editor-written sites).
