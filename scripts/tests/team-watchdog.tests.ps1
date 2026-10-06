@@ -119,6 +119,15 @@ Test-Case "a status of an older cycle is judged by when the lock was taken" {
     Assert-Equal "restart" $never.Kind "a cycle that never wrote its status in 25 minutes"
 }
 
+Test-Case "a NEWER status of another pid does not make a stuck holder fresh" {
+    # The old cycle that lost the lock still beats (3 minutes ago); the holder took the lock
+    # 25 minutes ago and never wrote: the holder is stuck, the other pid's beat is not its life.
+    $decision = Get-TeamWatchdogDecision -Lock (New-Lock -HolderPid 9100 -MinutesAgo 25) -Status (New-Status -MinutesAgo 3 -HolderPid 4736) -Machine $machine -HolderIsCycle $true -Restarts @() -Now $now
+    Assert-Equal "restart" $decision.Kind "another pid's fresh status"
+    Assert-Equal 9100 $decision.Pid "the lock's holder is the one stopped"
+    Assert-True ($decision.AgeMinutes -ge 24.9) "the age is the lock's: $($decision.AgeMinutes)"
+}
+
 Test-Case "another machine's lock, a free lock, a dead holder or a non-cycle process is never touched" {
     Assert-Equal "elsewhere" (Get-TeamWatchdogDecision -Lock (New-Lock -Machine "LAPTOP") -Status (New-Status -MinutesAgo 60) -Machine $machine -HolderIsCycle $true -Restarts @() -Now $now).Kind "the other PC's cycle"
     Assert-Equal "free" (Get-TeamWatchdogDecision -Lock ([pscustomobject]@{ held = $false }) -Status (New-Status -MinutesAgo 60) -Machine $machine -HolderIsCycle $false -Restarts @() -Now $now).Kind "nobody holds it"
@@ -257,6 +266,33 @@ Test-Case "a holder that will not die: the lock is NOT released and the task is 
     finally { Remove-Folder $folder }
 }
 
+# ------------------------------------------------------------------ the report line survives the cycle
+
+Test-Case "the report line survives the restarted cycle's Save-Report and goes to the Onay Merkezi under its own name" {
+    $folder = New-TempFolder
+    try {
+        $reports = Join-Path $folder "reports"
+        $sent = New-Object System.Collections.ArrayList
+        $send = { param($Name, $Text) [void]$sent.Add([pscustomobject]@{ Name = $Name; Text = $Text }) }.GetNewClosure()
+        Publish-TeamWatchdogReport -ReportsRoot $reports -CycleId "d20261006" -Text "Bekci: dongu takildi - durumu 20 dk eski" -Send $send
+        # The restarted cycle (same -DailyId) writes its report whole, as cycle.ps1's Save-Report does.
+        [System.IO.File]::WriteAllText((Join-Path $reports "d20261006.md"), "# Dongu raporu d20261006`n")
+        $kept = @(Get-ChildItem -LiteralPath $reports -Filter "*.md" | Where-Object { [System.IO.File]::ReadAllText($_.FullName) -match '20 dk eski' })
+        Assert-Equal 1 @($kept).Count "the line is still in a report file after Save-Report: $(@(Get-ChildItem -LiteralPath $reports | ForEach-Object { $_.Name }) -join ',')"
+        Assert-Equal 1 @($sent).Count "one copy to the Onay Merkezi"
+        Assert-Equal "d20261006-bekci.md" $sent[0].Name "under its own name, never the cycle's"
+        Assert-True ($sent[0].Name -cmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.md$') "a name the store accepts (services/api/app/team/store.py _REPORT_NAME)"
+        Assert-True ($sent[0].Text -match '20 dk eski') "the copy has the line: $($sent[0].Text)"
+        # A second line keeps the first (the whole file is sent each time).
+        Publish-TeamWatchdogReport -ReportsRoot $reports -CycleId "d20261006" -Text "Bekci: ikinci kez - Danisman bakmali" -Send $send
+        Assert-True ($sent[1].Text -match '20 dk eski' -and $sent[1].Text -match 'ikinci kez') "both lines: $($sent[1].Text)"
+        $refused = { param($Name, $Text) throw "HTTP 503 down" }
+        Publish-TeamWatchdogReport -ReportsRoot $reports -CycleId "d20261006" -Text "third" -Send $refused
+        Assert-True ([System.IO.File]::ReadAllText((Join-Path $reports "d20261006-bekci.md")) -match 'third') "a refused copy never loses the local line"
+    }
+    finally { Remove-Folder $folder }
+}
+
 # ------------------------------------------------------------------ watchdog.ps1 for real
 
 Test-Case "watchdog.ps1 (-File): a real stuck cycle tree is stopped, Docker is kept, the lock released, the task re-run" {
@@ -306,8 +342,9 @@ Start-Sleep -Seconds 900
         Assert-Equal "PagentOS Test Task" ([System.IO.File]::ReadAllText($taskMarker)) "by its name"
         $lockAfter = Read-TeamJson -Path (Join-Path $teamRoot "lock.json")
         Assert-True (-not [bool](Get-TeamProperty -InputObject $lockAfter -Name "held" -Default $false)) "the lock is released"
-        $report = Join-Path $teamRoot "reports\c-test.md"
-        Assert-True ((Test-Path -LiteralPath $report) -and ([System.IO.File]::ReadAllText($report) -match '20 dk')) "the cycle's report has the risk line"
+        # Its own file: the restarted cycle rewrites reports\c-test.md whole (Save-Report).
+        $report = Join-Path $teamRoot "reports\c-test-bekci.md"
+        Assert-True ((Test-Path -LiteralPath $report) -and ([System.IO.File]::ReadAllText($report) -match '20 dk')) "the watchdog's report has the risk line"
     }
     finally {
         Stop-Pids -Ids @($started)
@@ -375,15 +412,20 @@ Test-Case "new-worktree.ps1: a hanging 'git worktree add' is killed with its chi
             Assert-True $r.Success "git $($step -join ' '): $($r.StdErr)"
         }
         # The hang: a post-checkout hook that waits on a child (ping with a count nobody else uses).
+        # It writes a sign first: the case proves the `worktree add` really ran into the hang
+        # (a probe that fails before it would pass every other assertion here).
+        $hookStarted = Join-Path $folder "hook-started.txt"
         $hook = Join-Path $repo ".git\hooks\post-checkout"
-        [System.IO.File]::WriteAllText($hook, "#!/bin/sh`nping -n $marker 127.0.0.1 >/dev/null`n")
+        [System.IO.File]::WriteAllText($hook, "#!/bin/sh`necho started > '$($hookStarted -replace '\\', '/')'`nping -n $marker 127.0.0.1 >/dev/null`n")
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
         $ran = Invoke-NewWorktree -Repo $repo -Slug "hang" -GitTimeoutSeconds 10
         $code = $ran.ExitCode
         $watch.Stop()
         $text = ($ran.StdOut + " / " + $ran.StdErr) -replace '\s+', ' '
         Assert-True ($code -ne 0) "the task is stopped with a failure: exit $code, $text"
-        Assert-True ($text -match 'timed out|zaman') "the reason is named: $text"
+        Assert-True (Test-Path -LiteralPath $hookStarted) "the worktree add reached the hanging hook: $text"
+        Assert-True ($text -match 'git worktree add timed out after 10 s') "the reason names the worktree add's timeout: $text"
+        Assert-True ($text -match 'cleaned: git worktree remove: ok') "the clean-up ran and says so: $text"
         # Hang guard: ten seconds of timeout plus the clean-up; the hook alone would wait 100 minutes.
         Assert-True ($watch.Elapsed.TotalSeconds -lt 90) "within the timeout: $($watch.Elapsed.TotalSeconds) s"
         Start-Sleep -Milliseconds 500

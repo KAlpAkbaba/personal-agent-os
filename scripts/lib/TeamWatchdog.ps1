@@ -255,16 +255,39 @@ function Invoke-TeamWatchdog {
 }
 
 function Add-TeamWatchdogReportLine {
-    <# A line under "Bekci" in the cycle's local report (team/reports/<cycle>.md). #>
+    <# A line in the watchdog's own report of the cycle (team/reports/<cycle>-bekci.md). Never
+       the cycle's <cycle>.md: the restarted cycle (same -DailyId) rewrites that one whole
+       (cycle.ps1 Save-Report) and the line was gone. Returns the file's name, path and text. #>
     param([Parameter(Mandatory = $true)][string]$ReportsRoot, [string]$CycleId, [Parameter(Mandatory = $true)][string]$Text)
     if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { $CycleId = "watchdog" }
     if (-not (Test-Path -LiteralPath $ReportsRoot)) { [void](New-Item -ItemType Directory -Force -Path $ReportsRoot) }
-    $report = Join-Path $ReportsRoot "$CycleId.md"
-    $heading = "## Bekci (dongu takildi)"
+    $name = "$CycleId-bekci.md"
+    $report = Join-Path $ReportsRoot $name
     $lines = @()
-    if (-not (Test-Path -LiteralPath $report) -or -not ([System.IO.File]::ReadAllText($report)).Contains($heading)) { $lines += @("", $heading, "") }
+    if (-not (Test-Path -LiteralPath $report)) { $lines += @("# Bekci: dongu $CycleId takildi", "") }
     $lines += "- " + (Get-TeamTimestamp) + " " + $Text
-    [System.IO.File]::AppendAllText($report, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::AppendAllText($report, (($lines -join "`n") + "`n"), $utf8)
+    return [pscustomobject]@{ Name = $name; Path = $report; Text = [System.IO.File]::ReadAllText($report, $utf8) }
+}
+
+function Publish-TeamWatchdogReport {
+    <# The line in the local file, then the whole file to the Onay Merkezi through -Send
+       (name, text) - Send-TeamReportApi in API mode. A refused copy keeps the local line and
+       is answered as Error, never thrown. #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ReportsRoot,
+        [string]$CycleId,
+        [Parameter(Mandatory = $true)][string]$Text,
+        [scriptblock]$Send = $null
+    )
+    $written = Add-TeamWatchdogReportLine -ReportsRoot $ReportsRoot -CycleId $CycleId -Text $Text
+    $result = [pscustomobject]@{ Name = $written.Name; Path = $written.Path; Sent = $false; Error = "" }
+    if ($null -ne $Send) {
+        try { & $Send $written.Name $written.Text; $result.Sent = $true }
+        catch { $result.Error = $_.Exception.Message }
+    }
+    return $result
 }
 
 # ---------------------------------------------------------------------------- a git that cannot hang

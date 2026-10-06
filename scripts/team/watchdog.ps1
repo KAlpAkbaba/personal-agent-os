@@ -117,7 +117,13 @@ $io = @{
     }
     Report      = {
         param($CycleId, $Text)
-        try { Add-TeamWatchdogReportLine -ReportsRoot $reportsRoot -CycleId $CycleId -Text $Text }
+        # Its own file (<cycle>-bekci.md), and in API mode the same file to the Onay Merkezi.
+        $send = $null
+        if ($null -ne $store) { $send = { param($Name, $Body) Send-TeamReportApi -Store $store -Name $Name -Text $Body } }
+        try {
+            $published = Publish-TeamWatchdogReport -ReportsRoot $reportsRoot -CycleId $CycleId -Text $Text -Send $send
+            if ($published.Error) { Write-WatchdogLog "UYARI: the report copy was refused: $($published.Error)" }
+        }
         catch { Write-WatchdogLog "the report could not be written: $($_.Exception.Message)" }
     }
     Log         = { param($Text) Write-WatchdogLog $Text }

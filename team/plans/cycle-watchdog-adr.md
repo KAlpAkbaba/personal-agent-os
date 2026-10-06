@@ -55,3 +55,15 @@ Docker/WSL when a run started them.
   2 hours (the interim one used 1).
 - The watchdog posts to the board as seat `lead`, task `cycle-watchdog`. The board's seat list
   has no `watchdog` seat.
+- The watchdog's report line goes to its own file, `team/reports/<cycle>-bekci.md`, never the
+  cycle's `<cycle>.md`: the restarted cycle runs with the same `-DailyId` and `Save-Report`
+  rewrites that file whole, so a line appended there was gone within minutes (inspector,
+  2026-10-06). In API mode the whole `-bekci.md` file is also sent with `Send-TeamReportApi`
+  under that name, so the Onay Merkezi has it. A refused copy keeps the local line and logs
+  `UYARI`.
+- Only the lock holder's own status counts as its sign of life. A newer status written by
+  another pid (an old cycle that lost the lock and still beats) does not make a stuck holder
+  look fresh; the holder is judged by when it took the lock.
+- Follow-up (inspector): `schtasks /Run` right after the wrapper is killed can be swallowed
+  when the task (IgnoreNew) still shows "Running"; wait for Ready before /Run and verify a new
+  instance afterwards. Not in this card.
