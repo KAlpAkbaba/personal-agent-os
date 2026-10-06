@@ -404,8 +404,9 @@ function Start-TeamRun {
     # finished with this limit). An hour; a longer suite runs in slices.
     $psi.EnvironmentVariables["BASH_MAX_TIMEOUT_MS"] = "3600000"
     # The run's own temp folder (team/cycle-settings.json 'run_temp_root', owner 2026-10-03): the
-    # tests a run starts write their temp folders there, on the data drive, and the folder goes
-    # when the run ends (Remove-TeamRunTemp) - C: filled to zero at 12:00 that day, and %TEMP%
+    # tests a run starts write their temp folders there, on the data drive, and the folder is
+    # emptied when the run ends (Remove-TeamRunTemp; the folder itself stays, it may be Git Bash's
+    # /tmp for the whole machine) - C: filled to zero at 12:00 that day, and %TEMP%
     # held 2.67 million leaked folders the day before. Unset: the machine's TEMP, as before.
     if ($TempDirectory) {
         [void](New-Item -ItemType Directory -Force -Path $TempDirectory)
@@ -431,17 +432,102 @@ function Start-TeamRun {
     }
 }
 
+function Get-TeamGitBash {
+    <# Git for Windows' own bash.exe, found beside git.exe - never System32's bash (WSL). #>
+    $git = Get-TeamGit
+    $dir = Split-Path -Parent $git
+    for ($up = 0; $up -lt 3 -and $dir; $up++) {
+        $candidate = Join-Path $dir "bin\bash.exe"
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+        $dir = Split-Path -Parent $dir
+    }
+    throw "Git's bash.exe was not found beside $git"
+}
+
+function Read-TeamGitBashMount {
+    <# What Git Bash's `mount` prints, or $null when bash cannot be asked. #>
+    try {
+        $result = Invoke-NativeProcess -FilePath (Get-TeamGitBash) -Arguments @("-c", "mount") -TimeoutSeconds 30
+        if ($result.ExitCode -ne 0) { return $null }
+        return [string]$result.StdOut
+    }
+    catch { return $null }
+}
+
+function ConvertFrom-TeamGitBashMount {
+    <# The Windows folder `mount` text names as /tmp, or $null when it names none. #>
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $m = [regex]::Match($line, '^(?<source>.+?) on /tmp type ')
+        if ($m.Success) { return ($m.Groups["source"].Value -replace '/', '\').TrimEnd('\') }
+    }
+    return $null
+}
+
+function Invoke-TeamRunTempSweep {
+    <#
+    .SYNOPSIS
+        Remove the run folders under the run temp root that are empty, older than a day and
+        not Git Bash's /tmp.
+
+    .DESCRIPTION
+        Git for Windows mounts /tmp as 'usertemp': the TEMP of the first msys process of the
+        logon session, shared by every msys process until the last one exits. A run's bash can
+        be that first process, so its folder may be the whole machine's /tmp long after the run
+        (2026-10-06 01:50: the folder was deleted and every bash lost /tmp; mktemp failed in the
+        gate). When `mount` cannot be read, nothing is removed.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [double]$MaxAgeHours = 24,
+        [scriptblock]$ReadMount = { Read-TeamGitBashMount }
+    )
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
+    $text = $null
+    try { $text = & $ReadMount } catch { return }
+    $mounted = ConvertFrom-TeamGitBashMount -Text ([string]$text)
+    if (-not $mounted) { return }
+    try { $mounted = [System.IO.Path]::GetFullPath($mounted).TrimEnd('\') } catch { return }
+    $cutoff = [datetime]::UtcNow.AddHours(-$MaxAgeHours)
+    foreach ($folder in @(Get-ChildItem -LiteralPath $Root -Directory -Force -ErrorAction SilentlyContinue)) {
+        if ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+        if ($folder.LastWriteTimeUtc -gt $cutoff) { continue }
+        if ([string]::Equals($folder.FullName.TrimEnd('\'), $mounted, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (@(Get-ChildItem -LiteralPath $folder.FullName -Force -ErrorAction SilentlyContinue).Count -gt 0) { continue }
+        try { Remove-Item -LiteralPath $folder.FullName -Force -ErrorAction Stop } catch { }
+    }
+}
+
 function Remove-TeamRunTemp {
     <#
     .SYNOPSIS
-        Remove a finished run's temp folder. Best effort: a file still held open stays, and a
-        folder with a link inside is left whole (a recursive delete would follow it).
+        Empty a finished run's temp folder and keep the folder itself; then sweep the run temp
+        root (Invoke-TeamRunTempSweep).
+
+    .DESCRIPTION
+        The folder stays because Git Bash may have it mounted as /tmp for the whole machine
+        (see Invoke-TeamRunTempSweep). Best effort: a file still held open stays and is named
+        in a warning, and a folder with a link inside is left whole (a recursive delete would
+        follow it). Nothing is written to the pipeline.
     #>
-    param([string]$Path)
+    [CmdletBinding()]
+    param(
+        [string]$Path,
+        [scriptblock]$ReadMount = { Read-TeamGitBashMount }
+    )
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
     $links = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue)
     if (@($links).Count -gt 0) { return }
-    try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop } catch { }
+    foreach ($child in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        try { Remove-Item -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop } catch { }
+    }
+    $left = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue)
+    if (@($left).Count -gt 0) {
+        $names = @($left | Select-Object -First 10 | ForEach-Object { $_.FullName })
+        Write-Warning ("Remove-TeamRunTemp: {0} file(s) left in {1} (held open?): {2}" -f @($left).Count, $Path, ($names -join ", "))
+    }
+    try { Invoke-TeamRunTempSweep -Root (Split-Path -Parent $Path) -ReadMount $ReadMount } catch { }
 }
 
 function Stop-TeamProcessTree {

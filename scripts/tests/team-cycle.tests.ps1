@@ -2274,7 +2274,8 @@ try {
     Test-Case "each run gets its own temp folder under run_temp_root, removed when the run ends (owner, 2026-10-03)" {
         # C: filled to zero at 12:00 on 2026-10-03 and the day before %TEMP% held 2.67 million leaked
         # folders: the tests a run starts write their temp folders into the run's own folder on the
-        # data drive, and the cycle removes it when the run is over.
+        # data drive, and the cycle empties it when the run is over. The folder itself is kept: Git
+        # Bash may hold it as the machine's /tmp (2026-10-06 01:50, card run-temp-keeps-git-bash-tmp).
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $tempRoot = Join-Path $root "run-temp"
         $json = '{"max_parallel": 3, "run_temp_root": ' + (ConvertTo-Json -InputObject $tempRoot) + '}'
@@ -2287,7 +2288,7 @@ try {
             Assert-True -Condition ($temp.StartsWith($tempRoot + "\", [System.StringComparison]::OrdinalIgnoreCase)) -Because "the $($call.role)'s TEMP is under run_temp_root: '$temp'"
             Assert-Equal -Expected $temp -Actual ([string]$call.tmp_env) -Because "TMP is the same folder"
             Assert-True -Condition ($temp -match "task-one-$([string]$call.role)-[0-9a-f]{8}$") -Because "named by task and role: '$temp'"
-            Assert-True -Condition (-not (Test-Path -LiteralPath $temp)) -Because "the run's folder (with what the run left in it) is gone after the run: '$temp'"
+            Assert-True -Condition ((Test-Path -LiteralPath $temp -PathType Container) -and (@(Get-ChildItem -LiteralPath $temp -Force).Count -eq 0)) -Because "the run's folder is kept (Git Bash may hold it as /tmp) and emptied when the run ends: '$temp'"
             $folders += $temp
         }
         Assert-Equal -Expected 2 -Actual @($folders | Sort-Object -Unique).Count -Because "each run has its own folder"
