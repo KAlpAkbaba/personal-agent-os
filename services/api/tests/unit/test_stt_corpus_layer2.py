@@ -23,7 +23,9 @@ from typing import Any
 
 import pytest
 
+from app.memory.providers import DEFAULT_LOCAL_MODEL
 from app.voice.understanding import combine, policy
+from tests.voice_corpus import stt_harness
 from tests.unit import test_stt_utterance_corpus as no_engine_suite
 from tests.voice_corpus.stt_corpus import ORIGIN_REAL, STT_CORPUS_VERSION
 from tests.voice_corpus.stt_harness import (
@@ -46,6 +48,9 @@ EXEMPLARS_FILE = (
 )  # the shipped file, read here on its own
 REPORT_ENV = "PAGENTOS_STT_LAYER2_REPORT"
 REPEAT_ENV = "PAGENTOS_STT_LAYER2_REPEAT"
+#: The local model the engine embeds with (memory-embedding-granite-measure). Unset: the
+#: production default, so the gate's run is today's run.
+ENGINE_MODEL_ENV = "PAGENTOS_STT_CORPUS_ENGINE_MODEL"
 #: A hang guard for one whole run of the corpus, never a performance claim.
 RUN_DEADLINE_S = 1800.0
 
@@ -53,9 +58,13 @@ _ENGINE: dict[str, Any] = {}
 _RUNS: dict[str, Any] = {}
 
 
+def _engine_model() -> str:
+    return os.environ.get(ENGINE_MODEL_ENV) or DEFAULT_LOCAL_MODEL
+
+
 def _engine() -> Any:
     if "built" not in _ENGINE:
-        _ENGINE["built"] = production_engine()
+        _ENGINE["built"] = production_engine(model_name=_engine_model())
     return _ENGINE["built"]
 
 
@@ -316,6 +325,50 @@ def test_without_the_local_model_production_engine_refuses_and_writes_nothing(
     assert not target.exists()
     assert not target.with_suffix(".md").exists()
     assert policy.configured_engine() is before
+
+
+# --- (8b) another local model: the measurement's seam, never a production change -----------
+
+
+def test_production_engine_builds_with_the_model_it_is_given(monkeypatch):
+    other = "ibm-granite/granite-embedding-311m-multilingual-r2"
+    built_with: list[Any] = []
+    loaded: list[str] = []
+    real_build = stt_harness.build_embedder
+
+    def recording_build(settings, **kwargs):
+        built_with.append(settings)
+        return real_build(settings, **kwargs)
+
+    def fake_256(model_name: str, cache_dir: str | None) -> Any:
+        loaded.append(model_name)
+
+        class _Model:
+            def embed(self, documents, **_kwargs):
+                for text in documents:
+                    seed = sum(ord(ch) for ch in text) or 1
+                    yield [float((seed * (i + 1)) % 7 + 1) for i in range(256)]
+
+        return _Model()
+
+    monkeypatch.setattr(stt_harness, "build_embedder", recording_build)
+    before = policy.configured_engine()
+    built = production_engine(model_factory=fake_256, model_name=other)
+    assert [s.memory_local_embedding_model for s in built_with] == [other]
+    assert loaded == [other]
+    assert built.report.model_id.startswith("local-" + other)
+    assert policy.configured_engine() is before
+    # ... and with no model named, the default the gate has always measured.
+    built_with.clear()
+    production_engine(model_factory=fake_256)
+    assert [s.memory_local_embedding_model for s in built_with] == [DEFAULT_LOCAL_MODEL]
+
+
+def test_the_engine_model_variable_unset_is_the_production_default(monkeypatch):
+    monkeypatch.delenv(ENGINE_MODEL_ENV, raising=False)
+    assert _engine_model() == DEFAULT_LOCAL_MODEL
+    monkeypatch.setenv(ENGINE_MODEL_ENV, "ibm-granite/granite-embedding-311m-multilingual-r2")
+    assert _engine_model() == "ibm-granite/granite-embedding-311m-multilingual-r2"
 
 
 # --- (9) the report ---------------------------------------------------------------------------
