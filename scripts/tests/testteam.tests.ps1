@@ -374,7 +374,10 @@ function Start-FakeStaging {
     # would queue the ladder's requests and every timing would be the queue's):
     #   /broken 500; /load 503 above X-Load $FailAbove; /slowone holds the FIRST request 1.5 s;
     #   /flaky 503 to the first request of load 16 only; everything else 200 with the sha.
-    param([int]$Port, [int]$FailAbove = 0, [string]$Sha = ("c" * 40))
+    # The session: 'Bearer dead' (a staging credential rotated under it) is 401 everywhere but
+    # /broken, /v1/identity/sessions/current is 200 only for 'Bearer good', /unauth is 401 to all. With -Log every request's
+    # method and path is one line of that file (what reached staging).
+    param([int]$Port, [int]$FailAbove = 0, [string]$Sha = ("c" * 40), [string]$Log = "")
     $script = @"
 Add-Type -TypeDefinition @'
 using System;
@@ -384,7 +387,10 @@ using System.Threading;
 public static class FakeStaging {
     static int slowSeen = 0;
     static int flakySeen = 0;
-    public static void Run(int port, int failAbove, string sha) {
+    static string log = "";
+    static readonly object logLock = new object();
+    public static void Run(int port, int failAbove, string sha, string logFile) {
+        log = logFile;
         var listener = new HttpListener();
         listener.Prefixes.Add("http://127.0.0.1:" + port + "/");
         listener.Start();
@@ -402,7 +408,12 @@ public static class FakeStaging {
             string body = "{\"status\":\"ok\",\"release\":{\"version\":\"" + sha + "\"},\"items\":[]}";
             int load = 0;
             Int32.TryParse(c.Request.Headers["X-Load"] ?? "0", out load);
+            if (log.Length > 0) { lock (logLock) { System.IO.File.AppendAllText(log, c.Request.HttpMethod + " " + p + "\n"); } }
+            string auth = c.Request.Headers["Authorization"] ?? "";
+            if (p == "/v1/identity/sessions/current" && auth != "Bearer good") { code = 401; body = "{\"detail\":\"unauthorized\"}"; }
+            if (auth == "Bearer dead") { code = 401; body = "{\"detail\":\"unauthorized\"}"; }
             if (p == "/broken") { code = 500; body = "{\"detail\":\"boom\"}"; }
+            if (p == "/unauth") { code = 401; body = "{\"detail\":\"unauthorized\"}"; }
             if (p == "/load" && failAbove > 0 && load > failAbove) { code = 503; body = "{}"; }
             if (p == "/slowone" && Interlocked.Increment(ref slowSeen) == 1) { Thread.Sleep(1500); }
             if (p == "/flaky" && load == 16 && Interlocked.Increment(ref flakySeen) == 1) { code = 503; body = "{}"; }
@@ -416,7 +427,7 @@ public static class FakeStaging {
 }
 '@
 [System.Threading.ThreadPool]::SetMinThreads(64, 64) | Out-Null
-[FakeStaging]::Run($Port, $FailAbove, '$Sha')
+[FakeStaging]::Run($Port, $FailAbove, '$Sha', '$Log')
 "@
     $file = Join-Path $env:TEMP ("pagentos-fake-staging-$Port.ps1")
     Write-Utf8 $file $script
@@ -528,6 +539,19 @@ Start-Sleep -Milliseconds 600
 $state = "passed"; $steps = @(@{ name = "adim"; expected = "200"; actual = "200"; ok = $true })
 $breaking = @{ what = "ayni istek iki kez"; tried = @(@{ load = 2; ok = 2; errors = 0; p95_ms = 30 }); first_failure = $null }
 if ($family -eq "kirik") { $state = "failed"; $steps = @(@{ name = "nobet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = "500"; ok = $false }) }
+# 'kopuk': the staging credential is rotated under the round (the session file now holds a dead
+# token) and every step the tester wrote by hand answered 401 (t-d20261006, 2026-10-06).
+if ($family -eq "kopuk") {
+    [IO.File]::WriteAllText($env:PAGENTOS_FAKE_SESSION_FILE, '{"api":"http://127.0.0.1:28001","session_token":"dead"}')
+    $state = "failed"; $steps = @(@{ name = "nobet kur"; method = "POST"; path = "/v1/watches"; expected = "201"; actual = "401"; ok = $false }, @{ name = "nobet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = "401"; ok = $false })
+}
+# 'karma': the session dies too, but a step answered 500 before it; 'karma-ortam' says
+# 'environment' itself for such a mixed failure (a runner that trusts any 401 too much).
+if ($family -like "karma*") {
+    [IO.File]::WriteAllText($env:PAGENTOS_FAKE_SESSION_FILE, '{"api":"http://127.0.0.1:28001","session_token":"dead"}')
+    $state = "failed"; $steps = @(@{ name = "nobet kur"; method = "POST"; path = "/v1/watches"; expected = "201"; actual = "500"; ok = $false }, @{ name = "nobet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = "401"; ok = $false })
+    if ($family -eq "karma-ortam") { $state = "environment" }
+}
 if ($family -eq "yuk") { $state = "broke"; $breaking = @{ what = "GET /v1/watches esz."; tried = @(@{ load = 8; ok = 8; errors = 0; p95_ms = 80 }, @{ load = 16; ok = 10; errors = 6; p95_ms = 3000 }); first_failure = @{ load = 16; ok = 10; errors = 6; p95_ms = 3000 } } }
 $doc = @{ card = $id; tester = $seat; family = $family; state = $state; scenario = "scripts/testteam/scenarios/$family.json"; staging_sha = ("d" * 40); steps = $steps; breaking = $breaking; screenshot = "" }
 [IO.File]::WriteAllText($path, ($doc | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
@@ -556,7 +580,7 @@ Test-Case "a round deals four jobs to four testers at once, gets four results ba
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "r9" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "r9" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
         Assert-Equal -Expected 4 -Actual @($calls).Count -Because "four tester runs"
@@ -573,7 +597,7 @@ Test-Case "a round deals four jobs to four testers at once, gets four results ba
         Assert-True -Condition ($breaking -match "16") -Because "the first failing load"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "testteam"))) -Because "no run data beside the team's files"
         # A second round over the same queue forwards nothing twice.
-        $out = & $powershell -NoProfile -File $testRound -Round "r10" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "r10" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
         $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
         Assert-Equal -Expected 1 -Actual @($queue.tasks).Count -Because "an open card for the same failure is not opened again: $out"
     }
@@ -623,7 +647,7 @@ while (`$true) {
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "api1" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "api1" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $written = @(Get-Content -LiteralPath $puts -Encoding UTF8 | Where-Object { $_ })
         Assert-Equal -Expected 1 -Actual @($written).Count -Because "one failure, one create: $out"
@@ -633,7 +657,7 @@ while (`$true) {
         # The same failure next round: the store has the id, nothing is written.
         $id = [regex]::Match($written[0], 'tasks/(\S+) ').Groups[1].Value
         Write-Utf8 (Join-Path $work "queue-answer.json") ('{"version":1,"tasks":[{"id":"' + $id + '","state":"proposed"}]}')
-        $out = & $powershell -NoProfile -File $testRound -Round "api2" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "api2" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
         Assert-Equal -Expected 1 -Actual @(Get-Content -LiteralPath $puts -Encoding UTF8 | Where-Object { $_ }).Count -Because "a known id is not written again: $out"
     }
     finally {
@@ -655,10 +679,10 @@ Test-Case "under the memory floor a round starts no tester and says so; while a 
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "low" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 3 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "low" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 3 -AssumeGateRunning 0 -NoBoard 2>&1
         Assert-True -Condition (-not (Test-Path -LiteralPath $env:PAGENTOS_FAKE_TESTER_LOG)) -Because "no tester started: $out"
         Assert-True -Condition (($out -join " ") -match "bellek") -Because "it says why: $out"
-        $out = & $powershell -NoProfile -File $testRound -Round "gate" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 1 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "gate" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 1 -NoBoard 2>&1
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
         Assert-Equal -Expected 2 -Actual @($calls).Count -Because "both jobs ran: $out"
         $t1 = [datetime]::Parse((@($calls)[0] -split " ")[4]); $t2 = [datetime]::Parse((@($calls)[1] -split " ")[4])
@@ -689,7 +713,7 @@ Test-Case "measured, not assumed: the machine's own free memory and the test-slo
         Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"},{"family":"b","scenario":"b.json"}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
-        $out = & $powershell -NoProfile -File $testRound -Round "measured" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -SlotStore $slots -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "measured" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -SlotStore $slots -NoBoard 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         Assert-True -Condition (($out -join " ") -match "kap") -Because "the measured gate is said: $out"
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
@@ -720,7 +744,7 @@ Test-Case "the cap is measured again before every tester start: memory that runs
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $env:PAGENTOS_FAKE_SQUEEZE = $settings
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "squeeze" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "squeeze" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
         Assert-Equal -Expected 4 -Actual @($calls).Count -Because "the fifth job did not start: $out"
@@ -748,12 +772,12 @@ Test-Case "a round's run data goes under run_temp_root, never into the checkout"
         Write-Utf8 (Join-Path $team "cycle-settings.json") ('{"test_parallel":4,"run_temp_root":' + (ConvertTo-Json -InputObject $runTemp) + '}')
         $plan = Join-Path $work "plan.json"
         Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"}]}'
-        $out = & $powershell -NoProfile -File $testRound -Round "where" -TeamRoot $team -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "where" -TeamRoot $team -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends (no memory, no tester): $out"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $runTemp "testteam\where\cards.json")) -Because "the cards are under run_temp_root: $out"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "testteam"))) -Because "nothing beside the team's files"
         $inside = Join-Path $repoRoot "team\testteam-refused-$([guid]::NewGuid().ToString('N').Substring(0, 6))"
-        $out = & $powershell -NoProfile -File $testRound -Round "where" -TeamRoot $team -OutRoot $inside -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "where" -TeamRoot $team -OutRoot $inside -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard 2>&1
         Assert-Equal -Expected 2 -Actual $LASTEXITCODE -Because "an out root in the checkout is refused: $out"
         Assert-True -Condition (-not (Test-Path -LiteralPath $inside)) -Because "and nothing was created there"
     }
@@ -804,6 +828,252 @@ Test-Case "a retest after the fix is released AND staging was redeployed closes 
     }
 }
 
+# ============================================================================ the staging session
+
+Write-Host ""
+Write-Host "the staging session"
+
+function New-FakeSeed {
+    # A stand-in for scripts\staging\seed.ps1: writes the session file PAGENTOS_FAKE_SESSION_FILE
+    # names with the token PAGENTOS_FAKE_SEED_TOKEN names, and one line per run (with the time)
+    # into PAGENTOS_FAKE_SEED_LOG.
+    param([string]$Dir)
+    $file = Join-Path $Dir "fake-seed.ps1"
+    Write-Utf8 $file @'
+param([string]$ApiBase = "")
+[IO.File]::WriteAllText($env:PAGENTOS_FAKE_SESSION_FILE, ('{"api":"http://127.0.0.1:28001","session_token":"' + $env:PAGENTOS_FAKE_SEED_TOKEN + '"}'))
+[IO.File]::AppendAllText($env:PAGENTOS_FAKE_SEED_LOG, "seed $ApiBase $([datetime]::UtcNow.ToString('o'))`n")
+Start-Sleep -Milliseconds 300
+exit 0
+'@
+    return $file
+}
+
+Test-Case "a scenario step that enrols, rotates or revokes an identity is refused and never sent; the rest of the scenario runs" {
+    # t-d20261006 (2026-10-06): one tester's improvisation that rotates the staging owner
+    # credential turns every other tester's steps into 401 for the rest of the round.
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $log = Join-Path $work "requests.log"
+    $fake = Start-FakeStaging -Port $port -Log $log
+    try {
+        $scenario = Join-Path $work "i.json"
+        Write-Utf8 $scenario ('{"id":"i","family":"kimlik","steps":[' +
+            '{"name":"liste","method":"GET","path":"/v1/watches","expect_status":200},' +
+            '{"name":"oturumu iptal et","method":"POST","path":"/v1/identity/sessions/abc/revoke","expect_status":200},' +
+            '{"name":"kimlik kur","method":"POST","path":"/v1/identity/bootstrap","expect_status":201},' +
+            '{"name":"yeni oturum","method":"POST","path":"/v1/identity/sessions","expect_status":201},' +
+            '{"name":"bu oturumu kapat","method":"DELETE","path":"/v1/identity/sessions/current","expect_status":200},' +
+            '{"name":"panik","method":"POST","url":"http://127.0.0.1:' + $port + '/V1/Identity/panic","expect_status":200},' +
+            '{"name":"cihaz kaydet","method":"POST","path":"/v1/devices/enroll","expect_status":201},' +
+            '{"name":"cihaz iptal","method":"POST","path":"/v1/devices/d1/revoke","expect_status":200},' +
+            '{"name":"kimlik dondur","method":"POST","path":"/v1/owner/credential/rotate","expect_status":200}],' +
+            '"cleanup":[{"name":"temizlikte iptal","method":"POST","path":"/v1/identity/sessions/xyz/revoke"},{"name":"saglik","method":"GET","path":"/v1/system/health"}]}')
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -NoAuth -Card "tj-i" 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the one sent step passed; a refused step is not a failure of staging: $out"
+        $sent = @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_ })
+        Assert-Equal -Expected 0 -Actual @($sent | Where-Object { $_ -match '(?i)/v1/identity|/v1/devices|/rotate' }).Count -Because "no identity request reached staging: $($sent -join '; ')"
+        Assert-True -Condition (@($sent) -contains "GET /v1/watches") -Because "the harmless step was sent: $($sent -join '; ')"
+        Assert-True -Condition (@($sent) -contains "GET /v1/system/health") -Because "the harmless cleanup step was sent: $($sent -join '; ')"
+        $result = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $work "tj-i.result.json") | ConvertFrom-Json
+        Assert-Equal -Expected "passed" -Actual $result.state -Because "nothing sent failed"
+        Assert-Equal -Expected 9 -Actual @($result.refused).Count -Because "eight steps and one cleanup step refused: $($result.refused | ConvertTo-Json -Compress)"
+        Assert-Equal -Expected "refused" -Actual ([string]@($result.refused)[0].state) -Because "each is marked 'refused'"
+        Assert-Equal -Expected 1 -Actual @($result.steps).Count -Because "steps are what was sent"
+        Assert-True -Condition (($out -join " ") -match "REDDED") -Because "a clear refusal is printed: $out"
+        # A ladder of revocations is refused whole, before anything is sent.
+        Write-Utf8 $scenario ('{"id":"i2","family":"kimlik","steps":[],"breaking":{"method":"POST","path":"/v1/identity/sessions/abc/revoke","start":2,"max":4}}')
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -NoAuth -Card "tj-i2" 2>&1
+        Assert-Equal -Expected 2 -Actual $LASTEXITCODE -Because "a ladder aimed at revocation: $out"
+        Assert-Equal -Expected 0 -Actual @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_ -match '(?i)/v1/identity' }).Count -Because "nothing reached staging"
+        # Reading the session is not changing it.
+        Write-Utf8 $scenario ('{"id":"i3","family":"kimlik","steps":[{"name":"oturum oku","method":"GET","path":"/v1/identity/sessions/current","expect_status":401}]}')
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -NoAuth -Card "tj-i3" 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "a GET of the session is allowed: $out"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fake.HasExited) { $fake.Kill() }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a scenario whose session staging no longer accepts is 'environment' (exit 4), not 'failed'; a live session's 401-free failure stays 'failed'" {
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $fake = Start-FakeStaging -Port $port
+    try {
+        $session = Join-Path $work "owner.json"
+        Write-Utf8 $session '{"api":"http://127.0.0.1:28001","session_token":"dead"}'
+        $scenario = Join-Path $work "w.json"
+        Write-Utf8 $scenario '{"id":"w","family":"nobet","steps":[{"name":"nobet kur","method":"POST","path":"/v1/watches","body":{"url":"https://example.com/"},"expect_status":200},{"name":"nobet listesi","method":"GET","path":"/v1/watches","expect_status":200}]}'
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -SessionFile $session -Card "tj-w" 2>&1
+        Assert-Equal -Expected 4 -Actual $LASTEXITCODE -Because "every step 401 on a dead session is the environment: $out"
+        $result = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $work "tj-w.result.json") | ConvertFrom-Json
+        Assert-Equal -Expected "environment" -Actual $result.state -Because "not 'failed'"
+        Assert-True -Condition ([string]$result.environment -match "oturum") -Because "it says why: $($result.environment)"
+        Assert-Equal -Expected 0 -Actual @(Get-TestTeamFailures -Result $result).Count -Because "an environment result forwards nothing"
+        Write-Utf8 $session '{"api":"http://127.0.0.1:28001","session_token":"good"}'
+        Write-Utf8 $scenario '{"id":"b","family":"kirik","steps":[{"name":"kirik","method":"GET","path":"/broken","expect_status":200}]}'
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -SessionFile $session -Card "tj-b" 2>&1
+        Assert-Equal -Expected 1 -Actual $LASTEXITCODE -Because "a live session and a 500 is a failure of staging: $out"
+        # A 401 while the session itself is still accepted is staging's bug (an auth regression).
+        Write-Utf8 $scenario '{"id":"u","family":"yetki","steps":[{"name":"yetkisiz","method":"GET","path":"/unauth","expect_status":200}]}'
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -SessionFile $session -Card "tj-u" 2>&1
+        Assert-Equal -Expected 1 -Actual $LASTEXITCODE -Because "a 401 on a live session stays 'failed': $out"
+        $result = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $work "tj-u.result.json") | ConvertFrom-Json
+        Assert-Equal -Expected "failed" -Actual $result.state -Because "the session probe answered 200"
+        Assert-Equal -Expected 1 -Actual @(Get-TestTeamFailures -Result $result).Count -Because "it is forwarded"
+        # A dead session, but one step failed with a 500 before it: that 500 is staging's bug.
+        Write-Utf8 $session '{"api":"http://127.0.0.1:28001","session_token":"dead"}'
+        Write-Utf8 $scenario '{"id":"m","family":"karma","steps":[{"name":"kirik","method":"GET","path":"/broken","expect_status":200},{"name":"nobet listesi","method":"GET","path":"/v1/watches","expect_status":200}]}'
+        $out = & $powershell -NoProfile -File $runScenario -Scenario $scenario -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -OutDir $work -SessionFile $session -Card "tj-m" 2>&1
+        Assert-Equal -Expected 1 -Actual $LASTEXITCODE -Because "a 500 among the 401s is not the environment: $out"
+        $result = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $work "tj-m.result.json") | ConvertFrom-Json
+        Assert-Equal -Expected "failed" -Actual $result.state -Because "the 500 is forwarded"
+        Assert-True -Condition (@(Get-TestTeamFailures -Result $result).Count -ge 1) -Because "the 500 step is a failure to forward"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fake.HasExited) { $fake.Kill() }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a round seeds the staging session once before the first tester; a seeded session staging answers 401 starts no tester and opens no card" {
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $fakeStaging = Start-FakeStaging -Port $port
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"saglik","scenario":"s.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $seed = New-FakeSeed -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        $env:PAGENTOS_FAKE_SESSION_FILE = Join-Path $work "owner.json"
+        $env:PAGENTOS_FAKE_SEED_LOG = Join-Path $work "seed.log"
+        $env:PAGENTOS_FAKE_SEED_TOKEN = "dead"
+        $posts = Join-Path $work "posts.log"
+        $fakeBoard = Join-Path $work "board.ps1"
+        Write-Utf8 $fakeBoard ("[IO.File]::AppendAllText('$posts', ((@(`$args) -join '|') + [Environment]::NewLine), (New-Object Text.UTF8Encoding(`$false)))")
+        $common = @("-TeamRoot", $team, "-PlanPath", $plan, "-ClaudePath", $powershell, "-ClaudePrefixArguments", "-NoProfile,-File,$fake", "-AssumeFreeGb", "30", "-AssumeGateRunning", "0",
+            "-BoardScript", $fakeBoard, "-BaseUrl", "http://127.0.0.1:$port", "-AllowTestPort", "$port", "-SeedScript", $seed, "-SessionFile", $env:PAGENTOS_FAKE_SESSION_FILE)
+        $out = & $powershell -NoProfile -File $testRound -Round "dead" -OutRoot (Join-Path $work "out") @common 2>&1
+        Assert-Equal -Expected 1 -Actual $LASTEXITCODE -Because "the round refuses to start: $out"
+        Assert-Equal -Expected 1 -Actual @(Get-Content -LiteralPath $env:PAGENTOS_FAKE_SEED_LOG | Where-Object { $_ }).Count -Because "it seeded once"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG).Count -Because "no tester started: $out"
+        $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
+        Assert-Equal -Expected 0 -Actual @($queue.tasks).Count -Because "no card was opened"
+        $notes = [System.IO.File]::ReadAllText($posts, [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($notes -match "oturum") -Because "the board is told why: $notes"
+        Assert-True -Condition (($out -join " ") -match "401") -Because "the console says what staging answered: $out"
+        # The same round with a session staging accepts: seeded once, before the first tester.
+        Remove-Item -LiteralPath $env:PAGENTOS_FAKE_SEED_LOG -Force
+        $env:PAGENTOS_FAKE_SEED_TOKEN = "good"
+        $out = & $powershell -NoProfile -File $testRound -Round "live" -OutRoot (Join-Path $work "out") @common 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round runs: $out"
+        $seeds = @(Get-Content -LiteralPath $env:PAGENTOS_FAKE_SEED_LOG | Where-Object { $_ })
+        Assert-Equal -Expected 1 -Actual @($seeds).Count -Because "one seed for the round, not one per tester"
+        Assert-True -Condition ($seeds[0] -match [regex]::Escape("http://127.0.0.1:$port")) -Because "seeded against the round's staging: $($seeds[0])"
+        $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
+        Assert-Equal -Expected 2 -Actual @($calls).Count -Because "both testers ran: $out"
+        Assert-True -Condition ([datetime]::Parse(($seeds[0] -split " ")[2]) -lt [datetime]::Parse((@($calls)[0] -split " ")[4])) -Because "the seed ran before the first tester"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fakeStaging.HasExited) { $fakeStaging.Kill() }
+        foreach ($name in @("PAGENTOS_FAKE_TESTER_LOG", "PAGENTOS_FAKE_SESSION_FILE", "PAGENTOS_FAKE_SEED_LOG", "PAGENTOS_FAKE_SEED_TOKEN")) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a job whose steps all answer 401 while the round's session is dead is 'environment' and forwards no card" {
+    # t-d20261006: the nöbet job failed every step with 401 (the session revoked by a rotation)
+    # and the round would have forwarded it as a software card.
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $fakeStaging = Start-FakeStaging -Port $port
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"kopuk","scenario":"scripts/testteam/scenarios/watches.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $seed = New-FakeSeed -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        $env:PAGENTOS_FAKE_SESSION_FILE = Join-Path $work "owner.json"
+        $env:PAGENTOS_FAKE_SEED_LOG = Join-Path $work "seed.log"
+        $env:PAGENTOS_FAKE_SEED_TOKEN = "good"
+        $outRoot = Join-Path $work "out"
+        $out = & $powershell -NoProfile -File $testRound -Round "env" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -SeedScript $seed -SessionFile $env:PAGENTOS_FAKE_SESSION_FILE 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG).Count -Because "the tester ran: $out"
+        $cards = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $outRoot "env\cards.json") | ConvertFrom-Json
+        Assert-Equal -Expected "environment" -Actual ([string]@($cards.cards)[0].state) -Because "not failed: $out"
+        Assert-Equal -Expected "" -Actual ([string]@($cards.cards)[0].forwarded_task) -Because "nothing forwarded"
+        $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
+        Assert-Equal -Expected 0 -Actual @($queue.tasks).Count -Because "no software card for a dead session: $out"
+        Assert-True -Condition (($out -join " ") -match "ortam") -Because "the round says it was the environment: $out"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fakeStaging.HasExited) { $fakeStaging.Kill() }
+        foreach ($name in @("PAGENTOS_FAKE_TESTER_LOG", "PAGENTOS_FAKE_SESSION_FILE", "PAGENTOS_FAKE_SEED_LOG", "PAGENTOS_FAKE_SEED_TOKEN")) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a job with a 500 among its 401s on a dead session is forwarded, even when its result says 'environment'" {
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $fakeStaging = Start-FakeStaging -Port $port
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"karma","scenario":"scripts/testteam/scenarios/watches.json"},{"family":"karma-ortam","scenario":"scripts/testteam/scenarios/watches.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $seed = New-FakeSeed -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        $env:PAGENTOS_FAKE_SESSION_FILE = Join-Path $work "owner.json"
+        $env:PAGENTOS_FAKE_SEED_LOG = Join-Path $work "seed.log"
+        $env:PAGENTOS_FAKE_SEED_TOKEN = "good"
+        $outRoot = Join-Path $work "out"
+        $out = & $powershell -NoProfile -File $testRound -Round "mix" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -BaseUrl "http://127.0.0.1:$port" -AllowTestPort $port -SeedScript $seed -SessionFile $env:PAGENTOS_FAKE_SESSION_FILE 2>&1
+        Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
+        Assert-Equal -Expected 2 -Actual @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG).Count -Because "both testers ran: $out"
+        $cards = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $outRoot "mix\cards.json") | ConvertFrom-Json
+        foreach ($card in @($cards.cards)) {
+            Assert-Equal -Expected "failed" -Actual ([string]$card.state) -Because "$($card.family): the 500 is staging's bug, not the environment: $out"
+            Assert-True -Condition ([bool][string]$card.forwarded_task) -Because "$($card.family) is forwarded: $out"
+        }
+        $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
+        Assert-True -Condition (@($queue.tasks).Count -ge 1) -Because "a software card for the 500: $out"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $fakeStaging.HasExited) { $fakeStaging.Kill() }
+        foreach ($name in @("PAGENTOS_FAKE_TESTER_LOG", "PAGENTOS_FAKE_SESSION_FILE", "PAGENTOS_FAKE_SEED_LOG", "PAGENTOS_FAKE_SEED_TOKEN")) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "the tester's role file forbids re-seeding and identity changes in its 'Never anything irreversible' paragraph" {
+    $tester = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\testteam\roles\tester.md"), [System.Text.Encoding]::UTF8)
+    $paragraph = [regex]::Match($tester, '(?s)Never anything irreversible.*?(\r?\n\r?\n|$)').Value
+    Assert-True -Condition ($paragraph -match "seed\.ps1") -Because "it names seed.ps1: $paragraph"
+    Assert-True -Condition ($paragraph -match "(?i)rotat" -and $paragraph -match "(?i)revok" -and $paragraph -match "(?i)enrol") -Because "it names enrol, rotate and revoke: $paragraph"
+    Assert-True -Condition ($paragraph -match "environment") -Because "it says a dead session is the environment: $paragraph"
+}
+
 # ============================================================================ the board
 
 Write-Host ""
@@ -838,7 +1108,7 @@ Test-Case "a round sends its breaking report to the board as test-lead, addresse
         $posts = Join-Path $work "posts.log"
         $fakeBoard = Join-Path $work "board.ps1"
         Write-Utf8 $fakeBoard ("[IO.File]::AppendAllText('$posts', ((@(`$args) -join '|') + [Environment]::NewLine), (New-Object Text.UTF8Encoding(`$false)))")
-        $out = & $powershell -NoProfile -File $testRound -Round "rb" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -BoardScript $fakeBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "rb" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -BoardScript $fakeBoard 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $lines = @([System.IO.File]::ReadAllLines($posts, [System.Text.Encoding]::UTF8) | Where-Object { $_ -match "kopma noktası" })
         Assert-Equal -Expected 1 -Actual @($lines).Count -Because "one breaking report note: $out"
