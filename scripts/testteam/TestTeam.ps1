@@ -239,11 +239,32 @@ function Get-TestTeamFailureTaskId {
     return "test-fail-$family-$hex"
 }
 
+# A scenario family's known code paths: a forwarded card's first area, so the Proje Yöneticisi
+# widens rather than invents (2026-10-06: 19 cards forwarded with no area; seven moved into work
+# as they were and stopped the whole team). A family not named here carries no area.
+$script:TestTeamFamilyAreas = @{
+    "nobet"             = @("services/api/app/watch/")
+    "ev-stoku"          = @("services/api/app/household/")
+    "alarm"             = @("services/api/app/alarms/")
+    "dil-dayanikliligi" = @("services/api/app/voice/understanding/")
+    "yanlis-duyulan"    = @("services/api/app/voice/misheard/")
+    "saglik"            = @("services/api/app/health.py")
+}
+
+function Get-TestTeamFamilyArea {
+    <# The first area of a failure's card: its family's known code paths, or none. #>
+    param([string]$Family)
+    $key = (([string]$Family).ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    if ($script:TestTeamFamilyAreas.ContainsKey($key)) { return [string[]]@($script:TestTeamFamilyAreas[$key]) }
+    return [string[]]@()
+}
+
 function ConvertTo-TestTeamFailureTask {
     <#
     .SYNOPSIS
         One failure as a normal card of the software queue: state 'proposed' (the software
-        Proje Yöneticisi decides and splits it), no area yet, and a goal that reproduces it -
+        Proje Yöneticisi decides and splits it), a first area from the family's known code
+        paths (Get-TestTeamFamilyArea; none for an unknown family), and a goal that reproduces it -
         the steps, the expected, the actual, the scenario file, the screenshot, the staging sha.
     #>
     param([Parameter(Mandatory = $true)]$Failure, [string]$StagingSha = "", [Parameter(Mandatory = $true)][string]$Round, [string]$Now = "")
@@ -268,7 +289,7 @@ function ConvertTo-TestTeamFailureTask {
         title             = ("Test ekibi: {0} - {1}" -f $Failure.family, $Failure.step)
         roadmap_row       = "Repairs and improves itself"
         state             = "proposed"
-        area              = @()
+        area              = @(Get-TestTeamFamilyArea -Family ([string]$Failure.family))
         branch            = ""
         worktree          = ""
         assignee          = ""
