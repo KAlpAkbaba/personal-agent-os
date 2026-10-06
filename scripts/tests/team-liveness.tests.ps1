@@ -427,12 +427,16 @@ Stop-Started
 try { Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction Stop } catch { Write-Host "  (temp folder left: $script:TempRoot)" }
 
 Test-Case "the newest-write walk has a time budget: past it the answer is 'no sign', never a wait (the cycle froze three times inside one walk, 2026-10-06)" {
-    $big = Join-Path $repoRoot "services"
+    # Deterministic: three folders that each take 2 s to read, a 500 ms budget (2026-10-06: a 1 ms
+    # budget on a real tree was met once on a loaded machine - a stopwatch is not an assertion).
+    $tree = New-CaseDir
+    foreach ($d in @("a", "a/b", "a/b/c")) { [void](New-Item -ItemType Directory -Force -Path (Join-Path $tree $d)) }
+    [System.IO.File]::WriteAllText((Join-Path $tree "a/b/c/f.txt"), "x")
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
-    $answer = Get-TeamNewestWrite -Path $big -TimeoutMilliseconds 1
+    $answer = Get-TeamNewestWrite -Path $tree -TimeoutMilliseconds 500 -SlowDirectoryMilliseconds 2000
     Assert-True ($null -eq $answer) "a walk past its budget answers nothing, not a partial time: $answer"
-    Assert-True ($watch.Elapsed.TotalSeconds -lt 10) "a hang guard: it returned in $([Math]::Round($watch.Elapsed.TotalSeconds, 1)) s"
-    Assert-True ($null -ne (Get-TeamNewestWrite -Path $big -TimeoutMilliseconds 120000)) "with room, the same tree has a newest write"
+    Assert-True ($watch.Elapsed.TotalSeconds -lt 30) "a hang guard: it returned in $([Math]::Round($watch.Elapsed.TotalSeconds, 1)) s"
+    Assert-True ($null -ne (Get-TeamNewestWrite -Path $tree -TimeoutMilliseconds 60000)) "with room, the same tree has a newest write"
 }
 
 Write-Host ""
