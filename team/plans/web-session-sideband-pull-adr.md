@@ -49,3 +49,6 @@ da attach'te istemciye gidiyordu. Sahip sekmeyi açık bırakıp sustuğunda bri
   konuşma başlamamış) satır teslim sayılır - `/events` yolunun bugünkü sınırıyla aynı.
 - Testlerde iki eski "canlı bacakta hiç zamanlayıcı yok" iddiası (gone-is-terminal:266,
   session-storm:233) artık canlı bacağın çekiş zamanlayıcısını görür (1).
+- Kural: canlı bacak = 1 zamanlayıcı (15 sn çekiş); yeniden bağlanma ikincisini yığmaz,
+  kapanmış / 410 bacakta 0. İki test bunu `toBe(1)` ile tutar (iki clear kaldırılınca
+  "expected 3 to be 1").
