@@ -277,8 +277,14 @@ foreach ($group in @(Get-TeamMergedGroups -Queue $queue)) {
             Write-Host "waits: $integration is held by $who - their code is on the branch and has not passed; the branch goes onto $Base whole, when they are merged again"
             continue
         }
-        # The gate was red on this very commit and main has not moved past it: the answer is known.
-        if (-not $ClearGateStop -and -not (Test-TeamGateStopped -Records $records) -and
+        # The gate was red on this very commit and main has not moved past it: the answer is known -
+        # unless the red was the environment's (too many clients, Docker down): its steps are run
+        # again on the same sha, once (scripts/lib/TeamGateRerun.ps1).
+        $environmentRerun = $false
+        if (Get-Command -Name Test-TeamGateEnvironmentRerunDue -ErrorAction SilentlyContinue) {
+            $environmentRerun = Test-TeamGateEnvironmentRerunDue -Records $records -Sha $tip -Directory $directory
+        }
+        if (-not $ClearGateStop -and -not (Test-TeamGateStopped -Records $records) -and -not $environmentRerun -and
             (Test-TeamGateAlreadyRed -Records $records -Sha $tip) -and (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $baseAtStart -Of $tip)) {
             Write-Host "waits: $integration - the gate was red on $tip and neither the branch nor $Base has moved; a new commit (or the lead's -ClearGateStop) is gated, not the same one again"
             continue
@@ -610,6 +616,15 @@ function Invoke-BranchIntegration {
     $logFile = [string](Get-TeamProperty -InputObject $Item.Green -Name "log" -Default "")
     # A gate that was green on this very commit is not run again (main could not be moved then).
     $gated = ($null -ne $Item.Green) -and (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $baseSha -Of $tip)
+    # A 'gate A + rerun B' green keeps what it rests on in every record written of it (Complete-GreenGate's too).
+    $rerunMore = @{}
+    $rerunKeys = @("rerun_of", "gate_sha", "gate_log", "rerun_log", "rerun_steps")
+    if ($gated) {
+        foreach ($key in $rerunKeys) {
+            $value = Get-TeamProperty -InputObject $Item.Green -Name $key -Default $null
+            if ($null -ne $value) { $rerunMore[$key] = $value }
+        }
+    }
 
     if (-not $gated) {
         # ---- 2. main into the integration branch, before anything is judged
@@ -855,14 +870,35 @@ function Invoke-BranchIntegration {
             return 6
         }
 
-        # ---- 5. the full gate, in the environment built above
+        # ---- 5. the full gate, in the environment built above - or, after a red gate whose fix
+        # stays inside the red steps' files, only those steps (scripts/lib/TeamGateRerun.ps1)
         $logFile = "$relative/gate-$number.log"
         $logPath = Join-Path $Item.Directory "gate-$number.log"
         $gateScript = if ($GatePath) { $GatePath } else { Join-Path $tree "scripts\quality-gate.ps1" }
-        $ran = Invoke-TeamGate -GatePath $gateScript -WorkingDirectory $tree -LogPath $logPath -TimeoutMinutes $GateMinutes
+        $rerun = $null
+        if (Get-Command -Name Get-TeamGateRerunPlan -ErrorAction SilentlyContinue) {
+            try {
+                $gateText = if (Test-Path -LiteralPath $gateScript) { [System.IO.File]::ReadAllText($gateScript, [System.Text.Encoding]::UTF8) } else { "" }
+                $rerun = Get-TeamGateRerunPlan -RepoRoot $repoRoot -Directory $Item.Directory -Records @(Get-TeamGateRecords -Directory $Item.Directory -Branch $integration) -Sha $candidate -GateText $gateText -Tree $tree
+            }
+            catch { [void]$Outcome.Lines.Add("kısmi yeniden koşu planı okunamadı ($($_.Exception.Message)); tam kapı"); $rerun = $null }
+        }
+        $partial = ($null -ne $rerun) -and ([string]$rerun.Mode -eq "partial")
+        if ($null -ne $rerun -and $null -ne (Get-TeamGateLastRed -Records @(Get-TeamGateRecords -Directory $Item.Directory -Branch $integration))) {
+            [void]$Outcome.Lines.Add("önceki kırmızıdan sonra: " + [string]$rerun.Why)
+        }
+        $gateArguments = if ($partial) { @(Get-TeamGateRerunArguments -Patterns @($rerun.Patterns)) } else { @() }
+        $ran = Invoke-TeamGate -GatePath $gateScript -WorkingDirectory $tree -LogPath $logPath -TimeoutMinutes $GateMinutes -Arguments $gateArguments
         $logText = if (Test-Path -LiteralPath $logPath) { [System.IO.File]::ReadAllText($logPath, [System.Text.Encoding]::UTF8) } else { "" }
         $gate = Read-TeamGateLog -Text $logText -ExitCode $ran.ExitCode -TimedOut $ran.TimedOut
-        [void]$Outcome.Lines.Add("kapı: $candidate üzerinde, $($ran.Seconds) sn, çıkış kodu $($ran.ExitCode); kayıt: $logFile")
+        if ($partial) {
+            # A slice is green only when every step it was asked for ran and passed.
+            $slice = Test-TeamGateRerunLog -Text $logText -ExitCode $ran.ExitCode -TimedOut $ran.TimedOut -Steps @($rerun.Steps)
+            if ($gate.Green -and -not $slice.Ok) { $gate = [pscustomobject]@{ Green = $false; FailedSteps = @($gate.FailedSteps); FirstFailure = [string]$gate.FirstFailure; FailureText = [string]$gate.FailureText; Why = "kısmi yeniden koşu: " + $slice.Why } }
+            $rerunMore = @{ rerun_of = [int]$rerun.FromNumber; gate_sha = [string]$rerun.From; gate_log = [string]$rerun.FromLog; rerun_log = $logFile; rerun_steps = @($rerun.Steps) }
+            [void]$Outcome.Lines.Add("kısmi yeniden koşu (kapı $($rerun.From) + yeniden koşu $candidate): $($ran.Seconds) sn, çıkış kodu $($ran.ExitCode); kayıt: $logFile")
+        }
+        else { [void]$Outcome.Lines.Add("kapı: $candidate üzerinde, $($ran.Seconds) sn, çıkış kodu $($ran.ExitCode); kayıt: $logFile") }
 
         if (-not $gate.Green) {
             # ---- 6 (red). Nothing reaches main.
@@ -897,10 +933,13 @@ function Invoke-BranchIntegration {
             # The record carries the verdict, marked NOT applied: it is written before the queue is, and
             # if the queue's write fails (a task changed in the store during the gate's hour) the next
             # run writes the verdict from here instead of waiting in silence on a commit "already judged".
-            $stopped = Add-Strike -Item $Item -Number $number -Result "red" -More @{
+            $redMore = @{
                 sha = $candidate; steps = @($gate.FailedSteps); first = [string]$gate.FirstFailure; log = $logFile
                 applied = $false; blamed = @($blamed); reason = $reason; waits = $waitsFor
             }
+            # A partial rerun's red says so: the next red runs the full gate (never two reruns in a row).
+            foreach ($key in @($rerunMore.Keys)) { $redMore[$key] = $rerunMore[$key] }
+            $stopped = Add-Strike -Item $Item -Number $number -Result "red" -More $redMore
             Set-GateVerdict -Tasks $tasks -Reason $reason -WaitsFor $waitsFor -Blamed $blamed -Stopped $stopped
             $Item.Verdict = $number
             $Outcome.Result = "kapı kırmızı"
@@ -915,14 +954,24 @@ function Invoke-BranchIntegration {
             }
             return 6
         }
+        # A partial rerun's green record names the FULL gate's log (A's, red) as its `log`, and its own
+        # as `rerun_log`: a release step that does not know the chain finds a FAIL log and refuses;
+        # one that does checks it (Test-TeamGateRerunChain).
+        if ($partial) { $logFile = [string]$rerun.FromLog }
         # Green is recorded BEFORE main is touched: a run that dies here is finished by the next one.
-        Write-TeamGateRecord -Directory $Item.Directory -Number $number -Record ([pscustomobject]@{ n = $number; branch = $integration; at = (Get-TeamTimestamp); result = "green"; sha = $candidate; main = ""; log = $logFile })
+        $greenRecord = [ordered]@{ n = $number; branch = $integration; at = (Get-TeamTimestamp); result = "green"; sha = $candidate; main = ""; log = $logFile }
+        foreach ($key in @($rerunMore.Keys)) { $greenRecord[$key] = $rerunMore[$key] }
+        Write-TeamGateRecord -Directory $Item.Directory -Number $number -Record ([pscustomobject]$greenRecord)
     }
     else {
         $number = [int](Get-TeamProperty -InputObject $Item.Green -Name "n" -Default $number)
         [void]$Outcome.Lines.Add("kapı $candidate üzerinde daha önce yeşildi ($logFile); yeniden koşulmadı")
     }
-    return (Complete-GreenGate -Item $Item -Outcome $Outcome -Tree $tree -Tasks $tasks -Candidate $candidate -Number $number -LogFile $logFile -Gated $integration)
+    $rerunNote = ""
+    if ($rerunMore.Count -gt 0) {
+        $rerunNote = "kapı $($rerunMore['gate_sha']) + yeniden koşu $candidate (adımlar: " + (@($rerunMore['rerun_steps']) -join "; ") + "; kayıt: $($rerunMore['rerun_log']))"
+    }
+    return (Complete-GreenGate -Item $Item -Outcome $Outcome -Tree $tree -Tasks $tasks -Candidate $candidate -Number $number -LogFile $logFile -Gated $integration -Note $rerunNote -More $rerunMore)
 }
 
 function Invoke-RebuiltGate {
