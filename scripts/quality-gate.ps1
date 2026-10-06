@@ -434,18 +434,31 @@ Invoke-Step "Other services lint (ruff)" {
 # pytest-xdist now, with a worker count from the machine; every test still runs and a failure
 # is still a failure. Without xdist (or on a small or full machine) it runs serially as before.
 # PAGENTOS_GATE_UNIT_WORKERS sets the count by hand (1 = serial).
+function Get-GateUnitMemoryFloorGb {
+  # The memory the machine keeps for everything else: team/cycle-settings.json
+  # test_memory_floor_gb (1..64, the test queue's own floor), 8 when missing or malformed.
+  param([string]$SettingsPath)
+  try {
+    $value = (Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json).test_memory_floor_gb
+    if ($null -ne $value -and [string]$value -match '^\d+$' -and [int]$value -ge 1 -and [int]$value -le 64) { return [int]$value }
+  } catch { }
+  return 8
+}
+
 function Get-GateUnitWorkerCount {
-  # 0 = serial. min(8, cores - 2), lowered to what the free memory above the floor holds: the
-  # floor is what the machine keeps for everything else (cycle-settings test_memory_floor_gb),
-  # 2 GB what one worker may grow to over its share of the suite.
-  param([int]$Cores, [int64]$FreeBytes, [bool]$XdistPresent, [string]$Override = "")
+  # 0 = serial. min(8, cores - 2), lowered to what the free memory above the floor holds.
+  # 2 GB a worker: measured 2026-10-06 on 28 cores - one worker is ~1.07 GB once it has
+  # collected the suite, and the whole tree peaked at 14.0 GB with 8 workers (1.75 a worker)
+  # and 10.9 GB with 12. Twelve workers were not faster than eight on the shared machine
+  # (1567 s against 1470 s), so eight stays the cap.
+  param([int]$Cores, [int64]$FreeBytes, [bool]$XdistPresent, [string]$Override = "", [int]$FloorGb = 8)
   if (-not $XdistPresent) { return 0 }
   if ($Override -match '^\s*\d+\s*$') {
     $n = [int]$Override
     if ($n -lt 2) { return 0 }
     return $n
   }
-  $max = 8; $floorGb = 8; $workerGb = 2
+  $max = 8; $floorGb = $FloorGb; $workerGb = 2
   $n = [Math]::Min($max, $Cores - 2)
   $byMemory = [int][Math]::Floor(($FreeBytes - [int64]$floorGb * 1GB) / ([int64]$workerGb * 1GB))
   $n = [Math]::Min($n, $byMemory)
@@ -461,8 +474,9 @@ Invoke-Step "API unit tests" -Kinds heavy {
     $xdist = ($LASTEXITCODE -eq 0)
     $freeBytes = [int64]0
     try { $freeBytes = [int64](Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory * 1KB } catch { $freeBytes = [int64]0 }
-    $workers = Get-GateUnitWorkerCount -Cores ([Environment]::ProcessorCount) -FreeBytes $freeBytes -XdistPresent $xdist -Override ([string]$env:PAGENTOS_GATE_UNIT_WORKERS)
-    $machine = "{0} cores, {1:0.0} GB free" -f [Environment]::ProcessorCount, ($freeBytes / 1GB)
+    $floorGb = Get-GateUnitMemoryFloorGb -SettingsPath (Join-Path $repoRoot "team\cycle-settings.json")
+    $workers = Get-GateUnitWorkerCount -Cores ([Environment]::ProcessorCount) -FreeBytes $freeBytes -XdistPresent $xdist -Override ([string]$env:PAGENTOS_GATE_UNIT_WORKERS) -FloorGb $floorGb
+    $machine = "{0} cores, {1:0.0} GB free, {2} GB floor" -f [Environment]::ProcessorCount, ($freeBytes / 1GB), $floorGb
     if ($workers -ge 2) {
       Write-Host "API unit tests: $workers xdist workers ($machine)"
       & $uv run pytest tests/unit -q -n $workers --dist load

@@ -123,6 +123,19 @@ Test-Case "1. the worker count: min(8, cores-2), lowered by memory above the flo
     }
 }
 
+Test-Case "1b. the memory floor comes from team/cycle-settings.json test_memory_floor_gb (one copy, the test queue's), 8 when missing or malformed" {
+    Import-GateFunction "Get-GateUnitMemoryFloorGb"
+    Import-GateFunction "Get-GateUnitWorkerCount"
+    $settings = Join-Path $sandbox "cycle-settings.json"
+    foreach ($r in @(@('{"test_memory_floor_gb": 12}', 12), @('{"test_memory_floor_gb": 0}', 8), @('{"test_memory_floor_gb": "x"}', 8), @('{}', 8), @('not json', 8))) {
+        [System.IO.File]::WriteAllText($settings, $r[0])
+        Assert-Equal $r[1] (Get-GateUnitMemoryFloorGb -SettingsPath $settings) ("settings " + $r[0])
+    }
+    Assert-Equal 8 (Get-GateUnitMemoryFloorGb -SettingsPath (Join-Path $sandbox "missing.json")) "a missing file"
+    Assert-Equal 4 (Get-GateUnitWorkerCount -Cores 28 -FreeBytes ([int64]20 * 1GB) -XdistPresent $true -FloorGb 12) "(20 GB free - 12 GB floor) / 2 GB a worker = 4"
+    Assert-Equal 6 (Get-GateUnitWorkerCount -Cores 28 -FreeBytes ([int64]20 * 1GB) -XdistPresent $true -FloorGb 8) "(20 - 8) / 2 = 6"
+}
+
 Test-Case "2. the real gate with xdist present calls pytest with -n <workers> on tests/unit" {
     $run = Invoke-GateUnitStep -XdistExit 0 -PytestExit 0 -Workers "3"
     Assert-Equal 0 $run.Code ("the gate passes; output:`n" + ($run.Out -join "`n"))
