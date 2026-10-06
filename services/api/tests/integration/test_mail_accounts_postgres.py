@@ -153,7 +153,8 @@ def test_the_chain_has_one_head_and_0068_follows_the_base_tip() -> None:
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(_alembic())
-    assert script.get_heads() == ["0068_mail_accounts"]
+    # One head (the conversation tables follow 0068 since the 2026-10-06 integration).
+    assert len(script.get_heads()) == 1
     assert script.get_revision("0068_mail_accounts").down_revision == BEFORE
 
 

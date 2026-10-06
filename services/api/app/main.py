@@ -49,6 +49,8 @@ from app.calendar.routes import router as calendar_router
 from app.calendar.service import CalendarService
 from app.calendar.syncer import CalendarSyncer
 from app.config import Settings, get_settings
+from app.conversations.routes import router as conversations_router
+from app.conversations.service import LiveConversations
 from app.creative.imaging import build_image_provider
 from app.creative.routes import router as creative_router
 from app.creative.service import CreativeService
@@ -162,6 +164,7 @@ from app.telephony.service import build_owner_caller
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
+from app.voice.crypto import ProfileCipher
 from app.voice.intent_router import (
     AnthropicIntentModel,
     CompositeIntentRouter,
@@ -917,6 +920,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.misheard_purge = misheard_purge
     app.state.watch_runner = watch_runner
     app.state.watch_purge = watch_purge
+    # conversation-transcripts: the voice groups of the open conversations live in memory
+    # only; a named, consented person's profile is sealed with the voice-profile secret.
+    app.state.conversation_live = LiveConversations()
+    app.state.conversation_cipher = ProfileCipher(settings.voice_profile_secret)
     app.state.experience_scheduler = experience_scheduler
     app.state.mail_poller = mail_poller
     app.state.calendar_syncer = calendar_syncer
@@ -1095,6 +1102,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # one-time call audio Twilio fetches (the token is the authority).
     app.include_router(telephony_router)
     app.include_router(telephony_audio_router)
+    # conversation-transcripts: conversations as text (/v1/conversations).
+    app.include_router(conversations_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
