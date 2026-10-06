@@ -20,6 +20,7 @@ import {
   type SeatId,
   type SeatState,
 } from "./officeApi";
+import { type MeasuredAgent, seatLiveness } from "./officeLiveness";
 import { type Mood, moodOf } from "./officeMood";
 
 export const REPORT_LINE_CAP = 40;
@@ -256,19 +257,35 @@ export type PanelProgress = {
   percent: number;
   label: string;
   marks: { text: string; done: boolean }[];
+  /**
+   * The run's last sign of work (the cycle's last_activity_at: a write, output, CPU), shown first;
+   * "—" when the cycle measured none. The owner, 2026-10-06: the commit time alone made working
+   * seats look hours idle.
+   */
+  movement: string;
+  /** The newest commit on the task branch, shown smaller; null when there is none. */
   lastChange: string | null;
+  /** An inspector never commits: the commit is the worker's and is said so. */
+  changeLabel: "Son kayıt" | "Çalışanın son kaydı";
+  inspecting: boolean;
+  /** Today's "takılmış olabilir - N dk iz yok" when the run reached the cycle's bound, else null. */
+  stuck: string | null;
 };
+
+function minutesAgo(iso: unknown, now: Date): string | null {
+  if (typeof iso !== "string" || !iso) return null;
+  const minutes = Math.max(0, Math.round((now.getTime() - Date.parse(iso)) / 60000));
+  return Number.isNaN(minutes) ? null : minutes < 1 ? "az önce" : `${minutes} dk önce`;
+}
 
 /** The run's measured progress in the owner's words; null without a measurement or an area. */
 export function panelProgress(agent: OfficeAgent, now: Date = new Date()): PanelProgress | null {
   const p = agent.progress;
   if (agent.state !== "working" || !p || p.area_total <= 0) return null;
   const percent = Math.min(100, Math.round((100 * p.area_touched) / p.area_total));
-  let lastChange: string | null = null;
-  if (p.last_change_at) {
-    const minutes = Math.max(0, Math.round((now.getTime() - Date.parse(p.last_change_at)) / 60000));
-    lastChange = Number.isNaN(minutes) ? null : minutes < 1 ? "az önce" : `${minutes} dk önce`;
-  }
+  const measured = agent as MeasuredAgent & { last_activity_at?: unknown };
+  const inspecting = modelRole(agent) === "inspector";
+  const liveness = seatLiveness(measured, undefined);
   return {
     percent,
     label: `Kartın dosyalarının %${percent}'i değişti (${p.area_touched}/${p.area_total})`,
@@ -277,7 +294,11 @@ export function panelProgress(agent: OfficeAgent, now: Date = new Date()): Panel
       { text: "Kod değişti", done: p.area_touched > 0 },
       { text: "ADR taslağı", done: p.adr_draft },
     ],
-    lastChange,
+    movement: minutesAgo(measured.last_activity_at, now) ?? "—",
+    lastChange: minutesAgo(p.last_change_at, now),
+    changeLabel: inspecting ? "Çalışanın son kaydı" : "Son kayıt",
+    inspecting,
+    stuck: liveness?.kind === "stuck" ? liveness.label : null,
   };
 }
 
@@ -424,7 +445,7 @@ export function selectSeat(current: string | null, clicked: string): string | nu
   return current === clicked ? null : clicked;
 }
 
-export function buildPanel(view: OfficeView, seat: string): Panel | null {
+export function buildPanel(view: OfficeView, seat: string, now: Date = new Date()): Panel | null {
   const agent = view.agents.find((a) => a.seat === seat);
   if (!agent) return null;
   const drawn = drawSeat(agent, view.approvals.length);
@@ -461,7 +482,7 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
     sha: task?.sha ? task.sha.slice(0, SHA_SHORT) : null,
     shaFull: task?.sha ?? null,
     model: panelModel(view, agent),
-    progress: panelProgress(agent),
+    progress: panelProgress(agent, now),
   };
 }
 
