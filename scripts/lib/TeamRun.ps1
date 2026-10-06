@@ -20,6 +20,10 @@
 
 Set-StrictMode -Version Latest
 
+# The migration rechain rule Merge-TeamBranch applies (pure; loaded beside this file when it is there).
+$teamMigrationChain = Join-Path $PSScriptRoot "TeamMigrationChain.ps1"
+if (Test-Path -LiteralPath $teamMigrationChain) { . $teamMigrationChain }
+
 function Get-TeamGit {
     $command = Get-Command "git.exe" -ErrorAction SilentlyContinue
     if ($null -ne $command -and $command.Source) { return $command.Source }
@@ -114,27 +118,141 @@ function Merge-TeamBranch {
     .DESCRIPTION
         A branch that is already merged is reported as merged. A conflict is aborted, the
         integration branch is left as it was, and the answer says so: the task goes back.
+        A clean merge that adds alembic version files is put on the integration tip
+        (Invoke-TeamMergeRechain); a chain that cannot be made one-headed is taken back the
+        same way, Detail "göç zinciri: <neden>".
     #>
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$CycleId,
         [Parameter(Mandatory = $true)][string]$Branch,
-        [string]$Base = "main"
+        [string]$Base = "main",
+        [string]$UvPath = "",
+        # The one-head check in place of uv+pytest (the tests' sandboxes have no services/api):
+        # called with the integration worktree's path, answers Success and Output.
+        [scriptblock]$MigrationCheck = $null
     )
     $integration = "integrate/$CycleId"
     $tree = New-TeamWorktree -RepoRoot $RepoRoot -Branch $integration -Base $Base
     $ancestor = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge-base", "--is-ancestor", $Branch, "HEAD")
     if ($ancestor.ExitCode -eq 0) {
-        return [pscustomobject]@{ Merged = $true; Already = $true; Conflict = $false; Integration = $integration; Detail = "" }
+        return [pscustomobject]@{ Merged = $true; Already = $true; Conflict = $false; Integration = $integration; Detail = ""; Rechained = @() }
     }
     $message = "merge: $Branch into $integration"
+    $before = (Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("rev-parse", "HEAD")).StdOut.Trim()
     $merge = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--no-ff", "-m", $message, $Branch)
     if ($merge.Success) {
-        return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; Integration = $integration; Detail = "" }
+        $chain = Invoke-TeamMergeRechain -TreePath $tree.Path -Branch $Branch -Base $Base -Message $message `
+            -UvPath $UvPath -MigrationCheck $MigrationCheck
+        if ($chain.Stop) {
+            # Taken back to where it was: the task branch never moved, the integration branch is unchanged.
+            [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("reset", "--hard", "--quiet", $before))
+            return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = ("göç zinciri: " + $chain.Reason); Rechained = @() }
+        }
+        return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; Integration = $integration; Detail = $chain.Detail; Rechained = @($chain.Rechained) }
     }
     [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--abort"))
     $detail = ($merge.StdOut + "`n" + $merge.StdErr).Trim()
-    return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail }
+    return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail; Rechained = @() }
+}
+
+function Resolve-TeamUvPath {
+    <# uv for the chain check: given, on PATH, or in its two install places (the spawned shell's PATH is not to be trusted). #>
+    param([string]$Given = "")
+    if ($Given) { return $Given }
+    $command = Get-Command "uv.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $command -and $command.Source) { return $command.Source }
+    foreach ($candidate in @("$env:USERPROFILE\.local\bin\uv.exe", "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe")) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return "uv.exe"
+}
+
+function Invoke-TeamMergeRechain {
+    <#
+    .SYNOPSIS
+        After a clean --no-ff merge: put the branch's NEW migrations on the integration tip
+        (TeamMigrationChain.ps1's plan), inside the merge commit itself, and run the one-head tests.
+
+    .DESCRIPTION
+        Returns Stop/Reason (the caller resets the merge away), Rechained (the revision moves) and
+        Detail (a Turkish line). A branch that adds no version file is answered at once, as before.
+        The rewrite is AMENDED into the merge: HEAD stays one merge commit whose second parent is
+        the task branch's tip, so Undo-TeamMerge and the "already merged" check work unchanged.
+        The task branch itself (refs/heads/<branch>) is never written. The Postgres suite is not run
+        here (the merge holds the team lock; the gate runs tests/integration).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$TreePath,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [Parameter(Mandatory = $true)][string]$Base,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [string]$UvPath = "",
+        [scriptblock]$MigrationCheck = $null
+    )
+    $nothing = [pscustomobject]@{ Stop = $false; Reason = ""; Rechained = @(); Detail = "" }
+    $added = Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("diff", "--name-only", "--diff-filter=A", "$Base...$Branch")
+    if (-not $added.Success) { return [pscustomobject]@{ Stop = $true; Reason = "git diff okunamadı: $($added.StdErr.Trim())"; Rechained = @(); Detail = "" } }
+    $addedPaths = @($added.StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and ($_ -match '(^|/)alembic/versions/[^/]+\.py$') })
+    if ($addedPaths.Count -eq 0) { return $nothing }
+    if (-not (Get-Command Get-TeamMigrationChainPlan -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ Stop = $true; Reason = "TeamMigrationChain.ps1 yüklenmedi"; Rechained = @(); Detail = "" }
+    }
+
+    $readText = { param($relative) [System.IO.File]::ReadAllText((Join-Path $TreePath ($relative -replace '/', '\'))) }
+    $inBase = @((Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("ls-tree", "-r", "--name-only", $Base)).StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $baseSet = New-Object 'System.Collections.Generic.HashSet[string]' (, [string[]]$inBase)
+    $folders = @($addedPaths | ForEach-Object { $_.Substring(0, $_.LastIndexOf('/') + 1) } | Select-Object -Unique)
+    $headFiles = @((Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("ls-tree", "-r", "--name-only", "HEAD")).StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $existing = @()
+    foreach ($path in $headFiles) {
+        if ($addedPaths -contains $path) { continue }
+        if (-not ($path -match '(^|/)alembic/versions/[^/]+\.py$')) { continue }
+        if ($folders -notcontains $path.Substring(0, $path.LastIndexOf('/') + 1)) { continue }
+        $existing += [pscustomobject]@{ Path = $path; Text = (& $readText $path); InMain = $baseSet.Contains($path) }
+    }
+    $new = @($addedPaths | ForEach-Object { [pscustomobject]@{ Path = $_; Text = (& $readText $_); InBase = $baseSet.Contains($_) } })
+    $changed = Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("diff", "--name-only", "--diff-filter=AM", "$Base...$Branch")
+    $tests = @($changed.StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -like "services/api/tests/*" } |
+        ForEach-Object { [pscustomobject]@{ Path = $_; Text = (& $readText $_) } })
+
+    $plan = Get-TeamMigrationChainPlan -Existing $existing -New $new -ChangedTests $tests
+    if ($plan.Action -eq "stop") { return [pscustomobject]@{ Stop = $true; Reason = $plan.Reason; Rechained = @(); Detail = "" } }
+
+    $rechained = @()
+    if ($plan.Action -eq "rechain") {
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        foreach ($rename in @($plan.Renames)) {
+            $from = Join-Path $TreePath ($rename.OldPath -replace '/', '\')
+            Remove-Item -LiteralPath $from -Force
+            [System.IO.File]::WriteAllText((Join-Path $TreePath ($rename.NewPath -replace '/', '\')), [string]$rename.Text, $utf8)
+            $rechained += [pscustomobject]@{ OldPath = $rename.OldPath; NewPath = $rename.NewPath; OldRevision = $rename.OldRevision; NewRevision = $rename.NewRevision; NewDown = $rename.NewDown }
+        }
+        foreach ($test in @($plan.TestFiles)) {
+            [System.IO.File]::WriteAllText((Join-Path $TreePath ($test.Path -replace '/', '\')), [string]$test.Text, $utf8)
+        }
+        $moves = (@($rechained | ForEach-Object { "$($_.OldRevision) -> $($_.NewRevision)" }) -join ", ")
+        $add = Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("add", "-A")
+        $amend = Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("commit", "--amend", "--quiet", "-m", "$Message (migration rechained: $moves on $($plan.Tip))")
+        if (-not $add.Success -or -not $amend.Success) {
+            return [pscustomobject]@{ Stop = $true; Reason = "yeniden zincirleme işlenemedi: $($amend.StdErr.Trim())"; Rechained = @(); Detail = "" }
+        }
+    }
+
+    # The one-head tests, on the merged tree (seconds; no slot).
+    if ($null -ne $MigrationCheck) { $check = & $MigrationCheck $TreePath }
+    else {
+        $result = Invoke-NativeProcess -FilePath (Resolve-TeamUvPath -Given $UvPath) -WorkingDirectory (Join-Path $TreePath "services\api") -TimeoutSeconds 900 `
+            -Arguments @("run", "pytest", "tests/unit/test_migration_model_agreement.py", "tests/unit/test_migration_compatibility.py", "-q")
+        $check = [pscustomobject]@{ Success = [bool]$result.Success; Output = ($result.StdOut + "`n" + $result.StdErr) }
+    }
+    if (-not [bool]$check.Success) {
+        $tail = (@(([string]$check.Output) -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 3) -join " | "
+        return [pscustomobject]@{ Stop = $true; Reason = "tek uç testi kırmızı: $tail"; Rechained = @(); Detail = "" }
+    }
+    if ($rechained.Count -eq 0) { return $nothing }
+    $detail = "göç zinciri yeniden kuruldu (uç $($plan.Tip)): " + (@($rechained | ForEach-Object { "$($_.OldRevision) -> $($_.NewRevision)" }) -join ", ")
+    return [pscustomobject]@{ Stop = $false; Reason = ""; Rechained = @($rechained); Detail = $detail }
 }
 
 function Undo-TeamMerge {

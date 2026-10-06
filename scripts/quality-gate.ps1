@@ -606,6 +606,14 @@ if (-not $Fast) {
     Assert-ExitCode "team-integrate tests"
   }
 
+  Invoke-Step "Agent team migration rechain on merge (PS5.1 + git sandbox, no model)" {
+    # migration-rechain-on-merge: Merge-TeamBranch puts a branch's new alembic migrations on the integration tip.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-migration-chain.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-migration-chain tests"
+  }
+
   Invoke-Step "Agent team board client (PS5.1, fake board, no model)" {
     # The team's board (the owner's idea, 2026-10-03): scripts/team/board.ps1 posts and reads
     # notes against a fake board on 127.0.0.1; an unreachable board is a warning and exit 0.

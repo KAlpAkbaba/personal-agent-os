@@ -1279,7 +1279,7 @@ function New-Sandbox {
     foreach ($folder in @("scripts\lib", "scripts\team", "scripts\tests\lib", ".claude\agents", "team", "src\area")) {
         [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $folder))
     }
-    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamArea.ps1")) {
+    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "TeamMigrationChain.ps1", "HttpJson.ps1", "TeamArea.ps1")) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\$name") -Destination (Join-Path $root "scripts\lib\$name")
     }
     Copy-Item -Path (Join-Path $repoRoot "scripts\team\*.ps1") -Destination (Join-Path $root "scripts\team")
@@ -2663,6 +2663,34 @@ try {
         Assert-Equal -Expected 0 -Actual $clean.ExitCode -Because ($clean.StdOut + $clean.StdErr)
         Assert-True -Condition (-not (Test-Path -LiteralPath $tree)) -Because "the worktree is gone"
         Assert-True -Condition (Test-TeamBranch -RepoRoot $root -Branch "team/c1/worker-task-one") -Because "the branch is kept"
+    }
+
+    Test-Case "a merge the migration chain stops goes back with the chain's reason written beside 'entegrasyon dalında çakışma'" {
+        # migration-rechain-on-merge: the reason used to be the bare words; the Danışman had to find out why.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area", "services/api/alembic/versions")))
+        $versions = "services\api\alembic\versions"
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $versions))
+        $migration = { param($revision, $down, $table)
+            $parent = if ($down) { '"' + $down + '"' } else { "None" }
+            "revision: str = `"$revision`"`ndown_revision: str | None = $parent`n`ndef upgrade() -> None:`n    op.create_table(`"$table`")`n" }
+        Set-Content -LiteralPath (Join-Path $root "$versions\20261003_0066_watches.py") -Value (& $migration "0066_watches" "" "watches") -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $root -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "main at 0066_watches"))
+        foreach ($pair in @(@("team/c1/worker-book", "20261004_0067_people_book", "0067_people_book"), @("team/c1/worker-task-one", "20261005_0067_persons_too", "0067_persons_too"))) {
+            [void](Invoke-SandboxGit -Root $root -Arguments @("checkout", "-q", "-b", $pair[0], "main"))
+            Set-Content -LiteralPath (Join-Path $root "$versions\$($pair[1]).py") -Value (& $migration $pair[2] "0066_watches" "persons") -Encoding ASCII
+            [void](Invoke-SandboxGit -Root $root -Arguments @("add", "-A"))
+            [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "migration $($pair[2])"))
+            [void](Invoke-SandboxGit -Root $root -Arguments @("checkout", "-q", "main"))
+        }
+        $book = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-book" -Base "main" -MigrationCheck { param($tree) [pscustomobject]@{ Success = $true; Output = "" } }
+        Assert-True -Condition $book.Merged -Because "the first migration is on the integration branch: $($book.Detail)"
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        # Returned, run again in the same cycle, stopped again by the same chain: stopped after two.
+        Assert-Equal -Expected "stopped" -Actual $task.state -Because ($run.Report)
+        Assert-Equal -Expected "entegrasyon dalında çakışma: göç zinciri: aynı tablo: persons (20261005_0067_persons_too.py, 20261004_0067_people_book.py)" -Actual ([string]$task.reason) -Because "the reason is written"
     }
 
     Test-Case "a conflict leaves the integration branch as it was and says which branch" {

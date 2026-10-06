@@ -1776,6 +1776,7 @@ try {
                         $freshMerge = -not [bool]$merge.Already
                         Set-TeamProperty -InputObject $task -Name "state" -Value "merged"
                         Set-TeamProperty -InputObject $task -Name "integration_branch" -Value $merge.Integration
+                        if (@($merge.Rechained).Count -gt 0) { Add-CycleNote -List "risks" -Text "$($task.id): $($merge.Detail)" }
                     }
                     else {
                         $script:cycle.conflicts = [int]$script:cycle.conflicts + 1
@@ -1783,7 +1784,9 @@ try {
                         $back = Get-TeamStateAfterInspection -Task $task -Verdict "RETURN"
                         Set-TeamProperty -InputObject $task -Name "returns" -Value $back.Returns
                         Set-TeamProperty -InputObject $task -Name "state" -Value $back.State
-                        Set-TeamProperty -InputObject $task -Name "reason" -Value "entegrasyon dalında çakışma"
+                        $why = "entegrasyon dalında çakışma"
+                        if ($merge.Detail) { $why += ": " + ((([string]$merge.Detail) -replace '\s+', ' ').Trim() | ForEach-Object { if ($_.Length -gt 300) { $_.Substring(0, 300) } else { $_ } }) }
+                        Set-TeamProperty -InputObject $task -Name "reason" -Value $why
                     }
                 }
                 else {

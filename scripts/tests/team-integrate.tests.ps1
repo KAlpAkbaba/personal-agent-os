@@ -644,7 +644,7 @@ function New-Sandbox {
         [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $folder))
     }
     [void](New-Item -ItemType Directory -Force -Path $tools)
-    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamIntegrate.ps1")) {
+    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "TeamMigrationChain.ps1", "HttpJson.ps1", "TeamIntegrate.ps1")) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\$name") -Destination (Join-Path $root "scripts\lib\$name")
     }
     Copy-Item -Path (Join-Path $repoRoot "scripts\team\*.ps1") -Destination (Join-Path $root "scripts\team")
