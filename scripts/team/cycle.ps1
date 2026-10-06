@@ -480,7 +480,15 @@ function Start-CycleTestRound {
     $arguments = @("-NoProfile", "-File", "`"$script`"", "-Round", $round, "-TeamRoot", "`"$TeamRoot`"", "-ClaudePath", "`"$ClaudePath`"")
     if ($useApi) { $arguments += @("-QueueUrl", $QueueUrl, "-QueueToken", "`"$QueueToken`"") }
     $log = Join-Path $cycleDir "test-round.log"
+    # The board's address, as the cycle's own runs get it (test-round-board-address): in API mode
+    # the queue URL and the token file's PATH, in file mode neither. Start-Process has no
+    # environment of its own in PowerShell 5.1: the child inherits this process', so the two are
+    # set for the start and put back after it.
+    $boardAddress = @{ PAGENTOS_TEAM_URL = $(if ($useApi) { $QueueUrl } else { $null }); PAGENTOS_TEAM_TOKEN_FILE = $(if ($useApi) { $QueueToken } else { $null }) }
+    $inherited = @{}
+    foreach ($name in $boardAddress.Keys) { $inherited[$name] = [Environment]::GetEnvironmentVariable($name) }
     try {
+        foreach ($name in $boardAddress.Keys) { [Environment]::SetEnvironmentVariable($name, $boardAddress[$name]) }
         $process = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList $arguments -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput $log -RedirectStandardError (Join-Path $cycleDir "test-round.err.log")
         Write-Host "test ekibi turu $round yazılım ekibinin yanında başladı (pid $($process.Id)); yazılım koltukları değişmedi"
@@ -489,6 +497,9 @@ function Start-CycleTestRound {
     catch {
         Add-CycleNote -List "risks" -Text "test ekibi turu başlamadı: $($_.Exception.Message -replace '\s+', ' ')"
         return $null
+    }
+    finally {
+        foreach ($name in $inherited.Keys) { [Environment]::SetEnvironmentVariable($name, $inherited[$name]) }
     }
 }
 

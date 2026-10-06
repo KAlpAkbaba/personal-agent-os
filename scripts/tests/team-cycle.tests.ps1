@@ -2983,6 +2983,47 @@ try {
         Assert-True -Condition ($line -match "worker@1" -and $line -match "inspector@-" -and $line -notmatch "worker@worker|@inspector") -Because "a worker's number, no seat for the inspector: $line"
     }
 
+    Test-Case "the test team's round is told the board's address too: the queue URL and the token file's path in API mode, neither in file mode" {
+        # test-round-board-address (2026-10-06): every round printed 'pano: UYARI: ... panonun adresi
+        # verilmedi' - the round was started without PAGENTOS_TEAM_URL / PAGENTOS_TEAM_TOKEN_FILE, so
+        # the test seats never posted and the Ofis showed them idle while they worked.
+        $saved = @{}; foreach ($name in @("PAGENTOS_TEAM_URL", "PAGENTOS_TEAM_TOKEN_FILE")) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $null) }
+            $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"))
+            $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+            $marker = Join-Path $root "round-env.json"
+            $fakeRound = Join-Path $root "fake-round.ps1"
+            [System.IO.File]::WriteAllText($fakeRound, ("[System.IO.File]::WriteAllText('$marker', (@{ url = [string]`$env:PAGENTOS_TEAM_URL; token_file = [string]`$env:PAGENTOS_TEAM_TOKEN_FILE } | ConvertTo-Json -Compress))"), (New-Object System.Text.UTF8Encoding($false)))
+            $run = Invoke-Cycle -Root $root -Scenario "approve" -ExtraArguments "-TestTeam -TestRoundScript '$fakeRound'" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+            for ($i = 0; $i -lt 50 -and -not (Test-Path -LiteralPath $marker); $i++) { Start-Sleep -Milliseconds 200 }
+            Assert-True -Condition (Test-Path -LiteralPath $marker) -Because "the round was started: $($run.StdOut)"
+            $seen = [System.IO.File]::ReadAllText($marker) | ConvertFrom-Json
+            Assert-Equal -Expected $api.Url -Actual ([string]$seen.url) -Because "the round's board address is the queue's"
+            Assert-Equal -Expected $api.TokenFile -Actual ([string]$seen.token_file) -Because "the token file's PATH"
+            Assert-True -Condition (([string]$seen.token_file) -ne (Get-Content -Raw -LiteralPath $api.TokenFile).Trim()) -Because "never the token itself"
+
+            # file mode: no address, even when the cycle's own process carries one
+            [Environment]::SetEnvironmentVariable("PAGENTOS_TEAM_URL", "https://decoy.invalid")
+            [Environment]::SetEnvironmentVariable("PAGENTOS_TEAM_TOKEN_FILE", "C:\decoy.token")
+            $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+            $plainMarker = Join-Path $plain "round-env.json"
+            $plainRound = Join-Path $plain "fake-round.ps1"
+            [System.IO.File]::WriteAllText($plainRound, ("[System.IO.File]::WriteAllText('$plainMarker', (@{ url = [string]`$env:PAGENTOS_TEAM_URL; token_file = [string]`$env:PAGENTOS_TEAM_TOKEN_FILE } | ConvertTo-Json -Compress))"), (New-Object System.Text.UTF8Encoding($false)))
+            $files = Invoke-Cycle -Root $plain -Scenario "approve" -ExtraArguments "-TestTeam -TestRoundScript '$plainRound'"
+            Assert-Equal -Expected 0 -Actual $files.ExitCode -Because ($files.StdOut + $files.StdErr)
+            for ($i = 0; $i -lt 50 -and -not (Test-Path -LiteralPath $plainMarker); $i++) { Start-Sleep -Milliseconds 200 }
+            Assert-True -Condition (Test-Path -LiteralPath $plainMarker) -Because "the file-mode round was started: $($files.StdOut)"
+            $seen = [System.IO.File]::ReadAllText($plainMarker) | ConvertFrom-Json
+            Assert-Equal -Expected "" -Actual ([string]$seen.url) -Because "no queue URL, no board address"
+            Assert-Equal -Expected "" -Actual ([string]$seen.token_file) -Because "no queue, no token file"
+        }
+        finally {
+            foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+        }
+    }
+
     Test-Case "duty in API mode: the Proje Yöneticisi's decision is written to the store, through the cycle's own writes" {
         $api = Start-FakeApi -Tasks @((New-Stopped))
         $root = New-Sandbox -Tasks @((New-Stopped))
