@@ -34,8 +34,10 @@ import argparse
 import ctypes
 import ctypes.wintypes as wt
 import json
+import os
 import platform
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -98,13 +100,43 @@ def _mb(value: int) -> float:
     return round(value / (1024 * 1024), 1)
 
 
-def measure(model_name: str) -> dict[str, object]:
+def shape_for(threads: int | None) -> str:
+    """'ev-pc' is every thread of the owner's PC; 4 threads is the CPX32 PROXY (4 vCPU) -
+    never a CPX32 run."""
+    if threads is None:
+        return "ev-pc"
+    return "cpx32-bicimi" if threads == 4 else f"threads-{threads}"
+
+
+def default_cache_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(base) / "PagentOS" / "fastembed-cache"
+
+
+def cache_refusal(cache_dir: Path) -> str | None:
+    """Never the repository, never %TEMP% (the same rule as bench-memory-embedding.py)."""
+    resolved = cache_dir.resolve()
+    for forbidden, why in (
+        (ROOT.resolve(), "the repository"),
+        (Path(tempfile.gettempdir()).resolve(), "%TEMP%"),
+    ):
+        if resolved == forbidden or forbidden in resolved.parents:
+            return f"--cache-dir is under {why}; use a folder outside it"
+    return None
+
+
+def measure(
+    model_name: str, *, threads: int | None = None, cache_dir: str | None = None
+) -> dict[str, object]:
     from app.config import Settings
-    from app.memory.providers import LocalEmbedder
+    from app.memory.providers import LocalEmbedder, _fastembed_factory
+
+    def factory(name: str, cache: str | None):
+        return _fastembed_factory(name, cache, threads=threads)
 
     before = _read_counters()
     started = time.perf_counter()
-    embedder = LocalEmbedder(model_name=model_name)
+    embedder = LocalEmbedder(model_name=model_name, cache_dir=cache_dir, model_factory=factory)
     load_s = time.perf_counter() - started
 
     first = time.perf_counter()
@@ -125,6 +157,8 @@ def measure(model_name: str) -> dict[str, object]:
         "measured_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "host": {"platform": platform.platform(), "python": platform.python_version()},
         "model_name": model_name,
+        "threads": threads,
+        "shape": shape_for(threads),
         "model_id": embedder.model_id,
         "dim": embedder.dim,
         "native_dim": embedder.native_dim,
@@ -150,14 +184,21 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", nargs="?", default=DEFAULT_LOCAL_MODEL)
     parser.add_argument("--out", type=Path, default=None, help="write the numbers as JSON")
+    parser.add_argument("--threads", type=int, default=None, help="4 = the CPX32 proxy shape")
+    parser.add_argument("--cache-dir", type=Path, default=None)
     args = parser.parse_args(argv[1:])
+    cache_dir = args.cache_dir or default_cache_dir()
+    refusal = cache_refusal(cache_dir)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     # A console that cannot print "ısınmış" must not be able to fail a measurement that
     # already ran: Windows hands a piped stdout cp1252 by default.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    result = measure(args.model)
+    result = measure(args.model, threads=args.threads, cache_dir=str(cache_dir))
     print(
         f"{result['model_id']}  (boyut {result['dim']}"
         f"{', native ' + str(result['native_dim']) if result['truncated'] else ''})\n"

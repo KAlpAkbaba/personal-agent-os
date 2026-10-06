@@ -1,0 +1,721 @@
+{
+  "kind": "memory-embedding-granite-measure",
+  "measured_at": "2026-10-06T18:59:51+00:00",
+  "host": {
+    "platform": "Windows-10-10.0.19045-SP0",
+    "python": "3.12.7"
+  },
+  "threads": null,
+  "shape": "ev-pc",
+  "baseline_model": "minishlab/potion-multilingual-128M",
+  "retention_batch_rows": 200,
+  "cpx32_retention_budget_s": 30.0,
+  "earlier_run": {
+    "date": "2026-09-27",
+    "source": "ADR-0200 Kanıt",
+    "ayrim": {
+      "minishlab/potion-multilingual-128M": 0.457,
+      "Qwen/Qwen3-Embedding-0.6B-Q": 0.354
+    }
+  },
+  "deterministic": {
+    "model_name": "deterministic n-gram (ADR-0200 öncesi üretim)",
+    "refused": null,
+    "pairs": [
+      {
+        "a": "Sahip sabahları kahve içmeyi sever",
+        "b": "Kadir her sabah bir fincan kahve içer",
+        "label": "ANLAMDAŞ",
+        "cosine": 0.2909,
+        "ms": 0.33
+      },
+      {
+        "a": "Sahip sabahları kahve içmeyi sever",
+        "b": "Sunucuda disk alanı azaldı",
+        "label": "ALAKASIZ",
+        "cosine": 0.1832,
+        "ms": 0.21
+      },
+      {
+        "a": "Araştırma raporlarını Türkçe okusun",
+        "b": "Yabancı kaynaklar Türkçeye çevrilsin",
+        "label": "ANLAMDAŞ",
+        "cosine": 0.142,
+        "ms": 0.23
+      },
+      {
+        "a": "Araştırma raporlarını Türkçe okusun",
+        "b": "Alarm saat yedide çalsın",
+        "label": "ALAKASIZ",
+        "cosine": 0.0,
+        "ms": 0.2
+      },
+      {
+        "a": "Aktivra benim kurduğum şirket",
+        "b": "Şirketimin adı Aktivra",
+        "label": "ANLAMDAŞ",
+        "cosine": 0.4949,
+        "ms": 0.18
+      },
+      {
+        "a": "Aktivra benim kurduğum şirket",
+        "b": "Bugün hava çok sıcak",
+        "label": "ALAKASIZ",
+        "cosine": 0.0398,
+        "ms": 0.17
+      },
+      {
+        "a": "Nişanlımın adı Melissa",
+        "b": "Melissa ile nişanlıyım",
+        "label": "ANLAMDAŞ",
+        "cosine": 0.5915,
+        "ms": 0.16
+      },
+      {
+        "a": "Nişanlımın adı Melissa",
+        "b": "YouTube'da müzik aç",
+        "label": "ALAKASIZ",
+        "cosine": -0.0891,
+        "ms": 0.16
+      },
+      {
+        "a": "Ekranlar 15 dakika sonra kapansın",
+        "b": "Monitörler çeyrek saat boşta kalınca sönsün",
+        "label": "ANLAMDAŞ",
+        "cosine": 0.0,
+        "ms": 0.23
+      },
+      {
+        "a": "Ekranlar 15 dakika sonra kapansın",
+        "b": "Postgres yedeği gece yarısı alınır",
+        "label": "ALAKASIZ",
+        "cosine": -0.0291,
+        "ms": 0.21
+      },
+      {
+        "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+        "b": "AI gelişmelerini sık sık takip ederim",
+        "label": "ANLAMDAŞ",
+        "cosine": 0.1889,
+        "ms": 0.24
+      },
+      {
+        "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+        "b": "Mutfaktaki lambayı kapat",
+        "label": "ALAKASIZ",
+        "cosine": -0.032,
+        "ms": 0.21
+      },
+      {
+        "a": "İş bilgisayarımın adı MAIL",
+        "b": "MAIL benim ofis makinem",
+        "label": "ANLAMDAŞ",
+        "cosine": 0.2642,
+        "ms": 0.18
+      },
+      {
+        "a": "İş bilgisayarımın adı MAIL",
+        "b": "Kripto piyasası bugün düştü",
+        "label": "ALAKASIZ",
+        "cosine": -0.0393,
+        "ms": 0.18
+      }
+    ],
+    "same_mean": 0.2818,
+    "other_mean": 0.0048,
+    "ayrim": 0.277,
+    "embed_median_ms": 0.095
+  },
+  "models": [
+    {
+      "model_name": "minishlab/potion-multilingual-128M",
+      "refused": null,
+      "model_id": "local-minishlab/potion-multilingual-128M",
+      "native_dim": 256,
+      "dim": 256,
+      "truncated": false,
+      "load_path": "fastembed",
+      "load_s_first": 3.32,
+      "load_s_warm": 3.16,
+      "pinned_files": [],
+      "revision": null,
+      "pairs": [
+        {
+          "a": "Sahip sabahları kahve içmeyi sever",
+          "b": "Kadir her sabah bir fincan kahve içer",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.739,
+          "ms": 0.93
+        },
+        {
+          "a": "Sahip sabahları kahve içmeyi sever",
+          "b": "Sunucuda disk alanı azaldı",
+          "label": "ALAKASIZ",
+          "cosine": -0.0186,
+          "ms": 0.29
+        },
+        {
+          "a": "Araştırma raporlarını Türkçe okusun",
+          "b": "Yabancı kaynaklar Türkçeye çevrilsin",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.1417,
+          "ms": 0.71
+        },
+        {
+          "a": "Araştırma raporlarını Türkçe okusun",
+          "b": "Alarm saat yedide çalsın",
+          "label": "ALAKASIZ",
+          "cosine": -0.0188,
+          "ms": 0.31
+        },
+        {
+          "a": "Aktivra benim kurduğum şirket",
+          "b": "Şirketimin adı Aktivra",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.7184,
+          "ms": 0.61
+        },
+        {
+          "a": "Aktivra benim kurduğum şirket",
+          "b": "Bugün hava çok sıcak",
+          "label": "ALAKASIZ",
+          "cosine": -0.0447,
+          "ms": 0.29
+        },
+        {
+          "a": "Nişanlımın adı Melissa",
+          "b": "Melissa ile nişanlıyım",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.6845,
+          "ms": 0.58
+        },
+        {
+          "a": "Nişanlımın adı Melissa",
+          "b": "YouTube'da müzik aç",
+          "label": "ALAKASIZ",
+          "cosine": 0.037,
+          "ms": 0.29
+        },
+        {
+          "a": "Ekranlar 15 dakika sonra kapansın",
+          "b": "Monitörler çeyrek saat boşta kalınca sönsün",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.1704,
+          "ms": 0.63
+        },
+        {
+          "a": "Ekranlar 15 dakika sonra kapansın",
+          "b": "Postgres yedeği gece yarısı alınır",
+          "label": "ALAKASIZ",
+          "cosine": 0.0693,
+          "ms": 0.31
+        },
+        {
+          "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+          "b": "AI gelişmelerini sık sık takip ederim",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.317,
+          "ms": 0.61
+        },
+        {
+          "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+          "b": "Mutfaktaki lambayı kapat",
+          "label": "ALAKASIZ",
+          "cosine": 0.0858,
+          "ms": 0.28
+        },
+        {
+          "a": "İş bilgisayarımın adı MAIL",
+          "b": "MAIL benim ofis makinem",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.589,
+          "ms": 0.57
+        },
+        {
+          "a": "İş bilgisayarımın adı MAIL",
+          "b": "Kripto piyasası bugün düştü",
+          "label": "ALAKASIZ",
+          "cosine": 0.0539,
+          "ms": 0.3
+        }
+      ],
+      "same_mean": 0.48,
+      "other_mean": 0.0234,
+      "ayrim": 0.4566,
+      "embed_median_ms": 0.301
+    },
+    {
+      "model_name": "ibm-granite/granite-embedding-311m-multilingual-r2",
+      "refused": null,
+      "model_id": "local-ibm-granite/granite-embedding-311m-multilingual-r2@256",
+      "native_dim": 768,
+      "dim": 256,
+      "truncated": true,
+      "load_path": "onnxruntime-yedek",
+      "load_s_first": 10.71,
+      "load_s_warm": 11.17,
+      "pinned_files": [
+        {
+          "path": "onnx/model.onnx",
+          "size": 1247170481,
+          "sha256": "75f9f258bf5013f5fe8a4dad61dd0fd16ac0cbaa7a106e3d3f41c2d04a42d541",
+          "verified": true
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 33384821,
+          "sha256": "0087c868b33bad550a78a08d19798cfd7f713cde4f020803b8f51f405503e15f",
+          "verified": true
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1155500,
+          "sha256": "7947bdf0378520e69ca412b8c4dacd1cffa8aef099f851fdd5c65aa27c6b36a0",
+          "verified": true
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 694,
+          "sha256": "cb9e60dcf4d8d314315cb3e761fe4c2e664fda8dbf66d7815372b2639e381182",
+          "verified": true
+        },
+        {
+          "path": "config.json",
+          "size": 1191,
+          "sha256": "e1e3fc842a8e0537e25d6e4c93879698b92ae96722e8c162bef334b57978a3b0",
+          "verified": true
+        }
+      ],
+      "revision": "44399559930365213510b1ee2eb15ded83374f0e",
+      "pairs": [
+        {
+          "a": "Sahip sabahları kahve içmeyi sever",
+          "b": "Kadir her sabah bir fincan kahve içer",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9124,
+          "ms": 289.68
+        },
+        {
+          "a": "Sahip sabahları kahve içmeyi sever",
+          "b": "Sunucuda disk alanı azaldı",
+          "label": "ALAKASIZ",
+          "cosine": 0.7734,
+          "ms": 218.64
+        },
+        {
+          "a": "Araştırma raporlarını Türkçe okusun",
+          "b": "Yabancı kaynaklar Türkçeye çevrilsin",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9072,
+          "ms": 597.6
+        },
+        {
+          "a": "Araştırma raporlarını Türkçe okusun",
+          "b": "Alarm saat yedide çalsın",
+          "label": "ALAKASIZ",
+          "cosine": 0.7843,
+          "ms": 116.34
+        },
+        {
+          "a": "Aktivra benim kurduğum şirket",
+          "b": "Şirketimin adı Aktivra",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9573,
+          "ms": 332.19
+        },
+        {
+          "a": "Aktivra benim kurduğum şirket",
+          "b": "Bugün hava çok sıcak",
+          "label": "ALAKASIZ",
+          "cosine": 0.7601,
+          "ms": 260.06
+        },
+        {
+          "a": "Nişanlımın adı Melissa",
+          "b": "Melissa ile nişanlıyım",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9315,
+          "ms": 352.18
+        },
+        {
+          "a": "Nişanlımın adı Melissa",
+          "b": "YouTube'da müzik aç",
+          "label": "ALAKASIZ",
+          "cosine": 0.7658,
+          "ms": 145.08
+        },
+        {
+          "a": "Ekranlar 15 dakika sonra kapansın",
+          "b": "Monitörler çeyrek saat boşta kalınca sönsün",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.8978,
+          "ms": 507.66
+        },
+        {
+          "a": "Ekranlar 15 dakika sonra kapansın",
+          "b": "Postgres yedeği gece yarısı alınır",
+          "label": "ALAKASIZ",
+          "cosine": 0.818,
+          "ms": 60.25
+        },
+        {
+          "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+          "b": "AI gelişmelerini sık sık takip ederim",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9461,
+          "ms": 397.53
+        },
+        {
+          "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+          "b": "Mutfaktaki lambayı kapat",
+          "label": "ALAKASIZ",
+          "cosine": 0.7675,
+          "ms": 318.42
+        },
+        {
+          "a": "İş bilgisayarımın adı MAIL",
+          "b": "MAIL benim ofis makinem",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9393,
+          "ms": 207.72
+        },
+        {
+          "a": "İş bilgisayarımın adı MAIL",
+          "b": "Kripto piyasası bugün düştü",
+          "label": "ALAKASIZ",
+          "cosine": 0.7731,
+          "ms": 122.81
+        }
+      ],
+      "same_mean": 0.9274,
+      "other_mean": 0.7775,
+      "ayrim": 0.1499,
+      "embed_median_ms": 171.525
+    },
+    {
+      "model_name": "ibm-granite/granite-embedding-311m-multilingual-r2-int8",
+      "refused": null,
+      "model_id": "local-ibm-granite/granite-embedding-311m-multilingual-r2-int8@256",
+      "native_dim": 768,
+      "dim": 256,
+      "truncated": true,
+      "load_path": "onnxruntime-yedek",
+      "load_s_first": 6.36,
+      "load_s_warm": 6.37,
+      "pinned_files": [
+        {
+          "path": "onnx/model_quint8_avx2.onnx",
+          "size": 313421909,
+          "sha256": "f1fdd44e7e1ac51f12ab7957c7bd092e064d596c288513bf9d326842f669edee",
+          "verified": true
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 33384821,
+          "sha256": "0087c868b33bad550a78a08d19798cfd7f713cde4f020803b8f51f405503e15f",
+          "verified": true
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1155500,
+          "sha256": "7947bdf0378520e69ca412b8c4dacd1cffa8aef099f851fdd5c65aa27c6b36a0",
+          "verified": true
+        },
+        {
+          "path": "special_tokens_map.json",
+          "size": 694,
+          "sha256": "cb9e60dcf4d8d314315cb3e761fe4c2e664fda8dbf66d7815372b2639e381182",
+          "verified": true
+        },
+        {
+          "path": "config.json",
+          "size": 1191,
+          "sha256": "e1e3fc842a8e0537e25d6e4c93879698b92ae96722e8c162bef334b57978a3b0",
+          "verified": true
+        }
+      ],
+      "revision": "44399559930365213510b1ee2eb15ded83374f0e",
+      "pairs": [
+        {
+          "a": "Sahip sabahları kahve içmeyi sever",
+          "b": "Kadir her sabah bir fincan kahve içer",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9165,
+          "ms": 377.75
+        },
+        {
+          "a": "Sahip sabahları kahve içmeyi sever",
+          "b": "Sunucuda disk alanı azaldı",
+          "label": "ALAKASIZ",
+          "cosine": 0.7791,
+          "ms": 140.64
+        },
+        {
+          "a": "Araştırma raporlarını Türkçe okusun",
+          "b": "Yabancı kaynaklar Türkçeye çevrilsin",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9096,
+          "ms": 181.25
+        },
+        {
+          "a": "Araştırma raporlarını Türkçe okusun",
+          "b": "Alarm saat yedide çalsın",
+          "label": "ALAKASIZ",
+          "cosine": 0.7748,
+          "ms": 14.01
+        },
+        {
+          "a": "Aktivra benim kurduğum şirket",
+          "b": "Şirketimin adı Aktivra",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9515,
+          "ms": 143.46
+        },
+        {
+          "a": "Aktivra benim kurduğum şirket",
+          "b": "Bugün hava çok sıcak",
+          "label": "ALAKASIZ",
+          "cosine": 0.7692,
+          "ms": 82.4
+        },
+        {
+          "a": "Nişanlımın adı Melissa",
+          "b": "Melissa ile nişanlıyım",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9238,
+          "ms": 269.01
+        },
+        {
+          "a": "Nişanlımın adı Melissa",
+          "b": "YouTube'da müzik aç",
+          "label": "ALAKASIZ",
+          "cosine": 0.7689,
+          "ms": 92.73
+        },
+        {
+          "a": "Ekranlar 15 dakika sonra kapansın",
+          "b": "Monitörler çeyrek saat boşta kalınca sönsün",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.8866,
+          "ms": 97.23
+        },
+        {
+          "a": "Ekranlar 15 dakika sonra kapansın",
+          "b": "Postgres yedeği gece yarısı alınır",
+          "label": "ALAKASIZ",
+          "cosine": 0.8128,
+          "ms": 15.12
+        },
+        {
+          "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+          "b": "AI gelişmelerini sık sık takip ederim",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.9309,
+          "ms": 82.11
+        },
+        {
+          "a": "Yapay zeka haberlerini düzenli araştırıyorum",
+          "b": "Mutfaktaki lambayı kapat",
+          "label": "ALAKASIZ",
+          "cosine": 0.7667,
+          "ms": 182.42
+        },
+        {
+          "a": "İş bilgisayarımın adı MAIL",
+          "b": "MAIL benim ofis makinem",
+          "label": "ANLAMDAŞ",
+          "cosine": 0.937,
+          "ms": 153.43
+        },
+        {
+          "a": "İş bilgisayarımın adı MAIL",
+          "b": "Kripto piyasası bugün düştü",
+          "label": "ALAKASIZ",
+          "cosine": 0.7726,
+          "ms": 89.74
+        }
+      ],
+      "same_mean": 0.9223,
+      "other_mean": 0.7777,
+      "ayrim": 0.1445,
+      "embed_median_ms": 87.705
+    }
+  ],
+  "cost": [
+    {
+      "measured_at": "2026-10-06T18:59:33+00:00",
+      "host": {
+        "platform": "Windows-10-10.0.19045-SP0",
+        "python": "3.12.7"
+      },
+      "model_name": "ibm-granite/granite-embedding-311m-multilingual-r2",
+      "threads": 4,
+      "shape": "cpx32-bicimi",
+      "model_id": "local-ibm-granite/granite-embedding-311m-multilingual-r2@256",
+      "dim": 256,
+      "native_dim": 768,
+      "truncated": true,
+      "semantic": true,
+      "vector_len": 256,
+      "warm_load_s": 10.82,
+      "first_embed_ms": 43.5,
+      "embed_median_ms": 45.47,
+      "embed_slowest_ms": 47.68,
+      "embed_samples": 8,
+      "retention_batch_rows": 200,
+      "retention_batch_s": 9.09,
+      "rss_before_mb": 38.5,
+      "rss_after_mb": 1374.1,
+      "rss_peak_mb": 3329.1
+    },
+    {
+      "measured_at": "2026-10-06T18:59:21+00:00",
+      "host": {
+        "platform": "Windows-10-10.0.19045-SP0",
+        "python": "3.12.7"
+      },
+      "model_name": "ibm-granite/granite-embedding-311m-multilingual-r2",
+      "threads": null,
+      "shape": "ev-pc",
+      "model_id": "local-ibm-granite/granite-embedding-311m-multilingual-r2@256",
+      "dim": 256,
+      "native_dim": 768,
+      "truncated": true,
+      "semantic": true,
+      "vector_len": 256,
+      "warm_load_s": 10.61,
+      "first_embed_ms": 413.4,
+      "embed_median_ms": 211.12,
+      "embed_slowest_ms": 287.88,
+      "embed_samples": 8,
+      "retention_batch_rows": 200,
+      "retention_batch_s": 42.22,
+      "rss_before_mb": 38.6,
+      "rss_after_mb": 1377.9,
+      "rss_peak_mb": 3333.9
+    },
+    {
+      "measured_at": "2026-10-06T18:59:50+00:00",
+      "host": {
+        "platform": "Windows-10-10.0.19045-SP0",
+        "python": "3.12.7"
+      },
+      "model_name": "ibm-granite/granite-embedding-311m-multilingual-r2-int8",
+      "threads": 4,
+      "shape": "cpx32-bicimi",
+      "model_id": "local-ibm-granite/granite-embedding-311m-multilingual-r2-int8@256",
+      "dim": 256,
+      "native_dim": 768,
+      "truncated": true,
+      "semantic": true,
+      "vector_len": 256,
+      "warm_load_s": 7.25,
+      "first_embed_ms": 24.3,
+      "embed_median_ms": 23.91,
+      "embed_slowest_ms": 26.93,
+      "embed_samples": 8,
+      "retention_batch_rows": 200,
+      "retention_batch_s": 4.78,
+      "rss_before_mb": 38.4,
+      "rss_after_mb": 486.1,
+      "rss_peak_mb": 981.0
+    },
+    {
+      "measured_at": "2026-10-06T18:59:42+00:00",
+      "host": {
+        "platform": "Windows-10-10.0.19045-SP0",
+        "python": "3.12.7"
+      },
+      "model_name": "ibm-granite/granite-embedding-311m-multilingual-r2-int8",
+      "threads": null,
+      "shape": "ev-pc",
+      "model_id": "local-ibm-granite/granite-embedding-311m-multilingual-r2-int8@256",
+      "dim": 256,
+      "native_dim": 768,
+      "truncated": true,
+      "semantic": true,
+      "vector_len": 256,
+      "warm_load_s": 6.89,
+      "first_embed_ms": 90.8,
+      "embed_median_ms": 92.42,
+      "embed_slowest_ms": 292.65,
+      "embed_samples": 8,
+      "retention_batch_rows": 200,
+      "retention_batch_s": 18.48,
+      "rss_before_mb": 38.5,
+      "rss_after_mb": 491.3,
+      "rss_peak_mb": 985.2
+    },
+    {
+      "measured_at": "2026-10-06T18:59:07+00:00",
+      "host": {
+        "platform": "Windows-10-10.0.19045-SP0",
+        "python": "3.12.7"
+      },
+      "model_name": "minishlab/potion-multilingual-128M",
+      "threads": 4,
+      "shape": "cpx32-bicimi",
+      "model_id": "local-minishlab/potion-multilingual-128M",
+      "dim": 256,
+      "native_dim": 256,
+      "truncated": false,
+      "semantic": true,
+      "vector_len": 256,
+      "warm_load_s": 2.81,
+      "first_embed_ms": 0.3,
+      "embed_median_ms": 0.26,
+      "embed_slowest_ms": 0.3,
+      "embed_samples": 8,
+      "retention_batch_rows": 200,
+      "retention_batch_s": 0.05,
+      "rss_before_mb": 38.5,
+      "rss_after_mb": 1069.9,
+      "rss_peak_mb": 1099.4
+    },
+    {
+      "measured_at": "2026-10-06T18:59:03+00:00",
+      "host": {
+        "platform": "Windows-10-10.0.19045-SP0",
+        "python": "3.12.7"
+      },
+      "model_name": "minishlab/potion-multilingual-128M",
+      "threads": null,
+      "shape": "ev-pc",
+      "model_id": "local-minishlab/potion-multilingual-128M",
+      "dim": 256,
+      "native_dim": 256,
+      "truncated": false,
+      "semantic": true,
+      "vector_len": 256,
+      "warm_load_s": 3.01,
+      "first_embed_ms": 0.5,
+      "embed_median_ms": 0.37,
+      "embed_slowest_ms": 0.45,
+      "embed_samples": 8,
+      "retention_batch_rows": 200,
+      "retention_batch_s": 0.07,
+      "rss_before_mb": 38.4,
+      "rss_after_mb": 1072.4,
+      "rss_peak_mb": 1102.1
+    }
+  ],
+  "cache": "%LOCALAPPDATA%/PagentOS/fastembed-cache",
+  "verdict": {
+    "letter": "c",
+    "per_model": {
+      "ibm-granite/granite-embedding-311m-multilingual-r2": "c",
+      "ibm-granite/granite-embedding-311m-multilingual-r2-int8": "c"
+    },
+    "text": "(c) AYRIM potion'dan geniş değil: ölçüldü, alınmadı. Bu kart benimsemez: varsayılan model potion kalır, yeniden indeksleme yok."
+  },
+  "corpus_choice": {
+    "threshold": 0.01,
+    "max_diff": 0.015200000000000102,
+    "pair": [
+      "Yapay zeka haberlerini düzenli araştırıyorum",
+      "AI gelişmelerini sık sık takip ederim"
+    ],
+    "chosen": "ibm-granite/granite-embedding-311m-multilingual-r2",
+    "text": "`ibm-granite/granite-embedding-311m-multilingual-r2`: 14 çiftte en büyük FP32–INT8 farkı 0.0152 ('Yapay zeka haberlerini düzenli araştırıyorum' ~ 'AI gelişmelerini sık sık takip ederim'), eşik 0.01: eşiği aşıyor (kural: INT8, 14 çiftin hepsi FP32'ye 0.01 içindeyse; değilse FP32)."
+  }
+}
