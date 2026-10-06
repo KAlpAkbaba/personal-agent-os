@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -52,6 +53,11 @@ def _refused(error: service.HouseholdRefused) -> HTTPException:
     return HTTPException(422, {"code": "household_refused", "message": error.message})
 
 
+#: DELETE /list/{id} for an id that was never an item (a second removal of a real item is
+#: 200 with ``already: true``; ADR draft of alarm-household-watch-input-edges).
+_NOT_LISTED_TR = "Bu ürün listede değil; zaten çıkarılmış ya da hiç eklenmemiş."
+
+
 def _not_found() -> HTTPException:
     return HTTPException(404, {"code": "not_found", "message": "Bu ürün yok; silinmiş olabilir."})
 
@@ -69,6 +75,19 @@ async def _payload(request: Request) -> dict[str, Any]:
             422, {"code": "body_invalid", "message": "İstek bir JSON nesnesi olmalı."}
         )
     return payload
+
+
+def _quantity(raw: object) -> object:
+    """A number is a quantity too: ``{"quantity": 2}`` was refused as "not text" (test-team
+    finding). A finite int/float becomes its text ("2", "2.5"); everything else - a bool,
+    a list, Infinity - goes on to the service, which refuses it in Turkish."""
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        return raw
+    if isinstance(raw, float):
+        if not math.isfinite(raw):
+            return raw
+        return str(int(raw)) if raw.is_integer() else str(raw)
+    return str(raw)
 
 
 def _item_id(raw: str) -> uuid.UUID:
@@ -127,7 +146,7 @@ async def add_list_item(request: Request) -> dict[str, Any]:
             change = service.add_to_list(
                 db,
                 payload.get("name"),  # type: ignore[arg-type]
-                quantity=payload.get("quantity"),
+                quantity=_quantity(payload.get("quantity")),
                 now=datetime.now(UTC),
             )
             return {"item": _view(change.item), "speech": change.speech, "already": change.already}
@@ -145,13 +164,26 @@ async def remove_list_item(item_id: str, request: Request) -> dict[str, Any]:
 
     def run() -> dict[str, Any] | None:
         with artifacts.session() as db:
-            row = service.remove_by_id(db, target, now=datetime.now(UTC))
-            return None if row is None else _view(row)
+            row = db.get(HouseholdItem, target)
+            if row is None:
+                return None
+            if not row.on_list:
+                return {
+                    "item": _view(row),
+                    "speech": f"Bu ürün zaten listede değil: {row.name}.",
+                    "already": True,
+                }
+            removed = service.remove_by_id(db, target, now=datetime.now(UTC)) or row
+            return {
+                "item": _view(removed),
+                "speech": f"Listeden çıkardım: {removed.name}.",
+                "already": False,
+            }
 
-    view = await asyncio.to_thread(run)
-    if view is None:
-        raise _not_found()
-    return {"item": view}
+    answer = await asyncio.to_thread(run)
+    if answer is None:
+        raise HTTPException(404, {"code": "not_found", "message": _NOT_LISTED_TR})
+    return answer
 
 
 @router.delete("/v1/household/items/{item_id}")

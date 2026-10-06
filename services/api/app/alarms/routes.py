@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -35,7 +36,14 @@ from app.alarms import history as alarm_history
 from app.alarms import service as alarms_service
 from app.alarms import speech as alarm_speech
 from app.alarms.audio_store import AudioStore, get_audio_store
-from app.alarms.models import MAX_SNOOZE_MINUTES, WakeAlarm
+from app.alarms.models import (
+    ALARM_ACTIVE_STATES,
+    MAX_SNOOZE_MINUTES,
+    STATE_ARMED,
+    STATE_SCHEDULED,
+    STATE_STOPPED,
+    WakeAlarm,
+)
 from app.alarms.state import IllegalAlarmTransition
 from app.alarms.tr_time import (
     DEFAULT_TIMEZONE,
@@ -57,6 +65,34 @@ router = APIRouter(
 #: The token-authenticated exception (module docstring). Its own router so the exemption is
 #: a visible, single line rather than a per-route flag someone could copy by accident.
 audio_router = APIRouter(prefix="/v1/alarms", tags=["alarms"])
+
+
+#: The farthest an alarm may be set (test-team finding: 9999-12-31 was taken, and in a zone
+#: west of UTC it overflowed into a 500). A year and a day keeps "next year, same day" legal.
+MAX_AHEAD = timedelta(days=366)
+#: ``GET /v1/alarms?limit=`` bounds; the service clamped to 200 silently before.
+MAX_LIST_LIMIT = 200
+#: A stop is the end of a wake-up in progress; an alarm still waiting is turned off by it
+#: (``test_alarms_routes.py`` pins that). Anything else - snoozed, cancelled, completed,
+#: failed - is refused in Turkish instead of answering "Alarmı kapattım" over it.
+_STOPPABLE = ALARM_ACTIVE_STATES | {STATE_SCHEDULED, STATE_ARMED, STATE_STOPPED}
+
+_CONTROL_TR = "Alarmın yazısında okunamayan bir karakter var; düz yazıyla söyler misin?"
+_PAST_TR = "Bu tarih ve saat geçmişte kaldı; ileri bir zaman söyler misin?"
+_TOO_FAR_TR = "Bir yıldan daha ileriye alarm kuramam; bir yıl içinde bir gün söyler misin?"
+_NOT_RINGING_TR = (
+    "Bu alarm şu an çalmıyor; kapatacak bir şey yok. Ertelenmiş bir alarmı kaldırmak için iptal et."
+)
+
+
+def _has_control(text: str | None) -> bool:
+    return text is not None and any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+
+
+def _refuse(
+    specific: str, status: int = 422, error_class: str = "validation_error"
+) -> HTTPException:
+    return HTTPException(status_code=status, detail=owner_detail(error_class, specific=specific))
 
 
 def _artifacts(request: Request) -> ArtifactRuntime:
@@ -132,6 +168,11 @@ async def alarms_policy() -> dict[str, Any]:
 async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, Any]:
     artifacts = _artifacts(request)
     now = alarms_service.utcnow()
+    kept_texts = [body.label, body.greeting_text]
+    if body.media is not None:
+        kept_texts += [body.media.title, body.media.remembered]
+    if any(_has_control(text) for text in kept_texts):
+        raise _refuse(_CONTROL_TR)
     try:
         if body.when_text:
             parsed = parse_when_text(body.when_text, now=now, timezone=body.timezone)
@@ -141,7 +182,11 @@ async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, 
             )
         else:
             raise UnparsedWhen("either 'when' or 'when_text' is required")
+    except OverflowError as exc:  # 9999-12-31 west of UTC cannot be moved to UTC at all
+        raise _refuse(_TOO_FAR_TR) from exc
     except UnparsedWhen as exc:
+        if "in the past" in str(exc):
+            raise _refuse(_PAST_TR) from exc
         raise HTTPException(
             status_code=422,
             detail=owner_detail(
@@ -152,6 +197,8 @@ async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, 
                 ),
             ),
         ) from exc
+    if parsed.at - now > MAX_AHEAD:
+        raise _refuse(_TOO_FAR_TR)
 
     def write() -> WakeAlarm:
         with artifacts.session() as session:
@@ -184,6 +231,11 @@ async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, 
 async def list_alarms(
     request: Request, include_terminal: bool = False, limit: int = 100
 ) -> dict[str, Any]:
+    if not 1 <= limit <= MAX_LIST_LIMIT:
+        raise _refuse(
+            f"Bir seferde 1 ile {MAX_LIST_LIMIT} arasında alarm gösterebilirim; "
+            "bu aralıkta bir sayı ver."
+        )
     artifacts = _artifacts(request)
 
     def load() -> list[dict[str, Any]]:
@@ -274,7 +326,7 @@ async def get_alarm(request: Request, alarm_id: uuid.UUID) -> dict[str, Any]:
 
     payload = await asyncio.to_thread(load)
     if payload is None:
-        raise HTTPException(status_code=404, detail="alarm not found")
+        raise HTTPException(status_code=404, detail=owner_detail("not_found"))
     return payload
 
 
@@ -288,9 +340,7 @@ async def cancel_alarm(
 
     def write() -> dict[str, Any]:
         with artifacts.session() as session:
-            alarm = alarms_service.cancel_alarm(
-                session, alarm_id, sequence=sequence, reason=reason
-            )
+            alarm = alarms_service.cancel_alarm(session, alarm_id, sequence=sequence, reason=reason)
             return alarms_service.alarm_dict(alarm)
 
     try:
@@ -309,6 +359,9 @@ async def stop_alarm(request: Request, alarm_id: uuid.UUID) -> dict[str, Any]:
 
     def write() -> dict[str, Any]:
         with artifacts.session() as session:
+            alarm = alarms_service.require_alarm(session, alarm_id)
+            if alarm.state not in _STOPPABLE:
+                raise IllegalAlarmTransition(f"stop from {alarm.state}")
             alarm = alarms_service.stop_alarm(session, alarm_id, sequence=sequence)
             return alarms_service.alarm_dict(alarm)
 
@@ -316,6 +369,8 @@ async def stop_alarm(request: Request, alarm_id: uuid.UUID) -> dict[str, Any]:
         payload = await asyncio.to_thread(write)
     except alarms_service.AlarmNotFoundError as exc:
         raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
+    except IllegalAlarmTransition as exc:
+        raise _refuse(_NOT_RINGING_TR, 409, "lifecycle_violation") from exc
     return {**payload, "speech": alarm_speech.ALARM_STOPPED_TR}
 
 
