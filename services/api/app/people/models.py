@@ -1,6 +1,6 @@
 """The person cards and the follow-ups taken from conversations (conversation-followups).
 
-Canonical schema: ``alembic/versions/20261006_0071_conversation_followups.py``.
+Canonical schema: ``alembic/versions/conversation_followups.py``.
 
 ``people_cards`` is one row per person the owner talked about or with: the name and its folded
 key (unique: 'AHMET' and 'Ahmet' are one card), how they relate to him when somebody SAID it,
