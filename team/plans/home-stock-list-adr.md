@@ -48,18 +48,18 @@ stock, down to the toilet paper", the owner, 2026-10-05).
 - A bounded deny-list of things a house does not stock (`_NOT_GOODS`: people, money,
   utilities, notes, tasks, songs...) closes the place gate ("evde kimse kalmadı") and the bare
   "listeye not ekle". An allow-list would refuse "evde lazer toner bitti", which the owner may say.
+  The deny-list judges a ONE-word name only: "streç film", "yer fıstığı", "enerji içeceği" are
+  goods although "film", "yer", "enerji" alone are not. "şey" / "hiçbir şey" and the pronouns
+  ("bunu", "onu") name nothing.
+- A word naming another list before ANY list word ("çalma listeme", "oynatma listemden") is
+  another list: the first-person forms carry no compound ending to read the qualifier from.
 - A count in a level sentence is not the name ("Bir kahve aldım" -> kahve).
-
-## Needs outside this card's area (ALAN_ISTEGI)
-
-- `app/voice/realtime_sessions/service.py`: copy `household_item`, `household_level`,
-  `household_quantity` into `last_utterance` (the free local mode sends no arguments).
-- `app/security/step_up.py`: tiers - `household.list_read` OPEN; the three writes (reversible
-  rows of the owner's own list) proposed OPEN as well.
-- `tests/unit/test_voice_realtime_sessions.py`: the four names in the tool-set contract.
-- `tests/voice_corpus/harness.py`: `HouseholdItem.__table__`, `HouseholdEvent.__table__` in
-  `TABLES`.
-- `app/voice/understanding/exemplars.json`: regenerate (`services/api/scripts/export_understanding_exemplars.py`).
+- Step-up tiers: `household.list_read` OPEN ("ne almam lazım" at the market door must never ask
+  for a voice check); `household.level` / `list_add` / `list_remove` SENSITIVE, the same tier
+  as `memory.remember`: small and undoable, but a durable write to the owner's own record, and
+  the registry's rule is that a write is not OPEN. The owner trial line proves the writes are not stopped in the owner's real session.
+- The session copies `household_item` / `household_level` / `household_quantity` onto the turn
+  record (`last_utterance`): the free local mode calls the tool with no argument.
 
 ## Not in this card
 

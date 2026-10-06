@@ -84,6 +84,13 @@ def db(factory):
         ("Listede ne var", "read", None, None, None),
         ("Markete gidiyorum", "read", None, None, None),
         ("Evde ne eksik", "read", None, None, None),
+        # A compound name whose other word is not a good on its own (inspector, 2026-10-06:
+        # these parsed at 16c00a05 and were lost to a whole-name check).
+        ("Listeye streç film ekle", "add", "streç film", None, None),
+        ("Listeye yer fıstığı ekle", "add", "yer fıstığı", None, None),
+        ("Listeye enerji içeceği ekle", "add", "enerji içeceği", None, None),
+        ("Evde streç film bitti", "level", "streç film", "bitti", None),
+        ("Evde yer fıstığı kalmadı", "level", "yer fıstığı", "bitti", None),
     ],
 )
 def test_the_owner_s_sentences_parse(sentence, action, item, level, quantity) -> None:
@@ -125,6 +132,14 @@ def test_the_owner_s_sentences_parse(sentence, action, item, level, quantity) ->
         "Evde para kalmadı",
         "Evde elektrik bitti",
         "Evde internet bitti",
+        # Another list said in the first person (inspector, 2026-10-06, 2nd return).
+        "Çalma listeme bunu ekle",
+        "Çalma listemize bunu ekle",
+        "Oynatma listemden bunu çıkar",
+        # Nothing named (inspector, 2026-10-06, 2nd return).
+        "Evde bir şey kalmadı",
+        "Evde hiçbir şey kalmadı",
+        "Listeye bir şey ekle",
     ],
 )
 def test_the_neighbours_do_not_parse(sentence) -> None:
@@ -458,6 +473,25 @@ def test_no_item_is_a_question_not_a_receipt(db) -> None:
 def test_a_refused_name_is_said_not_raised(db) -> None:
     result = tools_household.household_list_add(_ctx(db), {"item": "\x00"})
     assert result["status"] == "refused" and result["speech"]
+
+
+def test_the_owner_s_words_travel_through_the_session_to_the_tool() -> None:
+    """Through ``create_app`` (the corpus harness): the tool is called with NO argument, as
+    the local mode calls it, and still hears the item. Before the session copied the three
+    household fields onto the turn record this answered "Hangi ürün efendim?"."""
+    from tests.voice_corpus.harness import build_harness
+
+    h = build_harness()
+    sid = h.new_session()
+    heard = h.say(sid, "Tuvalet kağıdı azaldı.", turn=1)
+    assert heard["resolved_intents"][0]["intent"] == "household_level"
+    call = h.tool(sid, "c-1", "household.level", {})
+    assert call["status"] == "succeeded", call
+    assert call["result"]["item"] == "tuvalet kağıdı" and call["result"]["level"] == "azaldı"
+    h.say(sid, "Ne almam lazım?", turn=2)
+    read = h.tool(sid, "c-2", "household.list_read", {})
+    assert read["status"] == "succeeded", read
+    assert "tuvalet kağıdı" in read["result"]["speech"]
 
 
 # ------------------------------------------------------------------ (6) /v1/household

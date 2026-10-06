@@ -2340,6 +2340,12 @@ def record_client_events(
                 # and the mission word the router heard.
                 "mission_request": intent.mission_request,
                 "mission_action": intent.mission_action,
+                # home-stock-list: the item, the level and the quantity the owner SAID. The
+                # local mode has no model to fill the argument; without these "Tuvalet kağıdı
+                # azaldı" was answered "Hangi ürün efendim?".
+                "household_item": intent.household_item,
+                "household_level": intent.household_level,
+                "household_quantity": intent.household_quantity,
                 # ADR-0212: the device(s) the owner NAMED in this sentence ("ofis
                 # bilgisayarımda ..."), as the canonical alias WORDS - never the sentence.
                 # Kept here, where the words are, because a tool call arrives without them;

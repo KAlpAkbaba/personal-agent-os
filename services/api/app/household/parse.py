@@ -280,6 +280,7 @@ _FILLER: Final = frozenset(
         "neredeyse",
         "tamamen",
         "hic",
+        "hicbir",
         "ben",
         "biz",
         "efendim",
@@ -292,9 +293,16 @@ _FILLER: Final = frozenset(
 )
 #: Folded stems of things a house does not stock: "Evde kimse kalmadı", "Evde elektrik bitti",
 #: "Listeye not ekle", "Görevi listeden sil" are about people, utilities, notes and tasks. A
-#: place word ("evde") or a bare "listeye" lets an unknown item in; these never are.
+#: place word ("evde") or a bare "listeye" lets an unknown item in; these never are - as a
+#: ONE-word name only: "streç film", "yer fıstığı", "enerji içeceği" are goods.
 _NOT_GOODS: Final = frozenset(
     {
+        "sey",
+        "hicbirsey",
+        "bunu",
+        "onu",
+        "bunlari",
+        "onlari",
         "kimse",
         "kimsecik",
         "insan",
@@ -340,6 +348,24 @@ _NOT_GOODS: Final = frozenset(
 #: The words that may qualify "X listesine / listesinden" as the shopping list; any other
 #: qualifier ("çalma listesine", "yapılacaklar listesinden") names another list.
 _SHOP_QUALIFIERS: Final = frozenset({"alisveris", "market", "bakkal", "pazar", "ev", "mutfak"})
+#: The words that name another list before ANY list word, the first-person forms included:
+#: "Çalma listeme bunu ekle" has no compound ending to read, so the qualifier is named here.
+_OTHER_LISTS: Final = frozenset(
+    {
+        "calma",
+        "oynatma",
+        "izleme",
+        "okuma",
+        "yapilacaklar",
+        "yapilacak",
+        "dilek",
+        "istek",
+        "favori",
+        "muzik",
+        "sarki",
+        "video",
+    }
+)
 #: Words that may follow the verb without changing what was said.
 _TAIL: Final = frozenset({"efendim", "ya", "galiba", "sanirim", "artik", "bile"})
 
@@ -476,7 +502,7 @@ def _item_words(words: list[str]) -> list[str] | None:
         return None
     if not all(re.search(r"[^\W\d_]", w) for w in kept):
         return None
-    if any(fold(w) in _NOT_GOODS or _stem(fold(w)) in _NOT_GOODS for w in kept):
+    if len(kept) == 1 and (fold(kept[0]) in _NOT_GOODS or _stem(fold(kept[0])) in _NOT_GOODS):
         return None
     return kept
 
@@ -556,6 +582,8 @@ def _parse_list_edit(
     verb_at = next((i for i, f in enumerate(folded) if f in verbs), None)
     if verb_at is None:
         return None
+    if anchor_at > 0 and folded[anchor_at - 1] in _OTHER_LISTS:
+        return None  # "çalma listeme", "oynatma listemden": another list
     qualified = folded[anchor_at].startswith("listesi")
     qualifier = anchor_at - 1 if qualified and anchor_at > 0 else None
     if qualifier is not None and folded[qualifier] not in _SHOP_QUALIFIERS:
