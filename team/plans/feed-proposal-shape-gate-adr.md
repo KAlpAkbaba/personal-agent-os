@@ -25,8 +25,9 @@ Kapı 80 dakika ve bir yayın; bir biçim farkı yüzünden kırmızı kalması 
 
 ## Lead'in bağlama satırı
 
-Ana kopyadaki iki izlenmeyen dosya (`2026-10-06-feed-radicale-calendar-server.md`,
-`2026-10-06-feed-iphone-app-apple-account.md`) yeni biçimde yeniden yazılır (`## Sahibe sorulan` -> `## Ne`,
+Ana kopyadaki BÜTÜN izlenmeyen `team/proposals/*-feed-*.md` dosyaları (denetimde üç:
+`2026-10-06-feed-radicale-calendar-server.md`, `2026-10-06-feed-iphone-app-apple-account.md`,
+`2026-10-06-feed-inbound-calls-public-endpoint.md`; bağlamadan önce yeniden sayılır) yeni biçimde yeniden yazılır (`## Sahibe sorulan` -> `## Ne`,
 eksik Hedef/Kabul için `Belirtilmedi.`, sona `## Karar` + `Sahip: evet / hayır / ertele.`) ya da silinir;
 sonra proposal-shapes.test.ts ana kopyada koşulur. Kart bu dosyalara dokunmadı.
 

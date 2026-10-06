@@ -125,6 +125,14 @@ describe("the shape the researcher really writes", () => {
   it("refuses the feeder's old shape: '## Sahibe sorulan' and no 'Ne' is what turned the gate red", () => {
     expect(parseProposal(OLD_FEED_SHAPE).sections.filter((section) => section.role === "what")).toHaveLength(0);
     expect(() => expectProposalShape(OLD_FEED_SHAPE, "OLD_FEED_SHAPE")).toThrow(/OLD_FEED_SHAPE/);
+    // The old shape is also one inline short; with a '## Karar' it is not, and only the one-"what"
+    // rule is left to refuse it (cycle d20261006: loosening that rule kept this case green).
+    const withDecision = `${OLD_FEED_SHAPE}\n## Karar\n\nSahip: evet / hayır / ertele.\n`;
+    expect(() => expectProposalShape(withDecision, "OLD_FEED_SHAPE + Karar")).toThrow(
+      /^OLD_FEED_SHAPE \+ Karar: expected \[\] to have a length of 1/,
+    );
+    // The heading renamed is all it takes to pass: the refusal is the 'Ne' rule's.
+    expectProposalShape(withDecision.replace("## Sahibe sorulan", "## Ne"), "OLD_FEED_SHAPE + Karar, Ne");
   });
 });
 
