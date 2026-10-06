@@ -6,6 +6,7 @@
 
 import { QUEUED_TR, type DrawnSeat } from "./officeModel";
 import { Figure, RoomDecor } from "./officeRobots";
+import { TestSeatCells, type TestSeat } from "./officeTestRoom";
 
 export default function OfficeScene({
   seats,
@@ -13,6 +14,8 @@ export default function OfficeScene({
   reducedMotion,
   onSelect,
   arriving = [],
+  testSeats,
+  now,
 }: {
   seats: DrawnSeat[];
   selected: string | null;
@@ -20,6 +23,10 @@ export default function OfficeScene({
   onSelect: (seat: string) => void;
   /** Seats that just took a new task: their characters walk in (officeMood.arrivals). */
   arriving?: string[];
+  /** The test team's five seats, seated on this same floor after the software seats. */
+  testSeats?: TestSeat[];
+  /** The clock the test seats' moods are read against (defaults to now). */
+  now?: Date;
 }) {
   return (
     <div className="office-scroll" data-office="scene">
@@ -80,6 +87,9 @@ export default function OfficeScene({
             )}
           </button>
         ))}
+        {testSeats && testSeats.length > 0 && (
+          <TestSeatCells seats={testSeats} now={now ?? new Date()} animated={!reducedMotion} />
+        )}
         <RoomDecor />
       </div>
     </div>

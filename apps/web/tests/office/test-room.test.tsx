@@ -13,17 +13,32 @@ import type { BoardNote } from "../../app/core/office/officeBoard";
 import {
   fetchTestRoom,
   TEST_SEATS,
-  TestRoom,
+  TestSeatCells,
   testMoodOf,
   testRoomFromBoard,
 } from "../../app/core/office/officeTestRoom";
 import { twoWorkers } from "./fixtures";
 
 // The owner, 2026-10-03: "Test ekibi ve çalışan ekibi ayrı olsun; 4 test ekibi çalışanı ve 1
-// proje yöneticisi olsun." The Ofis gets a separate 'Test odası' room: five seats, amber and
-// teal, the same mood rules, each seat's current job and the last breaking point.
+// proje yöneticisi olsun." Five test seats, amber and teal, the same mood rules, each seat's
+// current job and the last breaking point; since 2026-10-06 ("Aynı ofiste olsunlar") they sit
+// on the software team's own office floor, not in a room of their own.
 
 const NOW = new Date("2026-10-05T12:30:00Z");
+
+/** The whole markup of the <div> that opens with `open`, nested divs and all (no DOM in node). */
+function elementMarkup(html: string, open: string): string {
+  const start = html.indexOf(open);
+  expect(start, `${open} in the page`).toBeGreaterThanOrEqual(0);
+  const tag = /<div\b[^>]*>|<\/div>/g;
+  tag.lastIndex = start;
+  let depth = 0;
+  for (let m = tag.exec(html); m; m = tag.exec(html)) {
+    depth += m[0] === "</div>" ? -1 : 1;
+    if (depth === 0) return html.slice(start, m.index + m[0].length);
+  }
+  throw new Error(`${open} is never closed`);
+}
 
 let n = 0;
 function note(seat: string, text: string, at: string): BoardNote {
@@ -68,7 +83,7 @@ describe("the test room", () => {
     expect(testMoodOf({ ...base, state: "waiting", since: null }, NOW)).toBe("relaxed");
   });
 
-  it("draws the Test odası with five seats in amber and teal, the job and the last breaking point", () => {
+  it("draws the five test seats like software seats: job above, amber and teal figure, name card, breaking point", () => {
     const seats = testRoomFromBoard(
       [
         note("tester-1", "iş: nobet (tj-r1-1)", "2026-10-05T12:00:00Z"),
@@ -76,17 +91,21 @@ describe("the test room", () => {
       ],
       NOW,
     );
-    const html = renderToStaticMarkup(<TestRoom seats={seats} now={NOW} animated={false} />);
-    expect(html).toContain("Test odası");
+    const html = renderToStaticMarkup(<TestSeatCells seats={seats} now={NOW} animated={false} />);
+    expect(html).toContain('class="office-floor-divider"');
+    expect(html).toContain("Test ekibi");
     expect(html.match(/data-test-seat="/g)?.length).toBe(5);
-    expect(html).toContain("Test Proje Yöneticisi");
-    expect(html).toContain("Test çalışanı 4");
-    expect(html).toContain("nobet (tj-r1-1)");
-    expect(html).toContain("yük 256");
-    expect(html).toContain("office-test-room");
+    expect(html.match(/class="office-seat office-test-seat"/g)?.length).toBe(5);
+    // the name stands on its own white name card, never run into the state text
+    expect(html).toContain('<span class="office-name" aria-hidden="true">Test Proje Yöneticisi</span>');
+    expect(html).toContain('<span class="office-name" aria-hidden="true">Test çalışanı 4</span>');
+    expect(html).toMatch(/<span class="office-label" title="nobet \(tj-r1-1\)" aria-hidden="true">nobet \(tj-r1-1\)<\/span>/);
+    expect(html).toMatch(/<span class="office-label" title="iş bekliyor" aria-hidden="true">iş bekliyor<\/span>/);
+    expect(html).toMatch(/class="office-test-breaking"[^>]*>Son kopma noktası: Danışman&#x27;a, test turu r1: kopma noktası yük 256/);
+    expect(html).toContain('aria-label="Test çalışanı 2: iş bekliyor, dinleniyor"');
+    expect(html).toContain('aria-label="Test çalışanı 1: test ediyor, odaklanmış, iş: nobet (tj-r1-1)"');
     expect(html).toMatch(/--office-shirt:\s*#f4b13a/);
     expect(html).toMatch(/--office-navy:\s*#14b8a6/);
-    expect(html).toContain("odaklanmış");
   });
 
   it("an unreachable board is five waiting seats, never an error", async () => {
@@ -99,13 +118,40 @@ describe("the test room", () => {
   // The inspector, 2026-10-05: <TestRoom> was never mounted - the Ofis did not show the Test
   // odası (an acceptance item). OfficeView takes the test seats and draws the room beside the
   // software team; page.tsx reads them from the board with every office poll.
-  it("the Ofis page itself shows the Test odası beside the software team", () => {
+  it("the Ofis page itself shows the test team beside the software team", () => {
     const seats = testRoomFromBoard([note("tester-2", "iş: saglik (tj-r1-2)", "2026-10-05T12:00:00Z")], NOW);
     const html = renderToStaticMarkup(
       <OfficeView view={twoWorkers()} selected={null} offline={false} reducedMotion={false} onSelect={() => {}} testSeats={seats} />,
     );
-    expect(html).toContain("Test odası");
     expect(html.match(/data-test-seat="/g)?.length).toBe(5);
     expect(html).toContain("saglik (tj-r1-2)");
+  });
+
+  // The owner, 2026-10-06: "Aynı ofiste olsunlar". The test team sits on the software team's
+  // own floor - inside `.office-floor`, after the software seats - and nowhere else.
+  it("seats the test team inside the office floor, once each, with no separate Test odası", () => {
+    const seats = testRoomFromBoard([], NOW);
+    const html = renderToStaticMarkup(
+      <OfficeView view={twoWorkers()} selected={null} offline={false} reducedMotion={false} onSelect={() => {}} testSeats={seats} />,
+    );
+    expect(html.match(/class="office-floor"/g)).toHaveLength(1);
+    const floor = elementMarkup(html, '<div class="office-floor">');
+    const outside = html.replace(floor, "");
+    for (const id of TEST_SEATS) {
+      expect(html.split(`data-test-seat="${id}"`).length - 1, id).toBe(1);
+      expect(floor.split(`data-test-seat="${id}"`).length - 1, `${id} inside .office-floor`).toBe(1);
+    }
+    expect(outside).not.toContain("data-test-seat=");
+    const names = [...floor.matchAll(/data-test-seat="[^"]*"[\s\S]*?<span class="office-name"[^>]*>([^<]*)<\/span>/g)].map(
+      (m) => m[1],
+    );
+    expect(names).toEqual(["Test Proje Yöneticisi", "Test çalışanı 1", "Test çalışanı 2", "Test çalışanı 3", "Test çalışanı 4"]);
+    // the divider is in the floor, and the test seats come after every software seat
+    expect(floor).toMatch(/<div class="office-floor-divider"[^>]*><span>Test ekibi<\/span><\/div>/);
+    expect(floor.lastIndexOf('data-seat="')).toBeGreaterThan(0);
+    expect(floor.indexOf("office-floor-divider")).toBeGreaterThan(floor.lastIndexOf('data-seat="'));
+    expect(floor.indexOf("data-test-seat=")).toBeGreaterThan(floor.indexOf("office-floor-divider"));
+    expect(html).not.toContain("office-test-room");
+    expect(html).not.toContain("Test odası");
   });
 });

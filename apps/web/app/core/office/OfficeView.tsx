@@ -12,7 +12,7 @@ import type { ModelSetting, OfficeView as Office } from "./officeApi";
 import { energyOf } from "./officeEnergy";
 import { livenessLines } from "./officeLiveness";
 import { buildOffice, buildPanel } from "./officeModel";
-import { TestRoom, type TestSeat } from "./officeTestRoom";
+import type { TestSeat } from "./officeTestRoom";
 
 export default function OfficeView({
   view,
@@ -37,7 +37,7 @@ export default function OfficeView({
   onChooseModel?: ChooseModel;
   /** Called with the whole setting, its fallback flipped. */
   onToggleFallback?: (next: ModelSetting) => void;
-  /** The test team's five seats (officeTestRoom.tsx), drawn as the Test odası. */
+  /** The test team's five seats (officeTestRoom.tsx), seated on the same office floor as the software team. */
   testSeats?: TestSeat[];
 }) {
   const office = buildOffice(view);
@@ -92,6 +92,7 @@ export default function OfficeView({
           reducedMotion={reducedMotion}
           onSelect={onSelect}
           arriving={arriving}
+          testSeats={testSeats}
         />
         <OfficePanel
           panel={panel}
@@ -108,7 +109,6 @@ export default function OfficeView({
           ))}
         </ul>
       )}
-      {testSeats && <TestRoom seats={testSeats} now={new Date()} animated={!reducedMotion} />}
       <div className="office-energy" data-office="energy" data-level={energy.level}>
         <div className="office-energy-meter">
           <span className="office-energy-text">{energy.text}</span>

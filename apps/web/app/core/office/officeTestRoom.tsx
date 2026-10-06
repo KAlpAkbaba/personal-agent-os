@@ -1,8 +1,9 @@
 /**
- * The Ofis' 'Test odası' (the owner, 2026-10-03: "Test ekibi ve çalışan ekibi ayrı olsun; 4 test
- * ekibi çalışanı ve 1 proje yöneticisi olsun"). A room of its own: the Test Proje Yöneticisi and
- * four test çalışanları, in amber and teal, with the office's mood rules, each seat's current
- * job and the last breaking point.
+ * The Ofis' test team (the owner, 2026-10-03: "Test ekibi ve çalışan ekibi ayrı olsun; 4 test
+ * ekibi çalışanı ve 1 proje yöneticisi olsun"; 2026-10-06: "Aynı ofiste olsunlar"): the Test
+ * Proje Yöneticisi and four test çalışanları, in amber and teal, with the office's mood rules,
+ * each seat's current job and the last breaking point - seated on the same office floor as the
+ * software team, behind a "Test ekibi" divider (TestSeatCells, drawn by OfficeScene).
  *
  * The room reads the team's board and nothing else (scripts/testteam/test-round.ps1 posts the
  * notes): a tester's "iş: <job>" is its job now, its "sonuç: passed|failed|broke - ..." the
@@ -108,35 +109,64 @@ const STATE_TR: Record<TestSeatState, string> = {
   broke: "kopma noktası buldu",
 };
 
-export function TestRoom({ seats, now, animated }: { seats: TestSeat[]; now: Date; animated: boolean }) {
+/** The spoken name of a test seat: "Test çalışanı 1: iş bekliyor, dinleniyor". */
+export function testSeatAriaLabel(seat: TestSeat, now: Date): string {
+  const base = `${seatTitle(seat.seat)}: ${STATE_TR[seat.state]}, ${MOOD_TR[testMoodOf(seat, now)]}`;
+  const job = seat.job ? `, iş: ${seat.job}` : "";
+  const breaking = seat.breaking ? `, son kopma noktası: ${seat.breaking}` : "";
+  return base + job + breaking;
+}
+
+/**
+ * The test team inside the office floor (the owner, 2026-10-06: "Aynı ofiste olsunlar"): a
+ * full-row "Test ekibi" divider, then the five seats drawn like the software seats - the job
+ * above, the figure in the test team's amber and teal, the white name card, a breaking point
+ * under it. Rendered by OfficeScene inside `.office-floor`, never as a room of its own.
+ */
+export function TestSeatCells({ seats, now, animated }: { seats: TestSeat[]; now: Date; animated: boolean }) {
   return (
-    <section className="office-test-room" aria-label="Test odası" style={PALETTE}>
-      <h2>Test odası</h2>
-      <ul className="office-test-seats">
-        {seats.map((seat) => {
-          const mood = testMoodOf(seat, now);
-          const working = seat.state === "working";
-          return (
-            <li key={seat.seat} data-test-seat={seat.seat} data-state={seat.state}>
-              <Figure
-                seat={figureSeat(seat.seat)}
-                plain={false}
-                pose={working ? "typing" : "seated"}
-                warning={seat.state === "failed"}
-                animated={animated && working}
-                mood={mood}
-              />
-              <strong>{seatTitle(seat.seat)}</strong>
-              <span className="office-test-state">
-                {STATE_TR[seat.state]} · {MOOD_TR[mood]}
+    <>
+      <div className="office-floor-divider" data-office="test-team">
+        <span>Test ekibi</span>
+      </div>
+      {seats.map((seat) => {
+        const mood = testMoodOf(seat, now);
+        const working = seat.state === "working";
+        const label = seat.job ?? "iş bekliyor";
+        return (
+          <div
+            key={seat.seat}
+            className="office-seat office-test-seat"
+            role="group"
+            style={PALETTE}
+            data-test-seat={seat.seat}
+            data-state={seat.state}
+            data-mood={mood}
+            aria-label={testSeatAriaLabel(seat, now)}
+          >
+            <span className="office-label" title={label} aria-hidden="true">
+              {label}
+            </span>
+            <Figure
+              seat={figureSeat(seat.seat)}
+              plain={false}
+              pose={working ? "typing" : "seated"}
+              warning={seat.state === "failed"}
+              animated={animated && working}
+              mood={mood}
+            />
+            <span className="office-name" aria-hidden="true">
+              {seatTitle(seat.seat)}
+            </span>
+            {seat.breaking && (
+              <span className="office-test-breaking" title={seat.breaking} aria-hidden="true">
+                Son kopma noktası: {seat.breaking}
               </span>
-              <span className="office-test-job">{seat.job ?? "iş yok"}</span>
-              {seat.breaking && <span className="office-test-breaking">Son kopma noktası: {seat.breaking}</span>}
-            </li>
-          );
-        })}
-      </ul>
-    </section>
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
