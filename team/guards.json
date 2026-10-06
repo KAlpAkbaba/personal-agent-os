@@ -36,6 +36,12 @@
       "kind": "powershell",
       "path": "scripts/tests/installer-strictmode.tests.ps1",
       "label": "katı kipte patlayan PowerShell"
+    },
+    {
+      "id": "migration-revision-literals",
+      "kind": "pytest",
+      "path": "services/api/tests/unit/test_migration_revision_literals.py",
+      "label": "testte sabit göç numarası"
     }
   ]
 }

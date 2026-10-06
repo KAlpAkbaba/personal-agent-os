@@ -29,11 +29,12 @@ from app.watch import compare, runner, service
 from app.watch.models import Watch, WatchReading
 from app.watch.reader import Observation
 from tests.integration.conftest import owner_client
+from tests.integration.migration_ids import parent_of, revision_named
 
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-BEFORE = "0065_misheard_utterances"
+BEFORE = parent_of(revision_named("watches"))
 URL = "https://www.home-assistant.io/blog/"
 
 #: column -> (data_type, character_maximum_length, is_nullable), as information_schema says.

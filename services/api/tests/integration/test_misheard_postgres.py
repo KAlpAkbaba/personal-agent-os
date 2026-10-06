@@ -35,12 +35,13 @@ from app.main import create_app
 from app.voice.misheard import service
 from app.voice.misheard.models import MisheardUtterance
 from tests.integration.conftest import owner_client
+from tests.integration.migration_ids import parent_of, revision_named
 
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
 TABLE = "misheard_utterances"
-BEFORE = "0064_memory_vocabulary_class"
+BEFORE = parent_of(revision_named("misheard_utterances"))
 HEARD = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
 SENTENCE = "Ofisü bilgisayarında hesap makinesini açın"
 

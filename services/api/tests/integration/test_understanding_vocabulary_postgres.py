@@ -39,6 +39,7 @@ from app.voice.realtime_sessions.models import RealtimeSessionRow
 from app.voice.realtime_sessions.tools_operator import names_unbound_machine
 from app.voice.understanding import corrections, fuzzy
 from app.voice.understanding import policy as understanding_policy
+from tests.integration.migration_ids import parent_of, revision_named
 
 pytestmark = pytest.mark.integration
 
@@ -213,7 +214,7 @@ def test_migration_0064_is_what_lets_the_row_in_and_its_downgrade_takes_it_out(
                 session, EMBEDDER, _correction(heard, "ofis"), session_id="pg", proposals_dir=None
             ).written
 
-        command.downgrade(cfg, "0063_team_state")
+        command.downgrade(cfg, parent_of(revision_named("memory_vocabulary_class")))
         with MemoryRuntime(settings).session() as session:
             assert _rows(session, heard) == []
             refused = corrections.learn(

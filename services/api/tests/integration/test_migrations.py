@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from app.config import Settings
+from tests.integration.migration_ids import revision_named
 
 pytestmark = pytest.mark.integration
 
@@ -92,7 +93,7 @@ def test_downgrade_one_revision_drops_only_m3(settings: Settings) -> None:
     """0003 -> 0002 must remove M3 tables and keep the M0/M1 schema intact."""
     cfg = alembic_config()
     command.upgrade(cfg, "head")
-    command.downgrade(cfg, "0002_device_broker")
+    command.downgrade(cfg, revision_named("device_broker"))
     names = table_names(settings)
     assert ARTIFACT_TABLES.isdisjoint(names)
     assert BROKER_TABLES <= names
@@ -126,7 +127,7 @@ def test_downgrade_one_revision_drops_only_webpush(settings: Settings) -> None:
     cfg = alembic_config()
     command.upgrade(cfg, "head")
     assert WEBPUSH_TABLES <= table_names(settings)
-    command.downgrade(cfg, "0059_ambient_camera_mode")
+    command.downgrade(cfg, revision_named("ambient_camera_mode"))
     names = table_names(settings)
     assert WEBPUSH_TABLES.isdisjoint(names)
     assert "ambient_policy" in names
