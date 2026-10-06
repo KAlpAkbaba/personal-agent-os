@@ -55,17 +55,19 @@ def _sign(token: str, url: str, fields: list[tuple[str, str]]) -> str:
 
 
 def test_twilio_documentation_vector_is_accepted() -> None:
-    """The worked example of twilio.com/docs/usage/security (auth token 12345)."""
+    """The worked example of twilio.com/docs/usage/security (auth token 12345): the docs print
+    the signature ``GvWf1cFY/Q7PnoempGyD5oXAezc=`` for exactly these fields and this url."""
     fields = {
         "CallSid": "CA1234567890ABCDE",
-        "Caller": "+12349013030",
+        "Caller": "+14158675310",
         "Digits": "1234",
         "From": "+14158675310",
         "To": "+18005551212",
     }
     url = "https://mycompany.com/myapp.php?foo=1&bar=2"
-    assert tw.validate_signature("12345", url, fields, "0/KCTR6DLpKmkAf8muzZqo1nDgQ=")
-    assert not tw.validate_signature("12345", url, fields, "0/KCTR6DLpKmkAf8muzZqo1nDgQ")
+    assert tw.validate_signature("12345", url, fields, "GvWf1cFY/Q7PnoempGyD5oXAezc=")
+    assert not tw.validate_signature("12345", url, fields, "GvWf1cFY/Q7PnoempGyD5oXAezc")
+    assert not tw.validate_signature("12345", url, {**fields, "Digits": "1235"}, "GvWf1cFY/Q7PnoempGyD5oXAezc=")
 
 
 def test_a_correct_signature_is_accepted() -> None:

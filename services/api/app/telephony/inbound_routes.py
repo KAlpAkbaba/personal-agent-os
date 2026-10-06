@@ -13,6 +13,7 @@ Nothing is written while the phone rings: the call's one ledger row is finalize'
 from __future__ import annotations
 
 import asyncio
+import urllib.parse
 from typing import Final
 
 from fastapi import APIRouter, Request, Response, WebSocket
@@ -43,8 +44,15 @@ def _line(app: object) -> InboundLine:
 
 
 async def _signed_form(request: Request, line: InboundLine) -> dict[str, str] | None:
-    form = await request.form()
-    fields = [(str(k), str(val)) for k, val in form.multi_items()]
+    # Twilio posts application/x-www-form-urlencoded. Parsed with the standard library:
+    # Starlette's request.form() needs python-multipart, which this service does not carry.
+    body = await request.body()
+    try:
+        fields = urllib.parse.parse_qsl(
+            body.decode("utf-8"), keep_blank_values=True, strict_parsing=False
+        )
+    except (UnicodeDecodeError, ValueError):
+        return None
     url = line.settings.public_base_url.rstrip("/") + request.url.path
     if request.url.query:
         url += "?" + request.url.query
