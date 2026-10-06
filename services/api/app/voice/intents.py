@@ -33,9 +33,9 @@ from typing import Any, Final
 from app.calendar import tr_time as calendar_tr_time
 from app.devices.aliases import strip_device_phrases
 from app.household import parse as household_parse
-from app.money import parse as money_parse
 from app.macros.naming import match_stored_name
 from app.macros.naming import spoken_name as macro_spoken_name
+from app.money import parse as money_parse
 from app.narration import commands
 from app.narration.commands import Command, NarrationState, ParsedCommand, State
 from app.narration.engine import PARAGRAPH_HEADING, PARAGRAPH_LIST, Cursor, NarrationPlan

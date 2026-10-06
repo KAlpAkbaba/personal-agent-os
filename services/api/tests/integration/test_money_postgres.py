@@ -185,7 +185,9 @@ def test_a_conversation_spend_is_booked_then_confirmed_by_the_bank_mail_once(fac
         session.commit()
         assert loop.scan_conversations(session, now=now + timedelta(seconds=20))["booked"] == 1
         assert loop.scan_conversations(session, now=now + timedelta(seconds=40))["booked"] == 0
-        _mail(session, "LCW MODA işyerinde 750,00 TL harcama yapılmıştır.", now + timedelta(minutes=3))
+        _mail(
+            session, "LCW MODA işyerinde 750,00 TL harcama yapılmıştır.", now + timedelta(minutes=3)
+        )
         assert ledger.ingest_mail(session, now=now + timedelta(minutes=4))["matched"] == 1
         assert ledger.ingest_mail(session, now=now + timedelta(minutes=9))["read"] == 0
     with factory() as session:

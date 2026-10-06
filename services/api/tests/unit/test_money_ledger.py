@@ -27,7 +27,7 @@ from app.conversations.models import ConversationRow, SegmentRow
 from app.mail.models import MailIndexRow
 from app.mail.poller import MailPoller
 from app.main import create_app
-from app.money import amounts, banks, ledger, parse, pending, service
+from app.money import amounts, banks, ledger, pending, service
 from app.money.models import (
     MONEY_TABLES,
     MoneyBalance,

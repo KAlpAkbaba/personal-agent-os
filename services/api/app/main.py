@@ -100,9 +100,6 @@ from app.location.providers import (
 from app.location.service import LocationService
 from app.logging import configure_logging, get_logger
 from app.mail.poller import MailPoller
-from app.money import ledger as money_ledger
-from app.money.loop import SpendLoop as MoneySpendLoop
-from app.money.routes import router as money_router
 from app.mail.providers import build_mail_provider, build_mail_sender
 from app.mail.routes import device_router as mail_device_router
 from app.mail.routes import router as mail_router
@@ -113,6 +110,9 @@ from app.memory.runtime import MemoryRuntime
 from app.middleware import TraceIdMiddleware
 from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
+from app.money import ledger as money_ledger
+from app.money.loop import SpendLoop as MoneySpendLoop
+from app.money.routes import router as money_router
 from app.narration.routes import router as narration_router
 from app.nativefactory.interrupted import fail_interrupted_builds
 from app.nativefactory.routes import router as native_router

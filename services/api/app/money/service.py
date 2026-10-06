@@ -283,7 +283,9 @@ def spent(db: Session, *, category: str | None, now: datetime) -> Spent:
 
 
 def spent_speech(summary: Spent) -> str:
-    where = f"{categories.SPOKEN.get(summary.category, summary.category)} " if summary.category else ""
+    where = (
+        f"{categories.SPOKEN.get(summary.category, summary.category)} " if summary.category else ""
+    )
     if not summary.count:
         return f"Bu ay {where}bir harcama kaydım yok efendim."
     said = f"Bu ay {where}{format_tl(summary.total_kurus)} harcadınız ({summary.count} harcama)"

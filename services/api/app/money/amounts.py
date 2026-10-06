@@ -190,7 +190,7 @@ def words_amount(words: list[str]) -> int | None:
 def _clean(word: str) -> str:
     word = word.replace("İ", "i").replace("I", "ı").lower()
     word = re.split(r"['’`]", word, maxsplit=1)[0]
-    return word.strip(".,!?;:()\"")
+    return word.strip('.,!?;:()"')
 
 
 def _tokens(sentence: str) -> list[str]:

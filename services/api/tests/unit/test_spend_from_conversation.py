@@ -29,8 +29,8 @@ from app.voice.realtime_sessions.tools import ToolContext
 
 T0 = datetime(2026, 10, 6, 11, 0, tzinfo=UTC)
 
-O = True  # the owner said it
-X = False  # someone else said it
+ME = True  # the owner said it
+THEM = False  # someone else said it
 
 
 def _seg(seq: int, owner: bool, words: str) -> spend.Line:
@@ -47,28 +47,26 @@ def _decide(lines: list[tuple[bool, str]], *, ended: bool = True, owner_known: b
 
 def test_price_amount_and_his_acceptance_is_booked() -> None:
     decisions = _decide(
-        [(O, "Bu ceket ne kadar?"), (X, "Yedi yüz elli lira abi."), (O, "Tamam alayım.")]
+        [(ME, "Bu ceket ne kadar?"), (THEM, "Yedi yüz elli lira abi."), (ME, "Tamam alayım.")]
     )
-    assert [(d.kind, d.amount_kurus, d.method) for d in decisions] == [
-        (spend.BOOK, 75000, "card")
-    ]
+    assert [(d.kind, d.amount_kurus, d.method) for d in decisions] == [(spend.BOOK, 75000, "card")]
     assert decisions[0].anchor_seq == 3
 
 
 @pytest.mark.parametrize("accept", ["Olur veriyorum.", "Tamam alıyorum.", "Anlaştık, alıyorum."])
 def test_the_acceptance_words(accept) -> None:
-    decisions = _decide([(O, "Kaç para?"), (X, "1.250 TL"), (O, accept)])
+    decisions = _decide([(ME, "Kaç para?"), (THEM, "1.250 TL"), (ME, accept)])
     assert [(d.kind, d.amount_kurus) for d in decisions] == [(spend.BOOK, 125000)]
 
 
 def test_a_bare_number_answering_the_price_question_is_the_price() -> None:
-    decisions = _decide([(O, "Bu ne kadar?"), (X, "Yedi yüz elli."), (O, "Tamam alayım.")])
+    decisions = _decide([(ME, "Bu ne kadar?"), (THEM, "Yedi yüz elli."), (ME, "Tamam alayım.")])
     assert [(d.kind, d.amount_kurus) for d in decisions] == [(spend.BOOK, 75000)]
 
 
 def test_cash_said_is_booked_as_cash() -> None:
     decisions = _decide(
-        [(O, "Ne kadar?"), (X, "Üç yüz lira."), (O, "Tamam alayım, nakit verdim.")]
+        [(ME, "Ne kadar?"), (THEM, "Üç yüz lira."), (ME, "Tamam alayım, nakit verdim.")]
     )
     assert [(d.kind, d.method) for d in decisions] == [(spend.BOOK, "cash")]
 
@@ -77,14 +75,29 @@ def test_cash_said_is_booked_as_cash() -> None:
     ("lines", "reason", "amount"),
     [
         # A price and an amount, then no acceptance: asked after the conversation.
-        ([(O, "Bu ne kadar?"), (X, "Yedi yüz elli lira."), (O, "Bir düşüneyim.")],
-         spend.REASON_NO_ACCEPTANCE, 75000),
+        (
+            [(ME, "Bu ne kadar?"), (THEM, "Yedi yüz elli lira."), (ME, "Bir düşüneyim.")],
+            spend.REASON_NO_ACCEPTANCE,
+            75000,
+        ),
         # Two prices: which one? Asked with the last.
-        ([(O, "Ne kadar?"), (X, "Sekiz yüz lira."), (O, "Çok pahalı."), (X, "Yedi yüz elli olsun."),
-          (O, "Tamam alayım.")], spend.REASON_TWO_PRICES, 75000),
+        (
+            [
+                (ME, "Ne kadar?"),
+                (THEM, "Sekiz yüz lira."),
+                (ME, "Çok pahalı."),
+                (THEM, "Yedi yüz elli olsun."),
+                (ME, "Tamam alayım."),
+            ],
+            spend.REASON_TWO_PRICES,
+            75000,
+        ),
         # The acceptance was not HIS (someone else said "tamam alayım").
-        ([(O, "Ne kadar?"), (X, "Yedi yüz elli lira."), (X, "Tamam alayım.")],
-         spend.REASON_NO_ACCEPTANCE, 75000),
+        (
+            [(ME, "Ne kadar?"), (THEM, "Yedi yüz elli lira."), (THEM, "Tamam alayım.")],
+            spend.REASON_NO_ACCEPTANCE,
+            75000,
+        ),
     ],
 )
 def test_not_sure_is_asked_not_booked(lines, reason, amount) -> None:
@@ -94,14 +107,14 @@ def test_not_sure_is_asked_not_booked(lines, reason, amount) -> None:
 
 def test_an_owner_nobody_can_tell_apart_is_asked_not_booked() -> None:
     decisions = _decide(
-        [(X, "Bu ceket ne kadar?"), (X, "Yedi yüz elli lira."), (X, "Tamam alayım.")],
+        [(THEM, "Bu ceket ne kadar?"), (THEM, "Yedi yüz elli lira."), (THEM, "Tamam alayım.")],
         owner_known=False,
     )
     assert [(d.kind, d.reason) for d in decisions] == [(spend.ASK, spend.REASON_UNKNOWN_SPEAKER)]
 
 
 def test_an_open_episode_is_not_asked_while_the_conversation_goes_on() -> None:
-    lines = [(O, "Bu ne kadar?"), (X, "Yedi yüz elli lira.")]
+    lines = [(ME, "Bu ne kadar?"), (THEM, "Yedi yüz elli lira.")]
     assert _decide(lines, ended=False) == []
     assert [d.kind for d in _decide(lines, ended=True)] == [spend.ASK]
 
@@ -109,10 +122,10 @@ def test_an_open_episode_is_not_asked_while_the_conversation_goes_on() -> None:
 @pytest.mark.parametrize(
     "lines",
     [
-        [(O, "Maaşım elli bin lira oldu."), (X, "Tamam.")],
-        [(O, "Saat kaçta geliyorsun?"), (X, "Üçte.")],
-        [(O, "Tamam alayım."), (X, "Peki.")],
-        [(O, "Ne kadar sürer?"), (X, "İki saat.")],
+        [(ME, "Maaşım elli bin lira oldu."), (THEM, "Tamam.")],
+        [(ME, "Saat kaçta geliyorsun?"), (THEM, "Üçte.")],
+        [(ME, "Tamam alayım."), (THEM, "Peki.")],
+        [(ME, "Ne kadar sürer?"), (THEM, "İki saat.")],
         [],
     ],
 )
@@ -123,12 +136,12 @@ def test_no_purchase_is_nothing(lines) -> None:
 def test_two_purchases_in_one_conversation_are_two() -> None:
     decisions = _decide(
         [
-            (O, "Domates ne kadar?"),
-            (X, "Kırk lira."),
-            (O, "Tamam alayım."),
-            (O, "Peynir kaç para?"),
-            (X, "İki yüz elli lira."),
-            (O, "Olur veriyorum."),
+            (ME, "Domates ne kadar?"),
+            (THEM, "Kırk lira."),
+            (ME, "Tamam alayım."),
+            (ME, "Peynir kaç para?"),
+            (THEM, "İki yüz elli lira."),
+            (ME, "Olur veriyorum."),
         ]
     )
     assert [(d.kind, d.amount_kurus, d.anchor_seq) for d in decisions] == [
@@ -188,8 +201,8 @@ def _conversation(db, lines: list[tuple[bool, str]], *, ended_at: datetime | Non
     return cid
 
 
-SURE = [(O, "Bu ceket ne kadar?"), (X, "Yedi yüz elli lira abi."), (O, "Tamam alayım.")]
-UNSURE = [(O, "Bu ne kadar?"), (X, "Yedi yüz elli lira."), (O, "Bir düşüneyim.")]
+SURE = [(ME, "Bu ceket ne kadar?"), (THEM, "Yedi yüz elli lira abi."), (ME, "Tamam alayım.")]
+UNSURE = [(ME, "Bu ne kadar?"), (THEM, "Yedi yüz elli lira."), (ME, "Bir düşüneyim.")]
 
 
 def test_a_sure_spend_is_booked_while_the_conversation_still_runs(db) -> None:

@@ -152,9 +152,7 @@ def scan_conversations(db: Session, *, now: datetime) -> dict[str, int]:
     ).all()
     for conv in conversations:
         segments = db.scalars(
-            select(SegmentRow)
-            .where(SegmentRow.conversation_id == conv.id)
-            .order_by(SegmentRow.seq)
+            select(SegmentRow).where(SegmentRow.conversation_id == conv.id).order_by(SegmentRow.seq)
         ).all()
         scan = db.get(MoneyScan, conv.id)
         last_seq = segments[-1].seq if segments else 0

@@ -90,8 +90,8 @@ from app.voice.realtime_sessions.tools_household import (
 from app.voice.realtime_sessions.tools_macros import MACRO_TOOL_NAMES, register_macro_tools
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_media import register_media_tools
-from app.voice.realtime_sessions.tools_money import MONEY_TOOL_NAMES, register_money_tools
 from app.voice.realtime_sessions.tools_memory import register_memory_tools
+from app.voice.realtime_sessions.tools_money import MONEY_TOOL_NAMES, register_money_tools
 from app.voice.realtime_sessions.tools_native import (
     NATIVE_TOOL_NAMES,
     register_native_tools,

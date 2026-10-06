@@ -193,4 +193,11 @@ def after_mail_poll(db: Session, now: datetime) -> Any:
     return ingest_mail(db, now=now)
 
 
-__all__ = ["LOOKBACK", "MATCH_AFTER", "MATCH_BEFORE", "after_mail_poll", "find_match", "ingest_mail"]
+__all__ = [
+    "LOOKBACK",
+    "MATCH_AFTER",
+    "MATCH_BEFORE",
+    "after_mail_poll",
+    "find_match",
+    "ingest_mail",
+]
