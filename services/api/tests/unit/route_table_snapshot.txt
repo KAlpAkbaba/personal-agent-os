@@ -191,6 +191,7 @@ GET /v1/voice/realtime/sessions/{session_id}/benchmark session_benchmark
 GET /v1/voice/realtime/sessions/{session_id}/sideband pull_sideband
 GET /v1/voice/speaker speaker_status
 GET /v1/watches list_watches
+GET /v1/web-tasks/{task_id} get_web_task
 GET /v1/webpush/public-key get_public_key
 GET /v1/webpush/subscriptions list_subscriptions
 GET /v1/world get_world
@@ -389,6 +390,12 @@ POST /v1/voice/realtime/sessions/{session_id}/tool-calls/{call_id}/complete comp
 POST /v1/voice/speaker/enroll enroll_speaker
 POST /v1/voice/speaker/verify verify_speaker_route
 POST /v1/watches create_watch
+POST /v1/web-tasks start_web_task
+POST /v1/web-tasks/{task_id}/cancel cancel_web_task
+POST /v1/web-tasks/{task_id}/confirm confirm_web_task
+POST /v1/web-tasks/{task_id}/continue continue_web_task
+POST /v1/web-tasks/{task_id}/decline decline_web_task
+POST /v1/web-tasks/{task_id}/read-back read_back_web_task
 POST /v1/webpush/subscriptions create_subscription
 PUT /v1/alarms/wake-song put_wake_song
 PUT /v1/ambient/policy put_policy
