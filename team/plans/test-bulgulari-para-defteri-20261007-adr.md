@@ -27,28 +27,31 @@ Staging'de yeniden koşu bu çalışmada yapılamadı: `run-scenario.ps1` "ORTAM
 (/v1/identity/sessions/current 401)" dedi - yazılım hatası değil, tur başı `seed.ps1` işi. Yeniden üretim
 süreç içinde (TestClient, aynı kod) yapıldı.
 
-## Karar (uygulandı)
+## Karar (uygulandı, dönüş 3)
 
-`parse_amount` hane sayısı aşırı bir dizgeyi tutar saymaz: `int()`'den önce lira haneleri (gruplar
-birleştirilmiş) `MAX_LIRA_DIGITS = 15` ile karşılaştırılır, aşan `None` döner. 9-15 hane hâlâ bir tutardır
-ve defter tavanı (10 milyon TL, `service.MAX_KURUS`) "fazla büyük" ile reddeder; 16+ hane "anlayamadım"
-(`money_refused`). `sys.set_int_max_str_digits` yükseltilmez (DoS koruması bu sınırın amacı). Düzeltme
-rotada değil `parse_amount`'ta: iki rota, `money_in`, `banks.py` ve `tools_money.py:74` aynı yerden kapanır.
-`None` zaten rotada 422 `money_refused`, cümlede "tutar yok" demektir - yeni hata yolu gerekmez.
+Düzeltme onaylı `money-amount-input-edges` kartınınkiyle aynıdır: `services/api/app/money/amounts.py`
+o dalın (`team/d20261007/worker-money-amount-input-edges`, b89193ee) dosyasıyla bayt bayt aynı
+(sha256 `4792b8acb7d5ca0f1a6b0d8d6668eef018466abc72f462c81a4438126f67fd30`). `parse_amount`, `int()`'den
+önce `MAX_AMOUNT_CHARS = 64` karakterden uzun dizgeyi `None` sayar; regex yalnız ASCII rakam okur.
+Önceki dönüşün `MAX_LIRA_DIGITS = 15` sınırı kaldırıldı: edges testi 30 haneli tutarı okunur sayar
+(defter tavanı `service.MAX_KURUS` "fazla büyük" ile reddeder), 15 hane sınırı onu kırardı; iki dalın
+aynı fonksiyonu farklı değiştirmesi birleştirmede çakışırdı. `sys.set_int_max_str_digits` yükseltilmez.
+Bu kartın katkısı: test ekibi bulgusunun regresyon testi `test_money_amount_digit_limit.py` (4301 ve 5000
+haneli string tutar, nakit rotası ve soru yanıtı rotası dâhil, 9 vaka). Dal team/nightly/lead (81240096)
+üstüne yeniden tabanlandı; edges dalı birleştirilmedi.
 
 ## Kanıt
 
-- Regresyon testi `services/api/tests/unit/test_money_amount_digit_limit.py` (9 vaka), 1517a484'teki ve
-  önceki ADR ekindeki dosyayla birebir (sha256 `26fd0d71adb2ce8973004837fe7e2118b92c326d1b00c9948798373fe0e41226`).
-  Düzeltmesiz kodda 9 failed (PROVEN_AUTOMATED).
-- Düzeltmeyle: yeni test + `test_money_ledger.py` + `test_spend_from_conversation.py` 116 passed (PROVEN_AUTOMATED).
-- Mutasyon: `MAX_LIRA_DIGITS` 15 -> 10000 (int sınırının üstü): 9 failed; yedekten geri yüklendi,
-  `amounts.py` sha256 `59541413…96930` önce/sonra aynı, test yeniden 9 passed (PROVEN_AUTOMATED).
-- `tools_money.py:74` ve `banks.py` yolları için ayrı test yok: aynı `parse_amount` çağrısından kapandıkları
-  koddan çıkarım (PROVEN_PROXY, `parse_amount` birim vakaları üzerinden).
-- Staging'de oturumlu yeniden koşu: NOT_RUN (`/v1/identity/sessions/current` 401, tur başı `seed.ps1` işi;
-  ortam sorunu, kimlik bilgisine dokunulmadı). Staging'in düzeltmeli sha'yı sunması sonraki sürüme bağlı.
-- Tüm birim takımı: lead'in kapısı koşar.
+- Regresyon testi `services/api/tests/unit/test_money_amount_digit_limit.py` değişmedi (sha256
+  `26fd0d71adb2ce8973004837fe7e2118b92c326d1b00c9948798373fe0e41226`). Düzeltmesiz kodda 9 failed
+  (54dca82e, PROVEN_AUTOMATED).
+- Düzeltmeyle: digit_limit + `test_money_ledger.py` + `test_spend_from_conversation.py` 116 passed;
+  `test_money_amount_edges.py` (edges dalında, aynı amounts.py sha'sıyla) 21 passed (PROVEN_AUTOMATED).
+- Mutasyon: `MAX_AMOUNT_CHARS` 64 -> 6400 (int sınırının üstü): digit_limit 9 failed; yedekten geri
+  yüklendi, sha256 `4792b8ac…7fd30` önce/sonra aynı, yeniden 9 passed (PROVEN_AUTOMATED).
+- `tools_money.py:74` ve `banks.py` yolları aynı `parse_amount`'tan kapanır (PROVEN_PROXY).
+- Staging'de oturumlu yeniden koşu: NOT_RUN (staging düzeltmesiz sürümü sunuyor; sonraki sürümden
+  sonra test ekibi turu). Tüm birim takımı: lead'in kapısı koşar.
 
 ## Kapsam dışı
 
