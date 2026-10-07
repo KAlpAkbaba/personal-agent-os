@@ -36,5 +36,13 @@ cards and log never mix with an earlier round of the same (daily) cycle id.
 - The test seats are fed after every release that reaches staging and every two hours.
 - `test-round.log` is now `test-round-<n>.log` (nothing read the old name).
 - Known, not changed here: a round started by `Start-Process` inherits the cycle's output handles,
-  so a caller that captures the cycle's output waits until the round ends (the tests hold the lock
-  with a process they start themselves for that reason).
+  so a caller that captures the cycle's output waits until the round ends (the tests start the
+  cycle that writes the lock without pipes, `Invoke-Cycle -Detached`, for that reason).
+- `team/reports/test-round.json` is machine run-time state inside a tracked folder and is not
+  ignored: after the first real -TestTeam cycle it is an untracked file in the main checkout and
+  would ride into the next `git add team/reports`. Harmless if committed (a pid + start ticks never
+  match a later process), but it should not be: `.gitignore` is outside this card's area, so the
+  lead adds the line `team/reports/test-round.json` beside `team/status.json` when merging this.
+- Tests (team-cycle.tests.ps1, "test rounds:"): start + release; interval; a running round blocks;
+  the lock one cycle process writes holds the next cycle process (pid + ticks are the round's own);
+  a live pid with other start ticks is no round; test_parallel 0 starts nothing, one risk line.
