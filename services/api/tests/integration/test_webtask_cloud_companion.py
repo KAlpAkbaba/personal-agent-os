@@ -588,6 +588,27 @@ def test_t4_youtube_plays_or_meets_a_bot_wall(stack: Stack) -> None:
     assert playback.get("advanced") is True, f"currentTime did not advance: {playback}"
 
 
+# ------------------------------------------------------------------ the real app mounts it
+
+
+def test_the_real_app_mounts_the_web_task_routes() -> None:
+    """The unit tests mount the router on a bare FastAPI; the real app must mount it too.
+
+    Before ``ROUTERS = [router]`` in ``app/webtask/routes.py`` the real ``create_app()`` had 0
+    ``web-tasks`` paths and POST /v1/web-tasks answered 404 to every task of this module.
+    """
+    from app.main import create_app
+
+    paths = {
+        f"{method} {route.path}"
+        for route in create_app().routes
+        for method in sorted(getattr(route, "methods", None) or ())
+        if "web-tasks" in getattr(route, "path", "")
+    }
+    assert "POST /v1/web-tasks" in paths, sorted(paths)
+    assert len(paths) > 1, sorted(paths)
+
+
 # ------------------------------------------------------------------ the script's refusal
 
 
