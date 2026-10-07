@@ -36,7 +36,22 @@ with the temp sweep.
 4. The Ofis gets `OfficeTestReports.tsx` ("Test raporları": round, date, geçti · kaldı · koptu,
    a dead round's `yarım kaldı`), each button opening the report's text.
 
+## After the first inspection (2026-10-07)
+
+- The database path counts a round's own old row out of the "others" (as the file path did): 50
+  kept and one of them sent again stays 50 (was 49 on Postgres).
+- A cut is idempotent: a body that already ends in `…[kesildi: N karakterin ilk M'i]` keeps N
+  when the report reads it (was cut again and said 4134 of a 6012-character answer). A cut steps
+  one back rather than split a surrogate pair.
+- The route refuses NUL and lone surrogates in `text`/`unfinished` with a 422 (were a JSONB
+  `DataError` and a `UnicodeEncodeError`, both 500). The round cleans its report before it sends
+  (`ConvertTo-TestTeamCleanText`: NUL shown as `␀`, a lone half as U+FFFD), so a staging body with
+  binary in it still reaches the Ofis.
+
 ## Not done here (outside the card's area)
+
+- A Postgres integration test of `DbRoundReports` (put/list/get/keep 50/NUL refused) belongs in
+  `services/api/tests/integration/`; the inspector proved the 49/50 there by hand.
 
 - `services/api/app/main.py` must `include_router(app.team.test_reports.router)`; until then
   the real application answers 404 (strict-xfail test `test_the_real_application_serves_the_reports`

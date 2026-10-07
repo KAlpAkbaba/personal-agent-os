@@ -417,7 +417,7 @@ function Write-RoundIoReport {
             round       = $Round
             staging_sha = $sha
             counts      = $io.Counts
-            unfinished  = $Unfinished
+            unfinished  = (ConvertTo-TestTeamCleanText -Text $Unfinished)
             text        = (Limit-TestTeamReportText -Text $io.Markdown)
         }
         try { [void](Invoke-TeamApi -Store $apiStore -Method "POST" -Path "/v1/team/test-reports" -Body $body); Write-Host "  rapor Cloud Core'a yazıldı (Ofis: Test raporları)" }

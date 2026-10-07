@@ -51,6 +51,9 @@ COUNTS = ("passed", "failed", "broke")
 #: A round id as test-round.ps1 states it.
 _ROUND = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
 _SHA = re.compile(r"[0-9A-Za-z._-]{0,80}")
+#: What a kept text may not hold: NUL (Postgres JSONB refuses it) and any surrogate (a str
+#: from json.loads holds a pair as one character, so a surrogate here is always a lone one).
+_UNSTORABLE = re.compile("[\x00\ud800-\udfff]")
 
 _WRITE_LOCK = threading.Lock()
 
@@ -88,6 +91,11 @@ def check_report(body: Any) -> dict[str, Any]:
     text = body.get("text")
     if not isinstance(text, str):
         raise Refused(422, "invalid", ["text is the report's Markdown, a string"])
+    unfinished = body.get("unfinished", "")
+    for name, value in (("text", text), ("unfinished", unfinished)):
+        # NUL breaks Postgres JSONB, a lone surrogate breaks UTF-8: both a 422, never a 500.
+        if isinstance(value, str) and _UNSTORABLE.search(value) is not None:
+            raise Refused(422, "invalid", [f"{name}: no NUL and no lone surrogate"])
     size = len(text.encode("utf-8"))
     if size > TEXT_MAX_BYTES:
         raise Refused(
@@ -100,7 +108,6 @@ def check_report(body: Any) -> dict[str, Any]:
     sha = body.get("staging_sha", "")
     if not isinstance(sha, str) or _SHA.fullmatch(sha) is None:
         problems.append("staging_sha: a sha, at most 80 characters")
-    unfinished = body.get("unfinished", "")
     if not isinstance(unfinished, str) or len(unfinished) > UNFINISHED_MAX_CHARS:
         problems.append(f"unfinished: a string of at most {UNFINISHED_MAX_CHARS} characters")
     counts = body.get("counts", {})
@@ -167,7 +174,13 @@ class DbRoundReports:
 
     def put(self, report: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
         with _WRITE_LOCK, self._factory() as session:
-            others = [{"round": key, "at": at} for key, at in self._stamps(session)]
+            # The round's own old row is not an "other": counted with its new one it pushed a
+            # kept round out (50 kept, the newest sent again: 49).
+            others = [
+                {"round": key, "at": at}
+                for key, at in self._stamps(session)
+                if key != report["round"]
+            ]
             doc = _place(others, report, now or utcnow())
             row = session.get(TeamStateRow, (KIND_TEST_REPORT, doc["round"]))
             if row is None:

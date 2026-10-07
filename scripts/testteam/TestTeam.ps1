@@ -441,11 +441,38 @@ function Protect-TestTeamText {
 }
 
 function Limit-TestTeamText {
-    <# A body cut to -Max characters (4096) with a marker that says how much was cut. #>
+    <# A body cut to -Max characters (4096) with a marker that says how much was cut. A body that
+       already ends in a marker (run-scenario cut it; the report reads it) keeps that marker's
+       length: cut again, it said "4134 karakterin" of a 6012-character answer (inspector,
+       2026-10-07). A surrogate pair is never cut in half. #>
     param([AllowEmptyString()][AllowNull()][string]$Text, [int]$Max = $script:TestTeamBodyMax)
     if (-not $Text) { return "" }
-    if ($Text.Length -le $Max) { return $Text }
-    return $Text.Substring(0, $Max) + ("…[kesildi: {0} karakterin ilk {1}'i]" -f $Text.Length, $Max)
+    $whole = $Text.Length
+    $kept = $Text
+    $marked = [regex]::Match($Text, "…\[kesildi: (\d+) karakterin ilk \d+'i\]$")
+    if ($marked.Success) { $whole = [int]$marked.Groups[1].Value; $kept = $Text.Substring(0, $marked.Index) }
+    if ($kept.Length -le $Max) { return $Text }
+    $cut = $Max
+    if ($cut -gt 0 -and [char]::IsHighSurrogate($kept[$cut - 1])) { $cut-- }
+    return $kept.Substring(0, $cut) + ("…[kesildi: {0} karakterin ilk {1}'i]" -f $whole, $cut)
+}
+
+function ConvertTo-TestTeamCleanText {
+    <# Text the Cloud Core can keep: NUL shown as ␀ (Postgres JSONB refuses it) and a lone
+       surrogate replaced by U+FFFD (it is not UTF-8); a whole pair is kept. #>
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    if (-not $Text) { return "" }
+    $out = New-Object System.Text.StringBuilder($Text.Length)
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $c = $Text[$i]
+        if ($c -eq [char]0) { [void]$out.Append([char]0x2400); continue }
+        if ([char]::IsHighSurrogate($c) -and $i + 1 -lt $Text.Length -and [char]::IsLowSurrogate($Text[$i + 1])) {
+            [void]$out.Append($c).Append($Text[$i + 1]); $i++; continue
+        }
+        if ([char]::IsSurrogate($c)) { [void]$out.Append([char]0xFFFD); continue }
+        [void]$out.Append($c)
+    }
+    return $out.ToString()
 }
 
 function ConvertTo-TestTeamShownText {
@@ -592,7 +619,8 @@ function Format-TestTeamRoundReport {
     [void]$lines.Add("")
     if (@($Forwarded).Count -eq 0) { [void]$lines.Add("- yok") }
     foreach ($task in @($Forwarded)) { [void]$lines.Add(("- {0}: {1}" -f $task.id, $task.title)) }
-    return [pscustomobject]@{ Markdown = (($lines.ToArray()) -join "`n") + "`n"; Counts = $counts }
+    # A staging body may hold NUL or a broken pair; the Cloud Core refuses both (a 422).
+    return [pscustomobject]@{ Markdown = (ConvertTo-TestTeamCleanText -Text ((($lines.ToArray()) -join "`n") + "`n")); Counts = $counts }
 }
 
 function Limit-TestTeamReportText {

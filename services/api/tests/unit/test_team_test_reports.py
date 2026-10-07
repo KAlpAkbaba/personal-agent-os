@@ -9,6 +9,7 @@ database (``team_state`` rows of kind ``test_report``) or in the file beside the
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,50 @@ def test_the_last_fifty_rounds_are_kept_newest_first(client: TestClient) -> None
     assert len(listed) == 50
     assert listed[0] == "r052" and listed[-1] == "r003"
     assert client.get(f"{REPORTS}/r002").status_code == 404
+
+
+@pytest.mark.parametrize("again", ["r052", "r003"])
+def test_a_round_sent_again_at_fifty_keeps_fifty(client: TestClient, again: str) -> None:
+    # Inspector, 2026-10-07: the database path counted the round's old row and its new one
+    # as two, so 50 kept rounds and the newest sent again left 49 (r003 dropped).
+    for n in range(test_reports.KEEP + 3):
+        client.post(REPORTS, json=_report(f"r{n:03d}"))
+    assert client.post(REPORTS, json=_report(again, text="yeniden")).status_code == 200
+    listed = [r["round"] for r in client.get(REPORTS).json()["reports"]]
+    assert len(listed) == 50, listed
+    assert listed[0] == again
+    assert set(listed) == {f"r{n:03d}" for n in range(3, test_reports.KEEP + 3)}
+    assert client.get(f"{REPORTS}/{again}").json()["report"]["text"] == "yeniden"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"text": "ikili gövde \u0000 burada"},
+        {"text": "yarım emoji \ud83d burada"},
+        {"text": "ters yarım \ude00"},
+        {"unfinished": "kopma \u0000"},
+        {"unfinished": "kopma \udfff"},
+    ],
+)
+def test_a_nul_or_a_lone_surrogate_is_a_422_never_a_500(client: TestClient, fields) -> None:
+    # Inspector, 2026-10-07: NUL passed SQLite and broke Postgres JSONB (DataError, 500); a lone
+    # surrogate raised UnicodeEncodeError in the size check (500). test-round.ps1 cleans both
+    # before it sends (TestTeam.ps1: ConvertTo-TestTeamCleanText); the route refuses them.
+    # json.dumps escapes a lone surrogate as ``\ud83d`` (httpx' json= cannot encode it).
+    answer = client.post(
+        REPORTS,
+        content=json.dumps(_report(**fields)).encode("ascii"),
+        headers={"content-type": "application/json"},
+    )
+    assert answer.status_code == 422, answer.text
+    assert answer.json()["detail"]["code"] == "invalid"
+    assert client.get(REPORTS).json()["reports"] == []
+
+
+def test_a_whole_emoji_is_taken(client: TestClient) -> None:
+    assert client.post(REPORTS, json=_report(text="tamam 😀")).status_code == 200
+    assert client.get(f"{REPORTS}/t202610070100").json()["report"]["text"] == "tamam 😀"
 
 
 def test_a_report_over_256_kb_is_refused_and_one_at_the_bound_taken(client: TestClient) -> None:

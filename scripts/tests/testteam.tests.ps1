@@ -566,6 +566,11 @@ Test-Case "a scenario run records each step's input and output: the body as sent
         foreach ($secret in @($sessionToken, "hunter2-gizli", "tok-SIRRI-1234")) {
             Assert-True -Condition (-not $raw.Contains($secret)) -Because "'$secret' is nowhere in the result file"
         }
+        # Inspector, 2026-10-07: the report cut the cut body again and its marker said "4134
+        # karakterin" - the answer was 6012 ({"items":"<6000 x>"}).
+        $md = (Format-TestTeamRoundReport -Round "r-io" -Cards @([pscustomobject]@{ id = "tj-io"; tester = "tester-1"; family = "girdi-cikti"; state = "passed" }) -Results @($result)).Markdown
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($md, 'kesildi').Count) -Because "one marker in the report: $([regex]::Matches($md, '…\[kesildi[^\]]*\]') | ForEach-Object { $_.Value })"
+        Assert-True -Condition ($md.Contains("…[kesildi: 6012 karakterin ilk 4096'i]")) -Because "the marker gives the answer's own length"
     }
     finally {
         try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
@@ -586,6 +591,26 @@ Test-Case "masking and cutting: token, secret and password fields, Bearer values
     $session = "QWERTYUIOPASDFGHJKLZ"
     $cut = ConvertTo-TestTeamShownText -Text (("a" * 4090) + $session) -Secrets @($session)
     Assert-True -Condition (-not $cut.Contains("QWERTY")) -Because "no half of the session shows: $($cut.Substring(4085))"
+}
+
+Test-Case "a cut body cut again keeps the first length; a cut never splits a surrogate pair; NUL and lone surrogates are cleaned" {
+    $once = Limit-TestTeamText -Text ("y" * 6012)
+    Assert-Equal -Expected $once -Actual (Limit-TestTeamText -Text $once) -Because "a body already cut is left as it is"
+    Assert-Equal -Expected $once -Actual (ConvertTo-TestTeamShownText -Text $once) -Because "also through mask-then-cut"
+    $twice = Limit-TestTeamText -Text $once -Max 100
+    Assert-Equal -Expected (("y" * 100) + "…[kesildi: 6012 karakterin ilk 100'i]") -Actual $twice -Because "cut shorter, the marker still gives 6012"
+    $emoji = [char]::ConvertFromUtf32(0x1F600)
+    $split = Limit-TestTeamText -Text (("a" * 4095) + $emoji + "b")
+    Assert-True -Condition (-not [char]::IsHighSurrogate($split[4094])) -Because "the pair is not cut in half: $([int]$split[4094])"
+    Assert-True -Condition ($split.StartsWith(("a" * 4095) + "…[kesildi: 4098 karakterin ilk 4095'i]")) -Because "cut one earlier: $($split.Substring(4090))"
+    $dirty = "a" + [char]0 + "b" + [char]0xD83D + "c" + [char]0xDE00 + "d" + $emoji
+    Assert-Equal -Expected ("a␀b" + [char]0xFFFD + "c" + [char]0xFFFD + "d" + $emoji) -Actual (ConvertTo-TestTeamCleanText -Text $dirty) -Because "NUL shown, a lone half replaced, a whole pair kept"
+    $cards = @([pscustomobject]@{ id = "tj-n-1"; tester = "tester-1"; family = "ikili"; state = "failed" })
+    $results = @([pscustomobject]@{ card = "tj-n-1"; steps = @([pscustomobject]@{ name = "ikili"; ok = $false; input = [pscustomobject]@{ method = "GET"; path = "/x"; body = "" }; output = [pscustomobject]@{ status = "200"; body = $dirty } }) })
+    $md = (Format-TestTeamRoundReport -Round "r-n" -Cards $cards -Results $results -Unfinished ("kopma" + [char]0)).Markdown
+    Assert-True -Condition ($md.Contains($emoji) -and $md.Replace($emoji, "") -notmatch '[\x00\uD800-\uDFFF]') -Because "the report holds no NUL and no lone surrogate (the Cloud Core refuses them)"
+    Assert-True -Condition (-not $md.Contains([string][char]0)) -Because "no NUL in the report"
+    Assert-True -Condition ($md.Contains("yarım kaldı: kopma␀")) -Because "nor in its why"
 }
 
 Test-Case "the round report: Girdi / Beklenen / Çıktı / Sonuç for every step, the plan's why, the ladder table, the forwarded cards; a dead round says 'yarım kaldı'" {
