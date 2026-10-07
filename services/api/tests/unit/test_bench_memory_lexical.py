@@ -368,6 +368,17 @@ def test_decide_reads_every_seed_and_draw_of_the_local_embedder(bench: Any) -> N
     assert out["read_from"].startswith("local")
 
 
+EVIDENCE = REPO / "docs" / "evidence" / "memory-lexical-turkish-measure.json"
+
+
+def test_the_default_is_what_the_measurement_decided(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The card: lexical.py's default follows the pooled PostgreSQL measurement."""
+    decision = json.loads(EVIDENCE.read_text(encoding="utf-8"))["decision"]
+    assert decision["draws"] >= 2, "one load is one tie draw; the decision pools several"
+    monkeypatch.delenv(lexical.MODE_ENV, raising=False)
+    assert lexical.lexical_mode() == decision["default"]
+
+
 # --------------------------------------------------------------------------- run_mode on SQLite
 
 MEMORY_TABLES = [
