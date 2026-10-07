@@ -319,7 +319,8 @@ function Sync-Queue {
     Resolve-UnwrittenMerges
     try {
         $fresh = Get-TeamQueueApi -Store $apiStore
-        $why = @(Test-TeamQueue -Queue $fresh)
+        $freshProblems = Get-TeamQueueProblems -Queue $fresh
+        $why = @($freshProblems.Queue)
         if (@($why).Count -gt 0) { throw ("kuyruk protokolü bozuyor: " + ($why -join "; ")) }
     }
     catch {
@@ -355,6 +356,9 @@ function Sync-Queue {
         Set-TeamProperty -InputObject $fresh -Name "tasks" -Value @($tasks.ToArray())
     }
     $script:queue = $fresh
+    # A task the store has with a problem of its own (moved there meanwhile) is set aside; a run
+    # in flight is the cycle's copy and is not. It is written with the cycle's next write.
+    [void](Set-QueueAside -Problems $freshProblems -Skip @($mine.Keys))
     # Every other task is the store's version again: nothing but a run's task is "theirs" any more.
     foreach ($id in @($script:staleIds.Keys)) { if (-not $mine.Contains($id)) { $script:staleIds.Remove($id) } }
 }
@@ -379,8 +383,25 @@ function Resolve-UnwrittenMerges {
     }
 }
 
+function Set-QueueAside {
+    <# The tasks of the cycle's copy with a problem of their own are stopped, the problem as the
+       reason, and the rest runs (2026-10-06: seven area-less cards stopped every seat for an
+       hour). Said once per task: in the report's risks for the Danışman; the stopped list of
+       the report and the Ofis read the reason from the task. $true when one was set aside. #>
+    param($Problems, [string[]]$Skip = @())
+    $aside = @(Set-TeamTasksAside -Queue $script:queue -Problems $Problems -Skip $Skip)
+    foreach ($entry in $aside) {
+        $note = "Danışman'a iletildi: kenara alındı: $($entry.Id): $($entry.Reason)"
+        if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+    }
+    return (@($aside).Count -gt 0)
+}
+
 $queue = if ($useApi) { Read-TeamQueueApi -Store $apiStore } else { Read-TeamJson -Path $queuePath }
-$problems = @(Test-TeamQueue -Queue $queue)
+# Only a problem of the queue itself stops everything; one task's problem sets that task aside
+# once the lock is ours (Set-QueueAside).
+$queueProblems = Get-TeamQueueProblems -Queue $queue
+$problems = @($queueProblems.Queue)
 if (@($problems).Count -gt 0) {
     Write-Host "the queue breaks the protocol; nothing was run:"
     foreach ($problem in $problems) { Write-Host "  - $problem" }
@@ -480,7 +501,15 @@ function Start-CycleTestRound {
     $arguments = @("-NoProfile", "-File", "`"$script`"", "-Round", $round, "-TeamRoot", "`"$TeamRoot`"", "-ClaudePath", "`"$ClaudePath`"")
     if ($useApi) { $arguments += @("-QueueUrl", $QueueUrl, "-QueueToken", "`"$QueueToken`"") }
     $log = Join-Path $cycleDir "test-round.log"
+    # The board's address, as the cycle's own runs get it (test-round-board-address): in API mode
+    # the queue URL and the token file's PATH, in file mode neither. Start-Process has no
+    # environment of its own in PowerShell 5.1: the child inherits this process', so the two are
+    # set for the start and put back after it.
+    $boardAddress = @{ PAGENTOS_TEAM_URL = $(if ($useApi) { $QueueUrl } else { $null }); PAGENTOS_TEAM_TOKEN_FILE = $(if ($useApi) { $QueueToken } else { $null }) }
+    $inherited = @{}
+    foreach ($name in $boardAddress.Keys) { $inherited[$name] = [Environment]::GetEnvironmentVariable($name) }
     try {
+        foreach ($name in $boardAddress.Keys) { [Environment]::SetEnvironmentVariable($name, $boardAddress[$name]) }
         $process = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList $arguments -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput $log -RedirectStandardError (Join-Path $cycleDir "test-round.err.log")
         Write-Host "test ekibi turu $round yazılım ekibinin yanında başladı (pid $($process.Id)); yazılım koltukları değişmedi"
@@ -489,6 +518,9 @@ function Start-CycleTestRound {
     catch {
         Add-CycleNote -List "risks" -Text "test ekibi turu başlamadı: $($_.Exception.Message -replace '\s+', ' ')"
         return $null
+    }
+    finally {
+        foreach ($name in $inherited.Keys) { [Environment]::SetEnvironmentVariable($name, $inherited[$name]) }
     }
 }
 
@@ -816,6 +848,7 @@ if ($useApi) {
 else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $CycleId -Now $started) }
 
 try {
+    if (Set-QueueAside -Problems $queueProblems) { Save-Queue -Document $script:queue }
     Write-CycleStatus
     if (-not (Test-Path -LiteralPath $cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $cycleDir) }
     if ($TestTeam -and -not $ResearchOnly) { [void](Start-CycleTestRound) }
@@ -1206,6 +1239,18 @@ try {
                     continue
                 }
             }
+            if ($next.Kind -eq "move") {
+                # Never into work without an area (2026-10-06: area-less cards moved to 'assigned'
+                # made a queue every later cycle refused whole). Stopped with the reason, it is
+                # the Proje Yöneticisi's duty: an area granted, it comes back.
+                $refusal = Get-TeamMoveRefusal -Task $task -State ([string]$next.NextState)
+                if ($refusal) {
+                    Stop-Task -Task $task -Reason "$refusal (Proje Yöneticisi dosya alanını yazınca döner)"
+                    Add-CycleNote -List "risks" -Text "Danışman'a iletildi: kenara alındı: $($task.id): $refusal"
+                    $moved = $true
+                    continue
+                }
+            }
             if ($next.Kind -eq "move" -and [string]$next.NextState -eq "assigned") {
                 # Section 4: never into work beside a task that holds the same files. Two such
                 # tasks make a queue Test-TeamQueue refuses - and every later cycle with it.
@@ -1343,6 +1388,8 @@ try {
         $copy = ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject $Task -Depth 12 -Compress)
         Set-TeamProperty -InputObject $copy -Name "area" -Value ([string[]]@($Area))
         Set-TeamProperty -InputObject $copy -Name "state" -Value "returned"
+        $refusal = Get-TeamMoveRefusal -Task $copy -State "returned"
+        if ($refusal) { return [pscustomobject]@{ Holders = @(); Text = $refusal } }
         $tasks = @(Get-TeamTasks -Queue $script:queue | ForEach-Object { if ([string]$_.id -eq [string]$Task.id) { $copy } else { $_ } })
         $trial = [pscustomobject]@{ version = (Get-TeamProperty -InputObject $script:queue -Name "version" -Default 1); tasks = $tasks }
         $holders = @(Get-TeamAreaHolders -Task $copy -Queue $trial)
@@ -1425,10 +1472,31 @@ try {
         Set-DutyReturned -Task $task -Area $newArea -Reason $returned
     }
 
+    function Import-DutyWaits {
+        <# The held returns as the store says them (duty-waits-survive-restart): $dutyWaits lived
+           only in the cycle's memory, the cycle restarted at 15:00 on 2026-10-06 and nothing
+           reopened conversation-followups when money-ledger merged. A stopped task whose reason is
+           the Proje Yöneticisi's return followed by Get-DutyReturnBlock's hold is one: its area
+           the task's, its reason the text before the hold. Who holds the files is asked again when
+           it is resolved, so a holder merged or gone meanwhile frees it at once. #>
+        $pattern = "(?s)\A(?<reason>" + [regex]::Escape((Get-TeamDutyPrefix -Kind "returned")) + ".*) \(alan çakışması: (?<holders>[^;()]+); o iş bitince\)\z"
+        foreach ($task in @(Get-TeamTasks -Queue $script:queue)) {
+            if ([string]$task.state -ne "stopped") { continue }
+            $id = [string]$task.id
+            $stamp = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
+            if ($script:dutyWaits.ContainsKey($id) -and [string]$script:dutyWaits[$id].Updated -ceq $stamp) { continue }
+            $match = [regex]::Match([string](Get-TeamProperty -InputObject $task -Name "reason" -Default ""), $pattern)
+            if (-not $match.Success) { continue }
+            $area = [string[]]@(@(Get-TeamProperty -InputObject $task -Name "area" -Default @()) | ForEach-Object { [string]$_ })
+            $script:dutyWaits[$id] = [pscustomobject]@{ Updated = $stamp; Area = $area; Reason = $match.Groups["reason"].Value }
+        }
+    }
+
     function Resolve-DutyWaits {
         <# The returns the protocol refused beside a task holding the same files: made now when
            nobody holds them any more. One that somebody else moved meanwhile is theirs. $true
-           when a task moved. #>
+           when a task moved. The store's held returns are read first: a hold outlives the cycle. #>
+        Import-DutyWaits
         $moved = $false
         foreach ($id in @($script:dutyWaits.Keys)) {
             $wait = $script:dutyWaits[$id]
@@ -1966,8 +2034,14 @@ try {
                 if (Test-Path -LiteralPath (Join-Path $repoRoot ($plan -replace '/', '\'))) {
                     Set-TeamProperty -InputObject $task -Name "plan" -Value $plan
                     # With its plan an approved task is the refill's to move into work - beside
-                    # nobody that holds its files (the same rule as every other approved task).
-                    if (@(Get-TeamAreaHolders -Task $task -Queue $script:queue).Count -eq 0) { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
+                    # nobody that holds its files (the same rule as every other approved task),
+                    # and never without an area (the inspector of 11365bac: this path did not ask).
+                    $refusal = Get-TeamMoveRefusal -Task $task -State "assigned"
+                    if ($refusal) {
+                        Stop-Task -Task $task -Reason "$refusal (Proje Yöneticisi dosya alanını yazınca döner)"
+                        Add-CycleNote -List "risks" -Text "Danışman'a iletildi: kenara alındı: ${id}: $refusal"
+                    }
+                    elseif (@(Get-TeamAreaHolders -Task $task -Queue $script:queue).Count -eq 0) { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
                 }
                 else { Stop-Task -Task $task -Reason "entegratör plan dosyasını yazmadı ($plan)" }
             }

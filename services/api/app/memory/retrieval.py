@@ -18,6 +18,15 @@ Hybrid rerank (documented weight formula):
 Candidates are the union of semantic top-N and keyword/structured hits; ties
 break on memory id so ordering is fully deterministic.
 
+Word leg mode (card memory-lexical-turkish-rrf, ``PAGENTOS_MEMORY_LEXICAL``): ``like``
+(default) is the above, unchanged - a word-only hit scores 0.0 for meaning. ``trgm`` folds
+Turkish case, drops stop words, ranks the word hits (pg_trgm + ``turkish`` text search on
+PostgreSQL) and puts in the semantic term's place
+
+    semantic_similarity = (1/(60 + semantic_rank) + 1/(60 + word_rank)) / (2/61)
+
+with ``1/(60 + word_rank)`` absent for a row the words did not find.
+
 Semantic rerank (ADR-0206), only when a reranker is passed AND there is query text:
 the top ``rerank_top_k`` rows of the ordering above are read, query and memory together,
 by a cross-encoder, and for those rows its answer stands where the cosine stood:
@@ -45,10 +54,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, bindparam, func, literal_column, or_, select
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
+from app.memory import lexical
 from app.memory.embedding import Embedder, cosine_similarity
 from app.memory.lifecycle import aware, utcnow
 from app.memory.models import Memory, MemoryEmbedding
@@ -152,6 +162,16 @@ def keyword_candidates(
     *,
     limit: int = KEYWORD_CANDIDATES,
 ) -> list[Memory]:
+    """Memories holding the query's words, best word match first.
+
+    ``like`` mode (default) is the leg as it has always been, newest first. ``trgm`` mode
+    (card memory-lexical-turkish-rrf) folds Turkish case, drops stop words and ranks: on
+    PostgreSQL by pg_trgm word similarity and the ``turkish`` text search, elsewhere by how
+    many query words a memory holds."""
+    if lexical.lexical_mode() == "trgm":
+        if session.get_bind().dialect.name == "postgresql":
+            return _keyword_candidates_pg(session, query_text, filters, limit=limit)
+        return _keyword_candidates_python(session, query_text, filters, limit=limit)
     terms = [t.lower() for t in _QUERY_WORD.findall(query_text)][:8]
     if not terms:
         return []
@@ -164,6 +184,67 @@ def keyword_candidates(
     return list(session.execute(stmt).scalars().all())
 
 
+#: ``lexical.FOLD_SQL`` as an expression; character for character the migration's index.
+_FOLD_TEXT = func.translate(func.lower(Memory.text), literal_column("'ı'"), literal_column("'i'"))
+_TURKISH = literal_column("'turkish'::regconfig")
+
+
+def _keyword_candidates_pg(
+    session: Session, query_text: str, filters: RetrievalFilters, *, limit: int
+) -> list[Memory]:
+    """pg_trgm ``<%`` on the folded text (name with its suffix: "Ahmet'e", "Ahmete") OR the
+    ``turkish`` text search on root prefixes ("vermiştim" -> ``ver:*`` -> "verdim"). Ranked by
+    the better of the best word similarity and the text-search rank; ties on id."""
+    terms = lexical.query_terms(query_text)
+    if not terms:
+        return []
+    similarities = [
+        func.word_similarity(bindparam(f"kw_term_{i}", term), _FOLD_TEXT)
+        for i, term in enumerate(terms)
+    ]
+    matches = [
+        bindparam(f"kw_match_{i}", term).op("<%")(_FOLD_TEXT) for i, term in enumerate(terms)
+    ]
+    best = func.greatest(*similarities) if len(similarities) > 1 else similarities[0]
+    tsquery_text = lexical.tsquery_text(query_text)
+    if tsquery_text:
+        document = func.to_tsvector(_TURKISH, Memory.text)
+        tsquery = func.to_tsquery(_TURKISH, bindparam("kw_tsquery", tsquery_text))
+        matches.append(document.op("@@")(tsquery))
+        best = func.greatest(best, func.ts_rank(document, tsquery))
+    stmt = (
+        apply_filters(select(Memory), filters)
+        .where(or_(*matches))
+        .order_by(best.desc(), Memory.id)
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars().all())
+
+
+def _keyword_candidates_python(
+    session: Session, query_text: str, filters: RetrievalFilters, *, limit: int
+) -> list[Memory]:
+    """SQLite (unit tests) has no Turkish case folding: count the query's words in
+    ``lexical.fold(text)`` in Python. Ranked by that count, newest first, then id."""
+    terms = lexical.query_terms(query_text)
+    if not terms:
+        return []
+    scored: list[tuple[int, Memory]] = []
+    for memory in session.execute(apply_filters(select(Memory), filters)).scalars():
+        folded = lexical.fold(memory.text or "")
+        hits = sum(1 for term in terms if lexical.term_matches(term, folded))
+        if hits:
+            scored.append((hits, memory))
+    scored.sort(
+        key=lambda pair: (
+            -pair[0],
+            -(aware(pair[1].created_at) or utcnow()).timestamp(),
+            str(pair[1].id),
+        )
+    )
+    return [memory for _hits, memory in scored[:limit]]
+
+
 def semantic_candidates(
     session: Session,
     embedder: Embedder,
@@ -171,9 +252,12 @@ def semantic_candidates(
     filters: RetrievalFilters,
     *,
     limit: int = SEMANTIC_CANDIDATES,
+    query_vec: list[float] | None = None,
 ) -> list[tuple[Memory, float]]:
-    """Top-N (memory, cosine similarity) for the query under `filters`."""
-    query_vec = embedder.embed(query_text)
+    """Top-N (memory, cosine similarity) for the query under `filters`. ``query_vec`` is the
+    query already embedded, so a caller that needs it twice pays for it once."""
+    if query_vec is None:
+        query_vec = embedder.embed(query_text)
     dialect = session.get_bind().dialect.name
 
     if dialect == "postgresql":
@@ -237,7 +321,9 @@ def hybrid_search(
     now = now or utcnow()
     candidates: dict[uuid.UUID, tuple[Memory, float]] = {}
 
-    if query_text:
+    if query_text and lexical.lexical_mode() == "trgm":
+        candidates = _fused_candidates(session, embedder, query_text, filters)
+    elif query_text:
         for memory, sim in semantic_candidates(session, embedder, query_text, filters):
             candidates[memory.id] = (memory, sim)
         for memory in keyword_candidates(session, query_text, filters):
@@ -268,6 +354,57 @@ def hybrid_search(
     if reranker is not None and query_text and results:
         results = _rerank_head(results, reranker, query_text, rerank_top_k)
     return results[:k]
+
+
+def _fused_candidates(
+    session: Session, embedder: Embedder, query_text: str, filters: RetrievalFilters
+) -> dict[uuid.UUID, tuple[Memory, float]]:
+    """``trgm`` mode: every candidate's semantic term is the normalised RRF of its two ranks.
+
+    A word-only candidate's cosine is read too, so it has a semantic rank of its own (after
+    the semantic top-N, by its cosine) - without it a word-first memory and a meaning-first
+    look-alike would tie at 1/61. The value stands where the cosine stood, so the weights,
+    the other terms and the cross-encoder's place (ADR-0206) are what they were."""
+    query_vec = embedder.embed(query_text)
+    cosines: dict[uuid.UUID, tuple[Memory, float]] = {
+        memory.id: (memory, sim)
+        for memory, sim in semantic_candidates(
+            session, embedder, query_text, filters, query_vec=query_vec
+        )
+    }
+    keyword = keyword_candidates(session, query_text, filters)
+    keyword_rank = {memory.id: rank for rank, memory in enumerate(keyword, start=1)}
+    word_only = [memory for memory in keyword if memory.id not in cosines]
+    for memory, sim in _cosines_of(session, embedder, query_vec, word_only):
+        cosines[memory.id] = (memory, sim)
+    ordered = sorted(cosines.values(), key=lambda pair: (-pair[1], str(pair[0].id)))
+    return {
+        memory.id: (memory, lexical.rrf_score(rank, keyword_rank.get(memory.id)))
+        for rank, (memory, _sim) in enumerate(ordered, start=1)
+    }
+
+
+def _cosines_of(
+    session: Session, embedder: Embedder, query_vec: list[float], memories: list[Memory]
+) -> list[tuple[Memory, float]]:
+    """The query's cosine to each of ``memories``; 0.0 for one with no vector of this model."""
+    if not memories:
+        return []
+    ids = [memory.id for memory in memories]
+    found: dict[uuid.UUID, float] = {}
+    if session.get_bind().dialect.name == "postgresql":
+        distance = MemoryEmbedding.embedding.cosine_distance(query_vec)
+        stmt = select(MemoryEmbedding.memory_id, distance).where(
+            MemoryEmbedding.memory_id.in_(ids), MemoryEmbedding.model_id == embedder.model_id
+        )
+        found = {memory_id: 1.0 - float(dist) for memory_id, dist in session.execute(stmt)}
+    else:
+        stmt = select(MemoryEmbedding.memory_id, MemoryEmbedding.embedding).where(
+            MemoryEmbedding.memory_id.in_(ids), MemoryEmbedding.model_id == embedder.model_id
+        )
+        for memory_id, vector in session.execute(stmt):
+            found[memory_id] = cosine_similarity(query_vec, [float(x) for x in vector])
+    return [(memory, found.get(memory.id, 0.0)) for memory in memories]
 
 
 def _rerank_head(

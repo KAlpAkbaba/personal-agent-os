@@ -190,68 +190,52 @@ jobs:
       # ACTUALLY USES. A list nobody checks drifts. test_ci_covers_every_suite now fails
       # when a suite exists that this step does not name, so the list cannot silently fall
       # behind again.
+      # 2026-10-06 (ci-ps-suites-from-glob): the hand-typed list itself became the defect -
+      # every new suite added a line at the same place, and two parallel branches collided
+      # there at integration. The step now FINDS scripts\tests\*.tests.ps1 (sorted by name)
+      # and runs each one; a suite left out sits in $notInCi with its reason, and
+      # test_ci_covers_every_suite holds that table equal to PS_SUITES_NOT_IN_CI.
+      # Every suite runs even after a red one; the step ends red with the list of red suites
+      # and their exit codes. $ErrorActionPreference is Continue so a child's stderr never
+      # ends the loop early.
       # The installer/deployment/identity scripts run on the owner's machine under
       # WINDOWS POWERSHELL 5.1, and four real qualification failures were 5.1-only
       # (native quoting, StrictMode unrolling, ??, ImportFromPem). windows-latest still
       # ships 5.1 as powershell.exe; these suites assert the engine themselves and would
-      # fail rather than pass vacuously on pwsh.
+      # fail rather than pass vacuously on PowerShell 7. The step's own shell is 5.1 too.
       - name: PowerShell 5.1 script suites
-        shell: cmd
+        shell: powershell
         working-directory: ${{ github.workspace }}
         run: |
-          powershell -NoProfile -File scripts\tests\script-syntax.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\installer-strictmode.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\installer-invocation.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\installer-deploy.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\installer-acl.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\installer-browser.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\owner-enrollment.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\installer-evidence.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\agent-update.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\installer-release.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\browser-smoke-evidence.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\agent-release-currency.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\machine-readable.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\identity-restore.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\provision.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\config-swap.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\agent-audit.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\owner-explain.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\cloud-secret.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\cloud-owner-rotation.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\mint-enrollment-token.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\device-aliases.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\cloud-release-bluegreen.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\item28-gate.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\device-camera-qualification.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\core-verifier-scope.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\harness-symbols.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\owner-harness.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\native-signing-trust.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-cycle.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-feed.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-tick.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-area.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-integrate.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-run-temp.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-board.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-release.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-resume.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\testteam.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-gate-second-look.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-liveness.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-duty-integration.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-guards-after-merge.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-watchdog.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\staging.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\maintenance-reboot.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\host-snapshot.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\team-test-slots.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\web-tailnet-https.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\gate-steps.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\gate-database.tests.ps1
+          $ErrorActionPreference = 'Continue'
+          # Suites deliberately NOT run here: 'name.tests.ps1' = 'reason'. Must equal
+          # PS_SUITES_NOT_IN_CI in services/api/tests/unit/test_ci_covers_every_suite.py.
+          $notInCi = @{
+          }
+          $suites = Get-ChildItem -Path 'scripts\tests\*.tests.ps1' -File | Sort-Object Name
+          if (-not $suites) { Write-Host 'no PowerShell suites found under scripts\tests'; exit 1 }
+          $red = @()
+          foreach ($suite in $suites) {
+            if ($notInCi.ContainsKey($suite.Name)) {
+              Write-Host ('=== SKIP {0}: {1}' -f $suite.Name, $notInCi[$suite.Name])
+              continue
+            }
+            Write-Host ('=== RUN {0}' -f $suite.Name)
+            if ($env:PS_SUITES_LIST_ONLY -eq '1') { continue }
+            & powershell.exe -NoProfile -File $suite.FullName
+            $code = $LASTEXITCODE
+            if ($code -ne 0) {
+              Write-Host ('=== RED {0} (exit {1})' -f $suite.Name, $code)
+              $red += ('{0} (exit {1})' -f $suite.Name, $code)
+            }
+          }
+          Write-Host ('=== {0} suites found, {1} red' -f @($suites).Count, $red.Count)
+          if ($red.Count -gt 0) {
+            Write-Host 'Red PowerShell suites:'
+            $red | ForEach-Object { Write-Host ('  ' + $_) }
+            exit 1
+          }
+          exit 0
       # The staged update, end to end, against the REAL DeviceService this job just built:
       # candidate identity, the complete capability manifest (40 with -DisplayPower and a
       # browser worker, browser.media_* included), promotion, Cloud Core verification,

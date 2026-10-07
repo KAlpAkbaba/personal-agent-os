@@ -593,6 +593,19 @@ class Settings(BaseSettings):
     telephony_max_calls_per_hour: int = 3
     telephony_loop_interval_s: float = 30.0
 
+    # urgent-alert-wire (app.urgent_alert): the alarm rung - Pushover priority=2 rings the
+    # iPhone through silent mode for IMPORTANT rows. The app token and the user key are
+    # SECRETS (env file, scripts/cloud/set-cloud-secret.ps1; SecretStr, never returned, never
+    # logged). Both empty = no alarm rung, the ladder as it was.
+    urgent_alert_pushover_app_token: SecretStr = SecretStr("")
+    urgent_alert_pushover_user_key: SecretStr = SecretStr("")
+    # How often open receipts are asked about (Pushover allows 5 s; one a minute is plenty).
+    urgent_alert_poll_interval_s: float = 60.0
+    # The Cloud Core's https root on the tailnet (https://<host>.<tailnet>.ts.net). The
+    # alarm's link is '{root}/notifications/{id}' and must match this root EXACTLY. Empty =
+    # no alarm rung (every link would be refused).
+    urgent_alert_link_base: str = ""
+
     @field_validator("weather_provider")
     @classmethod
     def _validate_weather_provider(cls, v: str) -> str:

@@ -37,6 +37,17 @@
 
 .EXAMPLE
     .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_VOICE_OPENAI_API_KEY
+
+.EXAMPLE
+    The phone alarm (urgent-alert-wire, Pushover priority=2) - two names, one run each; the
+    compose wires both (infra/docker/docker-compose.prod.yml). No provider self-test runs
+    for them (a real one would ring the owner's phone); the Kokpit's /core/urgent-alert
+    'Onemli deneme bildirimi gonder' is that test.
+
+        .\scripts\secret-store.ps1 -Set PAGENTOS_URGENT_ALERT_PUSHOVER_APP_TOKEN
+        .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_URGENT_ALERT_PUSHOVER_APP_TOKEN
+        .\scripts\secret-store.ps1 -Set PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY
+        .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY
 #>
 [CmdletBinding()]
 param(

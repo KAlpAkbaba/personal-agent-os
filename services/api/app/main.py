@@ -112,7 +112,6 @@ from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.money import ledger as money_ledger
 from app.money.loop import SpendLoop as MoneySpendLoop
-from app.money.routes import router as money_router
 from app.narration.routes import router as narration_router
 from app.nativefactory.interrupted import fail_interrupted_builds
 from app.nativefactory.routes import router as native_router
@@ -124,6 +123,7 @@ from app.operator.mission_routes import router as operator_mission_router
 from app.operator.service import OperatorService, register_operator_service
 from app.operator.vision import build_vision_provider
 from app.presence.routes import router as presence_router
+from app.registry import include_discovered_routers
 from app.release.routes import router as release_router
 from app.release.version import release_model
 from app.research import service as research_service
@@ -169,6 +169,8 @@ from app.telephony.service import build_owner_caller
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
+from app.urgent_alert.loop import HEALTH_NAME as URGENT_ALERT_HEALTH_NAME
+from app.urgent_alert.wiring import build_alarm_rung, build_receipt_loop
 from app.voice.crypto import ProfileCipher
 from app.voice.intent_router import (
     AnthropicIntentModel,
@@ -371,6 +373,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings, session_scope=dispatch_session_factory, audio_store=telephony_audio_store
     )
     telephony_loop = TelephonyLoop(telephony, interval_s=settings.telephony_loop_interval_s)
+    # urgent-alert-wire: the alarm rung (Pushover; None without both keys) and its receipt loop.
+    urgent_alert_alarm_rung = build_alarm_rung(settings, dispatch_session_factory)
+    urgent_alert_loop = build_receipt_loop(
+        settings, dispatch_session_factory, urgent_alert_alarm_rung
+    )
     # docs/DECISIONS.md ADR-0078: the alarm/display voice tools read the wake sequence
     # and the device-status registry from ToolContext.live (tools_ambient._sequence,
     # display_status). They are registered HERE, where they are built, on the same
@@ -725,7 +732,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     lambda db: notification_ladder.sweep(
                         db,
                         rungs=notification_ladder.default_rungs(
-                            device_action=device_action, push_rung=push_rung
+                            device_action=device_action,
+                            push_rung=push_rung,
+                            alarm_rung=urgent_alert_alarm_rung,
                         ),
                     ),
                 ).values()
@@ -840,6 +849,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # jarvis-calls-owner: the no-answer retry and the important-event calls. Without
         # Twilio credentials a pass does nothing, so health still tells "idle" from "dead".
         await telephony_loop.start()
+        await urgent_alert_loop.start()
         await household_reminders.start()
         await money_spend_loop.start()
         # M16 track A: re-derive activity_events from canonical tables on every
@@ -874,6 +884,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             allowlist_store.unbind()
             await telephony_loop.stop()
+            await urgent_alert_loop.stop()
             await money_spend_loop.stop()
             await household_reminders.stop()
             await watch_runner.stop()
@@ -984,6 +995,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.telephony = telephony
     app.state.telephony_audio_store = telephony_audio_store
     app.state.telephony_loop = telephony_loop
+    app.state.urgent_alert_alarm_rung = urgent_alert_alarm_rung
+    app.state.urgent_alert_loop = urgent_alert_loop
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -1125,8 +1138,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conversations_router)
     # home-stock-list: the house's stock and the shopping list (/v1/household).
     app.include_router(household_router)
-    # money-ledger: JARVIS's own money ledger (/v1/money); never the bank.
-    app.include_router(money_router)
+    # registry-models-and-routers: a NEW router is declared as ROUTERS in its own routes.py
+    # and bound here; no new include_router line above (test_route_table_snapshot's ratchet).
+    include_discovered_routers(app)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -1203,6 +1217,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["watch_purge"] = watch_purge.health_check()
         # jarvis-calls-owner: the call loop (retry + event calls). Advisory like the above.
         checks[TELEPHONY_HEALTH_NAME] = telephony_loop.health_check()
+        # urgent-alert-wire: the Pushover receipt poll. Advisory like the above.
+        checks[URGENT_ALERT_HEALTH_NAME] = urgent_alert_loop.health_check()
         # home-stock-list: the hourly reminder pass; advisory like the loops above.
         checks["household_reminders"] = household_reminders.health_check()
         # money-ledger: the conversation spend scan; advisory like the loops above.

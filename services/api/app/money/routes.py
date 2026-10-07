@@ -213,3 +213,7 @@ async def book_cash(request: Request) -> dict[str, Any]:
 
 
 __all__ = ["router"]
+
+
+# money-ledger, bound by app/registry.py (card registry-models-and-routers): never the bank.
+ROUTERS = [router]

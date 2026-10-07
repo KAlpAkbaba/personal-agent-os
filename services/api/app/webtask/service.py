@@ -46,6 +46,7 @@ from app.webtask.types import (
     STATUS_DONE,
     STATUS_RUNNING,
     STATUS_WAITING_OWNER,
+    TARGET_CLOUD,
     TERMINAL,
 )
 from app.webtask.types import (
@@ -184,6 +185,8 @@ def task_dict(row: WebTaskRow) -> dict[str, Any]:
         "round_index": row.round_index,
         "rounds": [r.as_dict() for r in state.rounds],
         "attended": row.attended,
+        "target": state.target,
+        "device_id": str(row.device_id) if row.device_id else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
@@ -235,8 +238,15 @@ def start_task_db(
     source: str = SOURCE_VOICE,
     session_id: str | None = None,
     allowed_hosts: tuple[str, ...] = (),
+    target: str = "",
+    spoken_target: str | None = None,
     now: datetime | None = None,
 ) -> WebTaskRow:
+    """Write the task's row. ``target`` is where ``app.webtask.target`` chose to run it.
+
+    A CLOUD task is not attended, and the row says so (ADR-0213 addendum, 2026-09-30): the
+    task the owner started may go on after he leaves, because in the cloud it acts only
+    on sites he listed (the gate's rule 9). Every other target runs in front of him."""
     goal = " ".join((goal or "").split())
     if not goal:
         raise WebTaskError("empty_goal", "a browser task needs a goal")
@@ -252,7 +262,10 @@ def start_task_db(
             "task_in_flight", "another browser task is in flight", task_id=str(running.id)
         )
     task_id = uuid.uuid4()
-    state = TaskState(task_id=str(task_id), goal=goal, allowed_hosts=list(allowed_hosts))
+    state = TaskState(
+        task_id=str(task_id), goal=goal, allowed_hosts=list(allowed_hosts), target=target
+    )
+    attended = target != TARGET_CLOUD
     row = WebTaskRow(
         id=task_id,
         goal=goal,
@@ -260,14 +273,25 @@ def start_task_db(
         device_id=device_id,
         source=source,
         session_id=session_id,
-        attended=True,
+        attended=attended,
         state_json=state.as_dict(),
         created_at=moment,
         updated_at=moment,
     )
     db.add(row)
     db.commit()
-    _ledger(db, row, EVENT_TYPE_WEB_TASK_STARTED, f"başladı: {goal[:80]}")
+    _ledger(
+        db,
+        row,
+        EVENT_TYPE_WEB_TASK_STARTED,
+        f"başladı: {goal[:80]}",
+        detail={
+            "target": target,
+            "device_id": str(device_id) if device_id else None,
+            "attended": attended,
+            "spoken_target": spoken_target,
+        },
+    )
     return row
 
 

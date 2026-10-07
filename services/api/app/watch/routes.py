@@ -65,6 +65,25 @@ async def _payload(request: Request) -> dict[str, Any]:
     return payload
 
 
+#: The fields the owner writes; a NUL (or any other control character) in one was kept
+#: (test-team finding, three runs) and would be read back into a briefing.
+_TEXT_FIELDS = ("label", "url", "condition", "selector")
+
+
+def _refuse_control_characters(payload: dict[str, Any]) -> None:
+    for field in _TEXT_FIELDS:
+        value = payload.get(field)
+        if isinstance(value, str) and any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise HTTPException(
+                422,
+                {
+                    "code": "control_character",
+                    "message": "Nöbetin adında ya da adresinde okunamayan bir karakter var; "
+                    "düz yazıyla yaz.",
+                },
+            )
+
+
 @router.get("/v1/watches")
 async def list_watches(request: Request) -> dict[str, Any]:
     artifacts = request.app.state.artifacts
@@ -80,6 +99,7 @@ async def list_watches(request: Request) -> dict[str, Any]:
 async def create_watch(request: Request) -> dict[str, Any]:
     artifacts = request.app.state.artifacts
     payload = await _payload(request)
+    _refuse_control_characters(payload)
 
     def run() -> dict[str, Any]:
         with artifacts.session() as session:

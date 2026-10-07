@@ -187,46 +187,11 @@ def _open(
     return {(intent, sentence): (why, card) for sentence in sentences}
 
 
-_CANCEL_STEMS_WHY: Final = "_CANCEL_VERB_STEMS ('iptal','sil','kaldır') _has ile önek eşleşiyor"
-
-#: Red on main 2026-10-05 (72 cases): (intent, sentence) -> (why, the fixing card's name).
-#: Each is an ``xfail(strict=True)``; the ADR carries every fixing card's full text.
+#: Red on main 2026-10-05 (72 cases; 54 since negation-fix-cancel-verb-stems closed the 18 of
+#: memory_forget / routine_cancel / alarm_cancel, 2026-10-06): (intent, sentence) -> (why,
+#: the fixing card's name). Each is an ``xfail(strict=True)``; the ADR carries every fixing
+#: card's full text.
 KNOWN_OPEN: Final[dict[tuple[str, str], tuple[str, str]]] = {
-    **_open(
-        "memory_forget",
-        ("Bunu hafızandan silme.", "Bunu hafızandan silmeyin.", "Bunu hafızandan silmeyiniz."),
-        f"intents.py:2087 {_CANCEL_STEMS_WHY}",
-        "negation-fix-cancel-verb-stems",
-    ),
-    **_open(
-        "routine_cancel",
-        (
-            "Sabah rutinini iptal etme.",
-            "Sabah rutinini iptal etmeyin.",
-            "Sabah rutinini iptal etmeyiniz.",
-        ),
-        f"intents.py:1974 {_CANCEL_STEMS_WHY}",
-        "negation-fix-cancel-verb-stems",
-    ),
-    **_open(
-        "alarm_cancel",
-        (
-            "Sabah alarmımı iptal etme.",
-            "Sabah alarmımı iptal etmeyin.",
-            "Sabah alarmımı iptal etmeyiniz.",
-            "Alarmı iptal etme.",
-            "Alarmı iptal etmeyin.",
-            "Alarmı iptal etmeyiniz.",
-            "Sabah alarmını iptal etme.",
-            "Sabah alarmını iptal etmeyin.",
-            "Sabah alarmını iptal etmeyiniz.",
-            "Alarmı kaldırma.",
-            "Alarmı kaldırmayın.",
-            "Alarmı kaldırmayınız.",
-        ),
-        f"intents.py:2151 {_CANCEL_STEMS_WHY}",
-        "negation-fix-cancel-verb-stems",
-    ),
     **_open(
         "research_cancel",
         (

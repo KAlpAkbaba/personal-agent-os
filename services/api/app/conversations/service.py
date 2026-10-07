@@ -46,6 +46,7 @@ from app.conversations.models import (
     PersonRow,
     SegmentRow,
 )
+from app.conversations.search import search_fold, search_fold_sql
 from app.voice.crypto import ProfileCipher
 from app.voice.errors import VoiceError
 from app.voice.speaker import OwnerProfile, SpeakerDecision, verify_speaker
@@ -219,34 +220,6 @@ def name_key(name: str) -> str:
     """Turkish case-folding: 'AHMET', 'Ahmet' and 'ahmet' are one person; 'Işık' is 'ışık'."""
     folded = name.strip().replace("I", "ı").replace("İ", "i").lower()
     return " ".join(folded.split())
-
-
-#: Search folding, the same in Python and in SQL (SQLite's lower() is ASCII-only and
-#: PostgreSQL's depends on the database's locale, so the Turkish capitals are spelled out).
-#: All four i's are one letter: a transcript writes 'ışık' where the owner types 'isik', and
-#: 'IŞIK' must find 'Işıkları' as well as 'İSTANBUL' finds 'istanbul'.
-SEARCH_FOLD = (
-    ("I", "i"),
-    ("İ", "i"),
-    ("ı", "i"),
-    ("Ç", "ç"),
-    ("Ğ", "ğ"),
-    ("Ö", "ö"),
-    ("Ş", "ş"),
-    ("Ü", "ü"),
-)
-
-
-def search_fold(text: str) -> str:
-    for upper, lower in SEARCH_FOLD:
-        text = text.replace(upper, lower)
-    return text.lower()
-
-
-def _search_fold_sql(column):  # noqa: ANN001, ANN202
-    for upper, lower in SEARCH_FOLD:
-        column = func.replace(column, upper, lower)
-    return func.lower(column)
 
 
 #: PostgreSQL's ``integer``: a voice number beyond it is no voice of any conversation.
@@ -648,7 +621,7 @@ def list_conversations(db: Session, *, q: str | None = None) -> list[Conversatio
     if needle:
         escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         matching = select(SegmentRow.conversation_id).where(
-            _search_fold_sql(SegmentRow.text).like(f"%{escaped}%", escape="\\")
+            search_fold_sql(SegmentRow.text).like(f"%{escaped}%", escape="\\")
         )
         query = query.where(ConversationRow.id.in_(matching))
     rows = db.execute(query.limit(LIST_LIMIT)).scalars()

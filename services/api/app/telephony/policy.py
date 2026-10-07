@@ -87,8 +87,49 @@ class CallDecision:
     reason: str
 
 
+#: urgent-alert-wire: the Kokpit's 'önemli deneme bildirimi gönder'. Important (it rings the
+#: phone through the alarm rung) but never a call - a test of one channel must not spend the
+#: other's minutes - so it is not in ``_NOTIFICATION_KINDS``.
+KIND_URGENT_ALERT_TEST: Final[str] = "urgent_alert.test"
+ALERT_ONLY_KINDS: Final[tuple[str, ...]] = (KIND_URGENT_ALERT_TEST,)
+
+#: The ONE word an alarm may carry (``app.urgent_alert.text.CATEGORIES``), per reason. Never
+#: the amount of a spend, never a name: the alarm is a doorbell, the inbox is the letter.
+ALERT_CATEGORIES: Final[dict[str, str]] = {
+    KIND_SECURITY_CRITICAL: "sistem",
+    KIND_RELEASE_FAILED: "sistem",
+    KIND_ALARM_CALL_ME: "ev",
+    KIND_SPEND_UNANSWERED: "sistem",
+    KIND_AKTIVRA_IMPORTANT: "Aktivra",
+    KIND_URGENT_ALERT_TEST: "sistem",
+}
+
+
 def call_kind_for_notification(notification_kind: str) -> str | None:
     return _NOTIFICATION_KINDS.get(notification_kind)
+
+
+def important_kind(notification_kind: str) -> str | None:
+    """The reason a notification is important, or ``None``. The one definition of
+    "important" for both the phone call and the alarm rung: read at call time from the
+    same table, so the two can never drift."""
+    if notification_kind in ALERT_ONLY_KINDS:
+        return notification_kind
+    return _NOTIFICATION_KINDS.get(notification_kind)
+
+
+def is_important_notification(notification_kind: str) -> bool:
+    return important_kind(notification_kind) is not None
+
+
+def alert_category(notification_kind: str) -> str:
+    reason = important_kind(notification_kind)
+    return ALERT_CATEGORIES.get(reason, "") if reason else ""
+
+
+def important_notification_kinds() -> frozenset[str]:
+    """Every notification kind that is important - computed, never a second list."""
+    return frozenset({*_NOTIFICATION_KINDS, *ALERT_ONLY_KINDS})
 
 
 def is_critical(kind: str) -> bool:
@@ -119,7 +160,14 @@ def decide(
 
 
 __all__ = [
+    "ALERT_CATEGORIES",
+    "ALERT_ONLY_KINDS",
     "DEFAULT_MAX_PER_HOUR",
+    "KIND_URGENT_ALERT_TEST",
+    "alert_category",
+    "important_kind",
+    "important_notification_kinds",
+    "is_important_notification",
     "KIND_AKTIVRA_IMPORTANT",
     "KIND_ALARM_CALL_ME",
     "KIND_RELEASE_FAILED",

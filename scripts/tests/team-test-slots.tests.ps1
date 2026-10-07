@@ -701,7 +701,10 @@ Test-Case "gate: quality-gate.ps1 runs this suite as its own step under PS 5.1, 
         Assert-True ($gate -match ('Invoke-Step "' + $pair[0] + '" -Kinds ' + [regex]::Escape($pair[1]) + ' \{')) "the step '$($pair[0])' asks for $($pair[1])"
     }
     $ci = [System.IO.File]::ReadAllText((Join-Path $repoRoot ".github\workflows\ci.yml"), [System.Text.Encoding]::UTF8)
-    Assert-True ($ci -match 'scripts\\tests\\team-test-slots\.tests\.ps1') "CI names the suite"
+    # Since ci-ps-suites-from-glob CI runs every scripts\tests\*.tests.ps1 it finds, less a named
+    # skip list: the suite is in CI when the glob is there and the skip list does not name it.
+    Assert-True ($ci -match [regex]::Escape("Get-ChildItem -Path 'scripts\tests\*.tests.ps1'")) "CI runs the suites by glob"
+    Assert-True (-not ($ci -match "'team-test-slots\.tests\.ps1'\s*=")) "CI does not skip the suite"
 }
 
 Stop-Children

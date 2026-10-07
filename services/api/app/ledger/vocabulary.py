@@ -146,6 +146,9 @@ SUBSYSTEM_WATCH = "watch"
 #: jarvis-calls-owner: JARVIS phones the owner (Twilio). Every call, refusal and decision not
 #: to call is a row here - "beni neden aradın / neden aramadın?" is answered from this subsystem.
 SUBSYSTEM_TELEPHONY = "telephony"
+#: urgent-alert-wire: the alarm rung rang the phone (Pushover priority=2) - sent, seen (on the
+#: phone or in the inbox), unseen, or refused by the text/link gate.
+SUBSYSTEM_URGENT_ALERT = "urgent_alert"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -182,6 +185,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_SELFDEV,
     SUBSYSTEM_WATCH,
     SUBSYSTEM_TELEPHONY,
+    SUBSYSTEM_URGENT_ALERT,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -601,6 +605,13 @@ EVENT_TYPE_TELEPHONY_CALL_REFUSED = "telephony.call_refused"
 EVENT_TYPE_TELEPHONY_CALL_FAILED = "telephony.call_failed"
 #: inbound-calls-bridge: JARVIS answered a call for the owner (caller, duration, transcript).
 EVENT_TYPE_TELEPHONY_INBOUND_ANSWERED = "telephony.inbound_answered"
+#: urgent-alert-wire: an alarm Pushover accepted (receipt kept), the owner saw it (the
+#: phone's "acknowledge", or read in the inbox - ``detail_json.source``), it rang out unseen,
+#: and an alarm the text/link gate refused (the reason only, never the text).
+EVENT_TYPE_ALERT_SENT = "alert.sent"
+EVENT_TYPE_ALERT_SEEN = "alert.seen"
+EVENT_TYPE_ALERT_UNSEEN = "alert.unseen"
+EVENT_TYPE_ALERT_REFUSED = "alert.refused"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -795,6 +806,10 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_TELEPHONY_CALL_REFUSED,
     EVENT_TYPE_TELEPHONY_CALL_FAILED,
     EVENT_TYPE_TELEPHONY_INBOUND_ANSWERED,
+    EVENT_TYPE_ALERT_SENT,
+    EVENT_TYPE_ALERT_SEEN,
+    EVENT_TYPE_ALERT_UNSEEN,
+    EVENT_TYPE_ALERT_REFUSED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the
@@ -945,6 +960,10 @@ def validate_production_state(value: str) -> str:
 
 __all__ = [
     "ALARM_EVENT_TYPE_BY_STATE",
+    "EVENT_TYPE_ALERT_REFUSED",
+    "EVENT_TYPE_ALERT_SEEN",
+    "EVENT_TYPE_ALERT_SENT",
+    "EVENT_TYPE_ALERT_UNSEEN",
     "EVENT_TYPE_MEDIA_FAILED",
     "EVENT_TYPE_MEDIA_OPENED",
     "EVENT_TYPE_MEDIA_STOPPED",
@@ -958,6 +977,7 @@ __all__ = [
     "SEVERITIES",
     "STATUSES",
     "SUBSYSTEMS",
+    "SUBSYSTEM_URGENT_ALERT",
     "validate_event_type",
     "validate_production_state",
     "validate_severity",

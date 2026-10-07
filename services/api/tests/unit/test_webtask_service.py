@@ -420,3 +420,95 @@ def test_a_round_that_could_not_run_leaves_a_failed_row_and_never_a_running_one(
         assert service.fail_db(db, task_id, reason="x", detail="y").failure == "round_could_not_run"
         assert service.fail_db(db, uuid.uuid4(), reason="x", detail="y") is None
     assert start(factory, "Sonraki") != task_id
+
+
+# ------------------------------------------------------------ the target (cloud-task-loop-core)
+#
+# ADR-0213 addendum (owner, 2026-09-30): a cloud task the owner started may go on after
+# he leaves, because it acts nowhere he did not name. The row says so honestly: a cloud
+# task is NOT attended. Every other target still is.
+
+
+def _started_events(factory: sessionmaker[Session]) -> list[dict[str, Any]]:
+    with factory() as db:
+        rows = db.execute(
+            select(ActivityEventRow).where(
+                ActivityEventRow.event_type == EVENT_TYPE_WEB_TASK_STARTED
+            )
+        ).scalars()
+        return [dict(r.detail_json or {}) for r in rows]
+
+
+def test_a_cloud_task_is_not_attended_and_says_where_it_runs(
+    factory: sessionmaker[Session],
+) -> None:
+    device = uuid.uuid4()
+    with factory() as db:
+        task_id = service.start_task_db(
+            db, goal="Bir haber bul", device_id=device, target="cloud", spoken_target="bulutta"
+        ).id
+    started = row(factory, task_id)
+    assert started.attended is False
+    assert started.state_json["target"] == "cloud"
+    assert service.load(started).target == "cloud"
+    assert service.task_dict(started)["target"] == "cloud"
+    (detail,) = _started_events(factory)
+    assert detail["target"] == "cloud"
+    assert detail["device_id"] == str(device)
+    assert detail["attended"] is False
+    assert detail["spoken_target"] == "bulutta"
+
+
+@pytest.mark.parametrize("target", ["owner_chrome", "device", ""])
+def test_every_other_target_is_attended(factory: sessionmaker[Session], target: str) -> None:
+    with factory() as db:
+        task_id = service.start_task_db(db, goal="Bir sayfa aç", target=target).id
+    assert row(factory, task_id).attended is True
+    (detail,) = _started_events(factory)
+    assert detail["attended"] is True and detail["target"] == target
+
+
+def test_the_target_survives_a_round(factory: sessionmaker[Session]) -> None:
+    with factory() as db:
+        task_id = service.start_task_db(db, goal="Bir sayfa aç", target="cloud").id
+    run(factory, task_id, ports(shop_site(), [done("Bitti.")]))
+    assert service.load(row(factory, task_id)).target == "cloud"
+
+
+class _ModelLike:
+    """A planner that answers as the model planner does, by its name."""
+
+    name = "model"
+
+    def plan(self, request: Any) -> Any:
+        return done("Bitti.")
+
+
+def test_the_planner_calls_are_counted_on_the_row(factory: sessionmaker[Session]) -> None:
+    task_id = start(factory, "Bir sayfa aç")
+    run(factory, task_id, Ports(browser=shop_site(), planner=_ModelLike(), clock=Clock()))
+    state = row(factory, task_id).state_json
+    assert state["planner_calls"] == 1
+    assert state["planner_model_calls"] == 1
+
+    other = start(factory, "Bir sayfa aç")
+    run(factory, other, ports(shop_site(), [done("Bitti.")]))
+    state = row(factory, other).state_json
+    assert state["planner_calls"] == 1 and state["planner_model_calls"] == 0
+
+
+def test_no_routine_scheduler_or_research_code_starts_a_browser_task() -> None:
+    """'Hiçbir rutin görev başlatmaz' (ADR-0213 addendum): what runs on a timer or for
+    research never starts a browser task. Only the owner's own surfaces may."""
+    from pathlib import Path
+
+    app_root = Path(service.__file__).resolve().parents[1]
+    offenders = []
+    # `scheduler` is named by the card and has no package today; a future one is read too.
+    for package in ("routines", "scheduler", "research", "watch", "briefing"):
+        for path in sorted((app_root / package).rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if "start_task_db" in text or "BrowserTaskWorkflow" in text:
+                offenders.append(str(path.relative_to(app_root)))
+    assert (app_root / "routines").is_dir() and (app_root / "research").is_dir()
+    assert offenders == []

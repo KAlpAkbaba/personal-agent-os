@@ -46,6 +46,7 @@ from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from . import (
+    cloud_allowlist,
     launch_guard,
     lifecycle,
     media,
@@ -428,6 +429,45 @@ def _refuse_on_denied_site(state: SessionState, capability: str) -> None:
     )
 
 
+def _refuse_unless_owner_allow_listed(state: SessionState, capability: str) -> None:
+    """Contract v1.9: a cloud task's session writes only on the owner's listed sites.
+
+    A session opened without ``owner_allow_list`` (the owner's Chrome, every device
+    session) is not asked. Otherwise the page's CURRENT address decides - the deny-list
+    first, then the session's list joined to the seed - because only the worker knows
+    where a click or a redirect has taken the page since Cloud Core's gate allowed it."""
+    if state.owner_allow_list is None:
+        return
+    url = state.browser_session.backend.current_page.url
+    allowed, reason = cloud_allowlist.acting_allowed(url, extra_sites=state.owner_allow_list)
+    if allowed:
+        return
+    site = cloud_allowlist.site_of(url)
+    raise BrowserError(
+        ErrorClass.SECURITY_SCOPE_ERROR,
+        f"{capability}: a cloud task writes only on the owner's allow-listed sites; "
+        f"{site or 'this page'} is not one ({reason})",
+        retryable=False,
+        evidence={"reason": reason, "site": site},
+    )
+
+
+def _owner_allow_list(payload: dict[str, Any]) -> tuple[str, ...] | None:
+    """``session_open``'s ``owner_allow_list`` (v1.9), or ``None`` when it sends none."""
+    if "owner_allow_list" not in payload:
+        return None
+    sites = payload["owner_allow_list"]
+    if not isinstance(sites, list) or not all(
+        isinstance(site, str) and site and site == site.strip().lower() for site in sites
+    ):
+        raise BrowserError(
+            ErrorClass.VALIDATION_ERROR,
+            "session_open: owner_allow_list must be a list of lower-case site names",
+            retryable=False,
+        )
+    return tuple(sites)
+
+
 async def _stdin_lines(loop: asyncio.AbstractEventLoop) -> AsyncIterator[str]:
     """Yield stdin lines as they arrive, without blocking the event loop.
 
@@ -501,6 +541,10 @@ class SessionState:
     #: "open tab count 7 exceeds max_tabs=6").
     own_tabs: int = 0
     popups_closed: int = 0
+    #: Contract v1.9: a cloud task's session (``cloud_task``) and the owner's allow-list it
+    #: was opened with. ``None`` - every session that sends no list - writes as before.
+    owner_allow_list: tuple[str, ...] | None = None
+    cloud_task: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Contract v1.6 (ADR-0207): the LAST observation of this session and where it was
     # taken. A reference is good for exactly this observation, this tab and this
@@ -1333,6 +1377,14 @@ class Worker:
             True if session_kind == media.MEDIA_SESSION_KIND else self._default_visible
         )
         visible = bool(policy_payload.get("visible", default_visible))
+        owner_allow_list = _owner_allow_list(payload)
+        cloud_task = payload.get("cloud_task", False)
+        if not isinstance(cloud_task, bool):
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "session_open: cloud_task must be a boolean",
+                retryable=False,
+            )
         requested_classes: frozenset[policy.RiskClass] | None = None
         if "allowed_risk_classes" in policy_payload:
             requested_classes = policy.parse_risk_classes(policy_payload["allowed_risk_classes"])
@@ -1382,6 +1434,14 @@ class Worker:
                 )
             new_allowed = policy.narrow_reopen(existing.policy_allowed, requested_classes)
             existing.policy_allowed = new_allowed
+            # v1.9: like the classes, a reopen only narrows the sites a session writes on.
+            if owner_allow_list is not None:
+                existing.owner_allow_list = (
+                    owner_allow_list
+                    if existing.owner_allow_list is None
+                    else tuple(s for s in existing.owner_allow_list if s in owner_allow_list)
+                )
+            existing.cloud_task = existing.cloud_task or cloud_task
             existing.max_tabs = max_tabs
             existing.last_used = time.monotonic()
             tab_count = await self._current_tab_count(existing)
@@ -1498,6 +1558,8 @@ class Worker:
             session_kind=session_kind,
             max_tabs=max_tabs,
             last_used=time.monotonic(),
+            owner_allow_list=owner_allow_list,
+            cloud_task=cloud_task,
         )
         if not self._allow_private_destinations:
             # browser-redirect-guard: every request of this session's pages is held to the
@@ -2166,6 +2228,11 @@ class Worker:
         policy.enforce(state.policy_allowed, risk_class, capability="browser.click")
         # v1.7: never above the class the consumer gated this step at.
         policy.enforce_ceiling(risk_class, payload.get("risk_ceiling"), capability="browser.click")
+        # v1.9: following a link is NAVIGATE, served everywhere; anything more is a write.
+        if policy.RISK_ORDER.index(risk_class) >= policy.RISK_ORDER.index(
+            policy.RiskClass.REVERSIBLE_WRITE
+        ):
+            _refuse_unless_owner_allow_listed(state, "browser.click")
 
         url_before = page.url
         try:
@@ -2227,6 +2294,7 @@ class Worker:
 
     async def _op_fill(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         _refuse_on_denied_site(state, "browser.fill")
+        _refuse_unless_owner_allow_listed(state, "browser.fill")
         value = payload.get("value")
         if not isinstance(value, str):
             raise BrowserError(
@@ -2241,6 +2309,7 @@ class Worker:
         self, state: SessionState, payload: dict[str, Any]
     ) -> dict[str, Any]:
         _refuse_on_denied_site(state, "browser.select_option")
+        _refuse_unless_owner_allow_listed(state, "browser.select_option")
         value = payload.get("value")
         if not isinstance(value, str):
             raise BrowserError(
@@ -2255,6 +2324,7 @@ class Worker:
 
     async def _op_set_checked(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         _refuse_on_denied_site(state, "browser.set_checked")
+        _refuse_unless_owner_allow_listed(state, "browser.set_checked")
         checked = payload.get("checked")
         if not isinstance(checked, bool):
             raise BrowserError(

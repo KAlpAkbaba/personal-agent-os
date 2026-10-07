@@ -23,6 +23,7 @@ from temporalio.worker import Worker
 from app.actions.confirmation_gate import CONFIRM_SOURCE_VOICE, Confirmation
 from app.artifacts.runtime import build_artifact_context
 from app.config import Settings
+from app.execution import allowlist_store
 from app.webtask import activities, service
 from app.webtask.activities import WEB_TASK_ACTIVITIES
 from app.webtask.loop import Ports
@@ -85,6 +86,7 @@ class Seen:
         self.rounds = 0
         self.beats = 0
         self.devices: list[uuid.UUID | None] = []
+        self.targets: list[str] = []
 
 
 def fake_ports(browser: FakeBrowser, script: list[Any]) -> Seen:
@@ -92,10 +94,14 @@ def fake_ports(browser: FakeBrowser, script: list[Any]) -> Seen:
     ports = Ports(browser=browser, planner=ScriptedPlanner(script), clock=Clock())
 
     def build(
-        task_id: uuid.UUID, device_id: uuid.UUID | None, heartbeat: Callable[[], None]
+        task_id: uuid.UUID,
+        device_id: uuid.UUID | None,
+        heartbeat: Callable[[], None],
+        target: str,
     ) -> Ports:
         seen.rounds += 1
         seen.devices.append(device_id)
+        seen.targets.append(target)
         heartbeat()  # from the worker thread of the round: this is what killed the missions
         seen.beats += 1
         return ports
@@ -106,10 +112,10 @@ def fake_ports(browser: FakeBrowser, script: list[Any]) -> Seen:
 
 @asynccontextmanager
 async def started(
-    settings: Settings, factory: Any, goal: str
+    settings: Settings, factory: Any, goal: str, *, target: str = ""
 ) -> AsyncIterator[tuple[uuid.UUID, WorkflowHandle[Any, Any]]]:
     with factory() as db:
-        task_id = service.start_task_db(db, goal=goal, session_id=SESSION).id
+        task_id = service.start_task_db(db, goal=goal, session_id=SESSION, target=target).id
     client = await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
     task_queue = f"pagentos-webtask-{uuid.uuid4().hex[:8]}"
     async with Worker(
@@ -175,8 +181,42 @@ async def test_a_task_runs_to_the_end_under_a_real_worker(settings: Settings, fa
     # One activity per round, and each one could beat from its thread.
     assert seen.rounds == seen.beats == 2
     assert seen.devices == [None, None]
+    assert seen.targets == ["", ""]
     # No key was used twice, across activities.
     assert len(browser.keys) == len(set(browser.keys))
+
+
+async def test_a_cloud_task_runs_to_the_end_unattended_under_a_real_worker(
+    settings: Settings, factory: Any
+) -> None:
+    """Card cloud-task-loop-core: a task whose target is the cloud runs through the real
+    activity like any other, the row says it was NOT attended, the round is handed its
+    target, and the round's process has the owner's allow-list store bound (only the API
+    process binds it otherwise, and the gate's rule 9 would read the empty seed alone)."""
+    browser = news_site()
+    seen = fake_ports(
+        browser,
+        [
+            click(
+                "Yapay zeka: yeni model duyuruldu", Expectation(EXPECT_URL_CONTAINS, "yeni-model")
+            ),
+            done("haber.example.org: Şirket yeni dil modelini tanıttı."),
+        ],
+    )
+    allowlist_store.unbind()
+    async with started(
+        settings, factory, "Bugünkü yapay zeka haberlerinden birini özetle", target="cloud"
+    ) as (task_id, handle):
+        result = await asyncio.wait_for(handle.result(), timeout=120)
+
+    assert result["status"] == STATUS_DONE, result
+    finished = row(factory, task_id)
+    assert finished.attended is False
+    assert finished.state_json["target"] == "cloud"
+    # The story link is a NAVIGATE: reading and moving in the cloud ask no list.
+    assert [r["outcome"] for r in finished.state_json["rounds"]] == ["acted", "done"]
+    assert seen.targets == ["cloud", "cloud"]
+    assert allowlist_store._FACTORY is not None
 
 
 async def test_the_task_stops_at_the_payment_boundary_and_a_cancel_ends_it(
@@ -255,7 +295,10 @@ async def test_a_round_that_cannot_run_leaves_a_failed_row(
     settings: Settings, factory: Any
 ) -> None:
     def broken(
-        task_id: uuid.UUID, device_id: uuid.UUID | None, heartbeat: Callable[[], None]
+        task_id: uuid.UUID,
+        device_id: uuid.UUID | None,
+        heartbeat: Callable[[], None],
+        target: str,
     ) -> Ports:
         attempts.append(task_id)
         raise RuntimeError("the device path is not there")

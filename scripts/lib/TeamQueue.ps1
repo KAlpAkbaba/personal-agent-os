@@ -157,72 +157,126 @@ function Test-TeamQueue {
         Every way the queue breaks the protocol, as sentences. Empty when it breaks none.
     #>
     param($Queue)
-    $problems = New-Object System.Collections.ArrayList
-    if ($null -eq $Queue) { [void]$problems.Add("the queue is empty or not JSON"); return @($problems.ToArray()) }
+    $found = Get-TeamQueueProblems -Queue $Queue
+    return @(@($found.All) | ForEach-Object { [string]$_.Text })
+}
+
+# The states a task is worked in: it names its file area there (TEAM_PROTOCOL section 4).
+$script:TeamStatesNeedingArea = @("assigned", "in_progress", "inspecting", "returned")
+$script:TeamNoAreaRefusal = "alan yok: önce dosya alanı"
+
+function Get-TeamQueueProblems {
+    <#
+    .SYNOPSIS
+        Test-TeamQueue's problems, by whose they are: the queue's, or one task's.
+
+    .DESCRIPTION
+        2026-10-06 21:02: seven test-team cards moved to 'assigned' with no area, and every
+        cycle and the feeder refused the WHOLE queue for an hour - every seat asleep. A problem
+        of one task is that task's: it is set aside (Set-TeamTasksAside) and the rest runs.
+        Only a problem of the queue itself stops everything:
+          Queue  - not JSON, no version 1, no task list, an id missing / malformed / used twice
+                   (a task that cannot be named cannot be set aside by name), a cycle in
+                   depends_on (no order of the tasks keeps it);
+          Tasks  - id -> its problems (a field missing, a state that is not one, an area, the
+                   branch, a dependency that is not in the queue, the budget, work without an
+                   area, an area another task in work holds).
+        A 'stopped' task is held to the queue's rules only: it is not run, and it is what a
+        set-aside task becomes - one held to every rule would stop the queue again at the next
+        read. All is every problem in the order they were found.
+    #>
+    param($Queue)
+    $all = New-Object System.Collections.ArrayList
+    $byTask = [ordered]@{}
+    $queueLevel = New-Object System.Collections.ArrayList
+    $add = {
+        param([string]$Id, [string]$Text)
+        [void]$all.Add([pscustomobject]@{ Id = $Id; Text = $Text })
+        if ($Id) {
+            if (-not $byTask.Contains($Id)) { $byTask[$Id] = New-Object System.Collections.ArrayList }
+            [void]$byTask[$Id].Add($Text)
+        }
+        else { [void]$queueLevel.Add($Text) }
+    }
+    $result = { [pscustomobject]@{ Queue = @($queueLevel.ToArray()); Tasks = $byTask; All = @($all.ToArray()) } }
+    if ($null -eq $Queue) { & $add "" "the queue is empty or not JSON"; return (& $result) }
     if ((Get-TeamProperty -InputObject $Queue -Name "version") -ne 1) {
-        [void]$problems.Add("version must be 1")
+        & $add "" "version must be 1"
     }
     if ($null -eq $Queue.PSObject.Properties["tasks"]) {
-        [void]$problems.Add("tasks is missing")
-        return @($problems.ToArray())
+        & $add "" "tasks is missing"
+        return (& $result)
+    }
+    $tasks = @(Get-TeamTasks -Queue $Queue)
+    $counts = @{}
+    foreach ($task in $tasks) {
+        $id = [string](Get-TeamProperty -InputObject $task -Name "id" -Default "")
+        $counts[$id] = 1 + $(if ($counts.ContainsKey($id)) { $counts[$id] } else { 0 })
     }
     $seen = @{}
     $areas = @{}
-    foreach ($task in (Get-TeamTasks -Queue $Queue)) {
+    foreach ($task in $tasks) {
         $id = [string](Get-TeamProperty -InputObject $task -Name "id" -Default "")
         $label = if ($id) { $id } else { "(a task without an id)" }
+        $named = $id -cmatch '^[a-z0-9][a-z0-9-]{2,63}$' -and $counts[$id] -eq 1
+        # Whose a problem of this task is: its own when it can be named, the queue's otherwise.
+        $owner = if ($named) { $id } else { "" }
+        $state = [string](Get-TeamProperty -InputObject $task -Name "state" -Default "")
+        # A stopped task keeps the queue's rules only (see above).
+        $judged = $state -ne "stopped" -or -not $named
+        if (-not $named) {
+            if ($id -cnotmatch '^[a-z0-9][a-z0-9-]{2,63}$') { & $add "" "${label}: an id is 3-64 characters of a-z, 0-9 and '-'" }
+            if ($seen.ContainsKey($id)) { & $add "" "${label}: the id is used twice" }
+        }
+        $seen[$id] = $true
+        foreach ($dependency in @(Get-TeamProperty -InputObject $task -Name "depends_on" -Default @())) {
+            if ([string]$dependency -eq $id) { & $add "" "${label}: a task cannot depend on itself" }
+        }
+        if (-not $judged) { continue }
         foreach ($field in $script:TeamRequiredFields) {
             if ($null -eq $task.PSObject.Properties[$field]) {
-                [void]$problems.Add("${label}: the field '$field' is missing")
+                & $add $owner "${label}: the field '$field' is missing"
             }
         }
-        if ($id -cnotmatch '^[a-z0-9][a-z0-9-]{2,63}$') {
-            [void]$problems.Add("${label}: an id is 3-64 characters of a-z, 0-9 and '-'")
-        }
-        if ($seen.ContainsKey($id)) { [void]$problems.Add("${label}: the id is used twice") }
-        $seen[$id] = $true
-
-        $state = [string](Get-TeamProperty -InputObject $task -Name "state" -Default "")
         if ($script:TeamStates -notcontains $state) {
-            [void]$problems.Add("${label}: '$state' is not a state")
+            & $add $owner "${label}: '$state' is not a state"
         }
         if ([string]::IsNullOrWhiteSpace([string](Get-TeamProperty -InputObject $task -Name "title" -Default ""))) {
-            [void]$problems.Add("${label}: the title is empty")
+            & $add $owner "${label}: the title is empty"
         }
         $taskAreas = @(Get-TeamProperty -InputObject $task -Name "area" -Default @())
         foreach ($area in $taskAreas) {
             $text = [string]$area
             if ($text -match '^[\\/]' -or $text -match '\.\.' -or $text -match '^[A-Za-z]:') {
-                [void]$problems.Add("${label}: the area '$text' must be a path inside the repository")
+                & $add $owner "${label}: the area '$text' must be a path inside the repository"
             }
             elseif (@("", ".") -contains (Get-TeamAreaKey -Area $text)) {
                 # '*', '.', './': everything. An area names files or folders; "the whole
                 # repository" would hold every other task out of work, or - compared by another
                 # key - none (the two rules disagreed on exactly these, 2026-10-02).
-                [void]$problems.Add("${label}: the area '$text' is the whole repository; an area names files or folders inside it")
+                & $add $owner "${label}: the area '$text' is the whole repository; an area names files or folders inside it"
             }
         }
         $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
         if ($branch -match 'hand-gestures' -or $branch -eq "main") {
-            [void]$problems.Add("${label}: the branch '$branch' is not a team branch")
+            & $add $owner "${label}: the branch '$branch' is not a team branch"
         }
         foreach ($dependency in @(Get-TeamProperty -InputObject $task -Name "depends_on" -Default @())) {
             $name = [string]$dependency
-            if ($name -eq $id) { [void]$problems.Add("${label}: a task cannot depend on itself") }
-            elseif (@(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -eq $name }).Count -eq 0) {
-                [void]$problems.Add("${label}: depends on '$name', which is not in the queue")
+            if ($name -ne $id -and @($tasks | Where-Object { [string]$_.id -eq $name }).Count -eq 0) {
+                & $add $owner "${label}: depends on '$name', which is not in the queue"
             }
         }
         $budget = Get-TeamProperty -InputObject $task -Name "budget"
         if ($null -ne $budget) {
             $cap = Get-TeamProperty -InputObject $budget -Name "max_usd" -Default 0
             if (-not ($cap -is [ValueType]) -or [double]$cap -lt 0) {
-                [void]$problems.Add("${label}: budget.max_usd must be a number, zero or more")
+                & $add $owner "${label}: budget.max_usd must be a number, zero or more"
             }
         }
-        if (@("assigned", "in_progress", "inspecting", "returned") -contains $state) {
+        if ($script:TeamStatesNeedingArea -contains $state) {
             if (@($taskAreas).Count -eq 0) {
-                [void]$problems.Add("${label}: a task that is being worked on names its file area")
+                & $add $owner "${label}: a task that is being worked on names its file area"
             }
             # Section 4: two concurrent tasks never share an area. ONE rule for it
             # (Test-TeamAreasOverlap): the split's judge, the cycle's holder check
@@ -230,7 +284,7 @@ function Test-TeamQueue {
             foreach ($area in $taskAreas) {
                 foreach ($other in @($areas.Keys)) {
                     if (Test-TeamAreasOverlap -First ([string]$area) -Second ([string]$other)) {
-                        [void]$problems.Add("${label}: the area '$area' overlaps the area of $($areas[$other])")
+                        & $add $owner "${label}: the area '$area' overlaps the area of $($areas[$other])"
                     }
                 }
             }
@@ -239,7 +293,69 @@ function Test-TeamQueue {
             }
         }
     }
-    return @($problems.ToArray())
+    # A cycle longer than one (a -> b -> a): every task in it waits for another for ever.
+    $edges = @{}
+    foreach ($task in $tasks) {
+        $edges[[string](Get-TeamProperty -InputObject $task -Name "id" -Default "")] = @(@(Get-TeamProperty -InputObject $task -Name "depends_on" -Default @()) | ForEach-Object { [string]$_ })
+    }
+    $mark = @{}
+    foreach ($start in @($edges.Keys)) {
+        if ($mark.ContainsKey($start)) { continue }
+        $stack = New-Object System.Collections.Stack
+        $stack.Push(@($start, 0))
+        $mark[$start] = 1
+        while (@($stack).Count -gt 0) {
+            $top = $stack.Pop()
+            $node = [string]$top[0]; $next = [int]$top[1]
+            $out = @($edges[$node])
+            if ($next -lt @($out).Count) {
+                $stack.Push(@($node, ($next + 1)))
+                $to = [string]$out[$next]
+                if ($to -eq $node -or -not $edges.ContainsKey($to)) { continue }
+                if (-not $mark.ContainsKey($to)) { $mark[$to] = 1; $stack.Push(@($to, 0)) }
+                elseif ($mark[$to] -eq 1) { & $add "" "${node}: depends on '$to', which depends on it in turn (a cycle in depends_on)" }
+            }
+            else { $mark[$node] = 2 }
+        }
+    }
+    return (& $result)
+}
+
+function Set-TeamTasksAside {
+    <#
+    .SYNOPSIS
+        The tasks with a problem of their own (Get-TeamQueueProblems .Tasks) are stopped, the
+        problem as their reason, so the rest of the queue runs. Returns { Id; Reason } per task
+        set aside. A stopped task has no problem of its own, so the reason is written once.
+        -Skip: ids not to touch (a run in flight is the cycle's copy).
+    #>
+    param([Parameter(Mandatory = $true)]$Queue, [Parameter(Mandatory = $true)]$Problems, [string[]]$Skip = @(), [datetime]$Now = [datetime]::UtcNow)
+    $aside = New-Object System.Collections.ArrayList
+    foreach ($id in @($Problems.Tasks.Keys)) {
+        if (@($Skip) -contains $id) { continue }
+        $task = @(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -ceq $id })
+        if (@($task).Count -ne 1) { continue }
+        $why = (@($Problems.Tasks[$id]) | ForEach-Object { (([string]$_) -replace ('^' + [regex]::Escape($id) + ': '), '') -replace '\s+', ' ' }) -join "; "
+        $reason = "kuyruk kuralı, kenara alındı (önceki durum: $([string](Get-TeamProperty -InputObject $task[0] -Name 'state' -Default '?'))): $why"
+        if (@($Problems.Tasks[$id]) -match 'names its file area') { $reason = "$($script:TeamNoAreaRefusal) - $reason" }
+        if ($reason.Length -gt 600) { $reason = $reason.Substring(0, 600) }
+        Set-TeamProperty -InputObject $task[0] -Name "state" -Value "stopped"
+        Set-TeamProperty -InputObject $task[0] -Name "reason" -Value $reason
+        Set-TeamProperty -InputObject $task[0] -Name "updated_at" -Value (Get-TeamTimestamp -Now $Now)
+        [void]$aside.Add([pscustomobject]@{ Id = $id; Reason = $reason })
+    }
+    return @($aside.ToArray())
+}
+
+function Get-TeamMoveRefusal {
+    <# Why a task may not move to -State now, in Turkish; $null when it may. A task is worked
+       (assigned, in_progress, inspecting, returned) only inside its file area: without one the
+       move is refused - whoever makes it (the cycle, the Proje Yöneticisi's duty). #>
+    param([Parameter(Mandatory = $true)]$Task, [Parameter(Mandatory = $true)][string]$State)
+    if ($script:TeamStatesNeedingArea -notcontains $State) { return $null }
+    $area = @(@(Get-TeamProperty -InputObject $Task -Name "area" -Default @()) | Where-Object { ([string]$_).Trim() })
+    if (@($area).Count -eq 0) { return $script:TeamNoAreaRefusal }
+    return $null
 }
 
 function Get-TeamUnmetDependencies {

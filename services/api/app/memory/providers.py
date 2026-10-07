@@ -30,11 +30,14 @@ a model with no rows degrades to the keyword/structured candidates, never to a c
 
 from __future__ import annotations
 
+import hashlib
 import math
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 import httpx
@@ -78,6 +81,106 @@ MRL_TRUNCATABLE_MODELS: Final[frozenset[str]] = frozenset(
         "Qwen/Qwen3-Embedding-0.6B",  # model card: user-defined 32..1024 dims
         "Qwen/Qwen3-Embedding-0.6B-Q",
         "google/embeddinggemma-300m",  # model card: MRL, truncate to 512/256/128
+        # model card: MRL 512/384/256/128
+        # https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2
+        "ibm-granite/granite-embedding-311m-multilingual-r2",
+        "ibm-granite/granite-embedding-311m-multilingual-r2-int8",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedFile:
+    """One file the loader reads, as its bytes were at the pinned revision."""
+
+    path: str
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class CustomOnnxModel:
+    """An ONNX sentence-embedding model fastembed does not ship, pinned to one revision.
+    ``pooling`` is what the model card prescribes (``cls`` | ``mean``), never a guess."""
+
+    name: str
+    hf_repo: str
+    revision: str
+    model_file: str
+    pooling: str
+    native_dim: int
+    normalize: bool
+    files: tuple[PinnedFile, ...]
+    pad_id: int = 0
+
+
+_GRANITE_R2: Final = "ibm-granite/granite-embedding-311m-multilingual-r2"
+_GRANITE_R2_REVISION: Final = "44399559930365213510b1ee2eb15ded83374f0e"
+_GRANITE_R2_SHARED: Final[tuple[PinnedFile, ...]] = (
+    PinnedFile(
+        "tokenizer.json",
+        "0087c868b33bad550a78a08d19798cfd7f713cde4f020803b8f51f405503e15f",
+        33384821,
+    ),
+    PinnedFile(
+        "tokenizer_config.json",
+        "7947bdf0378520e69ca412b8c4dacd1cffa8aef099f851fdd5c65aa27c6b36a0",
+        1155500,
+    ),
+    PinnedFile(
+        "special_tokens_map.json",
+        "cb9e60dcf4d8d314315cb3e761fe4c2e664fda8dbf66d7815372b2639e381182",
+        694,
+    ),
+    PinnedFile(
+        "config.json", "e1e3fc842a8e0537e25d6e4c93879698b92ae96722e8c162bef334b57978a3b0", 1191
+    ),
+)
+
+#: The CLOSED registry of models loaded from a pinned Hugging Face revision instead of
+#: fastembed's own list (memory-embedding-granite-measure: MEASURED, not adopted - the
+#: default stays ``DEFAULT_LOCAL_MODEL``). Every file is checked against its size and
+#: sha256 before the first embedding. Pooling: the card's ``1_Pooling/config.json``
+#: (``pooling_mode_cls_token: true``) and its Transformers snippet ("uses CLS Pooling").
+CUSTOM_ONNX_MODELS: Final[Mapping[str, CustomOnnxModel]] = MappingProxyType(
+    {
+        spec.name: spec
+        for spec in (
+            CustomOnnxModel(
+                name=_GRANITE_R2,
+                hf_repo=_GRANITE_R2,
+                revision=_GRANITE_R2_REVISION,
+                model_file="onnx/model.onnx",
+                pooling="cls",
+                native_dim=768,
+                normalize=True,
+                files=(
+                    PinnedFile(
+                        "onnx/model.onnx",
+                        "75f9f258bf5013f5fe8a4dad61dd0fd16ac0cbaa7a106e3d3f41c2d04a42d541",
+                        1247170481,
+                    ),
+                    *_GRANITE_R2_SHARED,
+                ),
+            ),
+            CustomOnnxModel(
+                name=f"{_GRANITE_R2}-int8",
+                hf_repo=_GRANITE_R2,
+                revision=_GRANITE_R2_REVISION,
+                model_file="onnx/model_quint8_avx2.onnx",
+                pooling="cls",
+                native_dim=768,
+                normalize=True,
+                files=(
+                    PinnedFile(
+                        "onnx/model_quint8_avx2.onnx",
+                        "f1fdd44e7e1ac51f12ab7957c7bd092e064d596c288513bf9d326842f669edee",
+                        313421909,
+                    ),
+                    *_GRANITE_R2_SHARED,
+                ),
+            ),
+        )
     }
 )
 
@@ -167,15 +270,140 @@ class _EmbeddingModel(Protocol):
 ModelFactory = Callable[[str, str | None], _EmbeddingModel]
 
 
-def _fastembed_factory(model_name: str, cache_dir: str | None) -> _EmbeddingModel:
+def _fastembed_factory(
+    model_name: str, cache_dir: str | None, *, threads: int | None = None
+) -> _EmbeddingModel:
     """Load the ONNX model through fastembed. Imported lazily so that the API process
-    starts (and every other provider works) even where fastembed is not installed."""
+    starts (and every other provider works) even where fastembed is not installed.
+    A ``CUSTOM_ONNX_MODELS`` name is fetched at its pinned revision and verified first."""
+    spec = CUSTOM_ONNX_MODELS.get(model_name)
+    if spec is not None:
+        return _load_custom(spec, cache_dir, threads)
     from fastembed import TextEmbedding  # noqa: PLC0415 - optional at import time
 
     kwargs: dict[str, Any] = {"model_name": model_name}
     if cache_dir:
         kwargs["cache_dir"] = cache_dir
+    if threads is not None:
+        kwargs["threads"] = threads
     return TextEmbedding(**kwargs)
+
+
+#: Names already given to ``TextEmbedding.add_custom_model`` in this process (it raises on
+#: a second registration).
+_REGISTERED_CUSTOM: set[str] = set()
+_REGISTER_LOCK = threading.Lock()
+
+
+def _verify_pinned(spec: CustomOnnxModel, root: Path) -> None:
+    """Size and sha256 of every pinned file, BEFORE anything reads it as a model. The error
+    names the file - never its content."""
+    for pinned in spec.files:
+        target = root / pinned.path
+        if not target.is_file() or target.stat().st_size != pinned.size:
+            raise EmbeddingProviderError(
+                f"local embedding model {spec.name!r}: {pinned.path} is missing or its size "
+                "does not match the pin, so its sha256 cannot match"
+            )
+        digest = hashlib.sha256()
+        with target.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != pinned.sha256:
+            raise EmbeddingProviderError(
+                f"local embedding model {spec.name!r}: {pinned.path} sha256 does not match "
+                f"the pin at revision {spec.revision}"
+            )
+
+
+def _load_custom(
+    spec: CustomOnnxModel, cache_dir: str | None, threads: int | None
+) -> _EmbeddingModel:
+    from huggingface_hub import snapshot_download  # noqa: PLC0415 - optional at import time
+
+    root = Path(
+        snapshot_download(
+            repo_id=spec.hf_repo,
+            revision=spec.revision,
+            allow_patterns=[pinned.path for pinned in spec.files],
+            cache_dir=cache_dir,
+        )
+    )
+    _verify_pinned(spec, root)
+    try:
+        from fastembed import TextEmbedding  # noqa: PLC0415
+        from fastembed.common.model_description import (  # noqa: PLC0415
+            ModelSource,
+            PoolingType,
+        )
+
+        with _REGISTER_LOCK:
+            if spec.name not in _REGISTERED_CUSTOM:
+                TextEmbedding.add_custom_model(
+                    model=spec.name,
+                    pooling=PoolingType.CLS if spec.pooling == "cls" else PoolingType.MEAN,
+                    normalization=spec.normalize,
+                    sources=ModelSource(hf=spec.hf_repo),
+                    dim=spec.native_dim,
+                    model_file=spec.model_file,
+                )
+                _REGISTERED_CUSTOM.add(spec.name)
+        kwargs: dict[str, Any] = {
+            "model_name": spec.name,
+            "cache_dir": cache_dir,
+            "specific_model_path": str(root),
+        }
+        if threads is not None:
+            kwargs["threads"] = threads
+        return TextEmbedding(**kwargs)
+    except Exception as exc:  # noqa: BLE001 - fastembed could not; onnxruntime directly
+        logger.info("memory_embedder_custom_fallback", model=spec.name, reason=type(exc).__name__)
+        return _OnnxRuntimeModel(spec, root, threads)
+
+
+class _OnnxRuntimeModel:
+    """The fallback for a ``CUSTOM_ONNX_MODELS`` entry fastembed cannot load: the verified
+    files read by ``tokenizers`` + ``onnxruntime`` (CPU only), pooled as the registry says."""
+
+    def __init__(self, spec: CustomOnnxModel, root: Path, threads: int | None = None) -> None:
+        import onnxruntime  # noqa: PLC0415 - optional at import time
+        from tokenizers import Tokenizer  # noqa: PLC0415
+
+        options = onnxruntime.SessionOptions()
+        if threads:
+            options.intra_op_num_threads = threads
+        self._spec = spec
+        self._tokenizer = Tokenizer.from_file(str(root / "tokenizer.json"))
+        self._session = onnxruntime.InferenceSession(
+            str(root / spec.model_file),
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+        self._inputs = {node.name for node in self._session.get_inputs()}
+
+    def embed(self, documents: list[str], **_kwargs: Any) -> Iterable[Any]:
+        import numpy as np  # noqa: PLC0415
+
+        encodings = self._tokenizer.encode_batch(list(documents))
+        width = max((len(e.ids) for e in encodings), default=0)
+        ids = np.full((len(encodings), width), self._spec.pad_id, dtype=np.int64)
+        mask = np.zeros((len(encodings), width), dtype=np.int64)
+        for row, encoding in enumerate(encodings):
+            ids[row, : len(encoding.ids)] = encoding.ids
+            mask[row, : len(encoding.ids)] = encoding.attention_mask
+        feed = {"input_ids": ids, "attention_mask": mask}
+        if "token_type_ids" in self._inputs:
+            feed["token_type_ids"] = np.zeros_like(ids)
+        hidden = np.asarray(self._session.run(None, feed)[0], dtype=np.float64)
+        if self._spec.pooling == "cls":
+            pooled = hidden[:, 0]
+        else:
+            weights = mask[:, :, None].astype(np.float64)
+            pooled = (hidden * weights).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-9, None)
+        if self._spec.normalize:
+            norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+            pooled = pooled / np.clip(norms, 1e-12, None)
+        return [row.tolist() for row in pooled]
 
 
 @dataclass(slots=True)
@@ -216,6 +444,8 @@ class LocalEmbedder:
             raise EmbeddingProviderError(
                 "local embedding provider needs the fastembed package"
             ) from None
+        except EmbeddingProviderError:
+            raise  # a pinned file that does not match: the reason names the file
         except Exception as exc:  # noqa: BLE001 - the reason travels, the text never does
             raise EmbeddingProviderError(
                 f"local embedding model {self.model_name!r} could not be loaded: "
@@ -393,6 +623,7 @@ def _deterministic(requested: str, reason: str | None) -> tuple[Embedder, Embedd
 
 
 __all__ = [
+    "CUSTOM_ONNX_MODELS",
     "DEFAULT_LOCAL_MODEL",
     "DEFAULT_OPENAI_MODEL",
     "MRL_TRUNCATABLE_MODELS",

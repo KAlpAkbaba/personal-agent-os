@@ -2,8 +2,8 @@
 
 Nothing here reaches the network: every provider call goes through a real ``httpx.Client``
 on ``httpx.MockTransport``, so the form that would leave the machine and the log lines httpx
-itself writes are both the real ones. The ladder is not wired to this rung (a separate card);
-these tests prove the parts the wiring card will plug in.
+itself writes are both the real ones. These tests prove the package's parts; the wiring onto
+the ladder, the receipt table and the loop is ``test_urgent_alert_wire.py``.
 """
 
 from __future__ import annotations

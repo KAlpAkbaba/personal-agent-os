@@ -471,3 +471,97 @@ def test_after_one_unenforced_write_no_further_write_reaches_that_device() -> No
         risk_ceiling="REVERSIBLE_WRITE",
     )
     assert sent(c)[-1][0] == "browser.click"
+
+
+# ------------------------------------------------------------------ the cloud (S1)
+#
+# Card cloud-task-loop-core: a task whose target is the CLOUD opens the cloud worker's own
+# research profile in a headless Chromium, asks for no more than READ, NAVIGATE and
+# REVERSIBLE_WRITE, and hands the worker the owner's allow-list as it is now. Every other
+# target opens the owner's Chrome exactly as before, without the two new keys.
+
+
+def test_a_cloud_task_opens_the_research_profile_with_the_owners_list() -> None:
+    c = client()
+    DeviceTaskBrowser(
+        c,
+        device_id=DEVICE,
+        trace_id="trace-1",
+        target="cloud",
+        owner_allow_list=("example.com", "magaza.example.org"),
+    ).observe(task_id=TASK, key="k1")
+
+    name, opened = sent(c)[0]
+    assert name == "browser.session_open"
+    assert opened == {
+        "session_id": SESSION,
+        "profile": "research",
+        "policy": {
+            "allowed_risk_classes": ["READ", "NAVIGATE", "REVERSIBLE_WRITE"],
+            "visible": False,
+        },
+        "channel": "chromium",
+        "cloud_task": True,
+        "owner_allow_list": ["example.com", "magaza.example.org"],
+    }
+
+
+def test_an_empty_owner_list_is_still_sent_as_a_list() -> None:
+    c = client()
+    DeviceTaskBrowser(c, device_id=DEVICE, target="cloud").observe(task_id=TASK, key="k1")
+    opened = sent(c)[0][1]
+    assert opened["cloud_task"] is True and opened["owner_allow_list"] == []
+
+
+@pytest.mark.parametrize("target", ["", "owner_chrome", "device"])
+def test_every_other_target_opens_the_owners_chrome_as_before(target: str) -> None:
+    c = client()
+    DeviceTaskBrowser(
+        c, device_id=DEVICE, target=target, owner_allow_list=("example.com",)
+    ).observe(task_id=TASK, key="k1")
+    assert sent(c)[0][1] == {
+        "session_id": SESSION,
+        "profile": "owner",
+        "policy": {"allowed_risk_classes": list(RISK_ORDER), "visible": True},
+        "channel": "chrome",
+    }
+
+
+# ------------------------------------------------------------------ the activity's wiring
+#
+# The inspector's mutation: ``_default_ports`` handing ``()`` instead of the owner's list
+# left every test green, and the cloud worker would have refused every write even on a site
+# the owner listed. These read the list out of the session_open the real wiring sends.
+
+
+def _wired(monkeypatch: pytest.MonkeyPatch, target: str) -> FakeDeviceCommandClient:
+    from app.execution import allowlist_store
+    from app.webtask import activities
+
+    c = client()
+    monkeypatch.setattr(activities, "_factory", lambda: None)
+    monkeypatch.setattr(activities, "DeviceCommandClient", lambda _factory: c)
+    monkeypatch.setattr(activities, "default_planner", lambda: None)
+    monkeypatch.setattr(
+        allowlist_store, "effective_sites", lambda: ("example.com", "magaza.example.org")
+    )
+    ports = activities._default_ports(uuid.UUID(TASK), DEVICE, lambda: None, target)
+    ports.browser.observe(task_id=TASK, key="k1")
+    return c
+
+
+def test_the_activity_hands_a_cloud_task_the_owners_list_as_it_is_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name, opened = sent(_wired(monkeypatch, "cloud"))[0]
+    assert name == "browser.session_open"
+    assert opened["profile"] == "research" and opened["cloud_task"] is True
+    assert opened["owner_allow_list"] == ["example.com", "magaza.example.org"]
+
+
+def test_the_activity_opens_the_owners_chrome_without_the_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened = sent(_wired(monkeypatch, ""))[0][1]
+    assert opened["profile"] == "owner"
+    assert "owner_allow_list" not in opened and "cloud_task" not in opened

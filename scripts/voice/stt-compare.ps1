@@ -102,51 +102,9 @@ else {
 #: The prefix of the temp folder a -FromCore run downloads into; removed in the finally.
 $coreFolderPrefix = "pagentos-stt-compare-"
 
-function Get-CoreBytes {
-    <#  GET one body as raw bytes (the audio). Non-2xx is an exception naming the status.  #>
-    param([Parameter(Mandatory = $true)][string]$Uri, [Parameter(Mandatory = $true)][hashtable]$Headers, [int]$TimeoutSec = 60)
-    $request = [System.Net.HttpWebRequest]::Create($Uri)
-    $request.Method = "GET"
-    $request.Timeout = $TimeoutSec * 1000
-    $request.ReadWriteTimeout = $TimeoutSec * 1000
-    foreach ($key in $Headers.Keys) { $request.Headers.Add([string]$key, [string]$Headers[$key]) }
-    $response = $null
-    try { $response = $request.GetResponse() }
-    catch [System.Net.WebException] {
-        $status = $null
-        if ($null -ne $_.Exception.Response) {
-            try { $status = [int]$_.Exception.Response.StatusCode } catch { }
-            $_.Exception.Response.Close()
-        }
-        throw (New-Object System.Exception(("HTTP {0} from {1}" -f $status, $Uri)))
-    }
-    try {
-        $stream = $response.GetResponseStream()
-        $buffer = New-Object System.IO.MemoryStream
-        try { $stream.CopyTo($buffer); return , $buffer.ToArray() }
-        finally { $buffer.Dispose(); $stream.Dispose() }
-    }
-    finally { $response.Close() }
-}
-
-function Get-Sha256Hex {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { return ([System.BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace "-", "").ToLowerInvariant() }
-    finally { $sha.Dispose() }
-}
-
-function Remove-CoreFolder {
-    <#  The downloaded recordings are personal data: removed, and a locked file is RETRIED
-        (an antivirus scan or a child that has not let go yet), never silently left.  #>
-    param([Parameter(Mandatory = $true)][string]$Path)
-    for ($attempt = 1; $attempt -le 10; $attempt++) {
-        if (-not (Test-Path -LiteralPath $Path)) { return $true }
-        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop }
-        catch { Start-Sleep -Milliseconds (200 * $attempt) }
-    }
-    return (-not (Test-Path -LiteralPath $Path))
-}
+# Get-CoreBytes, Get-Sha256Hex, Remove-CoreFolder and the owner-session handling, shared with
+# speaker-compare.ps1 (speaker-engine-measure)
+. (Join-Path $root "scripts\lib\VoiceMeasurementCore.ps1")
 
 Write-Host "== STT engine comparison (measurement only)"
 
@@ -175,35 +133,12 @@ try {
         $exit = 3
         $headers = @{}
         try {
-            if (-not $CoreUrl) {
-                # the address the installed Windows agent dials (what verify-core-device-row reads)
-                $settings = Join-Path $InstallRoot "service\appsettings.json"
-                if (Test-Path -LiteralPath $settings) {
-                    $config = [System.IO.File]::ReadAllText($settings) | ConvertFrom-Json
-                    $CoreUrl = [string](Get-ManifestMember $config "BrokerRestUrl")
-                    if (-not $CoreUrl) { $CoreUrl = [string](Get-ManifestMember (Get-ManifestMember $config "Agent") "BrokerRestUrl") }
-                }
-            }
-            if (-not $CoreUrl) { throw "no Cloud Core URL: pass -CoreUrl, or install the Windows agent first" }
-            $base = $CoreUrl.TrimEnd("/")
+            $base = Resolve-VoiceCoreUrl -CoreUrl $CoreUrl -InstallRoot $InstallRoot
             Write-Host "   recordings: the Cloud Core ($base)$(if ($Place) { ", place $Place" })"
-            if (Test-Path "Env:PAGENTOS_OWNER_SESSION_TOKEN") {
-                # the caller's own session wins and is left alone
-                $headers["Authorization"] = "Bearer " + $env:PAGENTOS_OWNER_SESSION_TOKEN
-            }
-            else {
-                $session = Get-OwnerSessionToken -BaseUrl $base -Label "stt-compare"
-                if (-not $session) { throw "no owner session: store the owner credential (bootstrap-owner-credential.ps1) or set PAGENTOS_OWNER_SESSION_TOKEN" }
-                $headers["Authorization"] = "Bearer " + $session
-                $session = $null
-            }
-            $listing = Invoke-JsonUtf8 -Uri "$base/v1/voice/measurement" -Headers $headers -TimeoutSec 60
-            $query = if ($Place) { "?place=$Place" } else { "" }
-            [byte[]]$manifestBytes = Get-CoreBytes -Uri "$base/v1/voice/measurement/manifest$query" -Headers $headers
-            $manifest = ConvertFrom-Utf8Json -Bytes $manifestBytes
-            $items = @($manifest.items | Where-Object { $null -ne $_ })
-            $byFile = @{}
-            foreach ($recording in @($listing.recordings | Where-Object { $null -ne $_ })) { $byFile[[string]$recording.file] = $recording }
+            $headers = Get-VoiceCoreHeaders -Base $base -Label "stt-compare"
+            $listing = Get-VoiceMeasurementListing -Base $base -Headers $headers -Place $Place
+            [byte[]]$manifestBytes = $listing.ManifestBytes
+            $items = @($listing.Items)
             if ($items.Count -eq 0) {
                 # through Console.Out, which follows the UTF-8 set above: 5.1's host writer keeps
                 # its start-up code page on a redirected stdout and turns "kayıt" into "kayit"
@@ -212,26 +147,8 @@ try {
                 $exit = 0
             }
             else {
-                $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
-                $coreFolder = Join-Path $tempRoot ($coreFolderPrefix + [guid]::NewGuid().ToString("N"))
-                if ($coreFolder.StartsWith($root.TrimEnd("\") + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $coreFolder = ""
-                    throw "the temp directory is inside the repository ($tempRoot): the recordings are personal data and are never written there"
-                }
-                New-Item -ItemType Directory -Path $coreFolder | Out-Null
-                foreach ($item in $items) {
-                    $file = [string]$item.file
-                    if ($file -cnotmatch '^(ev|ofis)-\d{2}\.wav$' -or -not $byFile.ContainsKey($file)) {
-                        throw "the Core's manifest names '$file', which its recording list does not hold"
-                    }
-                    $recording = $byFile[$file]
-                    [byte[]]$audio = Get-CoreBytes -Uri ("$base/v1/voice/measurement/recordings/{0}/{1}/audio" -f $recording.place, $recording.index) -Headers $headers
-                    $actual = Get-Sha256Hex -Bytes $audio
-                    if ($actual -ne ([string]$recording.sha256).ToLowerInvariant()) {
-                        throw "sha256 mismatch for $file (the Core says $($recording.sha256), the download is $actual): nothing was sent to any engine"
-                    }
-                    [System.IO.File]::WriteAllBytes((Join-Path $coreFolder $file), $audio)
-                }
+                $coreFolder = New-VoiceCoreFolder -Prefix $coreFolderPrefix -RepoRoot $root
+                Save-VoiceMeasurementAudio -Base $base -Headers $headers -Items $items -ByFile $listing.ByFile -Folder $coreFolder
                 $headers = @{}
                 # the Core's own UTF-8 bytes, exactly the manifest load_manifest reads (no BOM)
                 if ($manifestBytes.Length -ge 3 -and $manifestBytes[0] -eq 0xEF -and $manifestBytes[1] -eq 0xBB -and $manifestBytes[2] -eq 0xBF) {

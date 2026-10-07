@@ -27,9 +27,10 @@ from app.models import Base
 SOURCE_VOICE = "voice"
 SOURCE_REST = "rest"
 
-#: The owner is PRESENT for every task through PR-A..D (ADR-0207 decision 3). The column
-#: exists so that the day unattended tasks are built, an attended row cannot be mistaken
-#: for one that was allowed to run alone.
+#: The column's default: a task runs in front of the owner (ADR-0207 decision 3). A CLOUD
+#: task is the exception and is written ``False`` by ``app.webtask.service.start_task_db``
+#: (ADR-0213 addendum, 2026-09-30): the task the owner started may go on after he leaves,
+#: because in the cloud it acts only on sites he listed. Nothing routine starts one.
 ATTENDED = True
 
 
