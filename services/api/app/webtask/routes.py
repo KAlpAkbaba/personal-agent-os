@@ -253,4 +253,6 @@ async def cancel_web_task(request: Request, task_id: uuid.UUID) -> dict[str, Any
     return answer
 
 
+ROUTERS = [router]
+
 __all__ = ["router"]

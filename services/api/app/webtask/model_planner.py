@@ -20,6 +20,12 @@ Boundaries, on purpose:
   step that does not parse - is a ``PlannerError`` whose message is built from fixed
   words and numbers. It never carries the model's text, a vendor's error message or a
   key the model invented: any of those can be a sentence a page wrote.
+* An acting step that names no expectation would only be refused by the gate
+  (``no_expectation``); the model is asked ONCE more, told what was missing, and a second
+  such answer is a ``PlannerError``. Every request the model answered is counted in
+  ``last_calls`` - that is what a round cost.
+* No ``temperature``: the capable model refuses it (400 "deprecated for this model", live
+  2026-10-06). The forced tool call is what keeps the answer one step.
 * Raw HTTP through an injectable ``send`` (the shape of
   ``app.assistant_chat.AnthropicChatProvider``): no SDK, and a test never touches the
   network.
@@ -29,13 +35,21 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, Final
 
 import httpx
 
 from app.logging import get_logger
-from app.webtask.planner import STEP_TOOL, PlannerError, PlanRequest, build_prompt, parse_step
-from app.webtask.types import Step
+from app.webtask.planner import (
+    STEP_TOOL,
+    PlannerError,
+    PlanRequest,
+    bind_expectation,
+    build_prompt,
+    parse_step,
+)
+from app.webtask.types import ACTING, Step
 
 logger = get_logger("app.webtask.model_planner")
 
@@ -47,6 +61,11 @@ REQUEST_TIMEOUT_S: Final = 30.0
 #: 429 (rate limit) and 529 (overloaded) are asked once more after a breath; nothing else is.
 RETRYABLE_STATUS: Final[frozenset[int]] = frozenset({429, 529})
 RETRY_DELAY_S: Final = 1.5
+#: What the second request is told when the first answered an acting step without one.
+EXPECT_HINT: Final = (
+    "your step had no expect_kind; every step other than done and ask_owner must carry "
+    "expect_kind (and expect_value) saying what the page shows after it"
+)
 
 #: The user message's blocks, in the order the model reads them. PAGE is last.
 BLOCKS: Final[tuple[tuple[str, str], ...]] = (
@@ -93,6 +112,8 @@ class ModelPlanner:
         self._timeout_s = timeout_s
         self._send = send or _http_send
         self._sleep = sleep
+        #: Requests the model ANSWERED (status 200) during the last ``plan`` - billed.
+        self.last_calls = 0
 
     @property
     def configured(self) -> bool:
@@ -103,7 +124,6 @@ class ModelPlanner:
         body = {
             "model": self._capable_model if request.capable else self._model,
             "max_tokens": MAX_TOKENS,
-            "temperature": 0,
             "system": prompt["system"],
             "messages": [
                 {
@@ -112,7 +132,12 @@ class ModelPlanner:
                 }
             ],
             "tools": [STEP_TOOL],
-            "tool_choice": {"type": "tool", "name": STEP_TOOL["name"]},
+            # ONE step: a forced tool may otherwise be called twice in parallel.
+            "tool_choice": {
+                "type": "tool",
+                "name": STEP_TOOL["name"],
+                "disable_parallel_tool_use": True,
+            },
         }
         headers = {
             "x-api-key": self._api_key,
@@ -122,8 +147,18 @@ class ModelPlanner:
         return f"{self._base_url}/v1/messages", headers, body
 
     def plan(self, request: PlanRequest) -> Step | None:
+        self.last_calls = 0
         if not self.configured:
             raise PlannerError("no model key is configured")
+        step = self._ask(request)
+        if step.action in ACTING and step.expect is None:
+            hint = f"{request.hint}; {EXPECT_HINT}" if request.hint else EXPECT_HINT
+            step = self._ask(replace(request, hint=hint))
+            if step.action in ACTING and step.expect is None:
+                raise PlannerError("the model's step names no expectation, asked twice")
+        return bind_expectation(step, request.observation)
+
+    def _ask(self, request: PlanRequest) -> Step:
         url, headers, body = self.request(request)
         model = str(body["model"])
         status, payload = 0, {}
@@ -152,6 +187,7 @@ class ModelPlanner:
                 raise PlannerError(f"the model is busy (status {status}, asked twice)")
             raise PlannerError(f"the model answered status {status}")
 
+        self.last_calls += 1
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
         logger.info(
             "webtask_planner_answered",
@@ -185,6 +221,7 @@ class ModelPlanner:
 
 __all__ = [
     "BLOCKS",
+    "EXPECT_HINT",
     "MAX_TOKENS",
     "REQUEST_TIMEOUT_S",
     "ModelPlanner",

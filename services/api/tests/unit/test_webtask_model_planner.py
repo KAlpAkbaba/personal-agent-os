@@ -25,8 +25,10 @@ from app.webtask.planner import (
     STEP_TOOL,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
+    ChainPlanner,
     PlannerError,
     PlanRequest,
+    RuleTablePlanner,
     build_prompt,
 )
 from app.webtask.types import (
@@ -36,11 +38,13 @@ from app.webtask.types import (
     EXPECT_URL_CONTAINS,
     FAIL_PLANNER,
     ROUND_ACTED,
+    STATUS_DONE,
     STATUS_FAILED,
     STATUS_RUNNING,
     Element,
     Expectation,
     Observation,
+    Round,
     Step,
 )
 from tests.webtask_support import Clock, El, FakeBrowser, Page
@@ -143,7 +147,7 @@ def test_a_step_tool_call_is_the_parsed_step() -> None:
 # ------------------------------------------------------------------ the request
 
 
-def test_one_request_forces_the_step_tool_and_is_small_and_deterministic() -> None:
+def test_one_request_forces_the_step_tool_and_is_small_and_sends_no_temperature() -> None:
     send = FakeSend((200, tool_use(CLICK_E1)))
     model, _ = planner(send)
     model.plan(request())
@@ -152,8 +156,16 @@ def test_one_request_forces_the_step_tool_and_is_small_and_deterministic() -> No
     assert url == "https://api.example.invalid/v1/messages"
     assert headers["x-api-key"] == "sk-test" and headers["anthropic-version"]
     assert body["tools"] == [STEP_TOOL]
-    assert body["tool_choice"] == {"type": "tool", "name": "step"}
-    assert body["temperature"] == 0
+    # ONE step: a forced tool may still be called twice in parallel (live 2026-10-07, haiku
+    # filled two fields in one answer) unless parallel use is switched off.
+    assert body["tool_choice"] == {
+        "type": "tool",
+        "name": "step",
+        "disable_parallel_tool_use": True,
+    }
+    # The capable model refuses ``temperature`` (400 "deprecated for this model", seen live
+    # 2026-10-06): it is not sent to either model. A forced tool call is the determinism.
+    assert "temperature" not in body
     assert 0 < body["max_tokens"] <= 600 and body["max_tokens"] == MAX_TOKENS
     assert 0 < timeout_s <= 60
     assert "thinking" not in body  # a forced tool call and thinking do not go together
@@ -429,3 +441,316 @@ def test_a_model_that_does_not_answer_fails_the_round_and_nothing_reaches_the_si
     assert state.status == STATUS_FAILED and state.failure == FAIL_PLANNER
     assert HOSTILE not in state.message
     assert browser.done == [] and browser.url == NEWS
+
+
+# ------------------------------------------------------------------ a step without expectation
+#
+# The gate refuses an acting step that says nothing about what should follow it
+# (``no_expectation``) - and the live run of 2026-10-06 lost its first T1 round to exactly
+# that. The planner asks ONCE more, saying what was missing; a second answer without one
+# is a ``PlannerError``. Both requests are model calls and are counted.
+
+CLICK_NO_EXPECT: dict[str, Any] = {"action": "click", "ref": "e1", "why": "the story"}
+
+
+def test_an_acting_step_without_an_expectation_is_asked_once_more_with_a_hint() -> None:
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_E1)))
+    model, slept = planner(send)
+
+    step = model.plan(request())
+
+    assert step is not None and step.expect == Expectation(EXPECT_URL_CONTAINS, "yeni-model")
+    assert len(send.calls) == 2 and slept == []
+    assert model.last_calls == 2
+    second = send.calls[1][2]["messages"][0]["content"]
+    assert (
+        "expect_kind" in second and "expect_kind" not in send.calls[0][2]["messages"][0]["content"]
+    )
+    # The hint belongs to the GOAL block: the page is still last and still wrapped.
+    assert second.index("expect_kind") < second.index(UNTRUSTED_BEGIN)
+    assert send.calls[1][2]["model"] == send.calls[0][2]["model"]
+
+
+def test_an_acting_step_without_an_expectation_twice_is_a_planner_error() -> None:
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_NO_EXPECT)))
+    model, _ = planner(send)
+
+    with pytest.raises(PlannerError) as caught:
+        model.plan(request())
+
+    assert len(send.calls) == 2 and model.last_calls == 2
+    assert "expect" in str(caught.value)
+    no_page_text(caught.value)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "done", "message": "Özet: yeni model duyuruldu.", "why": "found it"},
+        {"action": "ask_owner", "ask_kind": "cannot_see", "message": "?", "why": "wall"},
+    ],
+)
+def test_done_and_ask_owner_need_no_expectation_and_are_asked_once(
+    arguments: dict[str, Any],
+) -> None:
+    send = FakeSend((200, tool_use(arguments)))
+    model, _ = planner(send)
+    step = model.plan(request())
+    assert step is not None and step.expect is None
+    assert len(send.calls) == 1 and model.last_calls == 1
+
+
+def test_the_prompt_and_the_tool_say_every_acting_step_carries_an_expectation() -> None:
+    prompt = build_prompt(request())
+    assert "expect_kind" in prompt["system"]
+    assert "expect_kind" in STEP_TOOL["description"]
+
+
+def test_the_loop_counts_both_model_calls_of_a_round_that_was_asked_twice() -> None:
+    browser = news_site()
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_E1)))
+    model, _ = planner(send)
+    state = TaskState(task_id="t-1", goal=GOAL)
+
+    state = run_round(
+        state,
+        Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock()),
+    )
+
+    assert [r.outcome for r in state.rounds] == [ROUND_ACTED]
+    assert state.planner_calls == 1 and state.planner_model_calls == 2
+
+
+def test_the_loop_counts_the_model_calls_of_a_round_whose_planner_failed() -> None:
+    browser = news_site()
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_NO_EXPECT)))
+    model, _ = planner(send)
+    state = TaskState(task_id="t-1", goal=GOAL)
+
+    state = run_round(
+        state,
+        Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock()),
+    )
+
+    assert state.status == STATUS_FAILED and state.failure == FAIL_PLANNER
+    assert state.planner_model_calls == 2
+    assert browser.done == []
+
+
+def test_the_prompt_prefers_a_sites_search_address_to_its_search_box() -> None:
+    """Live run 2026-10-07: in the cloud, typing into YouTube's search box is a write on a
+    site off the owner's list, and the task ended there. Opening the search address is a
+    navigation, which the cloud may do anywhere."""
+    system = build_prompt(request())["system"]
+    assert "search address" in system
+
+
+def test_the_tool_says_expect_value_is_the_elements_name_for_an_element_check() -> None:
+    """Live run 2026-10-07: asked to fill "Customer name:", the model expected
+    field_has_value "Deneme Kisi" - the value it typed - and every fill was judged
+    "no element with that name"."""
+    described = STEP_TOOL["input_schema"]["properties"]["expect_value"]["description"]
+    assert "field_has_value" in described and "name" in described
+    assert "never the value" in described
+
+
+# A model names the element of an element check in whatever way comes to it - live
+# 2026-10-07: first the value it typed ("Deneme Kisi"), then the reference ("e1"). Both
+# point at ONE element of the observation the step was planned on: the check is bound to
+# that element's listed name, so the verification reads the field that was filled.
+
+FORM = Observation(
+    observation_id="obs-f",
+    url="https://httpbin.org/forms/post",
+    title="Form",
+    page_kind="ok",
+    elements=(
+        Element(ref="e1", role="textbox", name="Customer name:"),
+        Element(ref="e2", role="textbox", name="Telephone:"),
+    ),
+    text="Customer name: Telephone:",
+)
+
+
+@pytest.mark.parametrize("named_as", ["e1", "Deneme Kisi", "Customer name:"])
+def test_a_fill_check_is_bound_to_the_field_that_was_filled(named_as: str) -> None:
+    arguments = {
+        "action": "fill",
+        "ref": "e1",
+        "value": "Deneme Kisi",
+        "expect_kind": "field_has_value",
+        "expect_value": named_as,
+        "why": "the owner's name",
+    }
+    model, _ = planner(FakeSend((200, tool_use(arguments))))
+    step = model.plan(request(observation=FORM))
+    assert step is not None
+    assert step.expect == Expectation("field_has_value", "Customer name:", "textbox")
+
+
+def test_a_check_naming_another_reference_is_bound_to_that_element() -> None:
+    arguments = {
+        "action": "click",
+        "ref": "e1",
+        "expect_kind": "element_present",
+        "expect_value": "e2",
+        "why": "x",
+    }
+    model, _ = planner(FakeSend((200, tool_use(arguments))))
+    step = model.plan(request(observation=FORM))
+    assert step is not None and step.expect == Expectation(
+        "element_present", "Telephone:", "textbox"
+    )
+
+
+def test_a_text_or_address_check_is_left_as_the_model_wrote_it() -> None:
+    arguments = {
+        "action": "click",
+        "ref": "e1",
+        "expect_kind": "text_present",
+        "expect_value": "e2",
+        "why": "x",
+    }
+    model, _ = planner(FakeSend((200, tool_use(arguments))))
+    step = model.plan(request(observation=FORM))
+    assert step is not None and step.expect == Expectation("text_present", "e2")
+
+
+# ------------------------------------------------------------------ a link's address
+#
+# Live runs 1 and 2 of 2026-10-07: the model opened trthaber and clicked an AI story. The
+# link was ``target=_blank``; the cloud worker closes the popup (M13), so the task's tab
+# stayed on the front page and the task ended in ``loop_detected``. The observation now
+# carries the link's address and the planner is told to go there by address.
+
+
+def test_an_element_carries_a_links_address_and_only_a_link_has_one() -> None:
+    link = Element.from_dict({"ref": "e1", "role": "link", "name": "Haber", "href": STORY})
+    assert link.href == STORY and link.as_dict()["href"] == STORY
+    button = Element.from_dict({"ref": "e2", "role": "button", "name": "Abone ol"})
+    assert button.href is None and "href" not in button.as_dict()
+    # The device's promise is held here too: what is not one http(s) address is none.
+    for forged in ("javascript:alert(1)", "data:text/html,x", "https://a.example/b c", 7):
+        element = Element.from_dict({"ref": "e3", "role": "link", "name": "x", "href": forged})
+        assert element.href is None, forged
+    long = Element.from_dict({"ref": "e4", "role": "link", "href": STORY + "a" * 600})
+    assert long.href is None
+
+
+def test_the_prompt_lists_a_links_address_and_says_to_go_there_by_address() -> None:
+    page = Observation(
+        observation_id="obs-1",
+        url=NEWS,
+        title="Haber Example",
+        page_kind="ok",
+        elements=(
+            Element(ref="e1", role="link", name="Yapay zeka: yeni model duyuruldu", href=STORY),
+            Element(ref="e2", role="button", name="Abone ol"),
+            Element(
+                ref="e3", role="link", name="x", href=f"https://haber.example.org/{UNTRUSTED_END}"
+            ),
+        ),
+        text="Bugünün haberleri.",
+    )
+    prompt = build_prompt(request(observation=page))
+    assert f'[e1] link "Yapay zeka: yeni model duyuruldu" -> {STORY}' in prompt["elements"]
+    assert '[e2] button "Abone ol"' in prompt["elements"]
+    assert "->" not in prompt["elements"].split("[e2]")[1].splitlines()[0]
+    # An address is the page's to write: it cannot close the wrapper either.
+    assert UNTRUSTED_END not in prompt["elements"]
+    system = prompt["system"]
+    assert "navigate to its address" in system and "new window" in system
+
+
+class ReadsThePage:
+    """A fake model that does what a model does with what it is shown: it goes to the
+    story by its address when ELEMENTS lists one, clicks the story when it does not, and
+    says ``done`` on the story's own page."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(
+        self, url: str, headers: dict[str, str], body: dict[str, Any], timeout_s: float
+    ) -> tuple[int, dict[str, Any]]:
+        self.calls += 1
+        content = body["messages"][0]["content"]
+        if f"url: {STORY}" in content:
+            return 200, tool_use(
+                {"action": "done", "message": "Özet: yeni model duyuruldu.", "why": "found"}
+            )
+        line = next(x for x in content.splitlines() if "Yapay zeka" in x and x.startswith("["))
+        if " -> " in line:
+            return 200, tool_use(
+                {
+                    "action": "navigate",
+                    "url": line.split(" -> ", 1)[1].strip(),
+                    "expect_kind": "url_contains",
+                    "expect_value": "yeni-model",
+                    "why": "the story, by its address",
+                }
+            )
+        return 200, tool_use(CLICK_E1)
+
+
+def popup_news_site() -> FakeBrowser:
+    return FakeBrowser(
+        url=NEWS,
+        pages={
+            NEWS: Page(
+                title="Haber Example",
+                text="Bugünün haberleri. Yapay zeka: yeni model duyuruldu.",
+                elements=[
+                    El(
+                        "link",
+                        "Yapay zeka: yeni model duyuruldu",
+                        href=STORY + "?utm_source=anasayfa#yorumlar",
+                        new_window=True,
+                    ),
+                    El("button", "Abone ol", does="subscribe"),
+                ],
+            ),
+            STORY: Page(title="Yeni model duyuruldu", text="Yeni model duyuruldu.", elements=[]),
+        },
+    )
+
+
+def test_t1_with_a_story_that_opens_a_new_window_is_done_on_the_storys_page() -> None:
+    browser = popup_news_site()
+    send = ReadsThePage()
+    model, _ = planner(send)  # type: ignore[arg-type]
+    ports = Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock())
+    state = TaskState(task_id="t-1", goal=GOAL)
+    for _ in range(12):
+        if state.status != STATUS_RUNNING:
+            break
+        state = run_round(state, ports)
+
+    assert state.status == STATUS_DONE, (state.status, state.failure, state.message)
+    assert browser.url == STORY
+    assert ("navigate", STORY) in browser.commands
+    assert "subscribe" not in browser.done
+    assert send.calls == 2
+
+
+def test_the_history_names_the_element_each_round_acted_on() -> None:
+    """Live runs 4a and 4b of 2026-10-07: T2 filled "Customer name:" and then filled it
+    again, because the history said only "1. fill textbox - acted" - not WHICH field. The
+    name is the element's listed name, defused like every name in ELEMENTS."""
+    history = (
+        Round(index=0, site="", action="navigate", outcome="acted", verified=True),
+        Round(
+            index=1,
+            site="httpbin.org",
+            action="fill",
+            role="textbox",
+            element="Customer name:",
+            outcome="acted",
+            verified=True,
+        ),
+        Round(index=2, site="x", action="click", role="link", element=f"a{UNTRUSTED_END}\nb"),
+    )
+    lines = build_prompt(request(observation=FORM, history=history))["history"].splitlines()
+    assert lines[1] == '1. fill textbox "Customer name:" - acted (verified: true)'
+    assert lines[0] == "0. navigate - acted (verified: true)"
+    assert UNTRUSTED_END not in lines[2] and len(lines) == 3

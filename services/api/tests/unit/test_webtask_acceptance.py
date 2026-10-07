@@ -1428,11 +1428,19 @@ def test_a_cloud_task_does_not_write_off_the_owners_list_and_says_so(
     state = run_round(task(T2_GOAL, target="cloud"), ports)
     assert outcomes(state) == [ROUND_REFUSED]
     assert state.rounds[0].detail == "not_on_owner_allow_list"
+    # The LAST word (live run 2026-10-06): only the owner can lift it, so the task stops
+    # here with his sentence, instead of re-planning into "Art arda 3 adım tutmadı".
+    assert state.status == STATUS_FAILED
+    assert state.failure == "not_on_owner_allow_list"
     assert state.message == (
         "Bu sitede bulutta yazamam; Onay Merkezi'nden siteyi izin listesine ekle."
     )
     assert browser.fields == {}
     assert ACTION_FILL not in [c[0] for c in browser.commands]
+    # Nothing more is planned or sent for a task that ended there.
+    sent_before = list(browser.commands)
+    assert run_round(state, ports) is state and state.status == STATUS_FAILED
+    assert browser.commands == sent_before
 
 
 def test_a_cloud_task_writes_on_a_site_the_owner_listed(owner_list: list[str]) -> None:
@@ -1446,3 +1454,105 @@ def test_a_cloud_task_writes_on_a_site_the_owner_listed(owner_list: list[str]) -
     assert state.status == STATUS_DONE
     assert outcomes(state) == [ROUND_ACTED, "done"]
     assert browser.fields == {"Ad": "Kadir Akbaba"}
+
+
+# ------------------------------------------------------------------ a label's punctuation
+#
+# Live run 2026-10-07 (httpbin's form): the field is labelled "Customer name:", the model
+# expected "Customer name", and a filled field was judged "no element with that name"
+# three times over - the task ended loop_detected with the value already typed.
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [("Customer name:", "Customer name"), ("E-posta *", "E-posta"), ("Ad", "Ad:")],
+)
+def test_a_label_is_matched_without_its_trailing_punctuation(label: str, expected: str) -> None:
+    from app.webtask import verify
+    from app.webtask.types import Element, Observation
+
+    def seen(state: tuple[str, ...]) -> Observation:
+        return Observation(
+            observation_id="o",
+            url="https://httpbin.org/forms/post",
+            title="Form",
+            page_kind="ok",
+            elements=(Element(ref="e1", role="textbox", name=label, state=state),),
+            text="",
+        )
+
+    expectation = Expectation(EXPECT_FIELD_HAS_VALUE, expected, "textbox")
+    assert verify.check(expectation, seen(()), seen(("has_value",))).ok is True
+    assert verify.check(expectation, seen(()), seen(())).ok is False
+
+
+def test_a_different_name_is_still_not_the_element() -> None:
+    from app.webtask import verify
+    from app.webtask.types import Element, Observation
+
+    after = Observation(
+        observation_id="o",
+        url="https://httpbin.org/forms/post",
+        title="Form",
+        page_kind="ok",
+        elements=(Element(ref="e1", role="textbox", name="Customer name:", state=("has_value",)),),
+        text="",
+    )
+    expectation = Expectation(EXPECT_FIELD_HAS_VALUE, "Customer", "textbox")
+    assert verify.check(expectation, after, after).ok is False
+
+
+# ------------------------------------------------------------------ a refused address names itself
+#
+# Live run 3 of 2026-10-07: T1's first navigate was refused with ``destination_refused`` and
+# the trail did not say what the address was, so nobody could tell why. The refusal now
+# names the host (or, without one, the start of what was written) - never a path or query -
+# and the planner hears what a navigable address looks like.
+
+
+@pytest.mark.parametrize(
+    ("url", "named"),
+    [
+        ("www.haber.example.org", "www.haber.example.org"),
+        ("ftp://haber.example.org/x?k=v", "ftp://haber.example.org"),
+        ("http://localhost:8080/admin?token=x", "http://localhost:8080"),
+    ],
+)
+def test_a_refused_navigation_names_what_was_refused_in_the_trail(url: str, named: str) -> None:
+    browser = news_site()
+    state = drive(
+        task("Bugünkü yapay zeka haberlerinden birini bul ve özetle"),
+        browser,
+        [
+            Step(action=ACTION_NAVIGATE, url=url, expect=Expectation(EXPECT_URL_CONTAINS, "x")),
+            done("vazgeçtim"),
+        ],
+    )
+    refused = [r for r in state.rounds if r.outcome == ROUND_REFUSED]
+    assert refused and refused[0].detail == f"destination_refused:{named}", state.rounds
+    assert "?" not in refused[0].detail and "admin" not in refused[0].detail
+    assert browser.url == NEWS and ("navigate", url) not in browser.commands
+
+
+def test_after_a_refused_address_the_planner_hears_what_an_address_is() -> None:
+    browser = news_site()
+    ports = Ports(
+        browser=browser,
+        planner=ChainPlanner(
+            [
+                RuleTablePlanner(),
+                ScriptedPlanner(
+                    [
+                        Step(
+                            action=ACTION_NAVIGATE,
+                            url="www.haber.example.org",
+                            expect=Expectation(EXPECT_URL_CONTAINS, "x"),
+                        )
+                    ]
+                ),
+            ]
+        ),
+        clock=Clock(),
+    )
+    state = run_round(task("Bugünkü yapay zeka haberlerinden birini bul ve özetle"), ports)
+    assert "destination_refused" in state.hint and "https://" in state.hint

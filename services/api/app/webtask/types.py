@@ -172,6 +172,18 @@ FAIL_REASONS: Final[tuple[str, ...]] = (
 
 # ------------------------------------------------------------------ the observation
 
+#: A link's address as the worker hands it out (``browser_agent.observe.clean_href``).
+MAX_HREF_CHARS: Final = 512
+
+
+def _href(raw: Any) -> str | None:
+    """The worker's address, held to its own promise: http(s), one token, capped."""
+    if not isinstance(raw, str) or len(raw) > MAX_HREF_CHARS:
+        return None
+    if not raw.lower().startswith(("http://", "https://")) or not raw.isprintable():
+        return None
+    return None if any(ch.isspace() for ch in raw) else raw
+
 
 @dataclass(frozen=True, slots=True)
 class Element:
@@ -186,6 +198,8 @@ class Element:
     in_viewport: bool = True
     sensitive: bool = False
     risk_hint: str = RISK_REVERSIBLE_WRITE
+    #: A link's address: no query, no fragment. ``None`` for anything else.
+    href: str | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Element:
@@ -201,10 +215,11 @@ class Element:
             in_viewport=bool(raw.get("in_viewport", True)),
             sensitive=bool(raw.get("sensitive")),
             risk_hint=str(raw.get("risk_hint") or RISK_REVERSIBLE_WRITE),
+            href=_href(raw.get("href")),
         )
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "ref": self.ref,
             "role": self.role,
             "name": self.name,
@@ -217,6 +232,9 @@ class Element:
             "sensitive": self.sensitive,
             "risk_hint": self.risk_hint,
         }
+        if self.href is not None:
+            out["href"] = self.href
+        return out
 
 
 @dataclass(frozen=True, slots=True)

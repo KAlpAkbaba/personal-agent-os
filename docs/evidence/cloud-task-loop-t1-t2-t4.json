@@ -1,0 +1,317 @@
+{
+  "schema": "cloud-task-loop-evidence/1",
+  "written_at": "2026-10-07T07:36:57Z",
+  "host_kind": "dev-stack (process companion, owner's PC; capable planner claude-sonnet-5)",
+  "evidence_class": "PROVEN_PROXY",
+  "companion": {
+    "mode": "process",
+    "registry": [
+      "{\"device_id\": \"75c99bac-d56c-40ef-b868-86dd2ff70d3d\", \"name\": \"bulut\", \"platform\": \"cloud\", \"aliases\": [\"bulut\"], \"status\": \"online\"}",
+      "{\"logger_name\": \"app.broker.routes\", \"device_id\": \"75c99bac-d56c-40ef-b868-86dd2ff70d3d\", \"platform\": \"cloud\", \"event\": \"broker_device_enrolled\", \"level\": \"info\", \"timestamp\": \"2026-10-07T07:34:09.756509Z\", \"trace_id\": \"f72d5db1a12343ccbd7590d281331a52\", \"task_id\": null}"
+    ]
+  },
+  "tasks": [
+    {
+      "task": "T1",
+      "goal": "www.trthaber.com sitesinde bugünkü yapay zeka haberlerinden birini bul ve özetle",
+      "target_word": "bulutta",
+      "allowed_hosts": [
+        "www.trthaber.com"
+      ],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "done",
+      "outcome": "done",
+      "failure": "",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "",
+      "rounds": 5,
+      "round_index": 4,
+      "planner_calls": 5,
+      "planner_model_calls": 5,
+      "model_usage": {
+        "calls_logged": 5,
+        "input_tokens": 31522,
+        "output_tokens": 699,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.03502,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "https://www.trthaber.com/haber/bilim-teknoloji/",
+      "last_site": "trthaber.com",
+      "last_page_kind": "ok",
+      "submit_seen": false,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the page changed",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "trthaber.com",
+          "action": "click",
+          "element": "SICAK",
+          "outcome": "acted",
+          "detail": "the page changed",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 2,
+          "site": "trthaber.com",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the page changed",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 3,
+          "site": "trthaber.com",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the page changed",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 4,
+          "site": "trthaber.com",
+          "action": "done",
+          "element": "",
+          "outcome": "done",
+          "detail": "",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "owner_left_at_round": 0
+    },
+    {
+      "task": "T2",
+      "goal": "https://httpbin.org/forms/post adresindeki formu doldur ama gönderme: Customer name alanına Deneme Kisi, Telephone alanına 02120000000 yaz.",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "done",
+      "outcome": "done",
+      "failure": "",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "",
+      "rounds": 4,
+      "round_index": 3,
+      "planner_calls": 4,
+      "planner_model_calls": 4,
+      "model_usage": {
+        "calls_logged": 4,
+        "input_tokens": 6442,
+        "output_tokens": 494,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.00891,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "https://httpbin.org/forms/post",
+      "last_site": "httpbin.org",
+      "last_page_kind": "ok",
+      "submit_seen": true,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the page changed",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "acted",
+          "detail": "the field holds a value",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 2,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Telephone:",
+          "outcome": "acted",
+          "detail": "the field holds a value",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 3,
+          "site": "httpbin.org",
+          "action": "done",
+          "element": "",
+          "outcome": "done",
+          "detail": "",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "allow_listed": true
+    },
+    {
+      "task": "T2",
+      "goal": "https://httpbin.org/forms/post adresindeki formu doldur ama gönderme: Customer name alanına Deneme Kisi, Telephone alanına 02120000000 yaz.",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "not_on_owner_allow_list",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Bu sitede bulutta yazamam; Onay Merkezi'nden siteyi izin listesine ekle.",
+      "rounds": 2,
+      "round_index": 1,
+      "planner_calls": 2,
+      "planner_model_calls": 2,
+      "model_usage": {
+        "calls_logged": 2,
+        "input_tokens": 3057,
+        "output_tokens": 271,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.00441,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "https://httpbin.org/forms/post",
+      "last_site": "httpbin.org",
+      "last_page_kind": "ok",
+      "submit_seen": true,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the address matches",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "refused",
+          "detail": "not_on_owner_allow_list",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "allow_listed": false
+    },
+    {
+      "task": "T4",
+      "goal": "YouTube'da Barış Manço - Dönence aç",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "done",
+      "outcome": "done",
+      "failure": "",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "",
+      "rounds": 3,
+      "round_index": 2,
+      "planner_calls": 3,
+      "planner_model_calls": 3,
+      "model_usage": {
+        "calls_logged": 3,
+        "input_tokens": 13842,
+        "output_tokens": 416,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.01592,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "https://www.youtube.com/watch?v=yw_azIKC9UY&list=RDyw_azIKC9UY&start_radio=1",
+      "last_site": "youtube.com",
+      "last_page_kind": "ok",
+      "submit_seen": false,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the page changed",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "youtube.com",
+          "action": "click",
+          "element": "Barış Manço - Dönence 6 dakika 49 saniye",
+          "outcome": "acted",
+          "detail": "the page changed",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 2,
+          "site": "youtube.com",
+          "action": "done",
+          "element": "",
+          "outcome": "done",
+          "detail": "",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "playback": {
+        "method": "player clock in the task's own observations, read while it ran",
+        "readings_s": [
+          2
+        ],
+        "basis": "one reading against the 0:00 start of a watch address with no offset",
+        "advanced": true
+      }
+    }
+  ],
+  "total_model_calls": 14,
+  "total_cost_usd_estimate": 0.06426,
+  "cleanup": {
+    "web_tasks_active_after": 0,
+    "owner_allow_list_sites_after": 0,
+    "test_sites_left_on_list": 0
+  },
+  "findings": [],
+  "owner_trial": "READY_FOR_OWNER (cloud-task-loop-voice kartı ve yayın sonrası): söyleyeceğin cümle \"Bulutta bugünkü yapay zeka haberlerinden birini bul ve özetle\"; makine: herhangi biri (iş bulutta çalışır); göreceğin: üç cümlelik Türkçe özet ve kaynağı. Sonra \"bulutta şu formu doldur ama gönderme\" için ÖNCE Onay Merkezi'nden formun sitesini izin listesine ekle; liste dışındaki sitede bulut yazmaz, Türkçe söyler."
+}

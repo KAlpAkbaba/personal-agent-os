@@ -104,6 +104,10 @@ class BrowserPort(Protocol):
         self, *, task_id: str, key: str, step: Step, observation_id: str, risk_ceiling: str
     ) -> dict[str, Any]: ...
 
+    def close(self, task_id: str) -> None:
+        """The task has ended: release its browser session. Never raises."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class Ports:
@@ -284,6 +288,19 @@ def _value_chars(step: Step) -> int | None:
 _WHITESPACE = re.compile(r"\s+")
 
 
+def _where(url: str) -> str:
+    """What a refused address named: ``scheme://host[:port]``, or without a scheme the
+    first word of it. Never a path, a query or a fragment."""
+    try:
+        parts = urlsplit(url.strip())
+        named = f"{parts.scheme}://{parts.netloc.rsplit('@', 1)[-1]}" if parts.netloc else ""
+    except ValueError:
+        named = ""
+    if not named:
+        named = re.split(r"[/?#\s]", url.strip(), maxsplit=1)[0]
+    return "".join(ch for ch in named if ch.isprintable())[:80]
+
+
 def _short(text: str, limit: int = 160) -> str:
     return _WHITESPACE.sub(" ", text or "").strip()[:limit]
 
@@ -404,15 +421,12 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
                 )
             )
         except PlannerError as exc:
+            _count_model_calls(state, ports.planner, default=0)
             return _fail(state, FAIL_PLANNER, f"Planlayıcı yanıt vermedi ({_short(str(exc))}).")
         if planned is None:
             return _fail(state, FAIL_PLANNER, "Bu tur için bir adım planlanamadı.")
         step = planned
-        planner_name = str(
-            getattr(ports.planner, "last_used", "") or getattr(ports.planner, "name", "")
-        )
-        if planner_name == PLANNER_MODEL:
-            state.planner_model_calls += 1
+        planner_name = _count_model_calls(state, ports.planner, default=1)
 
     element = observation.by_ref(step.ref) if step.action in NEEDS_REF else None
     decision = gate.decide(step, observation, context)
@@ -450,14 +464,30 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
             pending.facts = dict(decision.facts)
         return _ask(state, observation, pending)
 
+    if (
+        decision.kind == gate.DECISION_REFUSE
+        and decision.reason == gate.REFUSE_NOT_ON_OWNER_ALLOW_LIST
+    ):
+        # The last word: only the owner lifts it (Onay Merkezi), so re-planning around it
+        # would end as "Art arda 3 adım tutmadı" and lose the owner's sentence
+        # (live run 2026-10-06).
+        _record(state, entry(ROUND_REFUSED, detail=decision.reason))
+        return _fail(state, decision.reason, decision.message or gate.NOT_ON_LIST_TR)
+
     if decision.kind == gate.DECISION_REFUSE:
         state.failed_streak += 1
         state.hint = f"the step was refused: {decision.reason}"
+        detail = decision.reason
+        if decision.reason == gate.REFUSE_DESTINATION:
+            # Live run 3 (2026-10-07): the trail said "refused" and not what. The host
+            # only - a path or a query may carry anything.
+            detail = f"{decision.reason}:{_where(step.url or '')}"
+            state.hint += " (an address starts with https:// and names a public host)"
         if decision.message:
             # A refusal the owner can lift himself (a site off his cloud allow-list) is
             # said to him; the planner hears the reason and plans again or ends honestly.
             state.message = decision.message
-        _record(state, entry(ROUND_REFUSED, detail=decision.reason))
+        _record(state, entry(ROUND_REFUSED, detail=detail))
         state.round_index += 1
         return _streak(state)
 
@@ -550,6 +580,17 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
     )
     state.round_index += 1
     return _streak(state)
+
+
+def _count_model_calls(state: TaskState, planner: Any, *, default: int) -> str:
+    """Adds what the model was asked this round; returns the name of who answered. A
+    planner that keeps its own count (``last_calls``: a re-asked step is two) is read;
+    one that does not is ``default`` calls when it is the model."""
+    name = str(getattr(planner, "last_used", "") or getattr(planner, "name", ""))
+    if name == PLANNER_MODEL:
+        calls = getattr(planner, "last_calls", None)
+        state.planner_model_calls += default if calls is None else int(calls)
+    return name
 
 
 def _streak(state: TaskState) -> TaskState:

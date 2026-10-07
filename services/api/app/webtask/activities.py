@@ -95,6 +95,22 @@ def _heartbeat_from_the_round() -> Callable[..., None]:
     return _beat
 
 
+#: A task in one of these is over: its browser session is closed.
+_TERMINAL = frozenset({"done", "failed", "cancelled"})
+
+
+def _close_session(db: Any, tid: uuid.UUID) -> None:
+    """Closes the ended task's browser session (live run 2026-10-06: an open research
+    session made the cloud worker refuse every later task). Best effort."""
+    try:
+        row = service.get_task(db, tid)
+        build = _ports_factory or _default_ports
+        ports = build(tid, row.device_id, lambda *_: None, service.load(row).target)
+    except service.WebTaskError:
+        return
+    ports.browser.close(str(tid))
+
+
 @activity.defn(name="web_task_round")
 async def web_task_round_activity(task_id: str) -> dict[str, Any]:
     import asyncio
@@ -118,7 +134,10 @@ async def web_task_round_activity(task_id: str) -> dict[str, Any]:
                 failed = service.fail_db(db, tid, reason=exc.reason, detail=str(exc))
                 return service.outcome(failed) if failed is not None else {"status": "failed"}
             heartbeat()
-            return service.run_round_db(db, tid, ports)
+            result = service.run_round_db(db, tid, ports)
+            if str(result.get("status")) in _TERMINAL:
+                ports.browser.close(task_id)
+            return result
 
     return await asyncio.to_thread(_run)
 
@@ -133,6 +152,7 @@ async def web_task_fail_activity(task_id: str, reason: str) -> dict[str, Any]:
             row = service.fail_db(
                 db, uuid.UUID(task_id), reason="round_could_not_run", detail=reason
             )
+            _close_session(db, uuid.UUID(task_id))
             return service.outcome(row) if row is not None else {"status": "failed"}
 
     return await asyncio.to_thread(_run)
@@ -144,7 +164,9 @@ async def web_task_cancel_activity(task_id: str) -> dict[str, Any]:
 
     def _run() -> dict[str, Any]:
         with _factory()() as db:
-            return service.outcome(service.cancel_db(db, uuid.UUID(task_id)))
+            result = service.outcome(service.cancel_db(db, uuid.UUID(task_id)))
+            _close_session(db, uuid.UUID(task_id))
+            return result
 
     return await asyncio.to_thread(_run)
 

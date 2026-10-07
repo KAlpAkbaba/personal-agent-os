@@ -64,6 +64,9 @@ class El:
     field_key: str = ""
     tag: str = ""
     onclick: bool = False
+    #: A ``target=_blank`` link: the click opens a popup, which the cloud worker closes
+    #: (M13), so the task's own tab stays where it was.
+    new_window: bool = False
 
 
 @dataclass
@@ -92,10 +95,15 @@ class FakeBrowser:
     observations: int = 0
     fail_observe: str = ""
     fail_act: str = ""
+    #: Task ids whose session was closed (the activity closes it when the task ends).
+    closed: list[str] = field(default_factory=list)
     _last_id: str = ""
     _last_refs: dict[str, El] = field(default_factory=dict)
 
     # ------------------------------------------------------------- the port
+
+    def close(self, task_id: str) -> None:
+        self.closed.append(task_id)
 
     def observe(self, *, task_id: str, key: str) -> Observation:
         self._key(key)
@@ -137,7 +145,11 @@ class FakeBrowser:
             hint = risk.classify_element(observed)
             if el.role == "link" and el.onclick:
                 hint = "REVERSIBLE_WRITE"
-            elements.append(Element.from_dict({**observed.as_dict(), "risk_hint": hint}))
+            # The address as the worker hands it out: no query, no fragment.
+            href = el.href.split("#", 1)[0].split("?", 1)[0] if el.href else None
+            elements.append(
+                Element.from_dict({**observed.as_dict(), "risk_hint": hint, "href": href})
+            )
         text = page.text(self) if callable(page.text) else page.text
         kind = page.kind(self) if callable(page.kind) else page.kind
         return Observation(
@@ -196,7 +208,7 @@ class FakeBrowser:
                 self.done.append(el.does)
             if el.effect is not None:
                 el.effect(self)
-            if el.href and el.effect is None:
+            if el.href and el.effect is None and not el.new_window:
                 self._goto(el.href)
             return {"clicked": True}
         # Contract v1.8: a write is classified from its element too, and refused above
