@@ -1748,7 +1748,7 @@ try {
     # area-check-wire-integrate-base: a worker branch built on integrate/<cycle> (the files it
     # needs exist only there) is judged by its own files, not by the other cards' merges it carries.
     function New-IntegrateBase {
-        param([string]$Root, [switch]$WorkerOnMain)
+        param([string]$Root, [switch]$WorkerOnMain, [switch]$AdvanceAfter)
         [void](Invoke-SandboxGit -Root $Root -Arguments @("branch", "integrate/c1", "main"))
         [void](Invoke-SandboxGit -Root $Root -Arguments @("checkout", "-q", "integrate/c1"))
         [void](New-Item -ItemType Directory -Force -Path (Join-Path $Root "docs"))
@@ -1758,6 +1758,33 @@ try {
         [void](Invoke-SandboxGit -Root $Root -Arguments @("checkout", "-q", "main"))
         $from = if ($WorkerOnMain) { "main" } else { "integrate/c1" }
         [void](Invoke-SandboxGit -Root $Root -Arguments @("branch", "team/c1/worker-task-one", $from))
+        if ($AdvanceAfter) {
+            # Every merge of the cycle moves integrate/<cycle>: a branch built earlier no longer
+            # contains its tip (two-devices-tests-late-write-routes, 2026-10-07 02:53).
+            [void](Invoke-SandboxGit -Root $Root -Arguments @("checkout", "-q", "integrate/c1"))
+            Set-Content -LiteralPath (Join-Path $Root "docs\later.md") -Value "a later card's merge" -Encoding ASCII
+            [void](Invoke-SandboxGit -Root $Root -Arguments @("add", "-A"))
+            [void](Invoke-SandboxGit -Root $Root -Arguments @("commit", "-q", "-m", "merge: a later card into integrate/c1"))
+            [void](Invoke-SandboxGit -Root $Root -Arguments @("checkout", "-q", "main"))
+        }
+    }
+
+    Test-Case "a worker branch on integrate/<cycle> goes to inspection after integrate/<cycle> moved on" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        New-IntegrateBase -Root $root -AdvanceAfter
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $task.state -Because ("the merges it carries are not its files, though the tip moved: " + (ConvertTo-Json -InputObject $task -Compress) + " " + $run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 1 -Actual @($run.Calls | Where-Object { $_.role -eq "inspector" }).Count -Because "the inspector was started"
+    }
+
+    Test-Case "a worker branch on a moved integrate/<cycle> touching a file outside its area is still returned, by that file alone" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        New-IntegrateBase -Root $root -AdvanceAfter
+        $run = Invoke-Cycle -Root $root -Scenario "outside"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "stopped" -Actual $task.state -Because "it left its area twice"
+        Assert-Equal -Expected "alan dışı dosya: docs/outside.md" -Actual ([string]$task.reason) -Because "its own file, not the merges it carries"
     }
 
     Test-Case "a worker branch on integrate/<cycle> touching only its area goes to inspection" {

@@ -21,3 +21,12 @@
   task's files with `Get-TeamChangedFiles -Base $baseSha`; it lists files for the integration
   step, not the worker's area check, but a follow-up card should decide whether it needs the
   same `-AlsoBase`.
+- Return 1 (inspector, 82224035): the real stopped branch still yields 108 files, because every
+  merge moves `integrate/<cycle>` and `Get-TeamWorkerChangedFiles` subtracts the integration
+  files only when the branch contains the CURRENT tip (`git merge-base --is-ancestor`,
+  `TeamArea.ps1` ~line 591). Proposed rule for the helper: the branch is "on the integration
+  branch" when `merge-base(AlsoBase, Branch)` is not already in `Base`; then the worker's files
+  are `git diff --name-only <merge-base>..<Branch>` (its own commits only, so an out-of-area file
+  is still caught). Two red team-cycle cases (integrate moves after the worker branches) carry it;
+  the fix belongs in `scripts/lib/TeamArea.ps1` + `scripts/tests/team-area.tests.ps1` (area
+  request), not a second copy of the rule in cycle.ps1 (integrate.ps1 would need the same).
