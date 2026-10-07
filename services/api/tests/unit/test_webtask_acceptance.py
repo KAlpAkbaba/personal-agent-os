@@ -1428,11 +1428,19 @@ def test_a_cloud_task_does_not_write_off_the_owners_list_and_says_so(
     state = run_round(task(T2_GOAL, target="cloud"), ports)
     assert outcomes(state) == [ROUND_REFUSED]
     assert state.rounds[0].detail == "not_on_owner_allow_list"
+    # The LAST word (live run 2026-10-06): only the owner can lift it, so the task stops
+    # here with his sentence, instead of re-planning into "Art arda 3 adım tutmadı".
+    assert state.status == STATUS_FAILED
+    assert state.failure == "not_on_owner_allow_list"
     assert state.message == (
         "Bu sitede bulutta yazamam; Onay Merkezi'nden siteyi izin listesine ekle."
     )
     assert browser.fields == {}
     assert ACTION_FILL not in [c[0] for c in browser.commands]
+    # Nothing more is planned or sent for a task that ended there.
+    sent_before = list(browser.commands)
+    assert run_round(state, ports) is state and state.status == STATUS_FAILED
+    assert browser.commands == sent_before
 
 
 def test_a_cloud_task_writes_on_a_site_the_owner_listed(owner_list: list[str]) -> None:

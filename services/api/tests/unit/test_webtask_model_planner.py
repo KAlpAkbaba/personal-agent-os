@@ -23,6 +23,8 @@ from app.webtask.loop import Ports, TaskState, run_round
 from app.webtask.model_planner import MAX_TOKENS, ModelPlanner
 from app.webtask.planner import (
     STEP_TOOL,
+    ChainPlanner,
+    RuleTablePlanner,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
     PlannerError,
@@ -143,7 +145,7 @@ def test_a_step_tool_call_is_the_parsed_step() -> None:
 # ------------------------------------------------------------------ the request
 
 
-def test_one_request_forces_the_step_tool_and_is_small_and_deterministic() -> None:
+def test_one_request_forces_the_step_tool_and_is_small_and_sends_no_temperature() -> None:
     send = FakeSend((200, tool_use(CLICK_E1)))
     model, _ = planner(send)
     model.plan(request())
@@ -153,7 +155,9 @@ def test_one_request_forces_the_step_tool_and_is_small_and_deterministic() -> No
     assert headers["x-api-key"] == "sk-test" and headers["anthropic-version"]
     assert body["tools"] == [STEP_TOOL]
     assert body["tool_choice"] == {"type": "tool", "name": "step"}
-    assert body["temperature"] == 0
+    # The capable model refuses ``temperature`` (400 "deprecated for this model", seen live
+    # 2026-10-06): it is not sent to either model. A forced tool call is the determinism.
+    assert "temperature" not in body
     assert 0 < body["max_tokens"] <= 600 and body["max_tokens"] == MAX_TOKENS
     assert 0 < timeout_s <= 60
     assert "thinking" not in body  # a forced tool call and thinking do not go together
@@ -429,3 +433,93 @@ def test_a_model_that_does_not_answer_fails_the_round_and_nothing_reaches_the_si
     assert state.status == STATUS_FAILED and state.failure == FAIL_PLANNER
     assert HOSTILE not in state.message
     assert browser.done == [] and browser.url == NEWS
+
+
+# ------------------------------------------------------------------ an acting step without an expectation
+#
+# The gate refuses an acting step that says nothing about what should follow it
+# (``no_expectation``) - and the live run of 2026-10-06 lost its first T1 round to exactly
+# that. The planner asks ONCE more, saying what was missing; a second answer without one
+# is a ``PlannerError``. Both requests are model calls and are counted.
+
+CLICK_NO_EXPECT: dict[str, Any] = {"action": "click", "ref": "e1", "why": "the story"}
+
+
+def test_an_acting_step_without_an_expectation_is_asked_once_more_with_a_hint() -> None:
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_E1)))
+    model, slept = planner(send)
+
+    step = model.plan(request())
+
+    assert step is not None and step.expect == Expectation(EXPECT_URL_CONTAINS, "yeni-model")
+    assert len(send.calls) == 2 and slept == []
+    assert model.last_calls == 2
+    second = send.calls[1][2]["messages"][0]["content"]
+    assert "expect_kind" in second and "expect_kind" not in send.calls[0][2]["messages"][0]["content"]
+    # The hint belongs to the GOAL block: the page is still last and still wrapped.
+    assert second.index("expect_kind") < second.index(UNTRUSTED_BEGIN)
+    assert send.calls[1][2]["model"] == send.calls[0][2]["model"]
+
+
+def test_an_acting_step_without_an_expectation_twice_is_a_planner_error() -> None:
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_NO_EXPECT)))
+    model, _ = planner(send)
+
+    with pytest.raises(PlannerError) as caught:
+        model.plan(request())
+
+    assert len(send.calls) == 2 and model.last_calls == 2
+    assert "expect" in str(caught.value)
+    no_page_text(caught.value)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "done", "message": "Özet: yeni model duyuruldu.", "why": "found it"},
+        {"action": "ask_owner", "ask_kind": "cannot_see", "message": "?", "why": "wall"},
+    ],
+)
+def test_done_and_ask_owner_need_no_expectation_and_are_asked_once(
+    arguments: dict[str, Any],
+) -> None:
+    send = FakeSend((200, tool_use(arguments)))
+    model, _ = planner(send)
+    step = model.plan(request())
+    assert step is not None and step.expect is None
+    assert len(send.calls) == 1 and model.last_calls == 1
+
+
+def test_the_prompt_and_the_tool_say_every_acting_step_carries_an_expectation() -> None:
+    prompt = build_prompt(request())
+    assert "expect_kind" in prompt["system"]
+    assert "expect_kind" in STEP_TOOL["description"]
+
+
+def test_the_loop_counts_both_model_calls_of_a_round_that_was_asked_twice() -> None:
+    browser = news_site()
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_E1)))
+    model, _ = planner(send)
+    state = TaskState(task_id="t-1", goal=GOAL)
+
+    state = run_round(
+        state, Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock())
+    )
+
+    assert [r.outcome for r in state.rounds] == [ROUND_ACTED]
+    assert state.planner_calls == 1 and state.planner_model_calls == 2
+
+
+def test_the_loop_counts_the_model_calls_of_a_round_whose_planner_failed() -> None:
+    browser = news_site()
+    send = FakeSend((200, tool_use(CLICK_NO_EXPECT)), (200, tool_use(CLICK_NO_EXPECT)))
+    model, _ = planner(send)
+    state = TaskState(task_id="t-1", goal=GOAL)
+
+    state = run_round(
+        state, Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock())
+    )
+
+    assert state.status == STATUS_FAILED and state.failure == FAIL_PLANNER
+    assert state.planner_model_calls == 2
+    assert browser.done == []

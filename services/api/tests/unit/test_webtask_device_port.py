@@ -12,6 +12,7 @@ A real Chrome is PR-C.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -565,3 +566,149 @@ def test_the_activity_opens_the_owners_chrome_without_the_list(
     opened = sent(_wired(monkeypatch, ""))[0][1]
     assert opened["profile"] == "owner"
     assert "owner_allow_list" not in opened and "cloud_task" not in opened
+
+
+# ------------------------------------------------------------------ the session's end
+#
+# Live run 2026-10-06: no task ever closed its session, the cloud worker's launch guard
+# refused the next holder of the research profile, and every task after the first died at
+# round 0 (``browser_lifecycle_violation``). A task that ends closes its session.
+
+
+def test_close_sends_session_close_and_forgets_the_session() -> None:
+    c = client()
+    p = port(c)
+    p.observe(task_id=TASK, key="k1")
+
+    p.close(TASK)
+
+    assert sent(c)[-1] == ("browser.session_close", {"session_id": SESSION})
+    assert c.calls[-1].idempotency_key == f"webtask:{TASK}:session_close"
+    # Forgotten: the next command of a task with this id opens a new session.
+    p.observe(task_id=TASK, key="k2")
+    assert [name for name, _ in sent(c)].count("browser.session_open") == 2
+
+
+def test_close_is_idempotent_under_one_key() -> None:
+    c = client()
+    p = port(c)
+    p.observe(task_id=TASK, key="k1")
+    p.close(TASK)
+    p.close(TASK)
+    closes = [call for call in c.calls if call.capability == "browser.session_close"]
+    assert {call.idempotency_key for call in closes} == {f"webtask:{TASK}:session_close"}
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        CommandFailed(error_class="internal_bug", message="boom (page)", retryable=False),
+        CommandExpired(),
+    ],
+)
+def test_a_close_that_fails_is_logged_and_swallowed(outcome: CommandOutcome) -> None:
+    def answer(**call: Any) -> CommandOutcome:
+        if call["capability"] == "browser.session_close":
+            return outcome
+        return client().factory(**call)  # type: ignore[attr-defined]
+
+    c = client(answer)
+    p = port(c)
+    p.observe(task_id=TASK, key="k1")
+    p.close(TASK)  # does not raise
+    p.observe(task_id=TASK, key="k2")
+    assert [name for name, _ in sent(c)].count("browser.session_open") == 2
+
+
+def test_a_client_that_raises_on_close_is_swallowed_too() -> None:
+    def answer(**call: Any) -> CommandOutcome:
+        if call["capability"] == "browser.session_close":
+            raise RuntimeError("the device is gone")
+        return CommandSucceeded(dict(OBSERVED))
+
+    port(client(answer)).close(TASK)  # does not raise
+
+
+# ------------------------------------------------------------------ the activities close it
+
+
+class _Row:
+    device_id = DEVICE
+
+
+class _Loaded:
+    target = "cloud"
+
+
+class _ClosingBrowser:
+    def __init__(self) -> None:
+        self.closed: list[str] = []
+
+    def close(self, task_id: str) -> None:
+        self.closed.append(task_id)
+
+
+@pytest.fixture
+def activity_world(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+    from contextlib import nullcontext
+
+    from app.execution import allowlist_store
+    from app.webtask import activities, service
+    from app.webtask.loop import Ports
+
+    world: dict[str, Any] = {"browser": _ClosingBrowser(), "status": "running"}
+    monkeypatch.setattr(activities, "_factory", lambda: (lambda: nullcontext(object())))
+    monkeypatch.setattr(allowlist_store, "bind", lambda _factory: None)
+    monkeypatch.setattr(service, "get_task", lambda db, tid: _Row())
+    monkeypatch.setattr(service, "load", lambda row: _Loaded())
+    monkeypatch.setattr(
+        service, "run_round_db", lambda db, tid, ports: {"status": world["status"]}
+    )
+    monkeypatch.setattr(service, "cancel_db", lambda db, tid: _Row())
+    monkeypatch.setattr(service, "fail_db", lambda db, tid, **kw: _Row())
+    monkeypatch.setattr(service, "outcome", lambda row: {"status": "cancelled"})
+    activities.set_ports_factory(
+        lambda tid, device, beat, target: Ports(
+            browser=world["browser"], planner=None, clock=lambda: 0.0  # type: ignore[arg-type]
+        )
+    )
+    yield world
+    activities.set_ports_factory(None)
+
+
+@pytest.mark.parametrize("status", ["done", "failed", "cancelled"])
+def test_a_round_that_ends_the_task_closes_its_session(
+    activity_world: dict[str, Any], status: str
+) -> None:
+    import asyncio
+
+    from app.webtask import activities
+
+    activity_world["status"] = status
+    asyncio.run(activities.web_task_round_activity(TASK))
+    assert activity_world["browser"].closed == [TASK]
+
+
+@pytest.mark.parametrize("status", ["running", "waiting_owner"])
+def test_a_round_that_does_not_end_the_task_keeps_its_session(
+    activity_world: dict[str, Any], status: str
+) -> None:
+    import asyncio
+
+    from app.webtask import activities
+
+    activity_world["status"] = status
+    asyncio.run(activities.web_task_round_activity(TASK))
+    assert activity_world["browser"].closed == []
+
+
+def test_cancel_and_the_workflows_last_word_close_the_session(
+    activity_world: dict[str, Any],
+) -> None:
+    import asyncio
+
+    from app.webtask import activities
+
+    asyncio.run(activities.web_task_cancel_activity(TASK))
+    asyncio.run(activities.web_task_fail_activity(TASK, "boom"))
+    assert activity_world["browser"].closed == [TASK, TASK]
