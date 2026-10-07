@@ -1500,3 +1500,59 @@ def test_a_different_name_is_still_not_the_element() -> None:
     )
     expectation = Expectation(EXPECT_FIELD_HAS_VALUE, "Customer", "textbox")
     assert verify.check(expectation, after, after).ok is False
+
+
+# ------------------------------------------------------------------ a refused address names itself
+#
+# Live run 3 of 2026-10-07: T1's first navigate was refused with ``destination_refused`` and
+# the trail did not say what the address was, so nobody could tell why. The refusal now
+# names the host (or, without one, the start of what was written) - never a path or query -
+# and the planner hears what a navigable address looks like.
+
+
+@pytest.mark.parametrize(
+    ("url", "named"),
+    [
+        ("www.haber.example.org", "www.haber.example.org"),
+        ("ftp://haber.example.org/x?k=v", "ftp://haber.example.org"),
+        ("http://localhost:8080/admin?token=x", "http://localhost:8080"),
+    ],
+)
+def test_a_refused_navigation_names_what_was_refused_in_the_trail(url: str, named: str) -> None:
+    browser = news_site()
+    state = drive(
+        task("Bugünkü yapay zeka haberlerinden birini bul ve özetle"),
+        browser,
+        [
+            Step(action=ACTION_NAVIGATE, url=url, expect=Expectation(EXPECT_URL_CONTAINS, "x")),
+            done("vazgeçtim"),
+        ],
+    )
+    refused = [r for r in state.rounds if r.outcome == ROUND_REFUSED]
+    assert refused and refused[0].detail == f"destination_refused:{named}", state.rounds
+    assert "?" not in refused[0].detail and "admin" not in refused[0].detail
+    assert browser.url == NEWS and ("navigate", url) not in browser.commands
+
+
+def test_after_a_refused_address_the_planner_hears_what_an_address_is() -> None:
+    browser = news_site()
+    ports = Ports(
+        browser=browser,
+        planner=ChainPlanner(
+            [
+                RuleTablePlanner(),
+                ScriptedPlanner(
+                    [
+                        Step(
+                            action=ACTION_NAVIGATE,
+                            url="www.haber.example.org",
+                            expect=Expectation(EXPECT_URL_CONTAINS, "x"),
+                        )
+                    ]
+                ),
+            ]
+        ),
+        clock=Clock(),
+    )
+    state = run_round(task("Bugünkü yapay zeka haberlerinden birini bul ve özetle"), ports)
+    assert "destination_refused" in state.hint and "https://" in state.hint
