@@ -123,8 +123,8 @@ def _browser_python() -> Path:
 class Stack:
     mode: str
     base_url: str
-    credential: str
-    client: Any
+    credential: str = field(repr=False)
+    client: Any = field(repr=False)
     device_id: str
     tmp: Path
     worker_log: Path
@@ -173,8 +173,8 @@ def _start_companion_process(
 ) -> subprocess.Popen[bytes]:
     python = _browser_python()
     env = os.environ.copy()
-    for key in [k for k in env if k.startswith("PAGENTOS_") and "ANTHROPIC" in k]:
-        env.pop(key)  # the companion holds no model key; it never needed one
+    for key in [k for k in env if k.startswith("PAGENTOS_")]:
+        env.pop(key)  # no model key, no owner secret: the companion needs none of them
     env.update(
         {
             "PAGENTOS_CLOUD_BROKER_URL": base_url,
