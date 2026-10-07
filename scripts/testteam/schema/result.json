@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "doc": "Bir test işinin sonuç dosyası (<card>.result.json): run-scenario.ps1 yazar ya da testçi elle yazar; test-round.ps1 scripts/testteam/TestTeamSchema.ps1'in Read-TestTeamResult'ı ile okur. Kural (team/plans/testteam-dry-round-schema-adr.md): dosya olmadan hiçbir şey söylemeyen alan zorunludur (yalnız state); betiğin anlamı değiştirmeden varsayılanla doldurabildiği her alan isteğe bağlıdır ve varsayılanı burada yazılıdır (null = yok). Burada olmayan bir alan korunur, hata değildir.",
+  "fields": {
+    "state": { "required": true, "type": "enum", "values": ["passed", "failed", "broke", "environment"], "default": null },
+    "card": { "required": false, "type": "string", "default": "" },
+    "tester": { "required": false, "type": "string", "default": "" },
+    "family": { "required": false, "type": "string", "default": "" },
+    "scenario": { "required": false, "type": "string", "default": "" },
+    "staging_sha": { "required": false, "type": "string", "default": "" },
+    "screenshot": { "required": false, "type": "string", "default": "" },
+    "environment": { "required": false, "type": "string", "default": "" },
+    "at": { "required": false, "type": "string", "default": "" },
+    "steps": {
+      "required": false, "type": "array", "default": [],
+      "items": {
+        "fields": {
+          "name": { "required": false, "type": "string", "default": "?" },
+          "method": { "required": false, "type": "string", "default": "" },
+          "path": { "required": false, "type": "string", "default": "" },
+          "expected": { "required": false, "type": "string", "default": "" },
+          "actual": { "required": false, "type": "string", "default": "" },
+          "ok": { "required": false, "type": "bool", "default": true },
+          "ms": { "required": false, "type": "int", "default": 0 }
+        }
+      }
+    },
+    "breaking": {
+      "required": false, "type": "object", "default": null,
+      "fields": {
+        "what": { "required": false, "type": "string", "default": "" },
+        "tried": {
+          "required": false, "type": "array", "default": [],
+          "items": {
+            "fields": {
+              "load": { "required": false, "type": "string", "default": "?" },
+              "ok": { "required": false, "type": "int", "default": 0 },
+              "errors": { "required": false, "type": "int", "default": 0 },
+              "p95_ms": { "required": false, "type": "int", "default": "?" },
+              "max_ms": { "required": false, "type": "int", "default": 0 },
+              "first_error": { "required": false, "type": "string", "default": "" },
+              "flaky": { "required": false, "type": "bool", "default": false },
+              "repeat": {
+                "required": false, "type": "object", "default": null,
+                "fields": {
+                  "ok": { "required": false, "type": "int", "default": 0 },
+                  "errors": { "required": false, "type": "int", "default": 0 },
+                  "p95_ms": { "required": false, "type": "int", "default": "?" }
+                }
+              }
+            }
+          }
+        },
+        "first_failure": {
+          "required": false, "type": "object", "default": null,
+          "fields": {
+            "load": { "required": false, "type": "string", "default": "?" },
+            "ok": { "required": false, "type": "int", "default": 0 },
+            "errors": { "required": false, "type": "int", "default": 0 },
+            "p95_ms": { "required": false, "type": "int", "default": "?" },
+            "max_ms": { "required": false, "type": "int", "default": 0 },
+            "first_error": { "required": false, "type": "string", "default": "" },
+            "flaky": { "required": false, "type": "bool", "default": false },
+            "repeat": {
+              "required": false, "type": "object", "default": null,
+              "fields": {
+                "ok": { "required": false, "type": "int", "default": 0 },
+                "errors": { "required": false, "type": "int", "default": 0 },
+                "p95_ms": { "required": false, "type": "int", "default": "?" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "refused": {
+      "required": false, "type": "array", "default": [],
+      "items": {
+        "fields": {
+          "name": { "required": false, "type": "string", "default": "?" },
+          "method": { "required": false, "type": "string", "default": "" },
+          "path": { "required": false, "type": "string", "default": "" },
+          "state": { "required": false, "type": "string", "default": "refused" },
+          "why": { "required": false, "type": "string", "default": "" }
+        }
+      }
+    }
+  }
+}
