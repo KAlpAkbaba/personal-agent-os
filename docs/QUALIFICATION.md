@@ -1550,3 +1550,23 @@ every team step on `330fb366` PASS.
 | 59.2 | One migration head, Postgres walks it | `PROVEN_AUTOMATED` | `Alembic upgrade head` PASS; a scratch database upgraded 0070 -> 0075 |
 | 59.3 | The test team's race defects are fixed | `PROVEN_AUTOMATED` | `tests/integration/test_two_devices_same_time_pg.py` - the strict xfails XPASSed, marks removed, green |
 | 59.4 | One clock for a spoken research result | `PROVEN_AUTOMATED` | `test_research_focus.py` frozen-clock case red before, green after; `test_research_announcer.py` |
+
+## Stage 60 — the 2026-10-07 late morning: the proof strip, spoken alarm times, the watches page, a faster gate
+
+Released 2026-10-07 07:33 UTC (10:33 local) as main `d74a8daa83389d87a3ad68e1177e99e802e816b3` (api-blue; previous
+`b1f8ef94…` kept as last known good; no migration, schema `0075_urgent_alert_receipts`; realtime contract version 4 with
+gpt-live-provider, off by default). Fourteen cards released: watch-page, local-tr-stt-measure, gpt-live-provider (three
+stranded on integrate/d20261004 since 2026-10-05 and carried in by the Danışman), staging-follows-release, gate-unit-parallel,
+gate-rerun-failed-steps, testteam-dry-round-schema, alarm-spoken-time-and-corrections, proof-from-test-rounds-and-trials,
+danisman-watch-in-repo, orphan-integration-carried-forward, guards-integration-tests-own-db, test-board-notes-per-job,
+protected-list-own-file. Two stranded cards that conflicted with today's code (gpt-live-web-bridge,
+dev-db-branch-migration-leak) were left out and returned to their workers (the owner: "testleri yeşil olanları direkt
+yayına al"). The Danışman's integration fixes: the live-sdp and proof routes in the route snapshot and the write-route
+ratchet's late baseline, the proof route's reader named. Full gate on `61ab42e3` green on the first run; 5844 s wall time
+(the API unit step 16 min in parallel, was 45 min).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 60.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: d74a8daa…`, `api-blue schema at 0075_urgent_alert_receipts`; recovery supervisor pinned to the full sha, `RECONCILE OK: api-blue is canonical`; staging deployed and seeded at the same sha |
+| 60.2 | The gate's unit step runs in parallel | `PROVEN_AUTOMATED` | `API unit tests` PASS, 18022 passed in 947 s; `scripts/tests/gate-unit-parallel.tests.ps1` 13/13 |
+| 60.3 | Stranded merges reach a release | `PROVEN_AUTOMATED` | three 2026-10-04 merges in this release; orphan-integration-carried-forward's suite in the team steps, PASS |

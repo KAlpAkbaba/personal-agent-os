@@ -15,8 +15,8 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `b1f8ef94c028b2476ba368b462ffa5a91c4277fc` (2026-10-07 04:05 UTC = 07:05 yerel, api-green), LKG `da3e26b9`,
-pin = RELEASE, reconcile OK, şema `0075_urgent_alert_receipts`. QUALIFICATION Stage 59 (konuşma devamı, acil uyarı, yarış/olumsuz-emir düzeltmeleri; önceki Stage 58: para defteri, test koltuklarının yüzleri, ekip
+**ÜRETİM: main `d74a8daa83389d87a3ad68e1177e99e802e816b3` (2026-10-07 07:33 UTC = 10:33 yerel, api-blue), LKG `b1f8ef94`,
+pin = RELEASE, reconcile OK, şema `0075_urgent_alert_receipts`. QUALIFICATION Stage 60 (kanıt şeridi, alarm saat ifadeleri, Nöbetler sayfası, paralel kapı). EKİP HESABI: `.claude-hesap3` (sahip 20x yükseltti, 2026-10-07 08:21). Test turu geçici kökü K:\AI\tmp-team\testteam-root (Fable limitliyken; kart test-round-model-fallback). Önceki Stage 59: konuşma devamı, acil uyarı, yarış/olumsuz-emir; Stage 58: para defteri, test koltuklarının yüzleri, ekip
 entegrasyon düzeltmeleri). Proje K:'de (NVMe); E: kopyası yedek, sahip onayıyla silinir. GECE NÖBETİ (sahip 2026-10-06 23:40):
 zamanlanmış görev 'PagentOS Danisman Watch' 15 dk'da bir %USERPROFILE%\.pagentos-team\danisman-watch.ps1 çalıştırır
 (sonuç watch-latest.txt / watch.log; yeni bulguda başsız Danışman koşusu kart yazar); kart danisman-watch-in-repo depoya taşır.
