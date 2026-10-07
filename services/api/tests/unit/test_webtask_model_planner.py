@@ -23,12 +23,12 @@ from app.webtask.loop import Ports, TaskState, run_round
 from app.webtask.model_planner import MAX_TOKENS, ModelPlanner
 from app.webtask.planner import (
     STEP_TOOL,
-    ChainPlanner,
-    RuleTablePlanner,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
+    ChainPlanner,
     PlannerError,
     PlanRequest,
+    RuleTablePlanner,
     build_prompt,
 )
 from app.webtask.types import (
@@ -435,7 +435,7 @@ def test_a_model_that_does_not_answer_fails_the_round_and_nothing_reaches_the_si
     assert browser.done == [] and browser.url == NEWS
 
 
-# ------------------------------------------------------------------ an acting step without an expectation
+# ------------------------------------------------------------------ a step without expectation
 #
 # The gate refuses an acting step that says nothing about what should follow it
 # (``no_expectation``) - and the live run of 2026-10-06 lost its first T1 round to exactly
@@ -455,7 +455,9 @@ def test_an_acting_step_without_an_expectation_is_asked_once_more_with_a_hint() 
     assert len(send.calls) == 2 and slept == []
     assert model.last_calls == 2
     second = send.calls[1][2]["messages"][0]["content"]
-    assert "expect_kind" in second and "expect_kind" not in send.calls[0][2]["messages"][0]["content"]
+    assert (
+        "expect_kind" in second and "expect_kind" not in send.calls[0][2]["messages"][0]["content"]
+    )
     # The hint belongs to the GOAL block: the page is still last and still wrapped.
     assert second.index("expect_kind") < second.index(UNTRUSTED_BEGIN)
     assert send.calls[1][2]["model"] == send.calls[0][2]["model"]
@@ -503,7 +505,8 @@ def test_the_loop_counts_both_model_calls_of_a_round_that_was_asked_twice() -> N
     state = TaskState(task_id="t-1", goal=GOAL)
 
     state = run_round(
-        state, Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock())
+        state,
+        Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock()),
     )
 
     assert [r.outcome for r in state.rounds] == [ROUND_ACTED]
@@ -517,7 +520,8 @@ def test_the_loop_counts_the_model_calls_of_a_round_whose_planner_failed() -> No
     state = TaskState(task_id="t-1", goal=GOAL)
 
     state = run_round(
-        state, Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock())
+        state,
+        Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock()),
     )
 
     assert state.status == STATUS_FAILED and state.failure == FAIL_PLANNER

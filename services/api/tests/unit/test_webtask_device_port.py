@@ -657,19 +657,19 @@ def activity_world(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     from app.webtask.loop import Ports
 
     world: dict[str, Any] = {"browser": _ClosingBrowser(), "status": "running"}
-    monkeypatch.setattr(activities, "_factory", lambda: (lambda: nullcontext(object())))
+    monkeypatch.setattr(activities, "_factory", lambda: lambda: nullcontext(object()))
     monkeypatch.setattr(allowlist_store, "bind", lambda _factory: None)
     monkeypatch.setattr(service, "get_task", lambda db, tid: _Row())
     monkeypatch.setattr(service, "load", lambda row: _Loaded())
-    monkeypatch.setattr(
-        service, "run_round_db", lambda db, tid, ports: {"status": world["status"]}
-    )
+    monkeypatch.setattr(service, "run_round_db", lambda db, tid, ports: {"status": world["status"]})
     monkeypatch.setattr(service, "cancel_db", lambda db, tid: _Row())
     monkeypatch.setattr(service, "fail_db", lambda db, tid, **kw: _Row())
     monkeypatch.setattr(service, "outcome", lambda row: {"status": "cancelled"})
     activities.set_ports_factory(
         lambda tid, device, beat, target: Ports(
-            browser=world["browser"], planner=None, clock=lambda: 0.0  # type: ignore[arg-type]
+            browser=world["browser"],
+            planner=None,
+            clock=lambda: 0.0,  # type: ignore[arg-type]
         )
     )
     yield world

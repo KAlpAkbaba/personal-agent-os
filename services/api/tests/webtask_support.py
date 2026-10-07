@@ -92,10 +92,15 @@ class FakeBrowser:
     observations: int = 0
     fail_observe: str = ""
     fail_act: str = ""
+    #: Task ids whose session was closed (the activity closes it when the task ends).
+    closed: list[str] = field(default_factory=list)
     _last_id: str = ""
     _last_refs: dict[str, El] = field(default_factory=dict)
 
     # ------------------------------------------------------------- the port
+
+    def close(self, task_id: str) -> None:
+        self.closed.append(task_id)
 
     def observe(self, *, task_id: str, key: str) -> Observation:
         self._key(key)

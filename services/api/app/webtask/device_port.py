@@ -40,6 +40,7 @@ from app.devices.commands import (
     CommandSucceeded,
     DeviceCommandClientProtocol,
 )
+from app.logging import get_logger
 from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.research.forbidden_keys import find_forbidden_keys
 from app.webtask.loop import BrowserPortError
@@ -59,11 +60,14 @@ from app.webtask.types import (
     Step,
 )
 
+logger = get_logger("app.webtask.device_port")
+
 PROFILE_OWNER: Final = "owner"
 #: The cloud worker's only profile (``services/browser/browser_agent/cloud/policy.py``).
 PROFILE_RESEARCH: Final = "research"
 CAPABILITY_OBSERVE: Final = "browser.observe"
 CAPABILITY_SESSION_OPEN: Final = "browser.session_open"
+CAPABILITY_SESSION_CLOSE: Final = "browser.session_close"
 CAPABILITY_TAB_NEW: Final = "browser.tab_new"
 CONTRACT_OBSERVE: Final = 1
 DEFAULT_TIMEOUT_S: Final = 60.0
@@ -211,6 +215,28 @@ class DeviceTaskBrowser:
 
     # ------------------------------------------------------------- the port
 
+    def close(self, task_id: str) -> None:
+        """The task has ended: its session is closed (live run 2026-10-06 - an unclosed
+        research session made the cloud worker refuse every later task). Sent even when
+        this process does not know the session (a restart forgets ``_OPEN``): the worker
+        answers an unknown session ``closed``. One key per task, so a second close is the
+        same command. Never raises: a task that ended stays ended."""
+        session_id = session_id_for(task_id)
+        with _lock:
+            _OPEN.discard((str(self._device_id), session_id))
+        try:
+            self._send(
+                CAPABILITY_SESSION_CLOSE,
+                {"session_id": session_id},
+                f"webtask:{task_id}:session_close",
+            )
+        except BrowserPortError as exc:
+            logger.warning(
+                "webtask_session_close_failed", error_class=exc.error_class, reason=exc.reason
+            )
+        except Exception as exc:  # noqa: BLE001 - best effort, the device may be gone
+            logger.warning("webtask_session_close_failed", error_class=type(exc).__name__)
+
     def observe(self, *, task_id: str, key: str) -> Observation:
         result = self._with_session(task_id, key, CAPABILITY_OBSERVE, {"scope": "page"})
         if not result.get("observation_id"):
@@ -275,6 +301,7 @@ class DeviceTaskBrowser:
 
 __all__ = [
     "CAPABILITY_OBSERVE",
+    "CAPABILITY_SESSION_CLOSE",
     "DeviceTaskBrowser",
     "PROFILE_OWNER",
     "reset_known_sessions",
