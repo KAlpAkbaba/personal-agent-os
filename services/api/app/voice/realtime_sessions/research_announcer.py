@@ -23,7 +23,7 @@ import asyncio
 import uuid
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -35,6 +35,7 @@ from app.notifications import delivery
 from app.research import runs_service, verify
 from app.research.models import STAGE_FAILED, TERMINAL_STAGES
 from app.research.result import build_insufficient_terminal_payload, build_tool_terminal_payload
+from app.voice.realtime_sessions import service as realtime_service
 from app.voice.realtime_sessions.models import TOOL_STATUS_RUNNING, RealtimeToolCall
 from app.voice.realtime_sessions.service import complete_tool_call_system
 from app.voice.realtime_sessions.sideband import SidebandPusher
@@ -114,7 +115,11 @@ class ResearchToolCallAnnouncer:
         ever guesses at a linkage it was not given.
         """
         completed = 0
-        moment = now or datetime.now(UTC)
+        # One clock for the pass, and it is the realtime service's: the completion it
+        # drives writes the spoken result's focus row on this instant, beside rows the service
+        # writes on its own utcnow() (two clocks put one act 0.4 s after the other - the
+        # frozen-clock focus test, 2026-10-07 integration).
+        moment = now or realtime_service.utcnow()
         with self._session_factory() as session:
             for call in self._claim_batch(session, now=moment):
                 task_id = str((call.result_json or {}).get("task_id") or "")

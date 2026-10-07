@@ -172,6 +172,7 @@ GET /v1/telephony/audio/{token} call_audio
 GET /v1/telephony/status telephony_status
 GET /v1/ui/state get_state
 GET /v1/ui/state/contract get_contract
+GET /v1/urgent-alert/status urgent_alert_status
 GET /v1/voice/benchmark/reports get_benchmark_reports
 GET /v1/voice/capabilities list_capabilities
 GET /v1/voice/measurement get_measurement
@@ -375,6 +376,7 @@ POST /v1/team/queue/proposals post_proposal
 POST /v1/team/queue/reports post_report
 POST /v1/team/trials/decision decide_trial
 POST /v1/telephony/test-call test_call
+POST /v1/urgent-alert/test urgent_alert_test
 POST /v1/voice/benchmark/run run_benchmark
 POST /v1/voice/misheard/{item_id}/meaning answer_misheard
 POST /v1/voice/qualification post_report

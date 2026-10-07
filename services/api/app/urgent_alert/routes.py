@@ -103,3 +103,7 @@ async def urgent_alert_test(request: Request) -> dict[str, Any]:
 
 
 __all__ = ["MAX_TESTS_PER_HOUR", "router", "status_of"]
+
+
+# urgent-alert-wire, bound by app/registry.py (card registry-models-and-routers).
+ROUTERS = [router]

@@ -296,15 +296,12 @@ def test_a_production_sweep_forwards_on_the_clock_it_claimed_the_batch_with(
     session_factory, monkeypatch
 ) -> None:
     """Production passes no ``now``: the pass's one clock (``moment``) must reach the
-    completion too, or the live-session window is judged on a second clock."""
-    import app.voice.realtime_sessions.research_announcer as announcer_module
+    completion too, or the live-session window is judged on a second clock. That one clock
+    is the realtime service's ``utcnow`` (2026-10-07: the announcer's own ``datetime.now``
+    put the spoken result's focus row 0.4 s off the rows the service wrote)."""
+    from app.voice.realtime_sessions import service as realtime_service
 
-    class _PassClock(datetime):
-        @classmethod
-        def now(cls, tz=None):  # type: ignore[override]
-            return NOW
-
-    monkeypatch.setattr(announcer_module, "datetime", _PassClock)
+    monkeypatch.setattr(realtime_service, "utcnow", lambda: NOW)
     _ready_closed_call(session_factory, "r-clock")
     live = _seed_session(session_factory, updated_at=NOW - timedelta(minutes=5))
     sideband = RecordingSideband(deliver=True)
