@@ -37,7 +37,9 @@ ikinci tur yarıda kaldı). Sınıf kapanmadı: bir sonraki yeni alan aynı yold
 4. **Okuyucu** `scripts/testteam/TestTeamSchema.ps1`: Read-TestTeamSchema (şemanın kendisi
    okunamıyorsa throw - o bizim dosyamız), ConvertTo-TestTeamShape (Readable = Missing boş; Value =
    her alanı varsayılanla doldurulmuş, tipleri çevrilmiş belge: '7' -> 7, 'TRUE' -> true, 'PASSED' ->
-   passed; enum dışı ya da tipi tutmayan değer o alanı eksik sayar; Missing / Defaulted noktalı yol:
+   passed; `int` alanı ondalık sayıyı ya da metni (1234.7, '812.5') yuvarlayarak alır (ortadan
+   sıfırdan uzağa) - elle yazılmış ölçüm varsayılana düşüp raporda 'eksik' görünmez (denetçi bulgusu
+   2026-10-07); NaN/sonsuz/9e15 üstü geçersiz; enum dışı ya da tipi tutmayan değer o alanı eksik sayar; Missing / Defaulted noktalı yol:
    `breaking.tried[1].p95_ms`; Why Türkçe tek cümle; belge ne olursa olsun ASLA throw etmez),
    Read-TestTeamResult -Path [-Card] (dosya yok -> 'dosya yok: ...'; boş ya da JSON değil -> 'JSON
    değil: ...'; -Card ile boş/eksik card/tester/family/scenario iş kartından dolar ve Defaulted'da

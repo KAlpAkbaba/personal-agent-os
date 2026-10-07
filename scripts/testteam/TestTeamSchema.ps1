@@ -97,16 +97,16 @@ function ConvertTo-TestTeamShapeValue {
         }
         "int" {
             if ($Raw -is [bool]) { return $no }
-            if (Test-TestTeamNumber -Raw $Raw) {
-                $number = [double]$Raw
-                if ([Math]::Floor($number) -ne $number -or [Math]::Abs($number) -gt 9e15) { return $no }
-                return [pscustomobject]@{ Ok = $true; Value = [int64]$number }
+            # A hand-written measurement is often a decimal ("p95_ms": 1234.7, "ms": "812.5"): it is
+            # rounded, never dropped to the default - a measured value reported as "missing" lies.
+            $number = $null
+            if (Test-TestTeamNumber -Raw $Raw) { $number = [double]$Raw }
+            elseif ($Raw -is [string]) {
+                $parsed = [double]0
+                if ([double]::TryParse($Raw.Trim(), [System.Globalization.NumberStyles]::Float, $culture, [ref]$parsed)) { $number = $parsed }
             }
-            if ($Raw -is [string]) {
-                $parsed = [int64]0
-                if ([int64]::TryParse($Raw.Trim(), [System.Globalization.NumberStyles]::Integer, $culture, [ref]$parsed)) { return [pscustomobject]@{ Ok = $true; Value = $parsed } }
-            }
-            return $no
+            if ($null -eq $number -or [double]::IsNaN($number) -or [double]::IsInfinity($number) -or [Math]::Abs($number) -gt 9e15) { return $no }
+            return [pscustomobject]@{ Ok = $true; Value = [int64][Math]::Round($number, [System.MidpointRounding]::AwayFromZero) }
         }
         "bool" {
             if ($Raw -is [bool]) { return [pscustomobject]@{ Ok = $true; Value = $Raw } }

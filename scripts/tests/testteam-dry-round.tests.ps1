@@ -152,6 +152,24 @@ $Fixturefc62979c = @'
 }
 '@
 
+# Not of 6 October, but the inspector's finding of 2026-10-07: a hand-written result measures in
+# decimals ("p95_ms": 1234.7, "ms": "812.5"); an int field that refused them turned a real
+# measurement into '?' / 0 and named it "missing".
+$FixtureDecimal = @'
+{
+  "card": "tj-r2-5",
+  "tester": "tester-1",
+  "family": "alisveris-listesi",
+  "state": "broke",
+  "steps": [ { "name": "liste ekle", "ok": true, "ms": 812.5 }, { "name": "liste oku", "ok": true, "ms": "40.2" } ],
+  "breaking": {
+    "what": "eşzamanlı öğe ekleme",
+    "tried": [ { "load": 2, "ok": 2, "errors": 0, "p95_ms": 310.4 }, { "load": 32, "ok": 20, "errors": 12, "p95_ms": 1234.7 } ],
+    "first_failure": { "load": 32, "ok": 20, "errors": 12, "p95_ms": "1234.7" }
+  }
+}
+'@
+
 # Not of 6 October, but as fixed: a hand-written result with no 'state' - says nothing.
 $FixtureNoState = @'
 {
@@ -404,6 +422,20 @@ Test-Case "fc62979c: p95_ms'siz basamak okunur, p95 '?' ile doldurulur ve Defaul
     Assert-Equal -Expected 16 -Actual (Get-PathValue -Object $read.Value -Path "breaking.first_failure.load") -Because "yük korunur"
     $report = Format-TestTeamBreakingReport -Round "kuru" -Results @($read.Value)
     Assert-True -Condition ($report.Markdown -match "ilk kırılan yük 16, 5 hata / 16 istek, istek başına p95 \? ms") -Because "kırılma satırı:`n$($report.Markdown)"
+}
+
+Test-Case "ondalık ölçüm: p95_ms/ms ondalık sayı ya da metin yuvarlanarak okunur, varsayılana düşmez" {
+    Assert-Library
+    $file = Join-Path $work "ondalik.result.json"; Write-Utf8 -Path $file -Text $FixtureDecimal
+    $read = Read-TestTeamResult -Path $file
+    Assert-True -Condition $read.Readable -Because "sonuç okunamadı: $($read.Why)"
+    $expected = [ordered]@{ "steps[0].ms" = 813; "steps[1].ms" = 40; "breaking.tried[0].p95_ms" = 310; "breaking.tried[1].p95_ms" = 1235; "breaking.first_failure.p95_ms" = 1235 }
+    foreach ($path in @($expected.Keys)) {
+        Assert-True -Condition (@($read.Defaulted) -notcontains $path) -Because "ölçülmüş '$path' varsayılanla dolan sayıldı: $(@($read.Defaulted) -join ', ')"
+        Assert-Equal -Expected ([string]$expected[$path]) -Actual ([string](Get-PathValue -Object $read.Value -Path $path)) -Because "$path yuvarlanır"
+    }
+    $report = Format-TestTeamBreakingReport -Round "kuru" -Results @($read.Value)
+    Assert-True -Condition ($report.Markdown -match "ilk kırılan yük 32, 12 hata / 32 istek, istek başına p95 1235 ms") -Because "kırılma satırı ölçümü taşımıyor:`n$($report.Markdown)"
 }
 
 Test-Case "state'siz sabit fikstür okunamadı kaydı döner: Missing = state, Why adını söyler, throw yok" {
