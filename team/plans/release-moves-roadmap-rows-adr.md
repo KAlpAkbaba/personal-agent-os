@@ -34,7 +34,15 @@ hears' still read MISSING although money-ledger and verify-mode were released th
 
 - The row's sha is the card's own `sha` (its merge into main); the release sha is in the commit.
 - Lines the script did not change are left byte for byte (LF / CRLF kept).
-- Not done in this card: the `.claude/agents/lead.md` duty paragraph - the edit was refused by the
+- Return 1 (worker-3): the live queue's cards name their row as
+  `Order step N - <topic>: '<Row>' (<note>)` (money-ledger, verify-mode, home-stock-list, read
+  2026-10-07 09:16 UTC); neither progress.py's rule nor the script knows the quoted name, so the
+  two rows the card measures did not move. The script stays the strip's copy: the rule learns it
+  first (progress.py `_base`/`_names_row`: a `'...'` quoted run that names a row is the row), the
+  script mirrors it in the same change. Until that file is in the area the case
+  "the queue's real wordings ..." is RED. A `stopped` card is now in the open-cards case.
+- Not done in this card: the `.claude/agents/lead.md` duty paragraph (refused again in return 1;
+  the text below also asks for a committed docs/ROADMAP.md before `-Commit`) - the edit was refused by the
   harness's permission layer in the worker run. The text the lead should add after the
   "Releases (owner, 2026-10-01)" paragraph:
 

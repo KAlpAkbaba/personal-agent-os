@@ -151,12 +151,13 @@ Test-Case "a row with open cards stays PARTIAL and lists them; a MISSING row wit
         (New-Task -Id "home-stock-list" -Row "Keeps the house's stock, down to the toilet paper" -State "released" -Sha $shaHouse),
         (New-Task -Id "stock-receipts" -Row "Keeps the house's stock, down to the toilet paper" -State "approved"),
         (New-Task -Id "stock-orders" -Row "Keeps the house's stock (order 5)" -State "in_progress"),
+        (New-Task -Id "stock-sensors" -Row "Keeps the house's stock, down to the toilet paper" -State "stopped"),
         (New-Task -Id "verify-later" -Row "Verifies what he hears and keeps it to argue later" -State "approved")
     ) -ProofRows @(@{ name = "Keeps the house's stock, down to the toilet paper (the owner, 2026-10-05)"; staging_proven = $true })
     $run = Invoke-Rows -Dir $dir
     Assert-Equal 0 $run.Exit "exit 0: $($run.Out)"
     $row = Get-Row -Dir $dir -Start "Keeps the house"
-    Assert-True ($row.EndsWith("| **PARTIAL** — RELEASED 2026-10-06 (72884b71): the house's stock [kartlar: yayında home-stock-list (72884b71); kalan: stock-orders, stock-receipts] |")) "the open cards are listed: $row"
+    Assert-True ($row.EndsWith("| **PARTIAL** — RELEASED 2026-10-06 (72884b71): the house's stock [kartlar: yayında home-stock-list (72884b71); kalan: stock-orders, stock-receipts, stock-sensors] |")) "the open cards are listed, a stopped card among them: $row"
     Assert-True ($run.Out -notlike "*ÖNERİ VAR*") "open cards: no HAVE proposed, even staging-proven: $($run.Out)"
     Assert-True ((Get-Row -Dir $dir -Start "Verifies what he hears") -like "*| **MISSING** — a ""doğrula"" mode |") "only open cards: the row stays MISSING"
 }
@@ -240,6 +241,22 @@ Test-Case "on a copy of the real ROADMAP: money-ledger and verify-mode move thei
     Assert-Equal $before.Count $after.Count "same number of lines"
     $differ = @(0..($before.Count - 1) | Where-Object { $before[$_] -cne $after[$_] })
     Assert-Equal 2 $differ.Count "exactly two lines changed"
+}
+
+Test-Case "the queue's real wordings ('Order step N - ...: ''Row'' (...)') move their rows" {
+    # The three cards' roadmap_row as the live queue carries them (read 2026-10-07 09:16 UTC):
+    # the row's name is the quoted part, after an "Order step N - <topic>:" prefix.
+    $dir = New-Sandbox -Tasks @(
+        (New-Task -Id "money-ledger" -Row "Order step 5 - his money and the house: 'Knows his money' (the owner, 2026-10-05)" -State "released" -Sha $shaMoney),
+        (New-Task -Id "verify-mode" -Row "Order step 2 - research and analysis: 'Verifies what he hears and keeps it to argue later' (the owner, 2026-10-05)" -State "released" -Sha $shaVerify),
+        (New-Task -Id "home-stock-list" -Row "Order step 5 - his money and the house: 'Keeps the house's stock, down to the toilet paper' (the owner, 2026-10-05)" -State "released" -Sha $shaHouse)
+    )
+    $run = Invoke-Rows -Dir $dir
+    Assert-Equal 0 $run.Exit "exit 0: $($run.Out)"
+    Assert-True ((Get-Row -Dir $dir -Start "Knows his money").EndsWith("| **PARTIAL** — JARVIS's own ledger [kartlar: yayında money-ledger (da3e26b9); kalan: yok] |")) "money row PARTIAL: $(Get-Row -Dir $dir -Start 'Knows his money')"
+    Assert-True ((Get-Row -Dir $dir -Start "Verifies what he hears").EndsWith("| **PARTIAL** — a ""doğrula"" mode [kartlar: yayında verify-mode (1234abcd); kalan: yok] |")) "verify row PARTIAL: $(Get-Row -Dir $dir -Start 'Verifies what he hears')"
+    Assert-True ((Get-Row -Dir $dir -Start "Keeps the house").EndsWith("[kartlar: yayında home-stock-list (72884b71); kalan: yok] |")) "house row names its card: $(Get-Row -Dir $dir -Start 'Keeps the house')"
+    Assert-True ($run.Out -notlike "*satır dışı*") "no card is left outside: $($run.Out)"
 }
 
 Test-Case "a wrong -Sha, -Commit without -Sha and a roadmap without the table write nothing" {
