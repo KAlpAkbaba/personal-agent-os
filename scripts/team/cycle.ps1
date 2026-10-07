@@ -804,16 +804,9 @@ function Select-RunModel {
 $lock = $null
 if ($useApi) { $lock = Get-TeamLockApi -Store $apiStore }
 elseif (Test-Path -LiteralPath $lockPath) { $lock = Read-TeamJson -Path $lockPath }
-$decision = Get-TeamLockDecision -Lock $lock -Machine $Machine -Now $started
-if ($decision.Kind -eq "ours") {
-    # Ours, and fresh. If the process that took it is gone, the run died and the lock with it.
-    $holderPid = [int](Get-TeamProperty -InputObject $lock -Name "pid" -Default 0)
-    $alive = $false
-    if ($holderPid -gt 0) { $alive = ($null -ne (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) }
-    if (-not $alive) {
-        $decision = [pscustomobject]@{ MayRun = $true; Kind = "dead"; Holder = $decision.Holder; Since = $decision.Since }
-    }
-}
+# Ours: the pid is looked at before the age - a dead run of ours is "dead" however old its lock
+# (the acquire then says takeover_dead), a live one is never taken over (2026-10-07).
+$decision = Get-TeamLockDecision -Lock $lock -Machine $Machine -Now $started -ProcessAlive { param($ProcessId, $Since) Test-TeamLockHolderAlive -ProcessId $ProcessId -Since $Since }
 if (-not $decision.MayRun) {
     Add-CycleNote -List "stops" -Text "kilit $($decision.Holder) makinesinde ($($decision.Since)); bu döngü hiçbir şey çalıştırmadı"
     $path = Save-Report
@@ -836,12 +829,13 @@ if ($DryRun) {
 }
 
 if ($useApi) {
-    $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId -TakeoverDead ($decision.Kind -eq "dead")
-    if (-not [bool]$taken.acquired) {
-        # The other machine took it between our read and our write.
-        Add-CycleNote -List "stops" -Text "kilit $($taken.holder) makinesinde ($($taken.since)); bu döngü hiçbir şey çalıştırmadı"
+    $taken = Enter-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId -Decision $decision
+    if (-not $taken.Acquired) {
+        # The other machine took it between our read and our write, or the server's clock (the
+        # holder's last status) disagrees with ours: the stop names the server's answer.
+        Add-CycleNote -List "stops" -Text $taken.Stop
         $path = Save-Report
-        Write-Host "the lock was taken by $($taken.holder); report: $path"
+        Write-Host "the lock was refused by the server ($($taken.Answer.kind), $($taken.Answer.holder)); report: $path"
         exit 3
     }
 }
