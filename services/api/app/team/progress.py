@@ -232,6 +232,9 @@ def round_problems(doc: Any) -> list[str]:
 PREFIX_MIN_WORDS = 3
 _TRAILING_NOTE = re.compile(r"\s*\([^()]*\)\s*$")
 _HEAD = re.compile(r"\s+[-—–:]\s+|:\s+")
+#: The queue's "Order step 5 - his money and the house: 'Knows his money' (...)": the quoted
+#: part. It opens after a space and closes before a space or punctuation, so "house's" stays in.
+_QUOTED = re.compile(r"(?:^|(?<=\s))'(.+?)'(?=[\s.,;:)]|$)")
 
 #: The queue's roadmap_row wordings that name a JARVIS row in other words (the lead's decision,
 #: 2026-10-06): kept here, so a card is never edited by hand. Key and value are compared as
@@ -292,8 +295,14 @@ def _names_row(row: str, ref: Any) -> bool:
 
 
 def resolve_row(ref: Any, names: list[str]) -> str | None:
-    """The JARVIS row (one of ``names``) that ``ref`` names - itself, or else through
-    ``ROW_ALIASES``; ``None`` when it names none (``is_outside`` tells one known to be no row)."""
+    """The JARVIS row (one of ``names``) that ``ref`` names - its quoted part first, then the
+    whole wording, or else through ``ROW_ALIASES``; ``None`` when it names none (``is_outside``
+    tells one known to be no row). A quoted remark that names no row leaves the whole to decide."""
+    quoted = _QUOTED.search(_plain(str(ref)))
+    if quoted:
+        hit = next((name for name in names if _names_row(name, quoted.group(1))), None)
+        if hit is not None:
+            return hit
     direct = next((name for name in names if _names_row(name, ref)), None)
     if direct is not None:
         return direct

@@ -176,6 +176,41 @@ def test_the_queues_wordings_reach_their_jarvis_row_through_the_table(ref, leadi
 
 
 @pytest.mark.parametrize(
+    ("ref", "leading"),
+    [
+        (
+            "Order step 5 - his money and the house: 'Knows his money' (the owner, 2026-10-05)",
+            "Knows his money",
+        ),
+        (
+            "Order step 2 - research and analysis: 'Verifies what he hears and keeps it to argue "
+            "later' (the owner, 2026-10-05)",
+            "Verifies what he hears",
+        ),
+        (
+            "Order step 5 - his money and the house: 'Keeps the house's stock, down to the toilet "
+            "paper' (the owner, 2026-10-05)",
+            "Keeps the house",
+        ),
+    ],
+)
+def test_the_quoted_part_of_a_queue_wording_is_the_rows_name(ref, leading):
+    """The live queue's "Order step N - <topic>: 'Row' (...)" wordings (2026-10-07): the row's
+    name is the quoted part; an apostrophe inside a word ("house's") does not end it."""
+    names = [r["name"] for r in _real_jarvis()["rows"] if r["state"] != "never"]
+    assert progress.resolve_row(ref, names) == _real_name(leading)
+
+
+def test_a_quoted_part_that_names_no_row_leaves_the_whole_wording_to_decide():
+    """A quoted remark ("... 2026-10-07: 'her iş yarım yapılmış neden?'") is not a row's name:
+    the wording before it still declares the card outside the JARVIS table."""
+    ref = "How it is built from here (the team cycle) - the owner, 2026-10-07: 'neden yarım?'"
+    names = [r["name"] for r in _real_jarvis()["rows"] if r["state"] != "never"]
+    assert progress.resolve_row(ref, names) is None
+    assert progress.is_outside(ref)
+
+
+@pytest.mark.parametrize(
     "ref",
     [
         "",

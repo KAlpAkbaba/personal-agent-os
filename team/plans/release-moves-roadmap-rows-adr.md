@@ -39,8 +39,14 @@ hears' still read MISSING although money-ledger and verify-mode were released th
   2026-10-07 09:16 UTC); neither progress.py's rule nor the script knows the quoted name, so the
   two rows the card measures did not move. The script stays the strip's copy: the rule learns it
   first (progress.py `_base`/`_names_row`: a `'...'` quoted run that names a row is the row), the
-  script mirrors it in the same change. Until that file is in the area the case
-  "the queue's real wordings ..." is RED. A `stopped` card is now in the open-cards case.
+  script mirrors it in the same change. A `stopped` card is now in the open-cards case.
+- Return 2 (area widened to progress.py and its test): `resolve_row` tries the quoted part
+  first (`_QUOTED`: opens after a space, closes before a space or punctuation, so "house's"
+  stays inside), then the whole wording as before; `Resolve-Row` does the same with the same
+  regex. The rule sits in `resolve_row`, not in `_base`, on purpose: a quoted part that names
+  no row falls back to the whole wording, so a remark like this card's own
+  "How it is built from here ... 2026-10-07: 'her iş yarım yapılmış neden?'" stays declared
+  outside (`is_outside` still reads the whole wording).
 - Not done in this card: the `.claude/agents/lead.md` duty paragraph (refused again in return 1;
   the text below also asks for a committed docs/ROADMAP.md before `-Commit`) - the edit was refused by the
   harness's permission layer in the worker run. The text the lead should add after the

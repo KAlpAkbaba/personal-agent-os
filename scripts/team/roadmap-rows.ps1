@@ -11,8 +11,9 @@
     released). The lead runs this after every release, on the lead branch:
 
       1. Every card of the queue is matched to a JARVIS row by its roadmap_row (the same rule as
-         the İlerleme strip, services/api/app/team/progress.py: the same words, the same name
-         before a remark, or one the other's leading words - at least three - and its aliases).
+         the İlerleme strip, services/api/app/team/progress.py: a quoted part ('Knows his money')
+         first, then the same words, the same name before a remark, or one the other's leading
+         words - at least three - and its aliases).
          A card no row names is left out and listed as "satır dışı".
       2. A card is RELEASED when its state is released or awaiting_real_evidence, or done with a
          40-hex sha; it is OPEN in every state before that and when stopped; done without a sha
@@ -128,6 +129,12 @@ function Test-NamesRow {
 }
 function Resolve-Row {
     param([string]$Ref, [string[]]$Names)
+    # The quoted part first ("Order step 5 - ...: 'Knows his money' (...)"), as progress.py's
+    # _QUOTED: it opens after a space, closes before a space or punctuation ("house's" stays in).
+    $quoted = [regex]::Match((Get-PlainText $Ref), "(?:^|(?<=\s))'(.+?)'(?=[\s.,;:)]|$)")
+    if ($quoted.Success) {
+        foreach ($name in $Names) { if (Test-NamesRow -Row $name -Ref $quoted.Groups[1].Value) { return $name } }
+    }
     foreach ($name in $Names) { if (Test-NamesRow -Row $name -Ref $Ref) { return $name } }
     $base = Get-BaseText $Ref
     foreach ($key in $rowAliases.Keys) {
