@@ -117,6 +117,16 @@ def clean_quantity(raw: object) -> str | None:
     return quantity or None
 
 
+def _split(raw: object) -> tuple[str, str | None]:
+    """The name and the amount said in it: "iki şişe süt" is süt, "iki şişe"."""
+    name, amount = parse.split_amount(clean_name(raw))
+    if amount is not None:
+        problem = parse.quantity_problem(amount)
+        if problem is not None:
+            raise HouseholdRefused(problem)
+    return name, clean_quantity(amount)
+
+
 def clean_level(raw: object) -> str:
     level = _LEVEL_ALIASES.get(parse.turkish_lower(raw).strip()) if isinstance(raw, str) else None
     if level is None:
@@ -161,10 +171,23 @@ def list_items(db: Session) -> list[HouseholdItem]:
     )
 
 
+def _locked(db: Session, item_id: uuid.UUID) -> HouseholdItem | None:
+    """The row, locked until this request commits; None when it is gone - forgotten by another
+    device while this one waited (test team round t-r10070152: 8 concurrent 'unut' answered 200
+    twice, 'bitti' racing 'unut' answered 500). SQLite has no row locks and needs none."""
+    return db.scalars(
+        select(HouseholdItem)
+        .where(HouseholdItem.id == item_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).first()
+
+
 def _get_or_create(db: Session, name: str, now: datetime) -> HouseholdItem:
     clean = clean_name(name)
     key = _key(clean)
-    row = find_item(db, clean)
+    found = find_item(db, clean)
+    row = _locked(db, found.id) if found is not None else None
     if row is not None:
         return row
     count = len(db.scalars(select(HouseholdItem.id)).all())
@@ -186,10 +209,11 @@ def _get_or_create(db: Session, name: str, now: datetime) -> HouseholdItem:
     except IntegrityError:
         # Another device said the same new item between the read and this insert and its row
         # holds the key: only the savepoint is undone, and this request lands on that row.
-        existing = db.scalars(select(HouseholdItem).where(HouseholdItem.key == key)).first()
-        if existing is None:
+        existing = db.scalars(select(HouseholdItem.id).where(HouseholdItem.key == key)).first()
+        won = _locked(db, existing) if existing is not None else None
+        if won is None:
             raise
-        return existing
+        return won
     return row
 
 
@@ -198,7 +222,8 @@ def _get_or_create(db: Session, name: str, now: datetime) -> HouseholdItem:
 
 def set_level(db: Session, name: str, level: str, *, now: datetime) -> ItemChange:
     level = clean_level(level)
-    row = _get_or_create(db, name, now)
+    said, _ = _split(name)
+    row = _get_or_create(db, said, now)
     previous = row.level
     if level == parse.LEVEL_FULL:
         was_listed = row.on_list
@@ -228,8 +253,9 @@ def set_level(db: Session, name: str, level: str, *, now: datetime) -> ItemChang
 
 
 def add_to_list(db: Session, name: str, *, quantity: object, now: datetime) -> ItemChange:
-    amount = clean_quantity(quantity)
-    row = _get_or_create(db, name, now)
+    said, spoken = _split(name)
+    amount = clean_quantity(quantity) or spoken
+    row = _get_or_create(db, said, now)
     if row.on_list and (amount is None or amount == row.list_quantity):
         db.commit()
         return ItemChange(item=row, speech=f"{_cap(row.name)} zaten listede.", already=True)
@@ -253,7 +279,7 @@ def remove_from_list(db: Session, name: str, *, now: datetime) -> ItemChange | N
 
 
 def remove_by_id(db: Session, item_id: uuid.UUID, *, now: datetime) -> HouseholdItem | None:
-    row = db.get(HouseholdItem, item_id)
+    row = _locked(db, item_id)  # a forget racing this one deletes it first, or waits
     if row is None:
         return None
     row.on_list = False
@@ -264,7 +290,7 @@ def remove_by_id(db: Session, item_id: uuid.UUID, *, now: datetime) -> Household
 
 
 def forget_item(db: Session, item_id: uuid.UUID) -> int:
-    row = db.get(HouseholdItem, item_id)
+    row = _locked(db, item_id)
     if row is None:
         return 0
     db.execute(delete(HouseholdEvent).where(HouseholdEvent.item_id == item_id))
