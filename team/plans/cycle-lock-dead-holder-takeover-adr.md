@@ -22,8 +22,15 @@ two clocks for one decision, and a stop that named neither.
    the six-hour rule. Without `-ProcessAlive` the function is as before (feed, integrate,
    release, and the existing tests).
 2. `Test-TeamLockHolderAlive`: the pid exists AND did not start after the lock was taken
-   (+1 min); a pid reused after a restart is not the holder. An unreadable start time counts
+   (+15 min); a pid reused after a restart is not the holder. An unreadable start time counts
    as alive (the safe side: never take over a running cycle).
+   Why 15 minutes, not 1 (inspector, first review): in API mode `acquired_at` is the server's
+   clock and `StartTime` this machine's. With the local clock more than 1 min ahead of the
+   server, a LIVE holder looked "started after the lock", was judged dead, and the server -
+   trusting `takeover_dead = true` - gave its lock to a second cycle of the same machine. The
+   window now covers any plausible skew (measured 0 s on 2026-10-07; w32time keeps both within
+   seconds). A pid reused within 15 min of the stamp counts as alive: the safe side, exit 3
+   until released by hand; a reboot-reused pid on an hours-old lock is still caught.
 3. `Enter-TeamLockApi` is the cycle's one acquire path: it derives `takeover_dead` from the
    decision and, when refused, returns the stop line naming the server's answer
    (`sunucu reddetti: kind=..., pid=...`), this machine's decision and the `takeover_dead`
@@ -38,5 +45,6 @@ two clocks for one decision, and a stop that named neither.
 - feed.ps1, integrate.ps1 and release.ps1 still take the lock the old way (age first, then
   `Set-TeamLockApi`); they were outside this task's area - follow-up card.
 
-Evidence: scripts/tests/team-cycle-lock.tests.ps1 (9 cases, fake store with the server's rule),
-7 mutations RED, each restored from a backup with an equal sha256.
+Evidence: scripts/tests/team-cycle-lock.tests.ps1 (10 cases, fake store with the server's rule;
+the skew case stamps the lock 2/10/14 min before the holder's start -> holder, 30 min -> reused),
+9 mutations RED (incl. tolerance 1 min and 60 min), each restored from a backup with an equal sha256.

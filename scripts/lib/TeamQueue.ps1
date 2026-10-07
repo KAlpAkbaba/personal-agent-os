@@ -1589,7 +1589,10 @@ function New-TeamLockReleased { return [pscustomobject]@{ held = $false } }
 function Test-TeamLockHolderAlive {
     <# Whether the process that took a lock of this machine is still running: the pid exists, and
        it did not start after the lock was taken (a pid reused by another process after a restart
-       is not the holder). A start time that cannot be read counts as the holder: alive. #>
+       is not the holder). A start time that cannot be read counts as the holder: alive.
+       In API mode the stamp is the server's clock and the start time this machine's, so a process
+       that started up to 15 minutes after the stamp is still the holder (clock skew); a reused pid
+       inside that window counts as alive, the safe side (exit 3, never a second cycle). #>
     param([int]$ProcessId, [string]$Since)
     if ($ProcessId -le 0) { return $false }
     $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
@@ -1598,7 +1601,7 @@ function Test-TeamLockHolderAlive {
     if ($null -eq $taken) { return $true }
     $started = $null
     try { $started = $process.StartTime.ToUniversalTime() } catch { return $true }
-    return ($started -le $taken.AddMinutes(1))
+    return ($started -le $taken.AddMinutes(15))
 }
 
 # ---------------------------------------------------------------------------- names

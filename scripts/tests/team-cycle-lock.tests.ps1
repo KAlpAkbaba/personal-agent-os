@@ -200,6 +200,18 @@ Test-Case "the holder's pid, read from this machine's process table" {
     Assert-Equal -Expected $false -Actual (Test-TeamLockHolderAlive -ProcessId $PID -Since "2000-01-01T00:00:00Z") -Because "this process did not exist in 2000"
 }
 
+Test-Case "a live holder whose lock the server stamped before it started (clock skew up to 15 min) is still the holder" {
+    # In API mode acquired_at is the server's clock and StartTime is this machine's: a local clock
+    # ahead of the server makes the stamp look older than the process (inspector, 2026-10-07).
+    $started = (Get-Process -Id $PID).StartTime.ToUniversalTime()
+    foreach ($minutes in @(2, 10, 14)) {
+        $since = Get-TeamTimestamp -Now $started.AddMinutes(-$minutes)
+        Assert-Equal -Expected $true -Actual (Test-TeamLockHolderAlive -ProcessId $PID -Since $since) -Because "a stamp $minutes min before the start is skew, not a reused pid"
+    }
+    $since = Get-TeamTimestamp -Now $started.AddMinutes(-30)
+    Assert-Equal -Expected $false -Actual (Test-TeamLockHolderAlive -ProcessId $PID -Since $since) -Because "a process started 30 min after the lock is a reused pid"
+}
+
 Test-Case "the cycle asks the pid through the decision and takes the lock through Enter-TeamLockApi" {
     $text = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\team\cycle.ps1"), [System.Text.Encoding]::UTF8)
     Assert-True -Condition ($text -match 'Get-TeamLockDecision\s[^\r\n]*-ProcessAlive') -Because "the cycle gives the decision its process table"
