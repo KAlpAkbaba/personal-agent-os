@@ -27,13 +27,24 @@ worktree'sinden elle 0065'e indirdi.
    kilit) bitince silinir. Sarmalayıcı öldürülürse (`finally` çalışmaz; ajanların Bash zaman aşımı
    bunu sık üretir) kayıt kalır. Sonraki `database` run'ı, slotu tutarken ve komutundan ÖNCE:
    - sahibi ölü, komutu da bitmişse: o ağaçtan geri alır (`SEMA_KORUMA olu_kosu geri_alindi`),
-     olmazsa (ağaç silinmiş, revizyon bilinmiyor, ayarlar başka veritabanını gösteriyor) kilidi
-     yazar ve DURDU ile çıkar (6), komut başlamaz;
+     olmazsa (ağaç silinmiş, revizyon bilinmiyor) kilidi yazar ve DURDU ile çıkar (6), komut başlamaz;
+   - kayıttaki veritabanı sunucuda artık yoksa (karalama DB silinmiş): `SEMA_KORUMA olu_kosu
+     kayit_dusuruldu <db>`, kayıt silinir, kilit yok, komut koşar;
    - sarmalayıcı ölü ama komutu hâlâ çalışıyorsa: hiçbir şeye dokunmaz, komutun pid'ini söyleyen
      DURDU ile çıkar (6). O süreç bitince sonraki run geri alır.
    `ask` bu durumda sırayı değiştirmez (slot sarmalayıcıya aittir, öleni boşalır - ADR-0282 ve
    team-test-slots 6. vaka); yalnız uyarır. Engel `run`'da, komut veritabanına dokunmadan önce.
-5. Kayıt yoksa (alembic_version tablosu yok) geri alma yapılmaz: geri almak `downgrade base`, yani
+5. HANGİ veritabanı sorusunun tek kaynağı kayıttır (2026-10-07, üçüncü dönüş; önceki "ağacın ayarları
+   başka veritabanını gösteriyorsa reddet" kuralı kalktı). Geri almadaki yoklama, kayıttaki adı
+   `PAGENTOS_SLOT_GUARD_DB` ile alır ve ayarların sunucusunda `url.set(database=<ad>)` ile o veritabanını
+   okur; `alembic downgrade`, aynı adla türetilmiş `PAGENTOS_DATABASE_URL` komutun ortamında verilerek
+   koşar. Sonraki koşunun kendi URL'i/ayarı geri almayı asla yönlendirmez. Neden: ekibin alışkanlığı
+   karalama DB + Bash zaman aşımı; ölen karalama koşusunun kaydını URL'i ayarsız (ya da başka bir
+   karalamaya bakan) sonraki koşu buluyordu, eski kural sahte kilit yazıyor ve Danışman'a YANLIŞ
+   veritabanına downgrade öneriyordu (denetim 2026-10-07, ts-5d064c8bb385). Kilit gerektiğinde DURDU
+   satırı hedefi adıyla ve parolası gizli `PAGENTOS_DATABASE_URL=<url>` ile verilen downgrade komutuyla
+   yazar. Parolalı URL yalnız bellekte, alembic sürecinin ortamında durur; dosyaya ve satıra girmez.
+6. Kayıt yoksa (alembic_version tablosu yok) geri alma yapılmaz: geri almak `downgrade base`, yani
    her şeyi silmek olurdu. Kayıt okunamazsa (Postgres kapalı, uv yok) bu yüksek sesle söylenir ve koşu
    korumasız devam eder.
 
@@ -74,5 +85,11 @@ satırlarıyla (8322f909) çakışma ikisini yan yana tutarak çözüldü.
   arada slotsuz bir alembic ya da dev API'si koşarsa dev veritabanı hâlâ yeni baştadır.
 - Komutun kendi alt süreçleri (ör. pytest'in açtığı bir sunucu) kayıtta yok; yalnız doğrudan komutun
   pid'i izlenir. Sarmalayıcıyla birlikte süreç ağacı öldürülürse (taskkill /T) sorun yok.
+- Sunucu ve parola ağacın ayarlarından gelir; kayıt yalnız veritabanı ADINI tutar. Ölen koşu başka bir
+  Postgres sunucusundaysa (bugün tek dev yığını var) geri alma bu sunucuda aynı adı arar.
+- "Yok" kararı `postgres` bakım veritabanındaki `pg_database` sorgusuna dayanır; o veritabanına
+  bağlanılamazsa yoklama hata verir ve kilit yazılır (yanlış "düşürüldü" yerine yüksek sesli kilit).
+- Gerçek `pagentos` veritabanı testte hiç yazılmaz: ters yön vakası (9c) ikinci bir karalama DB'yi
+  paylaşılanın yerine koyar. Testler panoya not basmaz (PAGENTOS_TEAM_URL/TOKEN_FILE/SEAT silinir).
 - Testler Base/Head'i ağacın kendisinden türetir (`alembic heads`, başın Parent'ı); yeni göç
   girdiğinde test kendiliğinden yeni çifte geçer.
