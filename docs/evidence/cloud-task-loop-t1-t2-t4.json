@@ -1,0 +1,509 @@
+{
+  "schema": "cloud-task-loop-evidence/1",
+  "written_at": "2026-10-07T05:15:29Z",
+  "host_kind": "dev-stack (process companion = testin kendi alt süreci, sahibin PC'si; Postgres + Temporal dev yığını, geçici veritabanı pagentos_w_ctle)",
+  "evidence_class": "PROVEN_PROXY",
+  "companion": {
+    "mode": "process",
+    "registry": [
+      "{\"device_id\": \"d9af492b-bfc0-4878-8ffa-666ebc6ea9b1\", \"name\": \"bulut\", \"platform\": \"cloud\", \"aliases\": [\"bulut\"], \"status\": \"online\"}",
+      "{\"device_id\": \"38db961d-81a7-4ceb-ba59-c39f7137fec0\", \"name\": \"bulut\", \"platform\": \"cloud\", \"aliases\": [\"bulut\"], \"status\": \"online\"}",
+      "{\"device_id\": \"64a7b1a1-b3bf-416b-94eb-76ac821d7b3c\", \"name\": \"bulut\", \"platform\": \"cloud\", \"aliases\": [\"bulut\"], \"status\": \"online\"}",
+      "{\"device_id\": \"19a5e225-129e-4510-85d2-6df107a3402e\", \"name\": \"bulut\", \"platform\": \"cloud\", \"aliases\": [\"bulut\"], \"status\": \"online\"}",
+      "{\"device_id\": \"c1d568de-43a2-43aa-84a1-097a2dc1855c\", \"name\": \"bulut\", \"platform\": \"cloud\", \"aliases\": [\"bulut\"], \"status\": \"online\"}"
+    ]
+  },
+  "tasks": [
+    {
+      "task": "T1 [A]",
+      "goal": "bugünkü yapay zeka haberlerinden birini bul ve özetle",
+      "target_word": "bulutta",
+      "allowed_hosts": [
+        "www.trthaber.com"
+      ],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "planner_unavailable",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Planlayıcı yanıt vermedi (the model answered status 400).",
+      "rounds": 1,
+      "round_index": 1,
+      "planner_calls": 2,
+      "planner_model_calls": 1,
+      "model_usage": {
+        "calls_logged": 1,
+        "input_tokens": 1162,
+        "output_tokens": 117,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.00175,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "",
+      "last_site": "",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "owner_left_at_round": 0
+    },
+    {
+      "task": "T2 [A]",
+      "goal": "https://httpbin.org/forms/post adresindeki formu doldur ama gönderme: Customer name alanına Deneme Kisi, Telephone alanına 02120000000 yaz.",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "browser_unavailable",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Tarayıcıya ulaşamadım (browser_lifecycle_violation).",
+      "rounds": 0,
+      "round_index": 0,
+      "planner_calls": 0,
+      "planner_model_calls": 0,
+      "model_usage": {
+        "calls_logged": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "models": []
+      },
+      "cost_usd_estimate": 0.0,
+      "cost_basis": "no model call",
+      "last_observation_url": "",
+      "last_site": "",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [],
+      "allow_listed": true
+    },
+    {
+      "task": "T2 [A]",
+      "goal": "https://httpbin.org/forms/post adresindeki formu doldur ama gönderme: Customer name alanına Deneme Kisi, Telephone alanına 02120000000 yaz.",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "browser_unavailable",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Tarayıcıya ulaşamadım (browser_lifecycle_violation).",
+      "rounds": 0,
+      "round_index": 0,
+      "planner_calls": 0,
+      "planner_model_calls": 0,
+      "model_usage": {
+        "calls_logged": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "models": []
+      },
+      "cost_usd_estimate": 0.0,
+      "cost_basis": "no model call",
+      "last_observation_url": "",
+      "last_site": "",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [],
+      "allow_listed": false
+    },
+    {
+      "task": "T4 [A]",
+      "goal": "YouTube'da Barış Manço - Dönence aç",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "browser_unavailable",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Tarayıcıya ulaşamadım (browser_lifecycle_violation).",
+      "rounds": 0,
+      "round_index": 0,
+      "planner_calls": 0,
+      "planner_model_calls": 0,
+      "model_usage": {
+        "calls_logged": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "models": []
+      },
+      "cost_usd_estimate": 0.0,
+      "cost_basis": "no model call",
+      "last_observation_url": "",
+      "last_site": "",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [],
+      "playback": {}
+    },
+    {
+      "task": "T1 [B]",
+      "goal": "bugünkü yapay zeka haberlerinden birini bul ve özetle",
+      "target_word": "bulutta",
+      "allowed_hosts": [
+        "www.trthaber.com"
+      ],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "too_many_failed_rounds",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Art arda 3 adım tutmadı; durdum.",
+      "rounds": 3,
+      "round_index": 3,
+      "planner_calls": 3,
+      "planner_model_calls": 3,
+      "model_usage": {
+        "calls_logged": 3,
+        "input_tokens": 3548,
+        "output_tokens": 338,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.00524,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "",
+      "last_site": "",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "refused",
+          "detail": "url_not_from_owner_or_page",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 2,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "owner_left_at_round": 0
+    },
+    {
+      "task": "T2 [B]",
+      "goal": "https://httpbin.org/forms/post adresindeki formu doldur ama gönderme: Customer name alanına Deneme Kisi, Telephone alanına 02120000000 yaz.",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "too_many_failed_rounds",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Art arda 3 adım tutmadı; durdum.",
+      "rounds": 5,
+      "round_index": 5,
+      "planner_calls": 5,
+      "planner_model_calls": 5,
+      "model_usage": {
+        "calls_logged": 5,
+        "input_tokens": 6901,
+        "output_tokens": 598,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.00989,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "",
+      "last_site": "httpbin.org",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the address matches",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 2,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 3,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "verify_failed",
+          "detail": "no element with that name",
+          "verified": false,
+          "planner": "model"
+        },
+        {
+          "index": 4,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "allow_listed": true
+    },
+    {
+      "task": "T2 [B]",
+      "goal": "https://httpbin.org/forms/post adresindeki formu doldur ama gönderme: Customer name alanına Deneme Kisi, Telephone alanına 02120000000 yaz.",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "too_many_failed_rounds",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Art arda 3 adım tutmadı; durdum.",
+      "rounds": 5,
+      "round_index": 5,
+      "planner_calls": 5,
+      "planner_model_calls": 5,
+      "model_usage": {
+        "calls_logged": 5,
+        "input_tokens": 6894,
+        "output_tokens": 598,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.00988,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "",
+      "last_site": "httpbin.org",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the address matches",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 2,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 3,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "refused",
+          "detail": "not_on_owner_allow_list",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 4,
+          "site": "httpbin.org",
+          "action": "fill",
+          "element": "Customer name:",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "allow_listed": false
+    },
+    {
+      "task": "T4 [B]",
+      "goal": "YouTube'da Barış Manço - Dönence aç",
+      "target_word": "bulutta",
+      "allowed_hosts": [],
+      "target": "cloud",
+      "device_platform": "cloud",
+      "attended": false,
+      "status": "failed",
+      "outcome": "failed",
+      "failure": "too_many_failed_rounds",
+      "ask_owner_reason": "",
+      "bot_wall": false,
+      "message": "Art arda 3 adım tutmadı; durdum.",
+      "rounds": 5,
+      "round_index": 5,
+      "planner_calls": 5,
+      "planner_model_calls": 5,
+      "model_usage": {
+        "calls_logged": 5,
+        "input_tokens": 6661,
+        "output_tokens": 569,
+        "models": [
+          "claude-haiku-4-5-20251001"
+        ]
+      },
+      "cost_usd_estimate": 0.00951,
+      "cost_basis": "measured_tokens x list price (estimate)",
+      "last_observation_url": "",
+      "last_site": "youtube.com",
+      "last_page_kind": "",
+      "submit_seen": false,
+      "trail": [
+        {
+          "index": 0,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 1,
+          "site": "",
+          "action": "navigate",
+          "element": "",
+          "outcome": "acted",
+          "detail": "the address matches",
+          "verified": true,
+          "planner": "model"
+        },
+        {
+          "index": 2,
+          "site": "youtube.com",
+          "action": "click",
+          "element": "Ara",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 3,
+          "site": "youtube.com",
+          "action": "fill",
+          "element": "Ara",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        },
+        {
+          "index": 4,
+          "site": "youtube.com",
+          "action": "click",
+          "element": "Ara",
+          "outcome": "refused",
+          "detail": "no_expectation",
+          "verified": null,
+          "planner": "model"
+        }
+      ],
+      "playback": {}
+    }
+  ],
+  "total_model_calls": 19,
+  "total_cost_usd_estimate": 0.03627,
+  "cleanup": {
+    "web_tasks_active_after": 0,
+    "owner_allow_list_sites_after": 0,
+    "test_sites_left_on_list": 0,
+    "runs": 5
+  },
+  "findings": [
+    "[A] = varsayılan ayar (ucuz model claude-haiku-4-5-20251001, 'capable' model claude-sonnet-5), üç görev tek yığında sırayla. [B] = aynı yığın ama PAGENTOS_EXECUTIVE_PLANNER_MODEL=claude-haiku-4-5-20251001 (capable da haiku) ve her görev KENDİ yığınında (yeni yardımcı); B, A'daki iki kusurun arkasını görmek için koşuldu.",
+    "Kusur 1 (app/webtask/model_planner.py:106): istek 'temperature: 0' taşıyor; claude-sonnet-5 bunu 400 ile reddediyor ('`temperature` is deprecated for this model', 2026-10-07 doğrudan denendi; temperature'sız aynı istek 200). Her 'capable' tur düşer: [A] T1 ilk başarısız adımdan sonra planner_unavailable.",
+    "Kusur 2 (app/webtask/device_port.py / workflow.py): görev biterken browser.session_close hiç gönderilmiyor. Bulut yardımcısının research profili ilk görevin oturumunda kalıyor; sonraki her görev 0. turda browser_lifecycle_violation ile düşüyor ([A] T2, T2 liste dışı, T4).",
+    "Kusur 3 (app/webtask/planner.py STEP_TOOL + gate.py:398): expect_kind araç şemasında zorunlu değil, kapı beklentisiz her eylemi no_expectation ile reddediyor. Ucuz model adımların yaklaşık yarısında beklenti yazmıyor; 3 başarısız tur -> too_many_failed_rounds ([B] dört görevin dördü).",
+    "Gözlem: [B] T1'de modelin kendi bulduğu haber adresine gidişi url_not_from_owner_or_page ile reddedildi; hedefte site adı yoksa T1 hiçbir habere gidemeyebilir. [B] liste dışı T2'de kapı not_on_owner_allow_list ile reddetti (Türkçe mesaj) ama red terminal değil, döngü sürdü ve son söz 'Art arda 3 adım tutmadı' oldu.",
+    "Sahip başında değil (d): [A] ve [B] T1'de sahip oturumu 0. turda kapatıldı (sonraki istek 401), görev attended=False ile sürdü ([B]: 3 tur), abandoned/owner_absent ile durmadı.",
+    "Bu koşularda T1 'done' DEĞİL: başarı sayılmaz. Neden bot duvarı değil, yukarıdaki üç kusur. T2 dolu-gönderilmemiş ve T4 currentTime ölçülemedi (görev done olmadı)."
+  ],
+  "owner_trial": "READY_FOR_OWNER (cloud-task-loop-voice kartı ve yayın sonrası): söyleyeceğin cümle \"Bulutta bugünkü yapay zeka haberlerinden birini bul ve özetle\"; makine: herhangi biri (iş bulutta çalışır); göreceğin: üç cümlelik Türkçe özet ve kaynağı. Sonra \"bulutta şu formu doldur ama gönderme\" için ÖNCE Onay Merkezi'nden formun sitesini izin listesine ekle; liste dışındaki sitede bulut yazmaz, Türkçe söyler."
+}
