@@ -235,6 +235,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\team-tick.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-area.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-integrate.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\team-migration-chain.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-board.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-release.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\team-resume.tests.ps1 && ^
