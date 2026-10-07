@@ -261,6 +261,31 @@ Test-Case "8. every SERIAL_TAIL id of tests/conftest.py exists and is marked ser
     foreach ($id in $ids) { Assert-True ($rest -notcontains $id) "$id is left out of the parallel part" }
 }
 
+Test-Case "9. under xdist the LONG_FIRST tests of tests/conftest.py are collected first (they start at once, not mid-run); a serial run keeps its order" {
+    # 2026-10-06: one corpus test took 768 s and started mid-run, so 6, 8 and 12 workers all
+    # ended after ~21 minutes. xdist hands out tests in collection order.
+    $uv = (Get-Command uv -ErrorAction SilentlyContinue)
+    $uvPath = if ($uv) { $uv.Source } else { Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe" }
+    $savedWorker = $env:PYTEST_XDIST_WORKER
+    Push-Location $apiRoot
+    try {
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        $ids = @(& $uvPath run python -c "import tests.conftest as c; print('\n'.join(c.LONG_FIRST))" 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        Assert-True ($ids.Count -ge 1) "tests/conftest.py has no LONG_FIRST"
+        # Their files and one short file collected before them alphabetically.
+        $files = @("tests/unit/test_allowlist_editor.py") + @($ids | ForEach-Object { ($_ -split '::')[0] } | Sort-Object -Unique)
+        $env:PYTEST_XDIST_WORKER = $null
+        $serial = @(& $uvPath run pytest @files --collect-only -q -p no:cacheprovider 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
+        $env:PYTEST_XDIST_WORKER = "gw0"
+        $worker = @(& $uvPath run pytest @files --collect-only -q -p no:cacheprovider 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
+        $ErrorActionPreference = $prev
+    } finally { $env:PYTEST_XDIST_WORKER = $savedWorker; Pop-Location }
+    foreach ($id in $ids) { Assert-True ($serial -contains $id) "$id is not a test any more (renamed or deleted)" }
+    Assert-Equal ($ids -join "|") (($worker | Select-Object -First $ids.Count) -join "|") "in an xdist worker the LONG_FIRST tests come first, in their order"
+    Assert-Equal (($serial | Sort-Object) -join "|") (($worker | Sort-Object) -join "|") "the same tests either way"
+    Assert-True ($serial[0] -like "tests/unit/test_allowlist_editor.py::*") ("a serial run keeps the collection order: " + $serial[0])
+}
+
 Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host ("gate-unit-parallel: {0} passed, {1} failed" -f $script:Passes, $script:Failures)

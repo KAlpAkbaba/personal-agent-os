@@ -115,7 +115,35 @@ def pytest_itemcollected(item):
         item.add_marker(pytest.mark.serial_tail)
 
 
+#: The longest unit tests, longest first (seconds measured in the gate's run of 2026-10-06).
+#: xdist hands tests out in collection order, so in its workers these are moved to the front:
+#: the 768 s corpus test started mid-run and the step ended after ~21 minutes with 6, 8 or 12
+#: workers alike. A serial run keeps its order.
+LONG_FIRST = (
+    # 768 s
+    "tests/unit/test_owner_utterance_corpus.py::test_corpus_has_no_forbidden_side_effect_anywhere",
+    # 84 s
+    "tests/unit/test_stt_utterance_corpus.py::test_stt_corpus_has_no_wrong_device_action",
+    # 83 s
+    "tests/unit/test_stt_corpus_layer2.py::test_the_no_engine_run_is_the_known_gaps_case_for_case",
+    # 51 s
+    "tests/unit/test_stt_corpus_layer2.py::"
+    "test_the_embedder_was_asked_for_every_case_no_rule_matched",
+)
+
+
+def _long_first(items):
+    rank = {nodeid: index for index, nodeid in enumerate(LONG_FIRST)}
+    first = sorted(
+        (item for item in items if item.nodeid in rank), key=lambda item: rank[item.nodeid]
+    )
+    if first:
+        items[:] = first + [item for item in items if item.nodeid not in rank]
+
+
 def pytest_collection_modifyitems(config, items):
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        _long_first(items)
     shard = parse_shard(os.environ.get(SHARD_ENV))
     if shard is None:
         return
