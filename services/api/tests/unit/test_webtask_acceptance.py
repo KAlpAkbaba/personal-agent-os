@@ -1454,3 +1454,49 @@ def test_a_cloud_task_writes_on_a_site_the_owner_listed(owner_list: list[str]) -
     assert state.status == STATUS_DONE
     assert outcomes(state) == [ROUND_ACTED, "done"]
     assert browser.fields == {"Ad": "Kadir Akbaba"}
+
+
+# ------------------------------------------------------------------ a label's punctuation
+#
+# Live run 2026-10-07 (httpbin's form): the field is labelled "Customer name:", the model
+# expected "Customer name", and a filled field was judged "no element with that name"
+# three times over - the task ended loop_detected with the value already typed.
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [("Customer name:", "Customer name"), ("E-posta *", "E-posta"), ("Ad", "Ad:")],
+)
+def test_a_label_is_matched_without_its_trailing_punctuation(label: str, expected: str) -> None:
+    from app.webtask import verify
+    from app.webtask.types import Element, Observation
+
+    def seen(state: tuple[str, ...]) -> Observation:
+        return Observation(
+            observation_id="o",
+            url="https://httpbin.org/forms/post",
+            title="Form",
+            page_kind="ok",
+            elements=(Element(ref="e1", role="textbox", name=label, state=state),),
+            text="",
+        )
+
+    expectation = Expectation(EXPECT_FIELD_HAS_VALUE, expected, "textbox")
+    assert verify.check(expectation, seen(()), seen(("has_value",))).ok is True
+    assert verify.check(expectation, seen(()), seen(())).ok is False
+
+
+def test_a_different_name_is_still_not_the_element() -> None:
+    from app.webtask import verify
+    from app.webtask.types import Element, Observation
+
+    after = Observation(
+        observation_id="o",
+        url="https://httpbin.org/forms/post",
+        title="Form",
+        page_kind="ok",
+        elements=(Element(ref="e1", role="textbox", name="Customer name:", state=("has_value",)),),
+        text="",
+    )
+    expectation = Expectation(EXPECT_FIELD_HAS_VALUE, "Customer", "textbox")
+    assert verify.check(expectation, after, after).ok is False

@@ -527,3 +527,11 @@ def test_the_loop_counts_the_model_calls_of_a_round_whose_planner_failed() -> No
     assert state.status == STATUS_FAILED and state.failure == FAIL_PLANNER
     assert state.planner_model_calls == 2
     assert browser.done == []
+
+
+def test_the_prompt_prefers_a_sites_search_address_to_its_search_box() -> None:
+    """Live run 2026-10-07: in the cloud, typing into YouTube's search box is a write on a
+    site off the owner's list, and the task ended there. Opening the search address is a
+    navigation, which the cloud may do anywhere."""
+    system = build_prompt(request())["system"]
+    assert "search address" in system
