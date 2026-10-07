@@ -71,8 +71,9 @@ audio_router = APIRouter(prefix="/v1/alarms", tags=["alarms"])
 #: The farthest an alarm may be set (test-team finding: 9999-12-31 was taken, and in a zone
 #: west of UTC it overflowed into a 500). A year and a day keeps "next year, same day" legal.
 MAX_AHEAD = timedelta(days=366)
-#: ``GET /v1/alarms?limit=`` bounds; the service clamped to 200 silently before.
-MAX_LIST_LIMIT = 200
+#: ``GET /v1/alarms?limit=`` bounds; the service clamped to 200 silently before. The same
+#: number bounds the open alarms (``MAX_OPEN_ALARMS``), so the default page holds them all.
+MAX_LIST_LIMIT = alarms_service.MAX_OPEN_ALARMS
 #: A stop is the end of a wake-up in progress; an alarm still waiting is turned off by it
 #: (``test_alarms_routes.py`` pins that). Anything else - snoozed, cancelled, completed,
 #: failed - is refused in Turkish instead of answering "Alarmı kapattım" over it.
@@ -81,6 +82,10 @@ _STOPPABLE = ALARM_ACTIVE_STATES | {STATE_SCHEDULED, STATE_ARMED, STATE_STOPPED}
 _CONTROL_TR = "Alarmın yazısında okunamayan bir karakter var; düz yazıyla söyler misin?"
 _PAST_TR = "Bu tarih ve saat geçmişte kaldı; ileri bir zaman söyler misin?"
 _TOO_FAR_TR = "Bir yıldan daha ileriye alarm kuramam; bir yıl içinde bir gün söyler misin?"
+_TOO_MANY_TR = (
+    f"Şu an {alarms_service.MAX_OPEN_ALARMS} alarm bekliyor; daha fazlasını kurarsam "
+    "listede görünmez. Önce birkaçını iptal eder misin?"
+)
 _NOT_RINGING_TR = (
     "Bu alarm şu an çalmıyor; kapatacak bir şey yok. Ertelenmiş bir alarmı kaldırmak için iptal et."
 )
@@ -217,7 +222,10 @@ async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, 
             )
             return alarms_service.alarm_dict(alarm)  # type: ignore[return-value]
 
-    payload = await asyncio.to_thread(write)
+    try:
+        payload = await asyncio.to_thread(write)
+    except alarms_service.AlarmLimitReached as exc:
+        raise _refuse(_TOO_MANY_TR, 409, "lifecycle_violation") from exc
     return {
         **payload,
         "speech": alarm_speech.alarm_created_speech(
@@ -232,7 +240,7 @@ async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, 
 
 @router.get("")
 async def list_alarms(
-    request: Request, include_terminal: bool = False, limit: int = 100
+    request: Request, include_terminal: bool = False, limit: int = MAX_LIST_LIMIT
 ) -> dict[str, Any]:
     if not 1 <= limit <= MAX_LIST_LIMIT:
         raise _refuse(
@@ -241,14 +249,18 @@ async def list_alarms(
         )
     artifacts = _artifacts(request)
 
-    def load() -> list[dict[str, Any]]:
+    def load() -> dict[str, Any]:
         with artifacts.session() as session:
             rows = alarms_service.list_alarms(
                 session, include_terminal=include_terminal, limit=limit
             )
-            return [alarms_service.alarm_dict(r) for r in rows]
+            # ``total`` is the open alarms, so a page shorter than it says so itself.
+            return {
+                "alarms": [alarms_service.alarm_dict(r) for r in rows],
+                "total": alarms_service.count_open_alarms(session),
+            }
 
-    return {"alarms": await asyncio.to_thread(load)}
+    return await asyncio.to_thread(load)
 
 
 # Declared BEFORE the /{alarm_id} routes for the same reason "wake-song" is: "history" is

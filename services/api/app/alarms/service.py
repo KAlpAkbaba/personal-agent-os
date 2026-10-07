@@ -37,7 +37,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.alarms import speech as alarm_speech
@@ -152,6 +152,22 @@ class AlarmNotFoundError(ValueError):
 
 class InvalidAlarmRequest(ValueError):
     """A create/snooze request this service refuses rather than guesses at."""
+
+
+class AlarmLimitReached(InvalidAlarmRequest):
+    """Creating one more would put an open alarm past what every reader of the list sees."""
+
+
+#: The most alarms that may be open (not terminal) at once. Every reader - the list page,
+#: the tick, ``next_alarm``, ``alarms_ringing`` - reads at most this many rows ordered by
+#: ``scheduled_for``; test round t-w10070808 left 767 open on staging and an alarm created
+#: after them answered 201 and was neither listed nor ever armed. Refusing the one past the
+#: bound keeps "201" meaning "it is in the list and it will ring".
+MAX_OPEN_ALARMS = 200
+
+#: Serialises the count-then-insert of ``create_alarm`` on PostgreSQL, so concurrent creates
+#: at the bound cannot both see room (an arbitrary, fixed advisory-lock key).
+_OPEN_BOUND_LOCK_KEY = 0x57414B45
 
 
 # ---------------------------------------------------------------- ledger + uistate
@@ -360,6 +376,7 @@ def create_alarm(
     engine's own idempotency and ledger rows apply to it unchanged.
     """
     source, resolved = _media_source(media, wake_song=get_wake_song(session))
+    _require_open_room(session)
     alarm = WakeAlarm(
         id=uuid.uuid4(),
         timezone=when.timezone or DEFAULT_TIMEZONE,
@@ -403,6 +420,26 @@ def create_alarm(
         },
     )
     return alarm
+
+
+def count_open_alarms(session: Session) -> int:
+    return int(
+        session.execute(
+            select(func.count())
+            .select_from(WakeAlarm)
+            .where(WakeAlarm.state.not_in(tuple(sorted(ALARM_TERMINAL_STATES))))
+        ).scalar_one()
+    )
+
+
+def _require_open_room(session: Session) -> None:
+    """Refuse the alarm that would be open past ``MAX_OPEN_ALARMS``. On PostgreSQL the
+    transaction-scoped lock is held until ``create_alarm``'s first commit, i.e. until the
+    new row is visible to the next creator's count."""
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _OPEN_BOUND_LOCK_KEY})
+    if count_open_alarms(session) >= MAX_OPEN_ALARMS:
+        raise AlarmLimitReached(f"already {MAX_OPEN_ALARMS} open alarms")
 
 
 def _create_trigger_routine(
@@ -461,7 +498,7 @@ def list_alarms(
         stmt = stmt.where(WakeAlarm.state == state)
     elif not include_terminal:
         stmt = stmt.where(WakeAlarm.state.not_in(tuple(sorted(ALARM_TERMINAL_STATES))))
-    stmt = stmt.order_by(WakeAlarm.scheduled_for.asc()).limit(max(1, min(limit, 200)))
+    stmt = stmt.order_by(WakeAlarm.scheduled_for.asc()).limit(max(1, min(limit, MAX_OPEN_ALARMS)))
     return list(session.execute(stmt).scalars().all())
 
 
@@ -1154,12 +1191,15 @@ def alarm_dict(alarm: WakeAlarm) -> dict[str, Any]:
 __all__ = [
     "ARM_LEAD_S",
     "MAX_LATE_FIRE_S",
+    "MAX_OPEN_ALARMS",
+    "AlarmLimitReached",
     "AlarmNotFoundError",
     "FireDecision",
     "InvalidAlarmRequest",
     "TickResult",
     "alarm_dict",
     "alarms_ringing",
+    "count_open_alarms",
     "cancel_alarm",
     "complete_alarm",
     "create_alarm",
