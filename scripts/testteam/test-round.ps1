@@ -43,6 +43,12 @@
 
     Staging only: run-scenario.ps1 refuses any other host, and the tester's role file says so.
 
+    The model of every run is the cycle's choice (Get-TeamRunModel, ADR-0214 addendum 7): the
+    role's model, or - when team/limits.json or the cycle's status 'limits' has it limited - the
+    next open one down the chain ('model düşürüldü'). A run that returns the usage limit is
+    started once more on the next model; with every model limited the round stops in one line
+    (team/plans/test-round-model-fallback-adr.md; t-r10070710, 2026-10-07).
+
     The staging session (t-d20261006, 2026-10-06: the testers read an owner.json two days old -
     the 19:38 seed had written its file into the Claude desktop's redirected LOCALAPPDATA - and
     every step answered 401; two testers then re-seeded and revoked each other's sessions): the
@@ -89,6 +95,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamQueue.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamRun.ps1")
+. (Join-Path $repoRoot "scripts\lib\TeamIntegrate.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamTestSlots.ps1")
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamFeed.ps1")
@@ -149,12 +156,76 @@ function Get-RoleModel {
     return $model
 }
 
+function Get-ModelFallback {
+    # team/models.json 'fallback' (default on): whether a limited model may be lowered, as in the cycle.
+    $path = Join-Path $TeamRoot "models.json"
+    if (Test-Path -LiteralPath $path) {
+        try { $value = Get-TeamProperty -InputObject (Read-TeamJson -Path $path) -Name "fallback"; if ($value -is [bool]) { return $value } } catch { }
+    }
+    return $true
+}
+
+# The limits the cycle knows (ADR-0214 addendum 7): team/limits.json, and the live status'
+# 'limits' (team/status.json, or the Cloud Core's in API mode). t-r10070710 (2026-10-07): the
+# plan run was started on Fable while the cycle had it limited until 10-12, and the round died.
+$limitedModels = Read-TeamLimitedModels -Path (Join-Path $TeamRoot "limits.json")
+$script:saidLowered = @{}
+
+function Add-StatusLimits {
+    $status = $null
+    try {
+        if ($null -ne $apiStore) { $status = Invoke-TeamApi -Store $apiStore -Method "GET" -Path "/v1/team/queue/status" }
+        elseif (Test-Path -LiteralPath (Join-Path $TeamRoot "status.json")) { $status = Read-TeamJson -Path (Join-Path $TeamRoot "status.json") }
+    }
+    catch { Write-Host "  döngü durumu okunamadı, limitler yalnız limits.json'dan: $($_.Exception.Message -replace '\s+', ' ')"; return }
+    $limits = Get-TeamProperty -InputObject $status -Name "limits"
+    if ($limits -isnot [System.Management.Automation.PSCustomObject]) { return }
+    $chain = @(Get-TeamModelChain)
+    $closes = [ordered]@{ fable = @($chain[0]); all = $chain }
+    foreach ($name in $closes.Keys) {
+        $entry = Get-TeamProperty -InputObject $limits -Name $name
+        if ([string](Get-TeamProperty -InputObject $entry -Name "state" -Default "") -ne "limited") { continue }
+        # Only a dated limit: an undated one in a status the cycle left long ago would bar the
+        # model for ever. The run then says the limit itself and is retried once.
+        $until = [string](Get-TeamProperty -InputObject $entry -Name "resets_at" -Default "")
+        if (-not $until) { continue }
+        foreach ($id in $closes[$name]) {
+            if (-not (Test-TeamModelLimited -Limited $script:limitedModels -Model $id)) { $script:limitedModels[$id] = [pscustomobject]@{ until = $until } }
+        }
+    }
+}
+
+function Select-RoleModel {
+    # The model a run of this role starts on now, as the cycle chooses it (Get-TeamRunModel): the
+    # configured one, or the next open one down the chain. Model is $null: every model is limited.
+    # A lowering is said once a round, here and from the test lead's seat.
+    param([string]$Role)
+    $configured = Get-RoleModel -Role $Role
+    $pick = Get-TeamRunModel -Configured $configured -Limited $script:limitedModels -Fallback (Get-ModelFallback)
+    if ($null -ne $pick.Model -and $pick.Lowered) {
+        $line = "model düşürüldü: $configured -> $($pick.Model) (limit, $Role)"
+        if (-not $script:saidLowered.ContainsKey($line)) {
+            $script:saidLowered[$line] = $true
+            Write-Host "  $line"
+            Send-Note -Seat "test-lead" -Text "Test PY: $line"
+        }
+    }
+    return $pick
+}
+
+function Format-NoModel {
+    param($Pick, [string]$Role)
+    $text = "modellerin hepsi limitte ($($Role): $(@($Pick.Candidates) -join ', '))"
+    if ($Pick.ResetsAt) { $text += "; en erken sıfırlanma $($Pick.ResetsAt)" }
+    return $text
+}
+
 function Start-RoleProcess {
-    param([string]$Role, [string]$Prompt, [string]$Seat)
+    param([string]$Role, [string]$Prompt, [string]$Seat, [string]$Model)
     # .claude/agents/ is the installed copy; scripts/testteam/roles/ is the source it is copied from.
     $roleFile = Join-Path $repoRoot ".claude\agents\$Role.md"
     if (-not (Test-Path -LiteralPath $roleFile)) { $roleFile = Join-Path $PSScriptRoot "roles\$Role.md" }
-    $arguments = Get-TeamRunArguments -RoleFile $roleFile -Model (Get-RoleModel -Role $Role) -PrefixArguments $ClaudePrefixArguments
+    $arguments = Get-TeamRunArguments -RoleFile $roleFile -Model $Model -PrefixArguments $ClaudePrefixArguments
     $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = "test-team" }
     return (Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $Prompt -WorkingDirectory $repoRoot -Environment $environment)
 }
@@ -254,22 +325,56 @@ if ($Retest) {
 
 # ------------------------------------------------------------------------------ the plan
 
+$planRun = $false
 if (-not $PlanPath) {
     $PlanPath = Join-Path $roundDir "plan.json"
-    if (-not (Test-Path -LiteralPath $PlanPath)) {
-        $prompt = @(
-            "# Test round $Round - the test plan"
-            ""
-            "- plan_file: $PlanPath"
-            "- scenarios: scripts/testteam/scenarios/"
-            "- staging_api: http://127.0.0.1:28001"
-            ""
-            "Write the plan of this round as your role file says, and nothing else."
-        ) -join "`n"
-        $run = Start-RoleProcess -Role "test-lead" -Prompt $prompt -Seat "test-lead"
+    $planRun = -not (Test-Path -LiteralPath $PlanPath)
+}
+
+# Every model a role of this round may use is limited: nothing is started - no plan run, no
+# tester, no seat shown working - and the round says so in one line.
+Add-StatusLimits
+foreach ($role in @($(if ($planRun) { "test-lead" }), "tester") | Where-Object { $_ }) {
+    $pick = Get-TeamRunModel -Configured (Get-RoleModel -Role $role) -Limited $limitedModels -Fallback (Get-ModelFallback)
+    if ($null -eq $pick.Model) {
+        $why = Format-NoModel -Pick $pick -Role $role
+        Write-Host "TUR BAŞLAMADI: $why; Test PY ve test çalışanı başlatılmadı"
+        Send-Note -Seat "test-lead" -Text "Test PY: tur $Round başlamadı - $why."
+        exit 1
+    }
+}
+
+if ($planRun) {
+    $prompt = @(
+        "# Test round $Round - the test plan"
+        ""
+        "- plan_file: $PlanPath"
+        "- scenarios: scripts/testteam/scenarios/"
+        "- staging_api: http://127.0.0.1:28001"
+        ""
+        "Write the plan of this round as your role file says, and nothing else."
+    ) -join "`n"
+    # A run that comes back with the usage limit (t-r10070710: 'model_requires_usage_credits')
+    # closes its model, and the plan is asked ONCE more on the next open model.
+    $limitSaid = ""
+    $planLog = Join-Path $roundDir "test-lead-plan.log"
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $pick = Select-RoleModel -Role "test-lead"
+        if ($null -eq $pick.Model) { $limitSaid = Format-NoModel -Pick $pick -Role "test-lead"; break }
+        $run = Start-RoleProcess -Role "test-lead" -Prompt $prompt -Seat "test-lead" -Model $pick.Model
         $done = Wait-TeamRun -Run $run -Deadline ([datetime]::UtcNow.AddMinutes($RunMinutes))
-        [System.IO.File]::WriteAllText((Join-Path $roundDir "test-lead-plan.log"), [string]$done.StdOut, (New-Object System.Text.UTF8Encoding($false)))
-        if (-not (Test-Path -LiteralPath $PlanPath)) { Write-Host "Test PY plan yazmadı ($PlanPath); tur başlamadı"; exit 1 }
+        [System.IO.File]::AppendAllText($planLog, [string]$done.StdOut, (New-Object System.Text.UTF8Encoding($false)))
+        if (Test-Path -LiteralPath $PlanPath) { break }
+        $result = Read-TeamRunResult -StdOut ([string]$done.StdOut) -ExitCode ([int]$done.ExitCode) -StdErr ([string]$done.StdErr) -Model $pick.Model
+        if (-not $result.UsageLimited) { break }
+        $closed = @(Set-TeamModelClosed -Limited $limitedModels -Result $result -RunModel $pick.Model)
+        $limitSaid = "kullanım limiti: $($pick.Model) ($($result.Why); kapandı: $($closed -join ', '))"
+        Write-Host "  Test PY koşusu $limitSaid"
+    }
+    if (-not (Test-Path -LiteralPath $PlanPath)) {
+        Write-Host ("Test PY plan yazmadı ($PlanPath); tur başlamadı" + $(if ($limitSaid) { " - $limitSaid" } else { "" }))
+        if ($limitSaid) { Send-Note -Seat "test-lead" -Text "Test PY: tur $Round başlamadı - $limitSaid." }
+        exit 1
     }
 }
 $plan = Read-TeamJson -Path $PlanPath
@@ -352,16 +457,30 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         $pending.Clear()
         break
     }
+    # The model the next tester starts on, measured now: a limit a run met a moment ago counts.
+    $testerModel = $null
+    if ($pending.Count -gt 0) {
+        $testerPick = Select-RoleModel -Role "tester"
+        $testerModel = $testerPick.Model
+        if ($null -eq $testerModel -and $inFlight.Count -eq 0) {
+            $why = Format-NoModel -Pick $testerPick -Role "tester"
+            Write-Host "TUR DURDU: $why; kalan $($pending.Count) kart planned kaldı ($(@($pending.ToArray() | ForEach-Object { $_.id }) -join ', '))"
+            Send-Note -Seat "test-lead" -Text "Test PY: tur $Round durdu - $why. Kalan $($pending.Count) iş başlatılmadı."
+            $pending.Clear()
+            break
+        }
+    }
     $busy = @($inFlight | ForEach-Object { $_.Card.tester })
     $waiting = $pending.Count
-    for ($i = 0; $i -lt $waiting -and $inFlight.Count -lt $cap.Cap; $i++) {
+    for ($i = 0; $i -lt $waiting -and $inFlight.Count -lt $cap.Cap -and $null -ne $testerModel; $i++) {
         $card = $pending.Dequeue()
         if ($busy -contains $card.tester) { $pending.Enqueue($card); continue }
         $resultFile = Join-Path $roundDir "$($card.id).result.json"
         Set-TestTeamCardState -Card $card -To "running"
         Write-Json -Path $cardsPath -Document $document
-        $run = Start-RoleProcess -Role "tester" -Prompt (New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round) -Seat $card.tester
-        [void]$inFlight.Add([pscustomobject]@{ Card = $card; Run = $run; ResultFile = $resultFile; Deadline = [datetime]::UtcNow.AddMinutes($RunMinutes) })
+        $prompt = New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round
+        $run = Start-RoleProcess -Role "tester" -Prompt $prompt -Seat $card.tester -Model $testerModel
+        [void]$inFlight.Add([pscustomobject]@{ Card = $card; Run = $run; ResultFile = $resultFile; Deadline = [datetime]::UtcNow.AddMinutes($RunMinutes); Model = $testerModel; Attempt = 1; Prompt = $prompt })
         $busy += $card.tester
         Write-Host "  $($card.tester) <- $($card.id) ($($card.family))"
         # The Ofis' Test odası (officeTestRoom.tsx) reads "iş: <job>" and "sonuç: <state> - <job> - ...".
@@ -373,7 +492,31 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         $inFlight.Remove($entry)
         $finishedSince = $true
         $done = Wait-TeamRun -Run $entry.Run -Deadline $entry.Deadline
-        [System.IO.File]::WriteAllText((Join-Path $roundDir "$($entry.Card.id).log"), [string]$done.StdOut, (New-Object System.Text.UTF8Encoding($false)))
+        [System.IO.File]::AppendAllText((Join-Path $roundDir "$($entry.Card.id).log"), [string]$done.StdOut, (New-Object System.Text.UTF8Encoding($false)))
+        if (-not (Test-Path -LiteralPath $entry.ResultFile)) {
+            # The usage limit, not the job: the model is closed for this round and the same job is
+            # started ONCE more on the next open model; with none, the seat is told the job ended.
+            $limit = Read-TeamRunResult -StdOut ([string]$done.StdOut) -ExitCode ([int]$done.ExitCode) -StdErr ([string]$done.StdErr) -Model $entry.Model
+            if ($limit.UsageLimited) {
+                $closed = @(Set-TeamModelClosed -Limited $limitedModels -Result $limit -RunModel $entry.Model)
+                Write-Host "  $($entry.Card.tester) -> $($entry.Card.id): kullanım limiti $($entry.Model) ($($limit.Why); kapandı: $($closed -join ', '))"
+                $retry = $null
+                if ($entry.Attempt -lt 2) { $retry = (Select-RoleModel -Role "tester").Model }
+                if ($null -ne $retry) {
+                    $run = Start-RoleProcess -Role "tester" -Prompt $entry.Prompt -Seat $entry.Card.tester -Model $retry
+                    [void]$inFlight.Add([pscustomobject]@{ Card = $entry.Card; Run = $run; ResultFile = $entry.ResultFile; Deadline = [datetime]::UtcNow.AddMinutes($RunMinutes); Model = $retry; Attempt = $entry.Attempt + 1; Prompt = $entry.Prompt })
+                    Write-Host "  $($entry.Card.tester) <- $($entry.Card.id) yeniden, $retry ile"
+                    continue
+                }
+                $entry.Card.state = "environment"
+                Set-TeamProperty -InputObject $entry.Card -Name "environment" -Value "model limiti: $($entry.Model), $($entry.Attempt). deneme; iş staging'e ulaşmadı"
+                Write-Json -Path $cardsPath -Document $document
+                Write-Host "  $($entry.Card.tester) -> $($entry.Card.id): model limiti; iletilmedi"
+                # 'error', not 'environment': the Ofis' Test odası ends a seat's job only on passed|failed|broke|error.
+                Send-Note -Seat $entry.Card.tester -Text ("sonuç: error - {0} ({1}) - model limiti, iletilmedi" -f $entry.Card.family, $entry.Card.id)
+                continue
+            }
+        }
         $state = "failed"
         $result = $null
         if (Test-Path -LiteralPath $entry.ResultFile) {
