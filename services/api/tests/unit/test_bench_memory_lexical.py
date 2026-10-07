@@ -228,7 +228,7 @@ def test_decide_trgm_when_better_nothing_lost_and_fast(bench: Any) -> None:
     out = bench.decide_default(like, trgm)
     assert out["default"] == "trgm"
     assert out["lost_in_trgm"] == []
-    assert out["rule"] == "trgm"
+    assert out["outcome"] == "trgm"
 
 
 def test_decide_like_when_a_case_is_lost_and_not_accepted(bench: Any) -> None:
@@ -236,11 +236,11 @@ def test_decide_like_when_a_case_is_lost_and_not_accepted(bench: Any) -> None:
     trgm = _mode(bench, "trgm", {"a": 4, "b": 1, "c": 2}, 12.0)
     out = bench.decide_default(like, trgm)
     assert out["default"] == "like"
-    assert out["lost_in_trgm"] == ["a"]
-    assert out["rule"] == "lost"
+    assert _ids(out) == ["a"]
+    assert out["outcome"] == "lost"
     accepted = bench.decide_default(like, trgm, accepted_lost={"a": "isim tuzağı, kabul"})
     assert accepted["default"] == "trgm"
-    assert accepted["rule"] == "trgm"
+    assert accepted["outcome"] == "trgm_with_accepted_losses"
     assert accepted["accepted_lost"] == {"a": "isim tuzağı, kabul"}
 
 
@@ -249,7 +249,7 @@ def test_decide_like_when_p95_is_51_ms_slower(bench: Any) -> None:
     trgm = _mode(bench, "trgm", {"a": 1, "b": 1}, 61.0)
     out = bench.decide_default(like, trgm)
     assert out["default"] == "like"
-    assert out["rule"] == "slow"
+    assert out["outcome"] == "slow"
     at_limit = bench.decide_default(like, _mode(bench, "trgm", {"a": 1, "b": 1}, 60.0))
     assert at_limit["default"] == "trgm"
 
@@ -259,7 +259,7 @@ def test_decide_like_when_top3_is_only_equal(bench: Any) -> None:
     trgm = _mode(bench, "trgm", {"a": 2, "b": 1}, 10.0)
     out = bench.decide_default(like, trgm)
     assert out["default"] == "like"
-    assert out["rule"] == "not_better"
+    assert out["outcome"] == "not_better"
 
 
 def test_the_four_outcomes_are_four_different_reasons(bench: Any) -> None:
@@ -270,7 +270,7 @@ def test_the_four_outcomes_are_four_different_reasons(bench: Any) -> None:
         bench.decide_default(like, _mode(bench, "trgm", {"a": 1, "b": 1, "c": 1}, 99.0)),
         bench.decide_default(like, _mode(bench, "trgm", {"a": 1, "b": 5, "c": 5}, 10.0)),
     ]
-    assert [o["rule"] for o in outcomes] == ["trgm", "lost", "slow", "not_better"]
+    assert [o["outcome"] for o in outcomes] == ["trgm", "lost", "slow", "not_better"]
     assert len({o["reasons"][0] for o in outcomes}) == 4
 
 
@@ -305,18 +305,69 @@ def test_pool_draws_averages_the_rates_and_pools_the_timings(bench: Any) -> None
     assert out["timed_queries"] == 6
 
 
-def test_a_question_is_in_the_pooled_top3_when_a_majority_of_draws_has_it(bench: Any) -> None:
-    like = bench.pool_draws("like", [{"ranks": {"a": 1}, "timings_ms": [1.0]}] * 2)
-    split = bench.pool_draws(
+def _ids(out: dict) -> list[str]:
+    return [entry["id"] for entry in out["lost_in_trgm"]]
+
+
+def test_a_question_lost_in_any_one_draw_is_lost_with_its_rate(bench: Any) -> None:
+    """The card's rule, not a majority: one load where like had it in the top 3 and trgm
+    did not is a drop, written with how many loads it happened in."""
+    like = bench.pool_draws("like", [{"ranks": {"a": 1, "b": 9}, "timings_ms": [1.0]}] * 4)
+    trgm = bench.pool_draws(
         "trgm",
-        [{"ranks": {"a": 1}, "timings_ms": [1.0]}, {"ranks": {"a": 5}, "timings_ms": [1.0]}],
+        [{"ranks": {"a": r, "b": 1}, "timings_ms": [1.0]} for r in (1, 4, 1, 1)],
     )
-    minority = bench.pool_draws(
-        "trgm",
-        [{"ranks": {"a": r}, "timings_ms": [1.0]} for r in (1, 5, 5)],
-    )
-    assert bench.decide_default(like, split)["lost_in_trgm"] == []
-    assert bench.decide_default(like, minority)["lost_in_trgm"] == ["a"]
+    out = bench.decide_default(like, trgm)
+    assert out["lost_in_trgm"] == [
+        {"id": "a", "lost_draws": 1, "draws": 4, "rate": 0.25, "class": "unclassified"}
+    ]
+    assert out["default"] == "like"
+    assert out["outcome"] == "lost"
+
+
+def test_the_rule_text_is_in_the_decision(bench: Any) -> None:
+    like = _mode(bench, "like", {"a": 1}, 1.0)
+    out = bench.decide_default(like, _mode(bench, "trgm", {"a": 1}, 1.0))
+    assert out["rule"] == bench.RULE_TEXT
+    assert "herhangi bir yükleme" in bench.RULE_TEXT
+
+
+def _tie_report(trgm_ranks_7: list[int], trgm_ranks_11: list[int]) -> dict:
+    """Seed 7: question 'a' moves with the ids only; seed 11: 'c' is never in trgm's top 3."""
+    seven = [_draw({"a": 1, "b": 9, "c": 9}, {"a": r, "b": 1, "c": 9}) for r in trgm_ranks_7]
+    eleven = [_draw({"a": 1, "b": 9, "c": 1}, {"a": 1, "b": 1, "c": r}) for r in trgm_ranks_11]
+    return {
+        "seeds": [7, 11],
+        "embedders": {"local": {}},
+        "results": {"local": {"7": {"draws": seven}, "11": {"draws": eleven}}},
+    }
+
+
+def test_a_drop_that_moves_with_the_ids_is_an_id_tie_and_a_class_can_accept_it(
+    bench: Any,
+) -> None:
+    report = _tie_report([1, 4, 1], [1, 1, 1])
+    out = bench.decide(report, {})
+    assert out["lost_in_trgm"] == [
+        {"id": "a", "lost_draws": 1, "draws": 6, "rate": pytest.approx(1 / 6), "class": "id_tie"}
+    ]
+    assert out["default"] == "like"
+    assert out["outcome"] == "lost"
+    why = "eşit puan kimlikle kırılıyor"
+    accepted = bench.decide(report, {}, accepted_classes={"id_tie": why})
+    assert accepted["default"] == "trgm"
+    assert accepted["outcome"] == "trgm_with_accepted_losses"
+    assert accepted["verdict"] == "trgm, kabul edilen düşüşlerle"
+    assert accepted["accepted_lost"] == {"a": "id_tie: " + why}
+
+
+def test_a_drop_in_every_draw_of_a_seed_is_not_an_id_tie(bench: Any) -> None:
+    report = _tie_report([1, 1, 1], [4, 4, 4])
+    out = bench.decide(report, {}, accepted_classes={"id_tie": "eşitlik"})
+    assert out["lost_in_trgm"][0]["id"] == "c"
+    assert out["lost_in_trgm"][0]["class"] == "consistent"
+    assert out["default"] == "like"
+    assert out["accepted_lost"] == {}
 
 
 def test_draws_that_disagree_are_caught_and_the_pool_decides(bench: Any) -> None:
@@ -337,7 +388,7 @@ def test_draws_that_disagree_are_caught_and_the_pool_decides(bench: Any) -> None
     assert out["draw_sensitive"] is True
     assert out["draws"] == 3
     assert out["default"] == "trgm"
-    assert out["rule"] == "trgm"
+    assert out["outcome"] == "trgm"
     agreeing = {
         "seeds": [7],
         "embedders": {"local": {}},
@@ -377,6 +428,17 @@ def test_the_default_is_what_the_measurement_decided(monkeypatch: pytest.MonkeyP
     assert decision["draws"] >= 2, "one load is one tie draw; the decision pools several"
     monkeypatch.delenv(lexical.MODE_ENV, raising=False)
     assert lexical.lexical_mode() == decision["default"]
+
+
+def test_the_evidence_names_every_drop_and_its_acceptance() -> None:
+    """Every question trgm dropped in any load is in the evidence with its rate, and a
+    trgm default carries a reason for each one."""
+    decision = json.loads(EVIDENCE.read_text(encoding="utf-8"))["decision"]
+    assert "herhangi bir yükleme" in decision["rule"]
+    for entry in decision["lost_in_trgm"]:
+        assert 0 < entry["lost_draws"] <= entry["draws"] == decision["draws"]
+        if decision["default"] == "trgm":
+            assert entry["id"] in decision["accepted_lost"]
 
 
 # --------------------------------------------------------------------------- run_mode on SQLite

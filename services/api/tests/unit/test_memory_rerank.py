@@ -30,7 +30,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
-from app.memory import rerank, retrieval
+from app.memory import lexical, rerank, retrieval
 from app.memory.embedding import cosine_similarity
 from app.memory.models import Base, Memory, MemoryEmbedding
 from app.memory.rerank import (
@@ -212,7 +212,10 @@ def _documented_score(
 # ------------------------------------------------------------------ off is the same function
 
 
-def test_off_is_the_same_function_float_for_float() -> None:
+def test_off_is_the_same_function_float_for_float(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The documented formula is the 'like' leg's (a word-only hit scores 0.0 for meaning);
+    # the trgm default fuses ranks instead (test_memory_lexical.py pins that).
+    monkeypatch.setenv(lexical.MODE_ENV, "like")
     runtime = _runtime()
     _seed(runtime)
     assert runtime.reranker is None

@@ -9,9 +9,11 @@ time p50/p95/max. Each seed's order is loaded ``--draws`` times with fresh ids (
 break on the id, so one load is one draw) and the draws are pooled. ``decide_default`` then
 reads the card's rule on the pool:
 
-    trgm becomes the default when its top-3 share is HIGHER than like's, no question that
-    like had in its top 3 drops out of trgm's (or each one that does is accepted with a
-    reason, ``--accept-lost id:reason``), and trgm's p95 is at most 50 ms slower.
+    trgm becomes the default when its top-3 share is HIGHER than like's, every question
+    that like had in its top 3 and trgm did not, in ANY one load, is listed with its rate
+    and accepted with a reason (``--accept-lost id:reason``, or by class:
+    ``--accept-lost-class id_tie:reason``), and trgm's p95 is at most 50 ms slower
+    (``RULE_TEXT``).
 
 The database address comes from the environment (``Settings().database_url``); the script
 creates ``pagentos_bench_lexical_<8hex>`` on that server, migrates it to head, and drops it
@@ -248,12 +250,41 @@ def _in_top3(rank: int | None) -> bool:
     return rank is not None and rank <= 3
 
 
-def _top3_set(summary: dict[str, Any]) -> set[str]:
-    """A pooled summary: the questions a majority (half or more) of draws had in the top 3;
-    a single draw: the questions in its top 3."""
-    if "top3_share" in summary:
-        return {cid for cid, share in summary["top3_share"].items() if share >= 0.5}
-    return {cid for cid, rank in summary["ranks"].items() if _in_top3(rank)}
+#: The card's rule, word for word what ``decide_default`` checks; written into the decision.
+RULE_TEXT = (
+    "trgm varsayılan olur, ancak: (1) trgm'in ilk-3 oranı (yüklemelerin ortalaması) like'tan "
+    "yüksekse; (2) herhangi bir yüklemede like'ın ilk-3'ünde olup aynı yüklemede trgm'in "
+    "ilk-3'ünden düşen her soru, düştüğü yükleme oranıyla lost_in_trgm'e yazılır ve her biri "
+    "için kabul gerekçesi (soru kimliğiyle ya da sınıfıyla) varsa; (3) trgm'in p95'i like'tan "
+    "en çok 50 ms fazlaysa. Biri tutmazsa like kalır."
+)
+#: A drop whose question was in trgm's top 3 in another load of the same seed: same texts,
+#: same order, only the ids differ, so the drop is an equal score broken on the id.
+ID_TIE = "id_tie"
+#: Dropped in every load of a seed where it dropped at all: not explained by the ids.
+CONSISTENT = "consistent"
+
+
+def _ranks_per_draw(summary: dict[str, Any]) -> dict[str, list[int | None]]:
+    if "ranks_per_draw" in summary:
+        return {cid: list(ranks) for cid, ranks in summary["ranks_per_draw"].items()}
+    return {cid: [rank] for cid, rank in summary["ranks"].items()}
+
+
+def _drops(like: dict[str, Any], trgm: dict[str, Any]) -> dict[str, list[bool]]:
+    """Per question, per paired draw (one load, both modes): like top 3, trgm not."""
+    like_ranks, trgm_ranks = _ranks_per_draw(like), _ranks_per_draw(trgm)
+    return {
+        cid: [
+            _in_top3(lr) and not _in_top3(tr)
+            for lr, tr in zip(ranks, trgm_ranks.get(cid, [None] * len(ranks)), strict=True)
+        ]
+        for cid, ranks in like_ranks.items()
+    }
+
+
+def _top3_any(summary: dict[str, Any]) -> set[str]:
+    return {cid for cid, ranks in _ranks_per_draw(summary).items() if any(map(_in_top3, ranks))}
 
 
 def decide_default(
@@ -261,44 +292,74 @@ def decide_default(
     trgm: dict[str, Any],
     *,
     accepted_lost: dict[str, str] | None = None,
+    accepted_classes: dict[str, str] | None = None,
+    classes: dict[str, str] | None = None,
     budget_ms: float = P95_BUDGET_MS,
 ) -> dict[str, Any]:
-    """The card's rule on two ``summarize`` (one draw) or ``pool_draws`` results. ``rule``
-    names the outcome: ``trgm`` (switch), ``not_better`` / ``lost`` / ``slow`` (stay on
-    like, and why)."""
-    accepted = dict(accepted_lost or {})
-    like_top3, trgm_top3 = _top3_set(like), _top3_set(trgm)
-    lost = sorted(like_top3 - trgm_top3)
-    gained = sorted(trgm_top3 - like_top3)
-    unaccepted = [cid for cid in lost if cid not in accepted]
+    """``RULE_TEXT`` on two ``summarize`` (one draw) or ``pool_draws`` results (the same
+    loads, in the same order). ``outcome``: ``trgm`` / ``trgm_with_accepted_losses``
+    (switch), ``not_better`` / ``lost`` / ``slow`` (stay on like, and why). A drop is
+    accepted by its id (``accepted_lost``) or by its class (``classes`` -> ``accepted_classes``)."""
+    by_id = dict(accepted_lost or {})
+    by_class = dict(accepted_classes or {})
+    known = dict(classes or {})
+    lost: list[dict[str, Any]] = []
+    accepted: dict[str, str] = {}
+    for cid, drops in sorted(_drops(like, trgm).items()):
+        if not any(drops):
+            continue
+        cls = known.get(cid, "unclassified")
+        lost.append(
+            {
+                "id": cid,
+                "lost_draws": sum(drops),
+                "draws": len(drops),
+                "rate": sum(drops) / len(drops),
+                "class": cls,
+            }
+        )
+        if cid in by_id:
+            accepted[cid] = by_id[cid]
+        elif cls in by_class:
+            accepted[cid] = f"{cls}: {by_class[cls]}"
+    unaccepted = [e["id"] for e in lost if e["id"] not in accepted]
+    gained = sorted(_top3_any(trgm) - _top3_any(like))
     delta = float(trgm["p95_ms"]) - float(like["p95_ms"])
     shares = f"ilk-3: like {like['top3']:.3f}, trgm {trgm['top3']:.3f}"
     if not trgm["top3"] > like["top3"]:
-        rule, default = "not_better", "like"
+        outcome, default = "not_better", "like"
         reason = f"trgm ilk-3 oranında like'tan iyi değil ({shares}); like kalır."
     elif unaccepted:
-        rule, default = "lost", "like"
+        outcome, default = "lost", "like"
         reason = (
             f"like'ta ilk-3'te olup trgm'de düşen ve kabul gerekçesi olmayan soru var "
             f"({', '.join(unaccepted)}); like kalır."
         )
     elif delta > budget_ms:
-        rule, default = "slow", "like"
+        outcome, default = "slow", "like"
         reason = f"trgm p95 {delta:+.1f} ms ek süre, sınır {budget_ms:g} ms; like kalır."
     else:
-        rule, default = "trgm", "trgm"
+        outcome = "trgm_with_accepted_losses" if lost else "trgm"
+        default = "trgm"
         reason = (
             f"trgm ilk-3'te daha iyi ({shares}), düşen soru "
-            f"{'yok' if not lost else 'yalnız kabul edilenler'}, p95 ek süre {delta:+.1f} ms "
-            f"(sınır {budget_ms:g} ms): varsayılan trgm."
+            f"{'yok' if not lost else f'{len(lost)}, hepsi kabul gerekçeli'}, p95 ek süre "
+            f"{delta:+.1f} ms (sınır {budget_ms:g} ms): varsayılan trgm."
         )
+    verdict = {
+        "trgm": "trgm",
+        "trgm_with_accepted_losses": "trgm, kabul edilen düşüşlerle",
+    }.get(outcome, "like")
     return {
         "default": default,
-        "rule": rule,
+        "outcome": outcome,
+        "verdict": verdict,
+        "rule": RULE_TEXT,
         "reasons": [reason],
         "lost_in_trgm": lost,
         "gained_in_trgm": gained,
-        "accepted_lost": {cid: accepted[cid] for cid in lost if cid in accepted},
+        "accepted_lost": accepted,
+        "accepted_classes": {c: why for c, why in by_class.items() if c in set(known.values())},
         "p95_delta_ms": delta,
         "borderline": BORDERLINE_MS[0] <= delta <= BORDERLINE_MS[1],
     }
@@ -759,12 +820,39 @@ def run_bench(args: argparse.Namespace) -> dict[str, Any]:
             session.close()
             engine.dispose()
     report["peak_rss_mb"] = peak_rss_mb()
-    report["decision"] = decide(report, dict(args.accept_lost))
+    report["decision"] = decide(
+        report, dict(args.accept_lost), accepted_classes=dict(args.accept_lost_class)
+    )
     report["seed_sensitivity"] = seed_sensitivity(report)
     return report
 
 
-def decide(report: dict[str, Any], accepted_lost: dict[str, str]) -> dict[str, Any]:
+def classify_drops(seed_draws: dict[str, Sequence[dict[str, Any]]]) -> dict[str, str]:
+    """``ID_TIE`` for a question that, in every seed where it dropped, was in trgm's top 3
+    in another load of that seed; ``CONSISTENT`` otherwise. Questions never dropped are not
+    in the result."""
+    classes: dict[str, str] = {}
+    for draws in seed_draws.values():
+        for cid, drops in _drops(
+            pool_draws("like", [d["like"] for d in draws]),
+            pool_draws("trgm", [d["trgm"] for d in draws]),
+        ).items():
+            if not any(drops):
+                continue
+            moved = any(_in_top3(d["trgm"]["ranks"].get(cid)) for d in draws)
+            if not moved or classes.get(cid) == CONSISTENT:
+                classes[cid] = CONSISTENT
+            else:
+                classes[cid] = ID_TIE
+    return classes
+
+
+def decide(
+    report: dict[str, Any],
+    accepted_lost: dict[str, str],
+    *,
+    accepted_classes: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """The decision from the local embedder, every seed and every draw pooled; the
     deterministic embedder never decides. Each draw's own verdict is counted too
     (``per_draw``): more than one verdict means one draw alone could not have decided."""
@@ -773,7 +861,9 @@ def decide(report: dict[str, Any], accepted_lost: dict[str, str]) -> dict[str, A
         fallback = report["embedders"].get("local", {}).get("fallback", "not measured")
         return {
             "default": "like",
-            "rule": "no_local",
+            "outcome": "no_local",
+            "verdict": "like",
+            "rule": RULE_TEXT,
             "reasons": [
                 "Yerel gömücü ölçülemedi (" + str(fallback) + "): like kalır, ölçüm kesin değil."
             ],
@@ -781,18 +871,22 @@ def decide(report: dict[str, Any], accepted_lost: dict[str, str]) -> dict[str, A
         }
     seeds = [str(s) for s in report["seeds"] if str(s) in local]
     draws = [d for s in seeds for d in local[s]["draws"]]
-    verdicts = Counter(
-        decide_default(
-            pool_draws("like", [d["like"]]),
-            pool_draws("trgm", [d["trgm"]]),
-            accepted_lost=accepted_lost,
-        )["rule"]
-        for d in draws
-    )
+    classes = classify_drops({s: local[s]["draws"] for s in seeds})
+    accept = {
+        "accepted_lost": accepted_lost,
+        "accepted_classes": accepted_classes,
+        "classes": classes,
+    }
+    verdicts: Counter[str] = Counter()
+    for d in draws:
+        one = decide_default(
+            pool_draws("like", [d["like"]]), pool_draws("trgm", [d["trgm"]]), **accept
+        )
+        verdicts[one["outcome"]] += 1
     out = decide_default(
         pool_draws("like", [d["like"] for d in draws]),
         pool_draws("trgm", [d["trgm"] for d in draws]),
-        accepted_lost=accepted_lost,
+        **accept,
     )
     out["read_from"] = f"local, tohumlar {', '.join(seeds)}, toplam {len(draws)} yükleme"
     out["draws"] = len(draws)
@@ -912,7 +1006,10 @@ def render_md(report: dict[str, Any]) -> str:
         "",
         "## Karar",
         "",
-        f"**Varsayılan: `{decision['default']}`** ({decision['rule']})",
+        f"**Varsayılan: `{decision['default']}`** — {decision.get('verdict', '')} "
+        f"({decision.get('outcome')})",
+        "",
+        f"Kural: {decision['rule']}",
         "",
     ]
     lines += [f"- {reason}" for reason in decision["reasons"]]
@@ -923,11 +1020,17 @@ def render_md(report: dict[str, Any]) -> str:
             + (" — tek yükleme kararı veremezdi" if decision.get("draw_sensitive") else "")
         )
     if decision.get("lost_in_trgm") is not None:
-        lines.append(f"- trgm'de ilk-3'ten düşen: {decision['lost_in_trgm'] or 'yok'}")
+        lost = decision["lost_in_trgm"]
+        lines.append(
+            "- trgm'de ilk-3'ten düşen (herhangi bir yüklemede): " + ("yok" if not lost else "")
+        )
+        for entry in lost:
+            why = decision.get("accepted_lost", {}).get(entry["id"], "KABUL GEREKÇESİ YOK")
+            lines.append(
+                f"  - {entry['id']}: {entry['lost_draws']}/{entry['draws']} yüklemede "
+                f"({_pct(entry['rate'])}), sınıf {entry['class']} — {why}"
+            )
         lines.append(f"- trgm'de ilk-3'e giren: {decision.get('gained_in_trgm') or 'yok'}")
-        if decision.get("accepted_lost"):
-            for cid, why in decision["accepted_lost"].items():
-                lines.append(f"  - kabul: {cid} — {why}")
         lines.append(f"- p95 farkı: {decision['p95_delta_ms']:+.1f} ms (sınır 50 ms)")
         if decision.get("borderline"):
             lines.append("- p95 farkı 40-60 ms bandında: SINIRDA")
@@ -938,7 +1041,9 @@ def render_md(report: dict[str, Any]) -> str:
 def _accept(value: str) -> tuple[str, str]:
     cid, sep, why = value.partition(":")
     if not sep or not cid.strip() or not why.strip():
-        raise argparse.ArgumentTypeError("--accept-lost id:reason")
+        raise argparse.ArgumentTypeError(
+            "--accept-lost id:reason / --accept-lost-class class:reason"
+        )
     return cid.strip(), why.strip()
 
 
@@ -959,6 +1064,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--keep-db", action="store_true")
     parser.add_argument("--accept-lost", type=_accept, action="append", default=[])
+    parser.add_argument(
+        "--accept-lost-class",
+        type=_accept,
+        action="append",
+        default=[],
+        help=f"class:reason, e.g. {ID_TIE}:... accepts every drop of that class",
+    )
     parser.add_argument("--out", type=Path, default=None, help="write the report as JSON (+ .md)")
     args = parser.parse_args(argv[1:])
     if hasattr(sys.stdout, "reconfigure"):
