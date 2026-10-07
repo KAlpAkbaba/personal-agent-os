@@ -1772,6 +1772,32 @@ Start-Sleep -Seconds 120
         finally { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
     }
 
+    Test-Case "test rounds: a lock whose round has ended is removed - no untracked file is left in the checkout" {
+        # The inspector's follow-up (2026-10-07): team/reports/test-round.json outlived its round and
+        # showed up untracked in the main checkout. A dead pid's lock goes at the next look, and the
+        # cycle looks once more at its end.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $gone = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-Command", "exit 0") -WindowStyle Hidden -PassThru
+        $gone.WaitForExit(10000) | Out-Null
+        $lock = Join-Path $root "team\reports\test-round.json"
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "team\reports"))
+        Write-TeamJson -Path $lock -Document ([pscustomobject]@{ pid = $gone.Id; process_started = "1"; round = "t-c0-1"; cycle_id = "c0"; why = "test" })
+        $steady = $releasingRound.Replace("if ([System.IO.File]", "if (`$false -and [System.IO.File]")
+        $run = Invoke-RoundCycle -Root $root -RoundBody $steady -EveryHours 100 -WorkerSeconds 4
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "t-c1-1" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "the dead lock held nothing: $($run.StdOut)"
+        Assert-True -Condition (-not (Test-Path -LiteralPath $lock)) -Because "the ended round's lock is gone at the cycle's end: $(if (Test-Path -LiteralPath $lock) { Get-Content -Raw -LiteralPath $lock })"
+
+        # test_parallel 0 starts nothing, and a dead lock left by an earlier round still goes.
+        $off = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $offLock = Join-Path $off "team\reports\test-round.json"
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $off "team\reports"))
+        Write-TeamJson -Path $offLock -Document ([pscustomobject]@{ pid = $gone.Id; process_started = "1"; round = "t-c0-1"; cycle_id = "c0"; why = "test" })
+        $run = Invoke-RoundCycle -Root $off -RoundBody $steady -EveryHours 100 -WorkerSeconds 1 -Testers 0
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition (-not (Test-Path -LiteralPath $offLock)) -Because "a dead lock goes even when no round may start"
+    }
+
     Test-Case "test rounds: test_parallel 0 starts no round (start, release, interval) and says so once" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $run = Invoke-RoundCycle -Root $root -RoundBody $releasingRound -EveryHours 0.0008 -Testers 0

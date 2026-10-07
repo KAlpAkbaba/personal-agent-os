@@ -39,10 +39,13 @@ cards and log never mix with an earlier round of the same (daily) cycle id.
   so a caller that captures the cycle's output waits until the round ends (the tests start the
   cycle that writes the lock without pipes, `Invoke-Cycle -Detached`, for that reason).
 - `team/reports/test-round.json` is machine run-time state inside a tracked folder and is not
-  ignored: after the first real -TestTeam cycle it is an untracked file in the main checkout and
-  would ride into the next `git add team/reports`. Harmless if committed (a pid + start ticks never
-  match a later process), but it should not be: `.gitignore` is outside this card's area, so the
-  lead adds the line `team/reports/test-round.json` beside `team/status.json` when merging this.
+  ignored. A lock whose round has ended (dead pid, or other start ticks) is removed at the next
+  look, and the cycle looks once more at its end (even with `test_parallel` 0), so the file stays
+  only while a round runs. While it does, it would still ride into a `git add team/reports`
+  (harmless: a pid + start ticks never match a later process): `.gitignore` is outside this card's
+  area, so the lead adds the line `team/reports/test-round.json` beside `team/status.json` when
+  merging this.
 - Tests (team-cycle.tests.ps1, "test rounds:"): start + release; interval; a running round blocks;
   the lock one cycle process writes holds the next cycle process (pid + ticks are the round's own);
-  a live pid with other start ticks is no round; test_parallel 0 starts nothing, one risk line.
+  a live pid with other start ticks is no round; an ended round's lock is removed (also with
+  test_parallel 0); test_parallel 0 starts nothing, one risk line.

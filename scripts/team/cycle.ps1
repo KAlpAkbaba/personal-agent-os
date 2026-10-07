@@ -551,18 +551,22 @@ function Start-CycleTestRound {
 function Test-CycleTestRoundRunning {
     <# The round's own process is the lock: the one this cycle started, or the one the lock file
        names (an earlier cycle process of this machine) - that pid with that start time, so a
-       reused pid is not taken for the round. #>
+       reused pid is not taken for the round. A lock whose round has ended is removed, so it is
+       never left untracked in the checkout. #>
     if ($null -ne $script:testRoundProcess) {
         try { if (-not $script:testRoundProcess.HasExited) { return $true } } catch { }
         $script:testRoundProcess = $null
     }
     if (-not (Test-Path -LiteralPath $testRoundLockPath)) { return $false }
+    $alive = $false
     try {
         $held = Read-TeamJson -Path $testRoundLockPath
         $process = Get-Process -Id ([int]$held.pid) -ErrorAction Stop
-        return ([string]$process.StartTime.ToUniversalTime().Ticks -eq [string]$held.process_started)
+        $alive = ([string]$process.StartTime.ToUniversalTime().Ticks -eq [string]$held.process_started)
     }
-    catch { return $false }
+    catch { }
+    if (-not $alive) { Remove-Item -LiteralPath $testRoundLockPath -Force -ErrorAction SilentlyContinue }
+    return $alive
 }
 
 function Get-CycleStagingSha {
@@ -2360,6 +2364,8 @@ finally {
     }
     $pool.Clear()
     $liveRuns.Clear()
+    # A test round that has ended leaves no lock behind (one still running keeps it).
+    if ($TestTeam) { try { [void](Test-CycleTestRoundRunning) } catch { } }
     Write-CycleStatus
     if ($useApi) {
         try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId }
