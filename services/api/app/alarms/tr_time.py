@@ -124,10 +124,12 @@ _NEGATED_CREATE_RE: Final = re.compile(
     r"^(?:kur|uyandır|uyandir)m[ae](?:y[ıi]n(?:[ıi]z)?|s[ıi]n(?:lar)?|yal[ıi]m)?$"
 )
 #: "8'i 10 geçe", "8'e 5 kala", "8'e çeyrek kala": a digit hour, then the minutes, then the
-#: direction. The hour's case suffix is optional and short; the direction word is a prefix.
+#: direction. The hour's case suffix is optional and short; "geç" is a prefix ("geçe",
+#: "geçiyor"), the "to" words are whole words, so "7 30 kalkmam" is not "7'ye 30 kala".
 _DIGIT_PAST_TO_RE: Final = re.compile(
     r"(?<![\d:.])(?P<h>[01]?\d|2[0-3])\s*'?\s*[a-zçğıöşü]{0,3}\s+"
-    r"(?P<m>[0-5]?\d|çeyrek|ceyrek)\s+(?P<dir>geç|gec|kal|var)"
+    r"(?P<m>[0-5]?\d|çeyrek|ceyrek)\s+"
+    r"(?:(?P<past>geç|gec)|(?P<to>kala|kalmadan|var)(?![a-zçğıöşü]))"
 )
 
 _HHMM_RE: Final = re.compile(r"(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)")
@@ -247,9 +249,11 @@ _CLOCK_CASE_SUFFIXES: Final[tuple[str, ...]] = (
     "ü",
 )
 
-#: "çeyrek geçe" / "on kala": the direction word after the minutes, as a prefix.
+#: "çeyrek geçe" / "on kala": the direction word after the minutes. "geç" is a prefix
+#: ("geçe", "geçiyor"); the "to" words are whole words, because the prefix "kal" is also
+#: the verb "kalk-" (to get up): "yedi on kalkayım" is 07:10, not 06:50.
 _PAST_PREFIXES: Final[tuple[str, ...]] = ("geç", "gec")
-_TO_PREFIXES: Final[tuple[str, ...]] = ("kal", "var")
+_TO_WORDS: Final[tuple[str, ...]] = ("kala", "kalmadan", "var")
 
 _HALF_WORDS: Final[tuple[str, ...]] = ("buçuk", "bucuk", "buçukta", "bucukta")
 _QUARTER_WORDS: Final[tuple[str, ...]] = ("çeyrek", "ceyrek")
@@ -328,7 +332,7 @@ def _spoken_clock(tokens: list[str]) -> tuple[int, int] | None:
         fraction = bool(rest and (rest[0] in _HALF_WORDS or rest[0] in _QUARTER_WORDS))
         minute, consumed, minute_suffixed = (None, 0, False) if fraction else _spoken_minute(rest)
         after = rest[1:2] if fraction else rest[consumed : consumed + 1]
-        to_hour = any(w.startswith(_TO_PREFIXES) for w in after)
+        to_hour = any(w in _TO_WORDS for w in after)
         past_hour = any(w.startswith(_PAST_PREFIXES) for w in after)
         # "onu" is also the pronoun "it": the round-vowel accusative counts only before the
         # minutes or a fraction ("dokuzu çeyrek geçe", "onu beş geçe").
@@ -374,7 +378,7 @@ def _clock_from(text: str, tokens: list[str]) -> tuple[int, int] | None:
         raw_minute = past_to.group("m")
         minute = 15 if raw_minute in _QUARTER_WORDS else int(raw_minute)
         if 0 < minute < 60:
-            if past_to.group("dir") in _TO_PREFIXES:
+            if past_to.group("to"):
                 return (hour - 1) % 24, 60 - minute
             return hour, minute
     clock_context = any(t.startswith("saat") for t in tokens) or any(
@@ -395,12 +399,54 @@ def _clock_from(text: str, tokens: list[str]) -> tuple[int, int] | None:
     return None
 
 
+def _says_afternoon(tokens: list[str]) -> bool:
+    """"öğleden sonra" is the afternoon; "öğleden önce" is the morning (inspector, 9d1be05a:
+    "öğleden önce onda" was set for 22:00)."""
+    return any(
+        t in _AFTERNOON_WORDS and i + 1 < len(tokens) and tokens[i + 1] == "sonra"
+        for i, t in enumerate(tokens)
+    )
+
+
+def _daypart_words(tokens: list[str]) -> list[str]:
+    """The daypart words of a sentence, "öğleden" kept together with the "sonra"/"önce"
+    after it, so a correction's tail can carry them without changing their meaning."""
+    carried: list[str] = []
+    for i, t in enumerate(tokens):
+        if t in _DAYPART_WORDS:
+            carried.append(t)
+            following = tokens[i + 1] if i + 1 < len(tokens) else ""
+            if t in _AFTERNOON_WORDS and following in ("sonra", "önce", "once"):
+                carried.append(following)
+    return carried
+
+
+#: "yarın" / "bugün" as said; a correction can swap one for the other.
+_TOMORROW_PREFIXES: Final[tuple[str, ...]] = ("yarın", "yarin")
+_TODAY_PREFIXES: Final[tuple[str, ...]] = ("bugün", "bugun")
+
+
+def _says_tomorrow(folded: str, corrections: list[re.Match[str]]) -> bool:
+    """"yarın" anywhere means tomorrow — unless a correction names the day again: then the
+    last "yarın"/"bugün" said after a marker wins ("yarın değil bugün akşam sekizde" is
+    today, "akşam sekizde, yarın değil bugün" too; inspector, 9d1be05a: it was tomorrow)."""
+    if corrections:
+        days = [
+            t
+            for t in _tokens(folded[corrections[0].end() :])
+            if t.startswith(_TOMORROW_PREFIXES + _TODAY_PREFIXES)
+        ]
+        if days:
+            return days[-1].startswith(_TOMORROW_PREFIXES)
+    return any(t.startswith(_TOMORROW_PREFIXES) for t in _tokens(folded))
+
+
 def _apply_daypart(hour: int, minute: int, tokens: list[str]) -> tuple[int, int]:
     """"akşam yedi" is 19:00; "sabah yedi" is 07:00. An hour already >= 13 is explicit and
     is never shifted, and neither is an hour written as an explicit "HH:MM" >= 13."""
     if hour >= 13:
         return hour, minute
-    if any(t in _EVENING_WORDS or t in _AFTERNOON_WORDS for t in tokens) and hour < 12:
+    if (any(t in _EVENING_WORDS for t in tokens) or _says_afternoon(tokens)) and hour < 12:
         return hour + 12, minute
     if any(t in _NOON_WORDS for t in tokens) and 1 <= hour <= 5:
         return hour + 12, minute
@@ -505,18 +551,20 @@ def parse_when_text(
     tokens = _tokens(text)
     # "yarın sabah yedide alarm kurma" names a time and says NOT to set it: no time is
     # produced, so nothing can be scheduled off it (test team, staging fba299af).
-    # "uyandırma alarmı" / "uyandırma saati" is the noun ("wake-up alarm"), not the verb.
+    # "uyandırma alarmı" / "uyandırma saati" / "alarm kurma işi" is the noun ("wake-up
+    # alarm", "the setting of the alarm"), not the verb.
     if any(
         _NEGATED_CREATE_RE.match(t.strip(".:"))
-        and not (i + 1 < len(tokens) and tokens[i + 1].startswith(("alarm", "saat")))
+        and not (i + 1 < len(tokens) and tokens[i + 1].startswith(("alarm", "saat", "iş")))
         for i, t in enumerate(tokens)
     ):
         raise UnparsedWhen(f"negated create, no alarm is meant: {text!r}")
 
-    # A spoken correction: the time after the LAST marker is the one meant. The date words
-    # ("yarın") still come from the whole sentence; a daypart or weekday said after the
-    # marker wins over one said before it.
+    # A spoken correction: the time after the LAST marker is the one meant. A daypart,
+    # weekday or "yarın"/"bugün" said after a marker wins over one said before it; with
+    # none said there, they come from the whole sentence.
     whole_tokens = tokens
+    whole_folded = folded
     corrections = list(_CORRECTION_RE.finditer(folded))
     if corrections:
         tail = folded[corrections[-1].end() :]
@@ -528,7 +576,7 @@ def parse_when_text(
             folded = tail
             tokens = tail_tokens
             if not any(t in _DAYPART_WORDS for t in tail_tokens):
-                tokens = [t for t in whole_tokens if t in _DAYPART_WORDS] + tail_tokens
+                tokens = _daypart_words(whole_tokens) + tail_tokens
 
     offset = _relative_seconds(folded, tokens)
     if offset is not None:
@@ -546,7 +594,7 @@ def parse_when_text(
         raise UnparsedWhen(f"no clock time or offset found in {text!r}")
     hour, minute = _apply_daypart(clock[0], clock[1], tokens)
     weekdays = _weekdays_from(tokens) or _weekdays_from(whole_tokens)
-    tomorrow = any(t.startswith("yarın") or t.startswith("yarin") for t in whole_tokens)
+    tomorrow = _says_tomorrow(whole_folded, corrections)
     at_local = _next_local(now_local, hour, minute, tomorrow=tomorrow, weekdays=weekdays)
     return ParsedWhen(
         at=at_local.astimezone(UTC),

@@ -110,6 +110,52 @@ def test_correction_keeps_the_date_and_takes_the_later_weekday() -> None:
     assert evening.matched == "tomorrow"
 
 
+@pytest.mark.parametrize(
+    ("spoken", "expected"),
+    [
+        # "kalk-" (to get up) is not "kala": the wake-up time must not move earlier
+        # (inspector, 9d1be05a: 06:30 / 06:50 / 05:15).
+        ("Yarın sabah 7 30 kalkmam lazım, uyandır.", "07:30"),
+        ("Yarın sabah yedi on kalkayım, alarm kur.", "07:10"),
+        ("Yarın sabah 6 45 kalkıyorum alarm kur.", "06:45"),
+        ("Yarın sabah 8'e 10 kalmadan uyandır.", "07:50"),
+        # "öğleden önce" is the morning; only "öğleden sonra" is the afternoon
+        ("Yarın öğleden önce onda hatırlat.", "10:00"),
+        # several correction words: the time after the LAST one wins
+        ("Yarın yedide değil, yok yok sekizde, pardon dokuzda uyandır.", "09:00"),
+        ("Yarın yedide değil sekizde, hayır hayır dokuzda uyandır.", "09:00"),
+        # a correction keeps "öğleden sonra" said before it
+        ("Yarın öğleden sonra üçte, yok yok dörtte hatırlat.", "16:00"),
+        # "kurma işi" is the noun, not a negated create
+        ("Alarm kurma işini sonra konuşuruz, yarın sabah yedide uyandır.", "07:00"),
+    ],
+)
+def test_inspector_return_cases(spoken: str, expected: str) -> None:
+    parsed = parse_when_text(spoken, now=NOW)
+    assert parsed.local_time == expected
+    assert parsed.at.astimezone(IST).date() == datetime(2026, 9, 10).date()
+
+
+#: Wednesday 10:00 local: "bugün akşam" is still ahead today.
+MORNING = datetime(2026, 9, 9, 10, 0, tzinfo=IST).astimezone(UTC)
+
+
+@pytest.mark.parametrize(
+    ("spoken", "expected_day"),
+    [
+        ("Yarın değil bugün akşam sekizde hatırlat.", 9),
+        ("Akşam sekizde hatırlat, yarın değil bugün.", 9),
+        ("Bugün değil yarın akşam sekizde hatırlat.", 10),
+        ("Yarın akşam sekizde, yok yok bugün akşam sekizde hatırlat.", 9),
+    ],
+)
+def test_corrected_day_wins(spoken: str, expected_day: int) -> None:
+    parsed = parse_when_text(spoken, now=MORNING)
+    local = parsed.at.astimezone(IST)
+    assert parsed.local_time == "20:00"
+    assert (local.month, local.day, local.hour) == (9, expected_day, 20)
+
+
 def test_bir_alone_still_names_no_time() -> None:
     with pytest.raises(UnparsedWhen):
         parse_when_text("Beni bir ara uyandır.", now=NOW)
