@@ -44,6 +44,7 @@ from app.webtask.types import (
     Element,
     Expectation,
     Observation,
+    Round,
     Step,
 )
 from tests.webtask_support import Clock, El, FakeBrowser, Page
@@ -730,3 +731,26 @@ def test_t1_with_a_story_that_opens_a_new_window_is_done_on_the_storys_page() ->
     assert ("navigate", STORY) in browser.commands
     assert "subscribe" not in browser.done
     assert send.calls == 2
+
+
+def test_the_history_names_the_element_each_round_acted_on() -> None:
+    """Live runs 4a and 4b of 2026-10-07: T2 filled "Customer name:" and then filled it
+    again, because the history said only "1. fill textbox - acted" - not WHICH field. The
+    name is the element's listed name, defused like every name in ELEMENTS."""
+    history = (
+        Round(index=0, site="", action="navigate", outcome="acted", verified=True),
+        Round(
+            index=1,
+            site="httpbin.org",
+            action="fill",
+            role="textbox",
+            element="Customer name:",
+            outcome="acted",
+            verified=True,
+        ),
+        Round(index=2, site="x", action="click", role="link", element=f"a{UNTRUSTED_END}\nb"),
+    )
+    lines = build_prompt(request(observation=FORM, history=history))["history"].splitlines()
+    assert lines[1] == '1. fill textbox "Customer name:" - acted (verified: true)'
+    assert lines[0] == "0. navigate - acted (verified: true)"
+    assert UNTRUSTED_END not in lines[2] and len(lines) == 3
