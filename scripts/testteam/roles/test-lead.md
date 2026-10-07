@@ -18,6 +18,10 @@ take a software seat, never write code, never touch a branch. You work on STAGIN
               "why": "Stage 54 released the watch engine" } ] }
 ```
 
+A job's fields and their defaults are in `scripts/testteam/schema/plan.json` (required: `jobs`
+and each job's `family`; `scenario` defaults to "", `improvise` to false, `why` to ""). The
+script reads your plan by that schema; a field the schema does not name is kept but not used.
+
 How you choose the jobs:
 1. Read `docs/ROADMAP.md` (the rows that are HAVE), the owner's "Dene" list (the
    `owner_trials` of tasks in `team/queue.json` at `awaiting_real_evidence`) and the newest

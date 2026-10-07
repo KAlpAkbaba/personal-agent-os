@@ -1420,12 +1420,16 @@ function Invoke-TeamGate {
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [Parameter(Mandatory = $true)][string]$LogPath,
         # Never without a cap: the caller holds the team lock while this waits.
-        [Parameter(Mandatory = $true)][double]$TimeoutMinutes
+        [Parameter(Mandatory = $true)][double]$TimeoutMinutes,
+        # The gate's own arguments (a partial rerun's -OnlyStep, scripts/lib/TeamGateRerun.ps1); none = the full gate.
+        [string[]]$Arguments = @()
     )
     if ($TimeoutMinutes -le 0) { throw "the gate is not run without a cap on its minutes" }
-    foreach ($path in @($GatePath, $LogPath)) {
-        if ($path -match '["&|<>^%!]') { throw "a path the gate is started with holds a character cmd.exe would read: $path" }
+    foreach ($path in @($GatePath, $LogPath) + @($Arguments)) {
+        if ([string]$path -match '["&|<>^%!]') { throw "a path or argument the gate is started with holds a character cmd.exe would read: $path" }
     }
+    $extra = (@($Arguments) | ForEach-Object { if ([string]$_ -match '[\s,()]') { '"' + $_ + '"' } else { [string]$_ } }) -join ' '
+    if ($extra) { $extra = " " + $extra }
     if (-not (Test-Path -LiteralPath $GatePath)) { throw "the gate script does not exist: $GatePath" }
     $folder = Split-Path -Parent $LogPath
     if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
@@ -1433,7 +1437,7 @@ function Invoke-TeamGate {
     $shell = Join-Path $system "WindowsPowerShell\v1.0\powershell.exe"
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = Join-Path $system "cmd.exe"
-    $psi.Arguments = '/d /s /c "chcp 65001 >nul & "' + $shell + '" -NoProfile -ExecutionPolicy Bypass -File "' + $GatePath + '" > "' + $LogPath + '" 2>&1"'
+    $psi.Arguments = '/d /s /c "chcp 65001 >nul & "' + $shell + '" -NoProfile -ExecutionPolicy Bypass -File "' + $GatePath + '"' + $extra + ' > "' + $LogPath + '" 2>&1"'
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = (Resolve-Path -LiteralPath $WorkingDirectory).Path
@@ -1612,3 +1616,9 @@ function New-TeamIntegrateReport {
     [void]$lines.Add("")
     return (($lines.ToArray()) -join "`n")
 }
+
+# ---------------------------------------------------------------------------- the rerun of a red gate's failed steps
+# scripts/lib/TeamGateRerun.ps1 (card gate-rerun-failed-steps). A copy of this library without it beside it
+# (a test sandbox that copies only the libraries it names) runs the full gate every time: never less.
+$teamGateRerunLibrary = Join-Path $PSScriptRoot "TeamGateRerun.ps1"
+if (Test-Path -LiteralPath $teamGateRerunLibrary) { . $teamGateRerunLibrary }

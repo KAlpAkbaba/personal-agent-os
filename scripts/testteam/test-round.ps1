@@ -30,6 +30,13 @@
       5. The 'kopma noktası' report: <OutRoot>/<round>/kopma-noktasi.md, and one board note
          addressed to the Danışman's seat ('danisman') (never to the owner).
 
+    Before the plan (staging-follows-release, the Danışman 2026-10-06): staging must serve
+    origin/main's tip (/v1/system/health release.version). Otherwise the round REFUSES - exit 4,
+    a board note naming both shas, no plan, no card, no tester: a round on an old build judged
+    old code (every step 404). -AllowStaleStaging skips the check for a deliberate test of an old
+    build. A test's stand-in staging (-NoAuth or -AllowTestPort) is checked only when -MainSha
+    names the sha it must serve. The session is the round's own seed (below).
+
     -Retest: for every failed card of -Round whose forwarded task is released, done or
     awaiting_real_evidence (NOT merged: an integration branch is not staging) AND whose staging
     now answers a sha other than the one the failure was found on (found_sha), the scenario is
@@ -75,6 +82,10 @@ param(
     [switch]$Retest,
     # Only post the proof of the finished round -Round (its cards.json, plan and result files).
     [switch]$PostProof,
+    # A deliberate round on a staging that does not serve main's tip.
+    [switch]$AllowStaleStaging,
+    # The sha staging must serve; empty = origin/main's tip, fetched now (the tests name it).
+    [string]$MainSha = "",
     [string]$BaseUrl = "http://127.0.0.1:28001",
     [int]$AllowTestPort = 0,
     # The stand-in staging of the tests needs no session: no seed, no session check.
@@ -110,6 +121,8 @@ $ClaudePrefixArguments = @($ClaudePrefixArguments | ForEach-Object { [string]$_ 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $Round) { $Round = "t" + [datetime]::UtcNow.ToString("yyyyMMddHHmm") }
 if ($Round -notmatch '^[a-z0-9][a-z0-9-]{0,40}$') { throw "-Round: a-z, 0-9 ve '-' (en çok 41)" }
+# The board allows RATE_PER_TASK_HOUR notes per task: the round posts under its id, a job under its card id.
+$roundTask = Get-TestTeamBoardTask -Id $Round
 $settingsPath = Join-Path $TeamRoot "cycle-settings.json"
 if (-not $OutRoot) {
     $tempRoot = Read-TeamRunTempRoot -Path $settingsPath
@@ -134,10 +147,10 @@ function Write-Json {
 
 function Send-Note {
     # The board never stops the round (board.ps1 says UYARI and exits 0 when it cannot post).
-    param([string]$Seat, [string]$Text, [string]$To = "")
+    param([string]$Seat, [string]$Text, [string]$To = "", [string]$Task = $roundTask)
     if ($NoBoard) { return }
     $board = if ($BoardScript) { $BoardScript } else { Join-Path $repoRoot "scripts\team\board.ps1" }
-    $arguments = @("-NoProfile", "-File", $board, "post", "-Seat", $Seat, "-Task", "test-team", "-Kind", "bilgi", "-Text", $Text)
+    $arguments = @("-NoProfile", "-File", $board, "post", "-Seat", $Seat, "-Task", $Task, "-Kind", "bilgi", "-Text", $Text)
     if ($To) { $arguments += @("-To", $To) }
     try { & $powershell @arguments 2>&1 | ForEach-Object { Write-Host "  pano: $_" } } catch { Write-Host "  pano: UYARI: $($_.Exception.Message)" }
 }
@@ -156,12 +169,12 @@ function Get-RoleModel {
 }
 
 function Start-RoleProcess {
-    param([string]$Role, [string]$Prompt, [string]$Seat)
+    param([string]$Role, [string]$Prompt, [string]$Seat, [string]$Task = $roundTask)
     # .claude/agents/ is the installed copy; scripts/testteam/roles/ is the source it is copied from.
     $roleFile = Join-Path $repoRoot ".claude\agents\$Role.md"
     if (-not (Test-Path -LiteralPath $roleFile)) { $roleFile = Join-Path $PSScriptRoot "roles\$Role.md" }
     $arguments = Get-TeamRunArguments -RoleFile $roleFile -Model (Get-RoleModel -Role $Role) -PrefixArguments $ClaudePrefixArguments
-    $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = "test-team" }
+    $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = $Task }
     return (Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $Prompt -WorkingDirectory $repoRoot -Environment $environment)
 }
 
@@ -329,6 +342,47 @@ if ($Retest) {
     exit 0
 }
 
+# ------------------------------------------------------------------------------ staging is main's tip
+
+if (-not (Test-TestTeamStagingUrl -Url $BaseUrl -AllowTestPort $AllowTestPort)) {
+    Write-Host "TUR REDDEDİLDİ: $BaseUrl staging değil"
+    exit 2
+}
+if ($AllowStaleStaging) { Write-Host "staging sürümü denetlenmedi (-AllowStaleStaging: eski bir sürümün bilerek denenmesi)" }
+elseif (($NoAuth -or $AllowTestPort -gt 0) -and -not $MainSha) { Write-Host "staging sürümü denetlenmedi (testin yerine geçen staging'i, -MainSha yok)" }
+else {
+    $mainTip = $MainSha
+    if (-not $mainTip) {
+        $fetched = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("fetch", "--quiet", "origin", "refs/heads/main:refs/remotes/origin/main") -TimeoutSeconds 300
+        if ($fetched.Success) {
+            $parsed = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}")
+            if ($parsed.Success) { $mainTip = ([string]$parsed.StdOut).Trim() }
+        }
+    }
+    $why = ""
+    if ($mainTip -notmatch '^[0-9a-f]{40}$') { $why = "origin/main'in ucu okunamadı; staging'in sürümü karşılaştırılamadı" }
+    else {
+        $servedSha = ""
+        try {
+            $health = Invoke-RestMethod -UseBasicParsing -Uri ($BaseUrl.TrimEnd("/") + "/v1/system/health") -TimeoutSec 15
+            $release = Get-TeamProperty -InputObject $health -Name "release"
+            if ($null -ne $release) { $servedSha = [string](Get-TeamProperty -InputObject $release -Name "version" -Default "") }
+        }
+        catch { Write-Host "  staging sağlığı okunamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+        if ($servedSha -ne $mainTip) {
+            $shown = if ($servedSha) { $servedSha } else { "okunamadı" }
+            $why = "staging eski: staging $shown, main $mainTip (önce scripts\staging\deploy.ps1 $mainTip; bilerek eski sürüm için -AllowStaleStaging)"
+        }
+    }
+    if ($why) {
+        # A refusal, not a failure: exit 4, said on the board; no plan, no card, no tester.
+        Write-Host "TUR BAŞLAMADI: $why"
+        Send-Note -Seat "test-lead" -Text ("Test PY: tur {0} başlamadı - {1}" -f $Round, $why)
+        exit 4
+    }
+    Write-Host "staging main'in ucunda: $mainTip"
+}
+
 # ------------------------------------------------------------------------------ the plan
 
 if (-not $PlanPath) {
@@ -437,12 +491,12 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         $resultFile = Join-Path $roundDir "$($card.id).result.json"
         Set-TestTeamCardState -Card $card -To "running"
         Write-Json -Path $cardsPath -Document $document
-        $run = Start-RoleProcess -Role "tester" -Prompt (New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round) -Seat $card.tester
+        $run = Start-RoleProcess -Role "tester" -Prompt (New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round) -Seat $card.tester -Task (Get-TestTeamBoardTask -Id $card.id)
         [void]$inFlight.Add([pscustomobject]@{ Card = $card; Run = $run; ResultFile = $resultFile; Deadline = [datetime]::UtcNow.AddMinutes($RunMinutes) })
         $busy += $card.tester
         Write-Host "  $($card.tester) <- $($card.id) ($($card.family))"
         # The Ofis' Test odası (officeTestRoom.tsx) reads "iş: <job>" and "sonuç: <state> - <job> - ...".
-        Send-Note -Seat $card.tester -Text (Format-TestTeamSeatNote -Card $card)
+        Send-Note -Seat $card.tester -Task (Get-TestTeamBoardTask -Id $card.id) -Text (Format-TestTeamSeatNote -Card $card)
     }
     $over = @($inFlight | Where-Object { Test-TeamRunOver -Run $_.Run -Deadline $_.Deadline })
     if (@($over).Count -eq 0) { Start-Sleep -Milliseconds 300; continue }
@@ -488,7 +542,7 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         if ($null -ne $result) { [void]$results.Add($result) }
         Write-Json -Path $cardsPath -Document $document
         Write-Host "  $($entry.Card.tester) -> $($entry.Card.id): $state"
-        Send-Note -Seat $entry.Card.tester -Text (Format-TestTeamSeatNote -Card $entry.Card -Result $result)
+        Send-Note -Seat $entry.Card.tester -Task (Get-TestTeamBoardTask -Id $entry.Card.id) -Text (Format-TestTeamSeatNote -Card $entry.Card -Result $result)
     }
 }
 

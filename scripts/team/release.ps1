@@ -37,6 +37,14 @@
          verification that does not hold: 'geri alındı' / the failure is recorded, the tasks stay
          'awaiting_release' and team/release-blocked.json is written - every later run stops on
          it until the lead removes it. This step never improvises a rollback of its own.
+      6. After a verified release staging follows (staging-follows-release, the Danışman
+         2026-10-06: a test round judged staging at an old sha): scripts\staging\deploy.ps1
+         <the released 40-hex sha>, then scripts\staging\seed.ps1 (a redeploy leaves the test
+         team's session invalid: 401 everywhere), each with its own .out/.err
+         (release-<n>.staging-deploy.*, release-<n>.staging-seed.*). The report names the sha
+         staging reached. A deploy or seed that fails is a 'risk:' line in the report and an
+         Onay Merkezi note in the tasks' reason - never a failed release (production is
+         already promoted) and never a block marker; test-round.ps1 refuses to start on it.
 
     -DryRun reads (the gate records, the host probe) and prints the decision; it writes nothing,
     takes no lock and runs no release.
@@ -69,6 +77,11 @@ param(
     [string]$EdgeDir = "/mnt/pagentos-data/edge",
     [string]$HostHealthUrl = "http://127.0.0.1:8001/v1/system/health",
     [string]$ReleaseScript = "",
+    # Staging follows the release: scripts\staging\deploy.ps1 <sha>, then seed.ps1 (the tests name fakes).
+    [string]$StagingDeployScript = "",
+    [string]$StagingSeedScript = "",
+    # deploy.ps1 builds two images and starts the stack.
+    [double]$StagingMinutes = 45,
     [string]$SshPath = (Join-Path $env:SystemRoot "System32\OpenSSH\ssh.exe"),
     [string[]]$SshPrefixArguments = @(),
     [int]$SshConnectTimeoutSec = 20,
@@ -107,6 +120,7 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 if ($CloudUser -cnotmatch '^[A-Za-z_][A-Za-z0-9_-]{0,31}$') { Write-Host "unsafe -CloudUser '$CloudUser'; nothing was done"; exit 2 }
 if ($BrokerHost -cnotmatch '^[A-Za-z0-9.-]+$') { Write-Host "unsafe -BrokerHost '$BrokerHost'; nothing was done"; exit 2 }
 if ($HostBase -cnotmatch '^/[A-Za-z0-9_./-]+$') { Write-Host "unsafe -HostBase '$HostBase'; nothing was done"; exit 2 }
+if ($StagingMinutes -le 0) { Write-Host "-StagingMinutes > 0; nothing was done"; exit 2 }
 if ($ReleaseMinutes -le 0 -or $VerifyTries -lt 1 -or $VerifyWaitSeconds -lt 0) { Write-Host "-ReleaseMinutes > 0, -VerifyTries >= 1, -VerifyWaitSeconds >= 0; nothing was done"; exit 2 }
 $probeCommand = Get-TeamHostProbeCommand -HostBase $HostBase -RecoveryRoot $RecoveryRoot -EdgeDir $EdgeDir -HealthUrl $HostHealthUrl
 
@@ -150,7 +164,7 @@ $ids = @($tasks | ForEach-Object { [string]$_.id })
 
 # ------------------------------------------------------------------ 2. the evidence, before anything is run
 
-$gate = Find-TeamReleaseGate -ReportsRoot $reportsRoot -Sha $tip
+$gate = Find-TeamReleaseGate -ReportsRoot $reportsRoot -Sha $tip -RepoRoot $repoRoot
 $cycleId = [string]$gate.CycleId
 if (-not $cycleId) {
     foreach ($task in $atTip) {
@@ -260,7 +274,7 @@ if ($DryRun) {
     $decision = Get-TeamReleaseDecision -Facts $facts
     if ($decision.Action -eq "stop") { Write-Host "  would stop: $($decision.Reason)" }
     else {
-        Write-Host "  would release: preflight, release -BlueGreen, install-recovery-supervisor.sh $tip, verify (production serves $($facts.Host.Release) on $($facts.Host.Colour))"
+        Write-Host "  would release: preflight, release -BlueGreen, install-recovery-supervisor.sh $tip, verify, staging deploy.ps1 $tip + seed.ps1 (production serves $($facts.Host.Release) on $($facts.Host.Colour))"
     }
     exit 0
 }
@@ -353,6 +367,26 @@ try {
                 [void]$lines.Add("doğrulandı: RELEASE = APPROVED_SHA = $tip, $($after.Reconcile), edge sağlığı ok")
                 $exitCode = 0
                 try { Save-Queue } catch { $exitCode = 12; [void]$lines.Add("kuyruk yazılamadı: $($_.Exception.Message); bir sonraki adım doğrulayıp yazar") }
+
+                # ---- 6. staging follows the release (production is promoted: a failure here is a risk, never a failed release)
+                $stagingSeconds = [int][Math]::Ceiling($StagingMinutes * 60)
+                $deployFile = if ($StagingDeployScript) { $StagingDeployScript } else { Join-Path $repoRoot "scripts\staging\deploy.ps1" }
+                $seedFile = if ($StagingSeedScript) { $StagingSeedScript } else { Join-Path $repoRoot "scripts\staging\seed.ps1" }
+                $deploy = Invoke-Logged -Name "staging-deploy" -FilePath $powershell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $deployFile, $tip) -WorkingDirectory $repoRoot -TimeoutSeconds $stagingSeconds
+                $seed = $null
+                if ($deploy.Success) {
+                    $seed = Invoke-Logged -Name "staging-seed" -FilePath $powershell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $seedFile) -WorkingDirectory $repoRoot -TimeoutSeconds 300
+                }
+                $staging = Get-TeamStagingOutcome -Deploy $deploy -Seed $seed -Sha $tip
+                if ($staging.Ok) { [void]$lines.Add("staging: $($staging.Reached) (deploy.ps1 STAGING DEPLOYED, seed.ps1 STAGING SEEDED)") }
+                else {
+                    $where = "kayıt team/reports/$cycleId/release-$number.staging-*.out/.err"
+                    [void]$lines.Add("risk: $($staging.Problem); üretim yayında, test turu staging main'in ucuna gelene kadar başlamaz ($where)")
+                    foreach ($task in $tasks) {
+                        Set-TaskReason -Task $task -Reason ("yayinlandi $stamp, main $tip ($($after.Colour)) | risk: $($staging.Problem) | Onay Merkezi: staging elle güncellenmeli (scripts\staging\deploy.ps1 $tip, sonra seed.ps1)")
+                    }
+                    try { Save-Queue } catch { $exitCode = 12; [void]$lines.Add("kuyruk yazılamadı: $($_.Exception.Message)") }
+                }
                 Save-Report -Result "yayınlandı" -Colour $after.Colour -LastKnownGood $after.Lkg -Lines @($lines.ToArray())
                 Write-Host "released: $tip on api-$($after.Colour) (last known good $($after.Lkg)); tasks: $($ids -join ', ')"
             }

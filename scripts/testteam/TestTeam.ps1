@@ -32,6 +32,25 @@ $script:TestTeamTestPortHigh = 49999
 $script:TestTeamAdvisorSeat = "danisman"
 # A fix is on staging only once the queue says it left the branch for main.
 $script:TestTeamRetestStates = @("released", "done", "awaiting_real_evidence")
+# services/api/app/team/board.py TASK_PATTERN (case-sensitive there: compare with -cmatch). The
+# board allows RATE_PER_TASK_HOUR notes per task: a job posts under its own id, a round under its id.
+$script:TestTeamBoardTaskPattern = '^[a-z0-9][a-z0-9-]{2,63}$'
+
+function Get-TestTeamBoardTask {
+    <#
+    .SYNOPSIS
+        The board task a note of a round (-Id <round>) or of a job (-Id <card id>) is posted
+        under: the id in lowercase, 'test-<id>' when that is shorter than the board takes
+        ('t1' -> 'test-t1'). An id that still is no task id is refused here, not by a 422.
+    #>
+    param([string]$Id)
+    # An empty id would become 'test-', which the board takes: one shared task again.
+    if (-not $Id) { throw "boş kimlik bir pano görev kimliği olamaz" }
+    $task = $Id.ToLowerInvariant()
+    if ($task -cnotmatch $script:TestTeamBoardTaskPattern) { $task = "test-$task" }
+    if ($task -cnotmatch $script:TestTeamBoardTaskPattern) { throw "'$Id' bir pano görev kimliği olamaz ($script:TestTeamBoardTaskPattern)" }
+    return $task
+}
 
 function Test-TestTeamTestPort {
     <# Whether -AllowTestPort names a port of the tests' range (41000-49999); 0 is "none". #>

@@ -580,6 +580,83 @@ Test-Case "the verification wants RELEASE, APPROVED_SHA, the reconcile's last li
     Assert-True -Condition (-not (Test-TeamReleaseVerified -Probe $old -Sha $shaB).Ok) -Because "a RECONCILE OK for ANOTHER sha is not the reconcile of this release"
 }
 
+# ---------------------------------------------------------------------------- the evidence: a 'gate A + rerun B' record
+
+Write-Host ""
+Write-Host "the evidence: a full gate's record, or a 'gate A + rerun B' one that chains (card gate-rerun-failed-steps)"
+
+function New-ChainedGateRecords {
+    <#
+        A git repository in TEMP (A, its child B, and 'side': A's other child) and team/reports/c1 with
+        gate-1 red on -A in "API integration tests" (its log FAIL in that step) and gate-2 green for
+        main 'm'*40: gate A + rerun -B of -Steps, its rerun log green for those steps.
+    #>
+    param([string]$A = "", [string]$B = "", [string[]]$Steps = @("Required files", "API integration tests"))
+    $root = Join-Path $env:TEMP ("pagentos-relchain-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
+    [void](New-Item -ItemType Directory -Force -Path $root)
+    foreach ($g in @(@("init", "-q", "-b", "main"), @("config", "user.name", "t"), @("config", "user.email", "t@example.invalid"))) { [void](Invoke-TeamGit -WorkingDirectory $root -Arguments $g) }
+    $commit = { param([string]$Name) Set-Content -LiteralPath (Join-Path $root $Name) -Value $Name -Encoding ASCII; [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("add", "-A")); [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("commit", "-q", "-m", $Name)); (Invoke-TeamGit -WorkingDirectory $root -Arguments @("rev-parse", "HEAD")).StdOut.Trim() }
+    $shas = @{ A = (& $commit "a.txt") }
+    $shas.B = & $commit "b.txt"
+    [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("checkout", "-q", "-b", "side", $shas.A))
+    $shas.Side = & $commit "side.txt"
+    $gateA = $(if ($A) { $shas[$A] } else { $shas.A })
+    $rerunB = $(if ($B) { $shas[$B] } else { $shas.B })
+    $reports = Join-Path $root "team\reports"
+    $dir = Join-Path $reports "c1"
+    [void](New-Item -ItemType Directory -Force -Path $dir)
+    $all = @("Required files", "API unit tests", "API integration tests", "Web shell build")
+    $log = { param([string[]]$Red, [string[]]$Ran)
+        $lines = New-Object System.Collections.ArrayList
+        foreach ($s in $Ran) { [void]$lines.Add(""); [void]$lines.Add("=== $s ==="); [void]$lines.Add($(if ($Red -contains $s) { "FAILED: the step failed" } else { "ok" })) }
+        [void]$lines.Add(""); [void]$lines.Add("=== Quality gate summary ===")
+        foreach ($s in $all) { [void]$lines.Add("$s $(if ($Ran -notcontains $s) { 'SKIPPED' } elseif ($Red -contains $s) { 'FAIL' } else { 'PASS' }) 1.0 0") }
+        [void]$lines.Add($(if (@($Red).Count -gt 0) { "QUALITY GATE: FAIL" } else { "QUALITY GATE: PASS" }))
+        ($lines.ToArray()) -join "`n" }
+    [System.IO.File]::WriteAllText((Join-Path $dir "gate-1.log"), (& $log @("API integration tests") $all), (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText((Join-Path $dir "gate-2.log"), (& $log @() $Steps), (New-Object System.Text.UTF8Encoding($false)))
+    Write-TeamJson -Path (Join-Path $dir "gate-1.json") -Document ([pscustomobject]@{ n = 1; branch = "integrate/c1"; at = "2026-10-07T00:00:00Z"; result = "red"; sha = $gateA; steps = @("API integration tests"); log = "team/reports/c1/gate-1.log" })
+    # The green record's `log` is A's (red) log, as integrate.ps1 writes it: only the chain makes it evidence.
+    Write-TeamJson -Path (Join-Path $dir "gate-2.json") -Document ([pscustomobject]@{ n = 2; branch = "integrate/c1"; at = "2026-10-07T01:00:00Z"; result = "green"; sha = $rerunB; main = "m" * 40
+        log = "team/reports/c1/gate-1.log"; rerun_of = 1; gate_sha = $gateA; gate_log = "team/reports/c1/gate-1.log"; rerun_log = "team/reports/c1/gate-2.log"; rerun_steps = @($Steps) })
+    return [pscustomobject]@{ Root = $root; Reports = $reports }
+}
+
+function Remove-ChainedGateRecords {
+    param([string]$Root)
+    for ($attempt = 0; $attempt -lt 5; $attempt++) { try { Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 400 } }
+}
+
+Test-Case "a chained 'gate A + rerun B' record (B descends from A, the red step rerun green) is the gate's evidence; its log is the rerun's" {
+    $box = New-ChainedGateRecords
+    try {
+        $found = Find-TeamReleaseGate -ReportsRoot $box.Reports -Sha ("m" * 40) -RepoRoot $box.Root
+        Assert-True -Condition ([bool]$found.Found -and [bool]$found.Pass) -Because "chained: $($found.Why)"
+        Assert-Equal -Expected "team/reports/c1/gate-2.log" -Actual $found.Log -Because "the evidence is the rerun's log, not A's red one"
+        Assert-Equal -Expected "c1" -Actual $found.CycleId -Because "the record's cycle"
+        # Without the repository the chain cannot be checked (does B descend from A?): closed, as before.
+        $blind = Find-TeamReleaseGate -ReportsRoot $box.Reports -Sha ("m" * 40)
+        Assert-True -Condition ([bool]$blind.Found -and -not [bool]$blind.Pass) -Because "no -RepoRoot: A's FAIL log is read and refused: $($blind.Why)"
+    }
+    finally { Remove-ChainedGateRecords -Root $box.Root }
+}
+
+Test-Case "a broken chain is refused: B not descended from A, or the red step not rerun" {
+    $cases = @(
+        @{ Name = "B does not descend from A"; Box = { New-ChainedGateRecords -A "Side" -B "B" } },
+        @{ Name = "the red step was not rerun"; Box = { New-ChainedGateRecords -Steps @("Required files") } }
+    )
+    foreach ($case in $cases) {
+        $box = & $case.Box
+        try {
+            $found = Find-TeamReleaseGate -ReportsRoot $box.Reports -Sha ("m" * 40) -RepoRoot $box.Root
+            Assert-True -Condition ([bool]$found.Found -and -not [bool]$found.Pass) -Because "$($case.Name): refused, not passed ($($found.Why))"
+            Assert-True -Condition ([string]$found.Why -match 'zincir|yeniden') -Because "$($case.Name): the chain's own reason: $($found.Why)"
+        }
+        finally { Remove-ChainedGateRecords -Root $box.Root }
+    }
+}
+
 # ============================================================================ the step
 
 Write-Host ""
@@ -587,6 +664,29 @@ Write-Host "the step, in a repository of its own, with the fake release script a
 
 $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $sandboxes = New-Object System.Collections.ArrayList
+
+# Stand-ins for scripts/staging/deploy.ps1 and seed.ps1: each call is a line in the host's
+# calls.log ("staging|deploy|<sha>", "staging|seed"); PAGENTOS_FAKE_STAGING_SCENARIO
+# deploy-fail / seed-fail makes that one fail. Both write to stderr as well (docker's progress).
+$fakeStagingDir = Join-Path $env:TEMP ("pagentos-rel-staging-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+[void]$sandboxes.Add($fakeStagingDir)
+[void](New-Item -ItemType Directory -Force -Path $fakeStagingDir)
+$fakeStagingDeploy = Join-Path $fakeStagingDir "deploy.ps1"
+$fakeStagingSeed = Join-Path $fakeStagingDir "seed.ps1"
+[System.IO.File]::WriteAllText($fakeStagingDeploy, @'
+$sha = [string]$args[0]
+[IO.File]::AppendAllText((Join-Path $env:PAGENTOS_FAKE_HOST "calls.log"), "staging|deploy|$sha`n")
+[Console]::Error.WriteLine("#12 building pagentos-staging/cloud-core")
+if ($env:PAGENTOS_FAKE_STAGING_SCENARIO -eq "deploy-fail") { [Console]::Out.WriteLine("STAGING DEPLOY FAILED: api image build failed"); exit 1 }
+[Console]::Out.WriteLine("STAGING DEPLOYED: $sha at http://127.0.0.1:28000/")
+exit 0
+'@, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($fakeStagingSeed, @'
+[IO.File]::AppendAllText((Join-Path $env:PAGENTOS_FAKE_HOST "calls.log"), "staging|seed`n")
+if ($env:PAGENTOS_FAKE_STAGING_SCENARIO -eq "seed-fail") { [Console]::Out.WriteLine("STAGING SEED FAILED: session exchange refused"); exit 1 }
+[Console]::Out.WriteLine("STAGING SEEDED: staging owner session s1 is valid")
+exit 0
+'@, (New-Object System.Text.UTF8Encoding($false)))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Invoke-SandboxGit {
@@ -615,7 +715,7 @@ function New-Sandbox {
     [void]$sandboxes.Add($root); [void]$sandboxes.Add($hostDir); [void]$sandboxes.Add("$root-origin.git")
     foreach ($folder in @("scripts\lib", "scripts\team", "team", "src")) { [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $folder)) }
     [void](New-Item -ItemType Directory -Force -Path $hostDir)
-    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamIntegrate.ps1", "TeamRelease.ps1")) {
+    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamIntegrate.ps1", "TeamGateRerun.ps1", "TeamRelease.ps1")) {
         $from = Join-Path $repoRoot "scripts\lib\$name"
         if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination (Join-Path $root "scripts\lib\$name") }
     }
@@ -655,7 +755,20 @@ function New-Sandbox {
 
     $reports = Join-Path $root "team\reports\c1"
     [void](New-Item -ItemType Directory -Force -Path $reports)
-    if ($Gate -ne "none") {
+    if ($Gate -eq "chained") {
+        # gate A (the served commit) red in one step, then rerun B (the tip, A's child) of that step green.
+        $sectionLog = { param([string]$Result)
+            "`n=== Required files ===`nok`n`n=== API integration tests ===`n" + $(if ($Result -eq "FAIL") { "FAILED: the step failed" } else { "ok" }) +
+            "`n`n=== Quality gate summary ===`nRequired files PASS 1.0 0`nAPI integration tests $Result 1.0 0`nQUALITY GATE: $Result" }
+        Write-TeamJson -Path (Join-Path $reports "gate-1.json") -Document ([pscustomobject]@{
+                n = 1; branch = "integrate/c1"; at = "2026-10-03T09:00:00Z"; result = "red"; sha = $served; steps = @("API integration tests"); log = "team/reports/c1/gate-1.log" })
+        [System.IO.File]::WriteAllText((Join-Path $reports "gate-1.log"), (& $sectionLog "FAIL"), $utf8)
+        Write-TeamJson -Path (Join-Path $reports "gate-2.json") -Document ([pscustomobject]@{
+                n = 2; branch = "integrate/c1"; at = "2026-10-03T10:00:00Z"; result = "green"; sha = $tip; main = $tip; log = "team/reports/c1/gate-1.log"
+                rerun_of = 1; gate_sha = $served; gate_log = "team/reports/c1/gate-1.log"; rerun_log = "team/reports/c1/gate-2.log"; rerun_steps = @("Required files", "API integration tests") })
+        [System.IO.File]::WriteAllText((Join-Path $reports "gate-2.log"), (& $sectionLog "PASS"), $utf8)
+    }
+    elseif ($Gate -ne "none") {
         $gatedMain = if ($Gate -eq "other-sha") { $served } else { $tip }
         Write-TeamJson -Path (Join-Path $reports "gate-1.json") -Document ([pscustomobject]@{
                 n = 1; branch = "integrate/c1"; at = "2026-10-03T10:00:00Z"; result = "green"; sha = $gatedMain; main = $gatedMain; log = "team/reports/c1/gate-1.log" })
@@ -673,12 +786,13 @@ function New-Sandbox {
 }
 
 function Invoke-Release {
-    param($Box, [string]$Scenario = "ok", [string]$Extra = "")
-    $set = @{ PAGENTOS_FAKE_HOST = $Box.Host; PAGENTOS_FAKE_RELEASE_SCENARIO = $Scenario }
+    param($Box, [string]$Scenario = "ok", [string]$Extra = "", [string]$Staging = "ok")
+    $set = @{ PAGENTOS_FAKE_HOST = $Box.Host; PAGENTOS_FAKE_RELEASE_SCENARIO = $Scenario; PAGENTOS_FAKE_STAGING_SCENARIO = $Staging }
     foreach ($name in @($set.Keys)) { Set-Item -Path "Env:\$name" -Value $set[$name] }
     try {
         $command = "& '" + (Join-Path $Box.Root "scripts\team\release.ps1") + "' -Machine 'MAIL'" +
         " -ReleaseScript '$fakeRelease' -SshPath '$powershell'" +
+        " -StagingDeployScript '$fakeStagingDeploy' -StagingSeedScript '$fakeStagingSeed'" +
         " -SshPrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','$fakeRelease','ssh'" +
         " -VerifyWaitSeconds 0" + $(if ($Extra) { " " + $Extra } else { "" })
         $result = Invoke-NativeProcess -FilePath $powershell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ($command + "; exit `$LASTEXITCODE")) `
@@ -759,6 +873,51 @@ try {
         Assert-True -Condition ($releaseErr -match "nginx: \[notice\]" -and $releaseErr -notmatch "RELEASE OK") -Because "stderr only in .err: $releaseErr"
     }
 
+    Test-Case "staging follows: after RELEASE OK the staging deploy runs with the released sha, then seed.ps1; the report names the staging sha reached" {
+        # The Danışman, 2026-10-06: production 72884b71, staging still 6a21294c - the test round judged old code.
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        $staging = @($run.Calls | Where-Object { $_ -match '^staging\|' })
+        Assert-Equal -Expected "staging|deploy|$($box.Tip) / staging|seed" -Actual ($staging -join " / ") -Because "deploy with the FULL released sha, then seed: $($run.Calls -join ' / ')"
+        $order = @($run.Calls)
+        Assert-True -Condition ([array]::IndexOf($order, "ssh|pin|$($box.Tip)") -lt [array]::IndexOf($order, "staging|deploy|$($box.Tip)")) -Because "staging only after production is pinned: $($order -join ' / ')"
+        Assert-True -Condition ($run.Report -match ("staging: " + $box.Tip)) -Because "the report records the staging sha reached: $($run.Report)"
+        foreach ($step in @("staging-deploy", "staging-seed")) {
+            Assert-True -Condition (@($run.Files | Where-Object { $_ -eq "release-1.$step.out" -or $_ -eq "release-1.$step.err" }).Count -eq 2) -Because "$step has its own .out and .err: $($run.Files -join ', ')"
+        }
+        $deployErr = [System.IO.File]::ReadAllText((Join-Path $run.Reports "release-1.staging-deploy.err"), [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($deployErr -match "building" -and $deployErr -notmatch "STAGING DEPLOYED") -Because "the streams are not merged: $deployErr"
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "released"
+    }
+
+    Test-Case "a staging deploy that fails leaves the release OK: risk line in the report, an Onay Merkezi note on the task, no block marker, no seed" {
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box -Staging "deploy-fail"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "production is promoted; the release is OK: $($run.Output)"
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "the task is released"
+        Assert-Equal -Expected $false -Actual $run.Blocked -Because "no block marker for a staging failure"
+        Assert-True -Condition ($run.Report -match "risk: staging") -Because "the risk line: $($run.Report)"
+        Assert-True -Condition ([string]$run.Task.reason -match "^yayinlandi " -and [string]$run.Task.reason -match "Onay Merkezi" -and [string]$run.Task.reason -match "staging") -Because "the task says it for the Onay Merkezi: $($run.Task.reason)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_ -eq "staging|seed" }).Count -Because "no seed on a staging that did not move: $($run.Calls -join ' / ')"
+    }
+
+    Test-Case "a staging seed that fails is a risk line too, never a failed release" {
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box -Staging "seed-fail"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "released"
+        Assert-True -Condition ($run.Report -match "risk: staging" -and $run.Report -match "seed") -Because "the risk line names the seed: $($run.Report)"
+        Assert-True -Condition ([string]$run.Task.reason -match "Onay Merkezi") -Because $run.Task.reason
+    }
+
+    Test-Case "a failed release never moves staging" {
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box -Scenario "rollback"
+        Assert-Equal -Expected 6 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_ -match '^staging\|' }).Count -Because "no staging call: $($run.Calls -join ' / ')"
+    }
+
     Test-Case "the step's source never merges stderr into stdout (2>&1) - least of all where it runs the release or ssh" {
         foreach ($path in @($releaseScript, $releaseLib)) {
             Assert-True -Condition (Test-Path -LiteralPath $path) -Because "$path exists"
@@ -782,6 +941,14 @@ try {
         $run = Invoke-Release -Box $box
         Assert-Stopped -Run $run -Words "kapı PASS demiyor"
         Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no command at all: $($run.Calls -join ' / ')"
+    }
+
+    Test-Case "a chained 'gate A + rerun B' record is the step's evidence: the step passes its repository and releases the tip" {
+        $box = New-Sandbox -Gate "chained"
+        $run = Invoke-Release -Box $box
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "released on the chain: $($run.Task.reason)"
+        Assert-True -Condition ($run.Report -match "gate-2\.log") -Because "the report names the rerun's log as the gate's record: $($run.Report)"
     }
 
     Test-Case "a gate log for ANOTHER sha: stop, nothing run" {

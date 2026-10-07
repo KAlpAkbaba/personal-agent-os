@@ -828,8 +828,8 @@ function ConvertTo-TeamSplitTasks {
 # (pm-duty-stopped, the owner of 2026-10-03: "Böyle bulgular bulunduğunda konuyu proje
 # yöneticisine iletsinler, proje yöneticisi de sana iletsin.") A task the cycle stopped wakes ONE
 # lead run that writes a decision file; as with a split, THIS side judges the file and takes it
-# whole or refuses it whole. The lead-protected paths are TeamArea.ps1's list - one list; without
-# it loaded nothing is accepted.
+# whole or refuses it whole. The lead-protected paths are the list in TeamAreaProtected.ps1 (loaded
+# by TeamArea.ps1) - one list; without it loaded nothing is accepted.
 
 # What a decision writes in front of the reason. A stopped task whose reason starts with the
 # first is the Danışman's: it is never handed to a duty run again until somebody else moves it.
@@ -925,11 +925,11 @@ function Test-TeamDuty {
     #>
     param($Decisions, [string[]]$Listed = @(), [Parameter(Mandatory = $true)]$Queue)
     $problems = New-Object System.Collections.ArrayList
-    # The protected list is TeamArea.ps1's; without it a grant cannot be judged, and a judge
-    # that cannot judge refuses.
+    # The protected list is TeamAreaProtected.ps1's (TeamArea.ps1 loads it); without it a grant
+    # cannot be judged, and a judge that cannot judge refuses.
     foreach ($needed in @("ConvertTo-TeamAreaPath", "Get-TeamAreaProtection")) {
         if ($null -eq (Get-Command -Name $needed -CommandType Function -ErrorAction SilentlyContinue)) {
-            [void]$problems.Add("the protected-path list (scripts/lib/TeamArea.ps1) is not loaded: no decision is accepted")
+            [void]$problems.Add("the protected-path list (scripts/lib/TeamAreaProtected.ps1) is not loaded: no decision is accepted")
             return @($problems.ToArray())
         }
     }
