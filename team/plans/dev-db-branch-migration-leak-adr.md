@@ -47,17 +47,31 @@ başarısız olur (dev API / Temporal işçisi bağlı tutar); (c) geri alma bug
 dosyada kapatıyor. Önerim: ayrı bir kart olarak, `test-slot.ps1 run -ScratchDatabase` gibi bir
 seçenekle başlayıp entegrasyon paketinin URL'i dışarıdan almasını sağlamak.
 
+## guards-integration-tests-own-db ve kapının kendi veritabanı ile ilişkisi (2026-10-07 yeniden kontrol)
+Danışman sordu: guards-integration-tests-own-db (8b0353dd, integrate/d20261006) aynı sorunu çözüyor mu?
+Hayır, yalnız bir parçasını:
+- O kart `scripts/lib/TeamGuards.ps1`'deki birleştirme sonrası KORUYUCULARI (`services/api/tests/integration/`
+  altındaki pytest koruyucuları) kendi `pagentos_g_*` veritabanına taşır. Kapı da artık
+  (`scripts/lib/GateDatabase.ps1`, ADR-0254) kendi `pagentos_gate_*` veritabanında koşar; yani 2026-10-04'teki
+  kırmızı kapı bugün aynı yoldan tekrarlamaz.
+- Ama `test-slot.ps1 run` ile ELLE koşulan işçi/denetleyici Postgres testleri hâlâ ayarların gösterdiği
+  veritabanına gider; `pagentos_scratch_*` kullanmak bir alışkanlık, zorunluluk değil. URL'i ayarlamayan
+  bir koşu paylaşılan `pagentos`'u kendi dalının başına taşır; dev API'si (main) ve kendi veritabanını
+  kurmayan her araç o zaman 'Can't locate revision' ile düşer. Bu kartın koruması tam bu yolu kapatır;
+  scratch veritabanında koşan bir koşuda kayıt o veritabanını gösterir ve iş yapmadan geçer.
+Kart kapanmadı; dal team/nightly/lead (93122258) üstüne rebase edildi, test-slot.ps1'deki pano
+satırlarıyla (8322f909) çakışma ikisini yan yana tutarak çözüldü.
+
 ## Bilinen sınırlar
-- Kapı (`quality-gate.ps1`) slotları kütüphaneden doğrudan alır, `test-slot.ps1`'den geçmez: kırmızı
-  kalan bir kapı koşusu dev veritabanını kendi dalının başında bırakabilir. Kapsamak bu kartın
-  alanı dışında (takip kartı).
+- Kapı (`quality-gate.ps1`) slotları kütüphaneden doğrudan alır, `test-slot.ps1`'den geçmez; ama artık
+  kendi `pagentos_gate_*` veritabanında koştuğu için paylaşılan veritabanını taşımaz. Kalan boşluk:
+  kapı, ölü bir koşunun `database-guard.json` kaydını tamamlamaz (takip kartı).
 - `test-slot.ps1` dışında (slotsuz) elle koşulan alembic ya da pytest korunmaz.
 - Downgrade fonksiyonu eksik/yanlış yazılmış bir göç geri alınamaz: tam olarak bu durumda kilit devreye
   girer ve Danışman bakar.
 - Her korunan koşu 2-4 `uv run python` yoklaması ekler (her biri birkaç saniye).
 - Öldürülen bir koşunun geri alınması ancak SONRAKİ `test-slot.ps1 run` (database) ile olur;
-  arada kapı (kütüphaneden slot alır, kayda bakmaz) ya da slotsuz bir alembic koşarsa dev veritabanı
-  hâlâ yeni baştadır. Kapının da kayda bakması takip kartı.
+  arada slotsuz bir alembic ya da dev API'si koşarsa dev veritabanı hâlâ yeni baştadır.
 - Komutun kendi alt süreçleri (ör. pytest'in açtığı bir sunucu) kayıtta yok; yalnız doğrudan komutun
   pid'i izlenir. Sarmalayıcıyla birlikte süreç ağacı öldürülürse (taskkill /T) sorun yok.
 - Testler Base/Head'i ağacın kendisinden türetir (`alembic heads`, başın Parent'ı); yeni göç
