@@ -164,7 +164,7 @@ $ids = @($tasks | ForEach-Object { [string]$_.id })
 
 # ------------------------------------------------------------------ 2. the evidence, before anything is run
 
-$gate = Find-TeamReleaseGate -ReportsRoot $reportsRoot -Sha $tip
+$gate = Find-TeamReleaseGate -ReportsRoot $reportsRoot -Sha $tip -RepoRoot $repoRoot
 $cycleId = [string]$gate.CycleId
 if (-not $cycleId) {
     foreach ($task in $atTip) {

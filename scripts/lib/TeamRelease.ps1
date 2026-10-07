@@ -668,8 +668,13 @@ function Find-TeamReleaseGate {
         (team/reports/<cycle>/gate-<n>.json) whose `main` IS the sha, and its log beside it,
         which must say QUALITY GATE: PASS (Read-TeamGateLog, the integrate step's own reader).
         No record for that sha, or no log: Found is false.
+        A 'gate A + rerun B' record (one with `rerun_of`, card gate-rerun-failed-steps) is evidence
+        only through its chain (Test-TeamGateRerunChain: A's FAIL log red only in the steps B
+        reran green, B descends from A); Log is then the rerun's log. That needs git: without
+        -RepoRoot, or without scripts/lib/TeamGateRerun.ps1, the record's own log (A's, red) is
+        read as before and the record is refused.
     #>
-    param([Parameter(Mandatory = $true)][string]$ReportsRoot, [Parameter(Mandatory = $true)][string]$Sha)
+    param([Parameter(Mandatory = $true)][string]$ReportsRoot, [Parameter(Mandatory = $true)][string]$Sha, [string]$RepoRoot = "")
     $none = { param([string]$Why) [pscustomobject]@{ Found = $false; Pass = $false; Why = $Why; Directory = ""; CycleId = ""; Log = "" } }
     if (-not (Test-Path -LiteralPath $ReportsRoot)) { return (& $none "team/reports yok") }
     $best = $null
@@ -684,6 +689,15 @@ function Find-TeamReleaseGate {
         }
     }
     if ($null -eq $best) { return (& $none "main $Sha için yeşil kapı kaydı (team/reports/<döngü>/gate-<n>.json) bulunamadı") }
+    $rerunOf = Get-TeamProperty -InputObject $best.Record -Name "rerun_of" -Default $null
+    if ($null -ne $rerunOf -and $RepoRoot -and (Get-Command -Name Test-TeamGateRerunChain -ErrorAction SilentlyContinue)) {
+        $chain = Test-TeamGateRerunChain -RepoRoot $RepoRoot -Directory $best.Folder.FullName -Record $best.Record
+        $rerunLog = Split-Path -Leaf ([string](Get-TeamProperty -InputObject $best.Record -Name "rerun_log" -Default ""))
+        return [pscustomobject]@{
+            Found = $true; Pass = [bool]$chain.Ok; Why = $(if ($chain.Ok) { "" } else { "zincirli kapı kaydı reddedildi: $($chain.Why)" })
+            Directory = $best.Folder.FullName; CycleId = $best.Folder.Name; Log = $(if ($rerunLog) { "team/reports/$($best.Folder.Name)/$rerunLog" } else { "" })
+        }
+    }
     $logName = Split-Path -Leaf ([string](Get-TeamProperty -InputObject $best.Record -Name "log" -Default ""))
     $relative = "team/reports/$($best.Folder.Name)/$logName"
     $logPath = if ($logName) { Join-Path $best.Folder.FullName $logName } else { "" }
