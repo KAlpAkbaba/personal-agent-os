@@ -599,7 +599,7 @@ Test-Case "a round deals four jobs to four testers at once, gets four results ba
         Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
         Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"saglik","scenario":"scripts/testteam/scenarios/health.json"},{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"yuk","scenario":"scripts/testteam/scenarios/yuk.json","improvise":true},{"family":"iptal","scenario":"scripts/testteam/scenarios/iptal.json","improvise":true}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"saglik","scenario":"scripts/testteam/scenarios/health.json"},{"roadmap_row":"Repairs and improves itself","family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"roadmap_row":"Repairs and improves itself","family":"yuk","scenario":"scripts/testteam/scenarios/yuk.json","improvise":true},{"roadmap_row":"Repairs and improves itself","family":"iptal","scenario":"scripts/testteam/scenarios/iptal.json","improvise":true}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
@@ -666,7 +666,7 @@ while (`$true) {
         [void](New-Item -ItemType Directory -Force -Path $team)
         $token = Join-Path $work "token.txt"; Write-Utf8 $token "test-token"
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"saglik","scenario":"s.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"roadmap_row":"Repairs and improves itself","family":"saglik","scenario":"s.json"}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
@@ -698,7 +698,7 @@ Test-Case "under the memory floor a round starts no tester and says so; while a 
         [void](New-Item -ItemType Directory -Force -Path $team)
         Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"},{"family":"b","scenario":"b.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"a","scenario":"a.json"},{"roadmap_row":"Repairs and improves itself","family":"b","scenario":"b.json"}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
@@ -733,7 +733,7 @@ Test-Case "measured, not assumed: the machine's own free memory and the test-slo
             first_asked = $now; last_asked = $now; granted_at = $now; started_at = $now; holder_pid = $PID; holder_start = "" }
         Write-Utf8 (Join-Path $slots "entries\t-gate.json") ($gateEntry | ConvertTo-Json -Compress)
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"},{"family":"b","scenario":"b.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"a","scenario":"a.json"},{"roadmap_row":"Repairs and improves itself","family":"b","scenario":"b.json"}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "measured" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -SlotStore $slots -NoBoard 2>&1
@@ -762,7 +762,7 @@ Test-Case "the cap is measured again before every tester start: memory that runs
         Write-Utf8 $settings '{"test_parallel":4,"test_memory_floor_gb":8}'
         $plan = Join-Path $work "plan.json"
         # Five jobs: tester-1 has the first and the fifth; its first job squeezes the memory.
-        Write-Utf8 $plan '{"jobs":[{"family":"sikis","scenario":"a.json"},{"family":"b","scenario":"b.json"},{"family":"c","scenario":"c.json"},{"family":"d","scenario":"d.json"},{"family":"e","scenario":"e.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"sikis","scenario":"a.json"},{"roadmap_row":"Repairs and improves itself","family":"b","scenario":"b.json"},{"roadmap_row":"Repairs and improves itself","family":"c","scenario":"c.json"},{"roadmap_row":"Repairs and improves itself","family":"d","scenario":"d.json"},{"roadmap_row":"Repairs and improves itself","family":"e","scenario":"e.json"}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $env:PAGENTOS_FAKE_SQUEEZE = $settings
@@ -794,7 +794,7 @@ Test-Case "a round's run data goes under run_temp_root, never into the checkout"
         $runTemp = Join-Path $work "run-temp"
         Write-Utf8 (Join-Path $team "cycle-settings.json") ('{"test_parallel":4,"run_temp_root":' + (ConvertTo-Json -InputObject $runTemp) + '}')
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"a","scenario":"a.json"}]}'
         $out = & $powershell -NoProfile -File $testRound -NoAuth -Round "where" -TeamRoot $team -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends (no memory, no tester): $out"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $runTemp "testteam\where\cards.json")) -Because "the cards are under run_temp_root: $out"
@@ -973,7 +973,7 @@ Test-Case "a round seeds the staging session once before the first tester; a see
         Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
         Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"saglik","scenario":"s.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"roadmap_row":"Repairs and improves itself","family":"saglik","scenario":"s.json"}]}'
         $fake = New-FakeTester -Dir $work
         $seed = New-FakeSeed -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
@@ -1026,7 +1026,7 @@ Test-Case "a job whose steps all answer 401 while the round's session is dead is
         Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
         Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"kopuk","scenario":"scripts/testteam/scenarios/watches.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"kopuk","scenario":"scripts/testteam/scenarios/watches.json"}]}'
         $fake = New-FakeTester -Dir $work
         $seed = New-FakeSeed -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
@@ -1062,7 +1062,7 @@ Test-Case "a job with a 500 among its 401s on a dead session is forwarded, even 
         Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
         Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"karma","scenario":"scripts/testteam/scenarios/watches.json"},{"family":"karma-ortam","scenario":"scripts/testteam/scenarios/watches.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"karma","scenario":"scripts/testteam/scenarios/watches.json"},{"roadmap_row":"Repairs and improves itself","family":"karma-ortam","scenario":"scripts/testteam/scenarios/watches.json"}]}'
         $fake = New-FakeTester -Dir $work
         $seed = New-FakeSeed -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
@@ -1124,7 +1124,7 @@ Test-Case "a round sends its breaking report to the board as test-lead, addresse
         Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
         Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"yuk","scenario":"scripts/testteam/scenarios/yuk.json","improvise":true}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"yuk","scenario":"scripts/testteam/scenarios/yuk.json","improvise":true}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         # A stand-in board.ps1: one line per post, its arguments joined by '|'.
@@ -1164,7 +1164,7 @@ function Invoke-StagingRound {
         Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
         Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
         $plan = Join-Path $work "plan.json"
-        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"saglik","scenario":"s.json"}]}'
+        Write-Utf8 $plan '{"jobs":[{"roadmap_row":"Repairs and improves itself","family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"roadmap_row":"Repairs and improves itself","family":"saglik","scenario":"s.json"}]}'
         $fake = New-FakeTester -Dir $work
         $seed = New-FakeSeed -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"

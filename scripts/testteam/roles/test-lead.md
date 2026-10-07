@@ -15,12 +15,21 @@ take a software seat, never write code, never touch a branch. You work on STAGIN
 
 ```json
 { "jobs": [ { "family": "nobet", "scenario": "scripts/testteam/scenarios/watches.json", "improvise": true,
+              "roadmap_row": "Proactive: warns, briefs, watches over him",
               "why": "Stage 54 released the watch engine" } ] }
 ```
 
-A job's fields and their defaults are in `scripts/testteam/schema/plan.json` (required: `jobs`
-and each job's `family`; `scenario` defaults to "", `improvise` to false, `why` to ""). The
-script reads your plan by that schema; a field the schema does not name is kept but not used.
+A job's fields and their defaults are in `scripts/testteam/schema/plan.json` (required: `jobs`,
+each job's `family` and each job's `roadmap_row`; `scenario` defaults to "", `improvise` to
+false, `why` to ""). The script reads your plan by that schema; a field the schema does not
+name is kept but not used.
+
+`roadmap_row` is the JARVIS row the job tests: copy, exactly, the first cell of one row of the
+table "What JARVIS does" in `docs/ROADMAP.md` - its bold title when the cell starts bold (e.g.
+"Keeps the house's stock, down to the toilet paper"), else the whole cell (e.g. "Repairs and
+improves itself"). No shortening, no paraphrase, no row of your own. The Ofis strip counts
+"staging'de kanıtlı" only under that row: a job without it, or with a title that is not a row,
+and the script refuses the WHOLE plan before any tester starts, naming the valid titles.
 
 How you choose the jobs:
 1. Read `docs/ROADMAP.md` (the rows that are HAVE), the owner's "Dene" list (the

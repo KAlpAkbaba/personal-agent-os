@@ -1,6 +1,8 @@
 # ADR draft - every test plan job names the JARVIS row it tests (test-plan-names-roadmap-rows)
 
-Status: draft (rounds 1-2: red tests only; implementation waits for the area request below)
+Status: draft, implemented in round 3 (the area widened). One step is left for the lead:
+`.claude/agents/test-lead.md` must be copied from `scripts/testteam/roles/test-lead.md`
+(byte-equal). The worker's write under `.claude/agents/` was refused by the permission layer.
 
 ## Context
 
@@ -26,7 +28,11 @@ test-round.ps1 reads the plan with plain `Read-TeamJson`, not the schema reader.
   title, so the generated half documents stay valid.
 - `test-round.ps1`: the plan goes through `Read-TestTeamPlan`. An unreadable plan stops the
   round before cards or testers start (exit 1, the Why printed, and a board note when the
-  board is on). The cards are made from the shaped `Value`.
+  board is on). The cards are made from the shaped `Value`. `Get-RoundProof` reads the plan
+  the same way, so the proof names the row by its bold title even when the plan wrote the
+  whole cell. An older plan, which `-PostProof` may re-post, is still read as written.
+- The match is exact: whitespace is collapsed and the comparison is ordinal. The half
+  documents gain an `enum-disi:jobs[0].roadmap_row` case, generated from `values_from`.
 - Both test-lead.md copies (kept byte-equal) ask for the field. They point at the JARVIS table
   ("What JARVIS does") and give an example that carries a real title.
 
@@ -36,8 +42,8 @@ test-round.ps1 reads the plan with plain `Read-TeamJson`, not the schema reader.
   nothing is refused loudly instead of passing silently.
 - A ROADMAP.md row rename refuses old plans. That is intended: the plan is written fresh each
   round.
-- Old plan fixtures in the existing suites need a `roadmap_row`. The 3d430def fixture is kept
-  word for word, and its test expects the refusal by name.
+- The old plan fixtures in the existing suites now carry a real `roadmap_row`. The 3d430def
+  fixture keeps its killing shape (a job with no `scenario`) and also gains a row.
 
 - The plan check is stricter than the Core on purpose. `app.team.progress.resolve_row` still
   resolves a loose wording to a row (a prefix of 3+ words, `_head`, `ROW_ALIASES`: "Proactive",
@@ -47,11 +53,9 @@ test-round.ps1 reads the plan with plain `Read-TeamJson`, not the schema reader.
   whole. A board note is cut to the board's 280 characters: the field, the wrong value and
   "geçerli başlıklar: docs/ROADMAP.md What JARVIS does".
 
-## Area request (rounds 1 and 2)
+## Area (round 3)
 
-Turning the red tests green needs these files outside the card's area:
-scripts/testteam/test-round.ps1 (the plan check), scripts/tests/testteam-dry-round.tests.ps1
-(its pinned required set {jobs, jobs[0].family}, the 'yeni-aile' plan, and the 3d430def fixture
-read as readable), scripts/tests/testteam.tests.ps1 and
-scripts/tests/testteam-board-notes.tests.ps1 (their plans have no roadmap_row and would be
-refused).
+In round 3 the area was widened to test-round.ps1 and the three testteam suites, and all of
+them are done. The one file left is the installed copy `.claude/agents/test-lead.md`. Writing
+it was refused, so it still differs from its source. Until the lead copies it, three checks
+stay red: plan-rows, dry-round's byte-equal check and testteam's sha check.

@@ -110,6 +110,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamFeed.ps1")
 . (Join-Path $PSScriptRoot "TestTeam.ps1")
+. (Join-Path $PSScriptRoot "TestTeamSchema.ps1")
 $apiStore = $null
 if ($QueueUrl) {
     if (-not $QueueToken) { throw "-QueueUrl needs -QueueToken: the path of a file holding the token" }
@@ -227,7 +228,12 @@ function Get-RoundProof {
     param($Document, [string]$Plan)
     $rowOf = @{}
     if ($Plan -and (Test-Path -LiteralPath $Plan)) {
-        foreach ($job in @((Read-TeamJson -Path $Plan).jobs)) {
+        # A readable plan gives each row as its bold title (the schema's canonical form, whichever
+        # form the plan wrote); an older plan (-PostProof of a round before the check) as written.
+        $planRead = Read-TestTeamPlan -Path $Plan
+        $jobs = @()
+        if ($planRead.Readable) { $jobs = @($planRead.Value.jobs) } else { $jobs = @((Read-TeamJson -Path $Plan).jobs) }
+        foreach ($job in $jobs) {
             $row = ([string](Get-TeamProperty -InputObject $job -Name "roadmap_row" -Default "")).Trim()
             if (-not $row) { $row = ([string](Get-TeamProperty -InputObject $job -Name "why" -Default "")).Trim() }
             if (-not $row) { $row = ([string]$job.family).Trim() }
@@ -403,7 +409,18 @@ if (-not $PlanPath) {
         if (-not (Test-Path -LiteralPath $PlanPath)) { Write-Host "Test PY plan yazmadı ($PlanPath); tur başlamadı"; exit 1 }
     }
 }
-$plan = Read-TeamJson -Path $PlanPath
+# The plan by its schema (scripts/testteam/schema/plan.json) BEFORE any card or tester: every job
+# names its JARVIS row exactly (test-plan-names-roadmap-rows) - a passing scenario under no row
+# proves nothing on the strip.
+$planRead = Read-TestTeamPlan -Path $PlanPath
+if (-not $planRead.Readable) {
+    Write-Host "TUR BAŞLAMADI: plan okunamadı ($PlanPath) - $($planRead.Why)"
+    $said = "Test PY: tur $Round başlamadı - plan okunamadı: " + (@($planRead.Missing) -join ", ")
+    if ($said.Length -gt 200) { $said = $said.Substring(0, 200) + "..." }
+    Send-Note -Seat "test-lead" -Text ($said + "; geçerli başlıklar: docs/ROADMAP.md What JARVIS does")
+    exit 1
+}
+$plan = $planRead.Value
 $cards = @(New-TestTeamCards -Round $Round -Jobs @($plan.jobs))
 $document = [pscustomobject]@{ round = $Round; plan = $PlanPath; cards = $cards }
 Write-Json -Path $cardsPath -Document $document

@@ -146,7 +146,7 @@ function Invoke-FakeRound {
     [void](New-Item -ItemType Directory -Force -Path $team)
     Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
     Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
-    $jobs = @($Families | ForEach-Object { [ordered]@{ family = $_; scenario = "scripts/testteam/scenarios/$_.json"; improvise = $true } })
+    $jobs = @($Families | ForEach-Object { [ordered]@{ family = $_; scenario = "scripts/testteam/scenarios/$_.json"; improvise = $true; roadmap_row = "Repairs and improves itself" } })
     $plan = Join-Path $Work "plan.json"
     Write-Utf8 $plan (ConvertTo-Json -InputObject ([ordered]@{ jobs = $jobs }) -Depth 5)
     $board = New-FakeBoard -Dir $Work

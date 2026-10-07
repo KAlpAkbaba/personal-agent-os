@@ -106,12 +106,14 @@ $schemaPaths = @{
 # ============================================================== the fixtures of 6 October
 # Word for word, NOT generated from the schema. Each one killed a real round (or its report).
 
-# 3d430def: a family with no scenario file yet - 'improvise' and no 'scenario'.
+# 3d430def: a family with no scenario file yet - 'improvise' and no 'scenario'. Each job carries
+# the JARVIS row it tests since test-plan-names-roadmap-rows (2026-10-07: the plan is refused
+# without it); the killing shape - no 'scenario' - is unchanged.
 $Fixture3d430def = @'
 {
   "jobs": [
-    { "family": "dil-dayanikliligi", "improvise": true, "why": "her turda bir dil dayanıklılığı işi (sahip, 2026-10-06)" },
-    { "family": "nobet", "scenario": "scripts/testteam/scenarios/watches.json", "improvise": true, "why": "Stage 54 nöbet motorunu çıkardı" }
+    { "family": "dil-dayanikliligi", "improvise": true, "roadmap_row": "Always-listening natural conversation, interruptible, in the owner's language", "why": "her turda bir dil dayanıklılığı işi (sahip, 2026-10-06)" },
+    { "family": "nobet", "scenario": "scripts/testteam/scenarios/watches.json", "improvise": true, "roadmap_row": "Proactive: warns, briefs, watches over him", "why": "Stage 54 nöbet motorunu çıkardı" }
   ]
 }
 '@
@@ -256,12 +258,12 @@ foreach ($kind in @("result", "plan")) {
     }
 }
 
-Test-Case "zorunlu alanlar: result yalnız 'state'; plan 'jobs' ve her işin 'family'si" {
+Test-Case "zorunlu alanlar: result yalnız 'state'; plan 'jobs', her işin 'family'si ve 'roadmap_row'u" {
     Assert-Library
     $result = Read-TestTeamSchema -Path $schemaPaths.result
     $plan = Read-TestTeamSchema -Path $schemaPaths.plan
     Assert-SameSet -Expected @("state") -Actual @(Get-SchemaSpecs -Fields $result.fields | Where-Object { $_.Spec.required } | ForEach-Object { $_.Path }) -Because "result.json zorunluları"
-    Assert-SameSet -Expected @("jobs", "jobs[0].family") -Actual @(Get-SchemaSpecs -Fields $plan.fields | Where-Object { $_.Spec.required } | ForEach-Object { $_.Path }) -Because "plan.json zorunluları"
+    Assert-SameSet -Expected @("jobs", "jobs[0].family", "jobs[0].roadmap_row") -Actual @(Get-SchemaSpecs -Fields $plan.fields | Where-Object { $_.Spec.required } | ForEach-Object { $_.Path }) -Because "plan.json zorunluları"
 }
 
 Test-Case "bozuk şema dosyası okunamazsa throw: o bizim dosyamız" {
@@ -364,9 +366,9 @@ Test-Case "senaryosuz iş kuralı: rol dosyasının cümlesi ile New-TestTeamCar
     $role = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\testteam\roles\test-lead.md"), [System.Text.Encoding]::UTF8)
     Assert-True -Condition ($role.Contains('("improvise": true)')) -Because "test-lead.md dosyası olmayan aileye '(""improvise"": true)' demiyor"
     $file = Join-Path $work "senaryosuz.plan.json"
-    Write-Utf8 -Path $file -Text '{ "jobs": [ { "family": "yeni-aile" } ] }'
+    Write-Utf8 -Path $file -Text '{ "jobs": [ { "family": "yeni-aile", "roadmap_row": "Repairs and improves itself" } ] }'
     $plan = Read-TestTeamPlan -Path $file
-    Assert-True -Condition $plan.Readable -Because "aile adı olan bir plan okunur ($($plan.Why))"
+    Assert-True -Condition $plan.Readable -Because "aile adı ve satırı olan bir plan okunur ($($plan.Why))"
     $threw = ""
     try { [void](New-TestTeamCards -Round "kuru" -Jobs @($plan.Value.jobs)) } catch { $threw = $_.Exception.Message }
     Assert-True -Condition ($threw -match 'improvise: true ister') -Because "senaryosuz, improvise'sız iş kart oldu: '$threw'"

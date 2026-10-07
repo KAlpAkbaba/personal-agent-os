@@ -13,8 +13,15 @@
 
     The schema format is our own (Windows PowerShell 5.1 has no JSON Schema library, and no new
     dependency): { version: 1, doc, fields: { <name>: { required, type: string|int|bool|enum|
-    array|object, values (enum), default (null = none), min_items (array), items: { fields }
-    (array), fields (object) } } }.
+    array|object, values (enum), values_from (string), default (null = none), min_items (array),
+    items: { fields } (array), fields (object) } } }.
+
+    values_from (test-plan-names-roadmap-rows): "docs/ROADMAP.md#What JARVIS does" - the value is
+    one of the counted rows of the table under that heading, read the way app.team.progress
+    parse_jarvis reads them (first cell, '**' dropped, whitespace collapsed, no NEVER row). A
+    row's whole cell or its bold title is accepted, exactly (no resolve_row looseness); the value
+    is read back as the bold title. An absent or unknown value is Missing, and the Why names the
+    wrong value and every valid title.
 
     ConvertTo-TestTeamShape returns a record: Readable (Missing is empty), Value (the document
     with every schema field filled and typed; a field the schema does not know is KEPT), Missing
@@ -30,6 +37,55 @@ Set-StrictMode -Version Latest
 
 $script:TestTeamSchemaDir = Join-Path $PSScriptRoot "schema"
 $script:TestTeamSchemaTypes = @("string", "int", "bool", "enum", "array", "object")
+$script:TestTeamRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$script:TestTeamValuesCache = @{}
+
+function Get-TestTeamValuesFrom {
+    <# The valid values of a values_from source "<repository file>#<heading>": the counted rows of
+       the table under the heading, each { Full, Title } (Title = the bold part when the first
+       cell starts bold, else Full). Throws when the source gives no row: it is our file. #>
+    param([Parameter(Mandatory = $true)][string]$Source)
+    if ($script:TestTeamValuesCache.ContainsKey($Source)) { return $script:TestTeamValuesCache[$Source] }
+    $parts = $Source.Split('#', 2)
+    if ($parts.Count -ne 2 -or -not $parts[0] -or -not $parts[1]) { throw "values_from '$Source': '<dosya>#<başlık>' değil" }
+    $path = Join-Path $script:TestTeamRepoRoot ($parts[0].Replace('/', '\'))
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "values_from '$Source': dosya yok ($path)" }
+    $lines = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) -split "`r?`n"
+    $at = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i].StartsWith("#") -and $lines[$i].TrimStart('#').Trim().StartsWith($parts[1], [System.StringComparison]::Ordinal)) { $at = $i; break } }
+    if ($at -lt 0) { throw "values_from '$Source': başlık yok" }
+    $table = New-Object System.Collections.ArrayList
+    for ($i = $at + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].StartsWith("#")) { break }
+        if ($lines[$i].TrimStart().StartsWith("|")) { [void]$table.Add($lines[$i]) }
+    }
+    $rows = New-Object System.Collections.ArrayList
+    foreach ($line in @($table.ToArray() | Select-Object -Skip 2)) {
+        $cells = @($line.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+        if ($cells.Count -lt 2) { continue }
+        $last = [regex]::Match($cells[$cells.Count - 1], '\*\*(.+?)\*\*')
+        if ($last.Success -and $last.Groups[1].Value.Trim().ToUpperInvariant().StartsWith("NEVER")) { continue }
+        $full = (($cells[0] -replace '\*\*', '') -split '\s+' | Where-Object { $_ }) -join ' '
+        if (-not $full) { continue }
+        $bold = [regex]::Match($cells[0], '^\*\*(.+?)\*\*')
+        $title = if ($bold.Success) { (($bold.Groups[1].Value -split '\s+' | Where-Object { $_ }) -join ' ') } else { $full }
+        [void]$rows.Add([pscustomobject]@{ Full = $full; Title = $title })
+    }
+    if ($rows.Count -eq 0) { throw "values_from '$Source': tabloda satır yok" }
+    $script:TestTeamValuesCache[$Source] = $rows.ToArray()
+    return $script:TestTeamValuesCache[$Source]
+}
+
+function Resolve-TestTeamValueFrom {
+    <# A written value against a values_from source: its Title on an exact match (whitespace
+       collapsed) of a row's Title or Full, else $null. #>
+    param([string]$Text, [Parameter(Mandatory = $true)][string]$Source)
+    $word = (($Text -split '\s+' | Where-Object { $_ }) -join ' ')
+    foreach ($row in @(Get-TestTeamValuesFrom -Source $Source)) {
+        if ([string]::Equals($row.Title, $word, [System.StringComparison]::Ordinal) -or [string]::Equals($row.Full, $word, [System.StringComparison]::Ordinal)) { return $row.Title }
+    }
+    return $null
+}
 
 function Assert-TestTeamSchemaFields {
     param($Fields, [string]$Prefix, [string]$Path)
@@ -45,6 +101,10 @@ function Assert-TestTeamSchemaFields {
         if ($script:TestTeamSchemaTypes -notcontains $type) { throw "test ekibi şeması ${Path}: '$name' tipi '$type' tanınmıyor" }
         if ($null -eq $spec.PSObject.Properties["default"]) { throw "test ekibi şeması ${Path}: '$name' default yok (yok için null)" }
         if ($type -eq "enum" -and @(Get-TeamProperty -InputObject $spec -Name "values" -Default @()).Count -eq 0) { throw "test ekibi şeması ${Path}: '$name' enum ama values yok" }
+        if ($null -ne $spec.PSObject.Properties["values_from"]) {
+            if ($type -ne "string") { throw "test ekibi şeması ${Path}: '$name' values_from yalnız string için" }
+            try { [void](Get-TestTeamValuesFrom -Source ([string]$spec.values_from)) } catch { throw "test ekibi şeması ${Path}: '$name' $($_.Exception.Message)" }
+        }
         if ($type -eq "object") { Assert-TestTeamSchemaFields -Fields (Get-TeamProperty -InputObject $spec -Name "fields") -Prefix $name -Path $Path }
         if ($type -eq "array") { Assert-TestTeamSchemaFields -Fields (Get-TeamProperty -InputObject (Get-TeamProperty -InputObject $spec -Name "items") -Name "fields") -Prefix "$name[]" -Path $Path }
     }
@@ -81,7 +141,7 @@ function Test-TestTeamNumber {
 
 function ConvertTo-TestTeamShapeValue {
     <# One field's value by its spec: { Ok, Value }. Ok false = absent or invalid. #>
-    param($Raw, $Spec, [string]$Path, $Missing, $Defaulted)
+    param($Raw, $Spec, [string]$Path, $Missing, $Defaulted, $Notes = $null)
     $no = [pscustomobject]@{ Ok = $false; Value = $null }
     if ($null -eq $Raw) { return $no }
     $culture = [System.Globalization.CultureInfo]::InvariantCulture
@@ -93,6 +153,11 @@ function ConvertTo-TestTeamShapeValue {
             elseif (Test-TestTeamNumber -Raw $Raw) { $text = [System.Convert]::ToString($Raw, $culture) }
             if ($null -eq $text) { return $no }
             if ($Spec.required -and -not $text.Trim()) { return $no }
+            if ($null -ne $Spec.PSObject.Properties["values_from"]) {
+                $title = Resolve-TestTeamValueFrom -Text $text -Source ([string]$Spec.values_from)
+                if ($null -eq $title) { return $no }
+                return [pscustomobject]@{ Ok = $true; Value = $title }
+            }
             return [pscustomobject]@{ Ok = $true; Value = $text }
         }
         "int" {
@@ -130,7 +195,7 @@ function ConvertTo-TestTeamShapeValue {
         "object" {
             $object = ConvertTo-TestTeamRecordObject -Raw $Raw
             if ($null -eq $object) { return $no }
-            return [pscustomobject]@{ Ok = $true; Value = (ConvertTo-TestTeamShapeObject -Object $object -Fields $Spec.fields -Prefix $Path -Missing $Missing -Defaulted $Defaulted) }
+            return [pscustomobject]@{ Ok = $true; Value = (ConvertTo-TestTeamShapeObject -Object $object -Fields $Spec.fields -Prefix $Path -Missing $Missing -Defaulted $Defaulted -Notes $Notes) }
         }
         "array" {
             if ($Raw -isnot [array]) { return $no }
@@ -143,7 +208,7 @@ function ConvertTo-TestTeamShapeValue {
                 # missing by name, its optional ones take their defaults.
                 $object = ConvertTo-TestTeamRecordObject -Raw $item
                 if ($null -eq $object) { $object = New-Object PSObject }
-                [void]$items.Add((ConvertTo-TestTeamShapeObject -Object $object -Fields $Spec.items.fields -Prefix "$Path[$index]" -Missing $Missing -Defaulted $Defaulted))
+                [void]$items.Add((ConvertTo-TestTeamShapeObject -Object $object -Fields $Spec.items.fields -Prefix "$Path[$index]" -Missing $Missing -Defaulted $Defaulted -Notes $Notes))
                 $index++
             }
             return [pscustomobject]@{ Ok = $true; Value = $items.ToArray() }
@@ -155,7 +220,7 @@ function ConvertTo-TestTeamShapeValue {
 function ConvertTo-TestTeamShapeObject {
     <# One object by its field specs: every original property kept, every schema field typed or
        defaulted; Missing and Defaulted collect dotted paths. #>
-    param($Object, $Fields, [string]$Prefix, $Missing, $Defaulted)
+    param($Object, $Fields, [string]$Prefix, $Missing, $Defaulted, $Notes = $null)
     $out = [ordered]@{}
     foreach ($property in $Object.PSObject.Properties) { $out[$property.Name] = $property.Value }
     foreach ($field in $Fields.PSObject.Properties) {
@@ -168,9 +233,13 @@ function ConvertTo-TestTeamShapeObject {
         $raw = $null
         $key = $name
         if ($null -ne $property) { $raw = $property.Value; $key = $property.Name }
-        $converted = ConvertTo-TestTeamShapeValue -Raw $raw -Spec $spec -Path $path -Missing $Missing -Defaulted $Defaulted
+        $converted = ConvertTo-TestTeamShapeValue -Raw $raw -Spec $spec -Path $path -Missing $Missing -Defaulted $Defaulted -Notes $Notes
         if ($converted.Ok) { $out[$key] = $converted.Value; continue }
         if ($spec.required) { [void]$Missing.Add($path) } else { [void]$Defaulted.Add($path) }
+        if ($spec.required -and $null -ne $Notes -and $null -ne $spec.PSObject.Properties["values_from"]) {
+            $said = if ($null -eq $raw -or -not ([string]$raw).Trim()) { "$path yok" } else { "$path '$raw' $($spec.values_from) satırı değil" }
+            [void]$Notes.Add([pscustomobject]@{ Text = $said; Source = [string]$spec.values_from })
+        }
         $default = $spec.default
         if ($default -is [array]) { $out[$key] = @() } else { $out[$key] = $default }
     }
@@ -186,7 +255,7 @@ function Get-TestTeamSchemaRequired {
 }
 
 function New-TestTeamShapeRecord {
-    param([bool]$Readable, $Value, [string[]]$Missing = @(), [string[]]$Defaulted = @(), [string]$Reason = "")
+    param([bool]$Readable, $Value, [string[]]$Missing = @(), [string[]]$Defaulted = @(), [string]$Reason = "", $Notes = @())
     if ($Readable) {
         $why = "okundu"
         if (@($Defaulted).Count -gt 0) { $why += "; varsayılanla dolan: " + (@($Defaulted) -join ", ") }
@@ -194,6 +263,14 @@ function New-TestTeamShapeRecord {
     else {
         $why = "okunamadı, eksik ya da geçersiz zorunlu alan: " + (@($Missing) -join ", ")
         if ($Reason) { $why = "${Reason}; $why" }
+        # A values_from field: what was wrong per path, then the valid titles once per source.
+        if (@($Notes).Count -gt 0) {
+            $why += "; " + (@($Notes | ForEach-Object { $_.Text }) -join "; ")
+            foreach ($source in @($Notes | ForEach-Object { $_.Source } | Select-Object -Unique)) {
+                $titles = @(Get-TestTeamValuesFrom -Source $source | ForEach-Object { "'$($_.Title)'" })
+                $why += "; geçerli başlıklar ($source, tam yazılır): " + ($titles -join " | ")
+            }
+        }
     }
     return [pscustomobject]@{ Readable = $Readable; Value = $Value; Missing = [string[]]@($Missing); Defaulted = [string[]]@($Defaulted); Why = $why }
 }
@@ -207,13 +284,14 @@ function ConvertTo-TestTeamShape {
     param($Document, [Parameter(Mandatory = $true)]$Schema)
     $missing = New-Object System.Collections.ArrayList
     $defaulted = New-Object System.Collections.ArrayList
+    $notes = New-Object System.Collections.ArrayList
     try {
         $object = ConvertTo-TestTeamRecordObject -Raw $Document
         if ($null -eq $object) {
             return (New-TestTeamShapeRecord -Readable $false -Value $null -Missing (Get-TestTeamSchemaRequired -Schema $Schema) -Reason "belge bir JSON nesnesi değil")
         }
-        $value = ConvertTo-TestTeamShapeObject -Object $object -Fields $Schema.fields -Prefix "" -Missing $missing -Defaulted $defaulted
-        return (New-TestTeamShapeRecord -Readable ($missing.Count -eq 0) -Value $value -Missing ([string[]]$missing.ToArray()) -Defaulted ([string[]]$defaulted.ToArray()))
+        $value = ConvertTo-TestTeamShapeObject -Object $object -Fields $Schema.fields -Prefix "" -Missing $missing -Defaulted $defaulted -Notes $notes
+        return (New-TestTeamShapeRecord -Readable ($missing.Count -eq 0) -Value $value -Missing ([string[]]$missing.ToArray()) -Defaulted ([string[]]$defaulted.ToArray()) -Notes $notes.ToArray())
     }
     catch {
         return (New-TestTeamShapeRecord -Readable $false -Value $null -Missing @("(okuyucu)") -Reason ("okuyucu hatası: " + $_.Exception.Message))
@@ -316,7 +394,10 @@ function New-TestTeamSchemaSample {
                 $value = $items.ToArray()
             }
             "enum" { $value = [string]@($spec.values)[0] }
-            "string" { $value = "ornek" }
+            "string" {
+                $value = "ornek"
+                if ($null -ne $spec.PSObject.Properties["values_from"]) { $value = [string]@(Get-TestTeamValuesFrom -Source ([string]$spec.values_from))[0].Title }
+            }
             "int" { $value = 7 }
             "bool" { $value = $true }
         }
@@ -378,7 +459,7 @@ function New-TestTeamHalfDocuments {
     }
     $full = Build -Mode "full"
     Add-Doc -Name "tam" -Document $full.Document -Readable $true -Missing @() -Defaulted @()
-    foreach ($field in @($list | Where-Object { $_.Spec.type -eq "enum" })) {
+    foreach ($field in @($list | Where-Object { $_.Spec.type -eq "enum" -or $null -ne $_.Spec.PSObject.Properties["values_from"] })) {
         $built = Build -Mode "full" -Override @{ $field.Path = "liste-disi-deger" }
         $outcome = Get-Outcome -Path $field.Path -Spec $field.Spec -Base $built.Defaulted
         Add-Doc -Name "enum-disi:$($field.Path)" -Document $built.Document -Readable $outcome.Readable -Missing $outcome.Missing -Defaulted $outcome.Defaulted

@@ -1,12 +1,13 @@
 {
   "version": 1,
-  "doc": "Test Proje Yöneticisinin tur planı (plan_file): test-lead yazar; test-round.ps1 scripts/testteam/TestTeamSchema.ps1'in Read-TestTeamPlan'ı ile okur, New-TestTeamCards işleri kartlara böler. Zorunlu: jobs (en az bir iş) ve her işin family'si. Senaryo dosyası olmayan aile improvise: true ister - o kural New-TestTeamCards'ta (TestTeam.ps1) durur, şema yinelemez. Burada olmayan bir alan korunur ama kullanılmaz.",
+  "doc": "Test Proje Yöneticisinin tur planı (plan_file): test-lead yazar; test-round.ps1 scripts/testteam/TestTeamSchema.ps1'in Read-TestTeamPlan'ı ile okur, New-TestTeamCards işleri kartlara böler. Zorunlu: jobs (en az bir iş), her işin family'si ve roadmap_row'u - işin sınadığı JARVIS satırı, docs/ROADMAP.md 'What JARVIS does' tablosundaki bir satırın kalın başlığı (ya da tam hücresi), tam yazılır; yoksa ya da satır değilse plan reddedilir ve geçerli başlıklar sayılır (test-plan-names-roadmap-rows: Ofis şeridindeki 'staging'de kanıtlı' bu satırdan sayılır). Senaryo dosyası olmayan aile improvise: true ister - o kural New-TestTeamCards'ta (TestTeam.ps1) durur, şema yinelemez. Burada olmayan bir alan korunur ama kullanılmaz.",
   "fields": {
     "jobs": {
       "required": true, "type": "array", "min_items": 1, "default": null,
       "items": {
         "fields": {
           "family": { "required": true, "type": "string", "default": null },
+          "roadmap_row": { "required": true, "type": "string", "values_from": "docs/ROADMAP.md#What JARVIS does", "default": null },
           "scenario": { "required": false, "type": "string", "default": "" },
           "improvise": { "required": false, "type": "bool", "default": false },
           "why": { "required": false, "type": "string", "default": "" }
