@@ -113,26 +113,40 @@ SERIAL_TAIL = {
 def pytest_itemcollected(item):
     if item.nodeid in SERIAL_TAIL:
         item.add_marker(pytest.mark.serial_tail)
+    group = XDIST_GROUPS.get(item.nodeid.split("::")[0])
+    if group is not None:
+        item.add_marker(pytest.mark.xdist_group(name=group))
 
 
-#: The unit tests that decide the step's length (measured in the gate's run of 2026-10-06).
-#: xdist hands tests out in collection order, so in its workers these are moved to the front:
-#: the 768 s corpus test started mid-run and the step ended after ~21 minutes with 6, 8 or 12
-#: workers alike. The next longest (84, 83, 51 s, the STT corpora) stay in place: moved first
-#: too, three memory-heavy corpora ran at once (6.1 + 5.3 + 2.1 GB, the tree at 14.2 GB). A
-#: serial run keeps its order.
-LONG_FIRST = (
-    "tests/unit/test_owner_utterance_corpus.py::test_corpus_has_no_forbidden_side_effect_anywhere",
-)
+#: Test files whose aggregate tests read a module-level result cache that the file's
+#: parametrised cases fill. Serially the cases fill it first; split over xdist workers, every
+#: worker that got an aggregate ran the whole corpus again (the owner corpus: 768 s and 7-10 GB,
+#: twice in one run, 2026-10-06). Each is one ``xdist_group``; the gate runs ``--dist loadgroup``.
+XDIST_GROUPS = {
+    "tests/unit/test_owner_utterance_corpus.py": "owner_utterance_corpus",
+    "tests/unit/test_stt_utterance_corpus.py": "stt_utterance_corpus",
+    "tests/unit/test_stt_corpus_layer2.py": "stt_corpus_layer2",
+}
+
+#: Files that decide the step's length, moved to the front in xdist workers (xdist hands work
+#: out in collection order): the owner corpus group is ~770 s on one worker, and started
+#: mid-run the step ended after ~21 minutes with 6, 8 or 12 workers alike. The STT corpora stay
+#: in place: moved first too, three memory-heavy corpora ran at once (tree 14.2 GB). A serial
+#: run keeps its order.
+LONG_FIRST = ("tests/unit/test_owner_utterance_corpus.py",)
+
+
+def _file_of(item):
+    return item.nodeid.split("::")[0]
 
 
 def _long_first(items):
-    rank = {nodeid: index for index, nodeid in enumerate(LONG_FIRST)}
+    rank = {path: index for index, path in enumerate(LONG_FIRST)}
     first = sorted(
-        (item for item in items if item.nodeid in rank), key=lambda item: rank[item.nodeid]
+        (item for item in items if _file_of(item) in rank), key=lambda item: rank[_file_of(item)]
     )
     if first:
-        items[:] = first + [item for item in items if item.nodeid not in rank]
+        items[:] = first + [item for item in items if _file_of(item) not in rank]
 
 
 def pytest_collection_modifyitems(config, items):

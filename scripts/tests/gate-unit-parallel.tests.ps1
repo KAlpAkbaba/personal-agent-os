@@ -261,29 +261,53 @@ Test-Case "8. every SERIAL_TAIL id of tests/conftest.py exists and is marked ser
     foreach ($id in $ids) { Assert-True ($rest -notcontains $id) "$id is left out of the parallel part" }
 }
 
-Test-Case "9. under xdist the LONG_FIRST tests of tests/conftest.py are collected first (they start at once, not mid-run); a serial run keeps its order" {
-    # 2026-10-06: one corpus test took 768 s and started mid-run, so 6, 8 and 12 workers all
-    # ended after ~21 minutes. xdist hands out tests in collection order.
+Test-Case "9. under xdist the LONG_FIRST files of tests/conftest.py are collected first (their group starts at once, not mid-run); a serial run keeps its order" {
+    # 2026-10-06: the owner corpus took ~770 s on one worker and started mid-run, so 6, 8 and
+    # 12 workers all ended after ~21 minutes. xdist hands work out in collection order.
     $uv = (Get-Command uv -ErrorAction SilentlyContinue)
     $uvPath = if ($uv) { $uv.Source } else { Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe" }
     $savedWorker = $env:PYTEST_XDIST_WORKER
     Push-Location $apiRoot
     try {
         $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-        $ids = @(& $uvPath run python -c "import tests.conftest as c; print('\n'.join(c.LONG_FIRST))" 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
-        Assert-True ($ids.Count -ge 1) "tests/conftest.py has no LONG_FIRST"
-        # Their files and one short file collected before them alphabetically.
-        $files = @("tests/unit/test_allowlist_editor.py") + @($ids | ForEach-Object { ($_ -split '::')[0] } | Sort-Object -Unique)
+        $first = @(& $uvPath run python -c "import tests.conftest as c; print('\n'.join(c.LONG_FIRST))" 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        Assert-True ($first.Count -ge 1) "tests/conftest.py has no LONG_FIRST"
+        # Those files and one short file collected before them alphabetically.
+        $files = @("tests/unit/test_allowlist_editor.py") + $first
         $env:PYTEST_XDIST_WORKER = $null
         $serial = @(& $uvPath run pytest @files --collect-only -q -p no:cacheprovider 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
         $env:PYTEST_XDIST_WORKER = "gw0"
         $worker = @(& $uvPath run pytest @files --collect-only -q -p no:cacheprovider 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
         $ErrorActionPreference = $prev
     } finally { $env:PYTEST_XDIST_WORKER = $savedWorker; Pop-Location }
-    foreach ($id in $ids) { Assert-True ($serial -contains $id) "$id is not a test any more (renamed or deleted)" }
-    Assert-Equal ($ids -join "|") (($worker | Select-Object -First $ids.Count) -join "|") "in an xdist worker the LONG_FIRST tests come first, in their order"
+    $inFirst = @($serial | Where-Object { $first -contains (($_ -split '::')[0]) })
+    Assert-True ($inFirst.Count -ge 1) "the LONG_FIRST files have no tests (renamed or deleted)"
+    Assert-Equal ($inFirst -join "|") (($worker | Select-Object -First $inFirst.Count) -join "|") "in an xdist worker the LONG_FIRST files' tests come first, in their order"
     Assert-Equal (($serial | Sort-Object) -join "|") (($worker | Sort-Object) -join "|") "the same tests either way"
     Assert-True ($serial[0] -like "tests/unit/test_allowlist_editor.py::*") ("a serial run keeps the collection order: " + $serial[0])
+}
+
+Test-Case "10. the corpus files that cache results for their aggregate tests are one xdist_group each, and the gate schedules by group" {
+    # Their aggregate tests read a module-level result cache the parametrised cases fill; split
+    # over workers, every worker that got an aggregate ran the whole corpus again (768 s and
+    # 7-10 GB, twice in one run).
+    $uv = (Get-Command uv -ErrorAction SilentlyContinue)
+    $uvPath = if ($uv) { $uv.Source } else { Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe" }
+    Push-Location $apiRoot
+    try {
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        $groups = @(& $uvPath run python -c "import tests.conftest as c; print('\n'.join(sorted(c.XDIST_GROUPS)))" 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        foreach ($f in @("tests/unit/test_owner_utterance_corpus.py", "tests/unit/test_stt_utterance_corpus.py", "tests/unit/test_stt_corpus_layer2.py")) {
+            Assert-True ($groups -contains $f) "$f is not an xdist group"
+        }
+        $all = @(& $uvPath run pytest @groups --collect-only -q -p no:cacheprovider 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
+        $marked = @(& $uvPath run pytest @groups --collect-only -q -p no:cacheprovider -m xdist_group 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -match '::' })
+        $ErrorActionPreference = $prev
+    } finally { Pop-Location }
+    Assert-True ($all.Count -gt 0) "the grouped files collected nothing"
+    Assert-Equal $all.Count $marked.Count "every test of a grouped file carries xdist_group"
+    $run = Invoke-GateUnitStep -XdistExit 0 -PytestExit 0 -Workers "3"
+    Assert-True ($run.Pytest[0] -match '--dist loadgroup') ("the gate schedules by group: " + $run.Pytest[0])
 }
 
 Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
