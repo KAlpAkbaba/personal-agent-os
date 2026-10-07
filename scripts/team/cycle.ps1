@@ -1463,7 +1463,7 @@ try {
             Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
             $script:dutyHanded[$id] = [string]$task.updated_at
             if (@($blocked.Holders).Count -gt 0) {
-                $script:dutyWaits[$id] = [pscustomobject]@{ Updated = [string]$task.updated_at; Area = $newArea; Reason = $returned }
+                $script:dutyWaits[$id] = [pscustomobject]@{ Updated = [string]$task.updated_at; Area = $newArea; Reason = $returned; Holders = @($blocked.Holders) }
                 $waitNote = "bekliyor: $id -> $(@($blocked.Holders) -join ', ') aynı dosyaları bırakınca (Proje Yöneticisi geri verdi)"
                 if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
             }
@@ -1478,24 +1478,47 @@ try {
            reopened conversation-followups when money-ledger merged. A stopped task whose reason is
            the Proje Yöneticisi's return followed by Get-DutyReturnBlock's hold is one: its area
            the task's, its reason the text before the hold. Who holds the files is asked again when
-           it is resolved, so a holder merged or gone meanwhile frees it at once. #>
-        $pattern = "(?s)\A(?<reason>" + [regex]::Escape((Get-TeamDutyPrefix -Kind "returned")) + ".*) \(alan çakışması: (?<holders>[^;()]+); o iş bitince\)\z"
+           it is resolved, so a holder merged or gone meanwhile frees it at once.
+           held-stop-resumes-when-area-frees (2026-10-07 11:40: three cards sat held after their
+           holders had left): a hold written WITHOUT the prefix - by the Danışman, or by a
+           decision of another cycle - is one too, when every card it names is in the queue (a
+           name the queue does not know is not guessed at). The Danışman's own stops, the
+           owner's refusals and the owner's postponements ("bekletiliyor - sahibin sırası") are
+           never read as a hold: they are not this script's to end. #>
+        $suffix = " \(alan çakışması: (?<holders>[^;()]+); o iş bitince\)\z"
+        $own = "(?s)\A(?<reason>" + [regex]::Escape((Get-TeamDutyPrefix -Kind "returned")) + ".*)" + $suffix
+        $any = "(?s)\A(?<reason>.*\S)" + $suffix
+        $known = @{}
+        foreach ($task in @(Get-TeamTasks -Queue $script:queue)) { $known[[string]$task.id] = $true }
         foreach ($task in @(Get-TeamTasks -Queue $script:queue)) {
             if ([string]$task.state -ne "stopped") { continue }
             $id = [string]$task.id
             $stamp = [string](Get-TeamProperty -InputObject $task -Name "updated_at" -Default "")
             if ($script:dutyWaits.ContainsKey($id) -and [string]$script:dutyWaits[$id].Updated -ceq $stamp) { continue }
-            $match = [regex]::Match([string](Get-TeamProperty -InputObject $task -Name "reason" -Default ""), $pattern)
-            if (-not $match.Success) { continue }
+            $text = [string](Get-TeamProperty -InputObject $task -Name "reason" -Default "")
+            if ($text.StartsWith((Get-TeamDutyPrefix -Kind "escalated"), [System.StringComparison]::Ordinal) -or
+                $text.StartsWith($script:TeamOwnerRejected, [System.StringComparison]::Ordinal) -or
+                $text.Contains("bekletiliyor - sahibin sırası")) { continue }
+            $match = [regex]::Match($text, $own)
+            $holders = @()
+            if ($match.Success) { $holders = @($match.Groups["holders"].Value.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+            else {
+                $match = [regex]::Match($text, $any)
+                if (-not $match.Success) { continue }
+                $holders = @($match.Groups["holders"].Value.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                if (@($holders).Count -eq 0 -or @($holders | Where-Object { -not $known.ContainsKey([string]$_) }).Count -gt 0) { continue }
+            }
             $area = [string[]]@(@(Get-TeamProperty -InputObject $task -Name "area" -Default @()) | ForEach-Object { [string]$_ })
-            $script:dutyWaits[$id] = [pscustomobject]@{ Updated = $stamp; Area = $area; Reason = $match.Groups["reason"].Value }
+            $script:dutyWaits[$id] = [pscustomobject]@{ Updated = $stamp; Area = $area; Reason = $match.Groups["reason"].Value; Holders = @($holders) }
         }
     }
 
     function Resolve-DutyWaits {
         <# The returns the protocol refused beside a task holding the same files: made now when
            nobody holds them any more. One that somebody else moved meanwhile is theirs. $true
-           when a task moved. The store's held returns are read first: a hold outlives the cycle. #>
+           when a task moved. The store's held returns are read first: a hold outlives the cycle.
+           Held now by another card than the reason names, the reason names that card (once,
+           when the holders change); made, it is one line in the report. #>
         Import-DutyWaits
         $moved = $false
         foreach ($id in @($script:dutyWaits.Keys)) {
@@ -1506,9 +1529,24 @@ try {
                 continue
             }
             if ($script:staleIds.ContainsKey($id)) { continue }
-            if ($null -ne (Get-DutyReturnBlock -Task $found[0] -Area ([string[]]$wait.Area))) { continue }
+            $named = @($wait.Holders)
+            $blocked = Get-DutyReturnBlock -Task $found[0] -Area ([string[]]$wait.Area)
+            if ($null -ne $blocked) {
+                $now = @($blocked.Holders)
+                if (@($now).Count -gt 0 -and ((@($now) | Sort-Object) -join ",") -cne ((@($named) | Sort-Object) -join ",")) {
+                    Set-TeamProperty -InputObject $found[0] -Name "reason" -Value "$($wait.Reason) ($($blocked.Text))"
+                    Set-TeamProperty -InputObject $found[0] -Name "updated_at" -Value (Get-TeamTimestamp)
+                    $wait.Updated = [string]$found[0].updated_at
+                    $wait.Holders = @($now)
+                    $waitNote = "bekliyor: $id -> $(@($now) -join ', ') aynı dosyaları bırakınca (gerekçede $(@($named) -join ', ') yazıyordu)"
+                    if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
+                    $moved = $true
+                }
+                continue
+            }
             Set-DutyReturned -Task $found[0] -Area ([string[]]$wait.Area) -Reason ([string]$wait.Reason)
             $script:dutyWaits.Remove($id)
+            Add-CycleNote -List "gaps" -Text "alan boşaldı: $id geri döndü ($(@($named) -join ', ') bitti)"
             $moved = $true
         }
         return $moved

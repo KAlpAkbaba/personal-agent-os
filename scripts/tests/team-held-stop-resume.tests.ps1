@@ -199,14 +199,16 @@ try {
         Assert-Equal -Expected "stopped|$reason|2026-10-06T17:35:00Z" -Actual ("{0}|{1}|{2}" -f $task.state, $task.reason, $task.updated_at) -Because "untouched"
     }
 
-    Test-Case "a stopped card without the suffix is untouched (the duty gets it as any stop), and one naming a card the queue does not know is not guessed at" {
+    Test-Case "a stopped card without the suffix is untouched (the duty gets it as any stop), one naming a card the queue does not know is not guessed at, and the Danışman's own stop is his" {
         $plain = New-Stopped -Reason "inceleme durdu: test eksik"
         $unknown = New-Stopped -Id "held-two" -Area @("src/b") -Reason "$base (alan çakışması: nowhere-card; o iş bitince)"
-        $root = New-Sandbox -Tasks @($plain, $unknown)
+        $danisman = New-Stopped -Id "held-three" -Area @("src/c") -Reason "Danışman'a iletildi: $base (alan çakışması: verify-mode; o iş bitince)"
+        $root = New-Sandbox -Tasks @($plain, $unknown, $danisman, (New-Task -Id "verify-mode" -State "merged" -Area @("src/c")))
         $run = Invoke-DutyCycle -Root $root
         Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
-        Assert-Equal -Expected "lead:" -Actual $run.Order -Because "both go to the duty (it wrote no decision): $($run.Report)"
-        foreach ($expected in @(@("held-one", "inceleme durdu: test eksik"), @("held-two", "$base (alan çakışması: nowhere-card; o iş bitince)"))) {
+        Assert-Equal -Expected "lead:" -Actual $run.Order -Because "the first two go to the duty (it wrote no decision), the Danışman's to nobody: $($run.Report)"
+        foreach ($expected in @(@("held-one", "inceleme durdu: test eksik"), @("held-two", "$base (alan çakışması: nowhere-card; o iş bitince)"),
+                @("held-three", "Danışman'a iletildi: $base (alan çakışması: verify-mode; o iş bitince)"))) {
             $task = Get-TaskById -Queue $run.Queue -Id $expected[0]
             Assert-Equal -Expected "stopped|$($expected[1])|2026-10-06T17:35:00Z" -Actual ("{0}|{1}|{2}" -f $task.state, $task.reason, $task.updated_at) -Because "untouched"
         }
