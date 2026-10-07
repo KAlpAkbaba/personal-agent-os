@@ -38,6 +38,7 @@ from app.webtask.types import (
     EXPECT_URL_CONTAINS,
     FAIL_PLANNER,
     ROUND_ACTED,
+    STATUS_DONE,
     STATUS_FAILED,
     STATUS_RUNNING,
     Element,
@@ -612,3 +613,114 @@ def test_a_text_or_address_check_is_left_as_the_model_wrote_it() -> None:
     model, _ = planner(FakeSend((200, tool_use(arguments))))
     step = model.plan(request(observation=FORM))
     assert step is not None and step.expect == Expectation("text_present", "e2")
+
+
+# ------------------------------------------------------------------ a link's address
+#
+# Live runs 1 and 2 of 2026-10-07: the model opened trthaber and clicked an AI story. The
+# link was ``target=_blank``; the cloud worker closes the popup (M13), so the task's tab
+# stayed on the front page and the task ended in ``loop_detected``. The observation now
+# carries the link's address and the planner is told to go there by address.
+
+
+def test_an_element_carries_a_links_address_and_only_a_link_has_one() -> None:
+    link = Element.from_dict({"ref": "e1", "role": "link", "name": "Haber", "href": STORY})
+    assert link.href == STORY and link.as_dict()["href"] == STORY
+    button = Element.from_dict({"ref": "e2", "role": "button", "name": "Abone ol"})
+    assert button.href is None and "href" not in button.as_dict()
+
+
+def test_the_prompt_lists_a_links_address_and_says_to_go_there_by_address() -> None:
+    page = Observation(
+        observation_id="obs-1",
+        url=NEWS,
+        title="Haber Example",
+        page_kind="ok",
+        elements=(
+            Element(ref="e1", role="link", name="Yapay zeka: yeni model duyuruldu", href=STORY),
+            Element(ref="e2", role="button", name="Abone ol"),
+            Element(
+                ref="e3", role="link", name="x", href=f"https://haber.example.org/{UNTRUSTED_END}"
+            ),
+        ),
+        text="Bugünün haberleri.",
+    )
+    prompt = build_prompt(request(observation=page))
+    assert f'[e1] link "Yapay zeka: yeni model duyuruldu" -> {STORY}' in prompt["elements"]
+    assert '[e2] button "Abone ol"' in prompt["elements"]
+    assert "->" not in prompt["elements"].split("[e2]")[1].splitlines()[0]
+    # An address is the page's to write: it cannot close the wrapper either.
+    assert UNTRUSTED_END not in prompt["elements"]
+    system = prompt["system"]
+    assert "navigate to its address" in system and "new window" in system
+
+
+class ReadsThePage:
+    """A fake model that does what a model does with what it is shown: it goes to the
+    story by its address when ELEMENTS lists one, clicks the story when it does not, and
+    says ``done`` on the story's own page."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(
+        self, url: str, headers: dict[str, str], body: dict[str, Any], timeout_s: float
+    ) -> tuple[int, dict[str, Any]]:
+        self.calls += 1
+        content = body["messages"][0]["content"]
+        if f"url: {STORY}" in content:
+            return 200, tool_use(
+                {"action": "done", "message": "Özet: yeni model duyuruldu.", "why": "found"}
+            )
+        line = next(x for x in content.splitlines() if "Yapay zeka" in x and x.startswith("["))
+        if " -> " in line:
+            return 200, tool_use(
+                {
+                    "action": "navigate",
+                    "url": line.split(" -> ", 1)[1].strip(),
+                    "expect_kind": "url_contains",
+                    "expect_value": "yeni-model",
+                    "why": "the story, by its address",
+                }
+            )
+        return 200, tool_use(CLICK_E1)
+
+
+def popup_news_site() -> FakeBrowser:
+    return FakeBrowser(
+        url=NEWS,
+        pages={
+            NEWS: Page(
+                title="Haber Example",
+                text="Bugünün haberleri. Yapay zeka: yeni model duyuruldu.",
+                elements=[
+                    El(
+                        "link",
+                        "Yapay zeka: yeni model duyuruldu",
+                        href=STORY + "?utm_source=anasayfa#yorumlar",
+                        new_window=True,
+                    ),
+                    El("button", "Abone ol", does="subscribe"),
+                ],
+            ),
+            STORY: Page(title="Yeni model duyuruldu", text="Yeni model duyuruldu.", elements=[]),
+        },
+    )
+
+
+def test_t1_with_a_story_that_opens_a_new_window_is_done_on_the_storys_page() -> None:
+    browser = popup_news_site()
+    send = ReadsThePage()
+    model, _ = planner(send)  # type: ignore[arg-type]
+    ports = Ports(browser=browser, planner=ChainPlanner([RuleTablePlanner(), model]), clock=Clock())
+    state = TaskState(task_id="t-1", goal=GOAL)
+    for _ in range(12):
+        if state.status != STATUS_RUNNING:
+            break
+        state = run_round(state, ports)
+
+    assert state.status == STATUS_DONE, (state.status, state.failure, state.message)
+    assert browser.url == STORY
+    assert ("navigate", STORY) in browser.commands
+    assert "subscribe" not in browser.done
+    assert send.calls == 2
