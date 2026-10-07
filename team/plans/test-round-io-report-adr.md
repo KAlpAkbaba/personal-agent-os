@@ -48,16 +48,27 @@ with the temp sweep.
   (`ConvertTo-TestTeamCleanText`: NUL shown as `␀`, a lone half as U+FFFD), so a staging body with
   binary in it still reaches the Ofis.
 
+## İkinci denetimden sonra (2026-10-07)
+
+- Wired: `services/api/app/main.py` includes `app.team.test_reports.router` (one import, one
+  `include_router` beside the team board's); `apps/web/app/core/office/page.tsx` mounts
+  `<OfficeTestReports />` after the office view (under the test seats), shown even before the
+  office answers. The strict xfail is gone: `test_the_real_application_serves_the_reports` goes
+  through `create_app()` alone (401 without a session, 200 and an empty list with the owner's),
+  and every other route test now uses the application's own wiring (no test-local
+  `include_router`); the web suite renders the Ofis page and finds the list.
+- The POST body is built by `New-TestTeamReportBody` (TestTeam.ps1) and cleaned AFTER the last
+  cut: `clean(cut256KB(clean(markdown)))`. Every cut path is then storable; no more character
+  arithmetic in the 256 KB cut (its 5 % back-off split a pair in 43 of 123 emoji-heavy reports,
+  and the route answered 422). The second clean changes neither length nor UTF-8 size (a lone
+  half and U+FFFD are both 3 bytes; NUL is already gone).
+- `unfinished` is cut to 500 characters (`$script:TestTeamUnfinishedMax`, the route's
+  `UNFINISHED_MAX_CHARS`; the API contract test reads both), then cleaned.
+
 ## Not done here (outside the card's area)
 
 - A Postgres integration test of `DbRoundReports` (put/list/get/keep 50/NUL refused) belongs in
-  `services/api/tests/integration/`; the inspector proved the 49/50 there by hand.
-
-- `services/api/app/main.py` must `include_router(app.team.test_reports.router)`; until then
-  the real application answers 404 (strict-xfail test `test_the_real_application_serves_the_reports`
-  turns into a failure once wired - remove the marker then).
-- `apps/web/app/core/office/page.tsx` (or `OfficeView.tsx`) must mount `<OfficeTestReports />`
-  under the test seats.
+  `services/api/tests/integration/`; the inspector proved it on a scratch database by hand.
 
 ## Consequences
 

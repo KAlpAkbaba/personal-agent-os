@@ -55,6 +55,8 @@ function Get-TestTeamBoardTask {
 $script:TestTeamBodyMax = 4096
 # The round report the Cloud Core keeps (app/team/test_reports.py: TEXT_MAX_BYTES).
 $script:TestTeamReportMaxBytes = 262144
+# The why of a round that died, as the route takes it (UNFINISHED_MAX_CHARS).
+$script:TestTeamUnfinishedMax = 500
 $script:TestTeamMask = "***"
 
 function Test-TestTeamTestPort {
@@ -634,6 +636,25 @@ function Limit-TestTeamReportText {
     $cut = [Math]::Min($Text.Length, $room)
     while ($cut -gt 0 -and $encoding.GetByteCount($Text.Substring(0, $cut)) -gt $room) { $cut = [int]($cut * 0.95) }
     return $Text.Substring(0, $cut) + $marker
+}
+
+function New-TestTeamReportBody {
+    <# The body test-round.ps1 POSTs to /v1/team/test-reports. Cleaned AFTER the last cut, so no
+       cut can leave half a surrogate pair (the 256 KB cut did, and the Cloud Core answered 422:
+       inspector, 2026-10-07). Cleaning keeps the length and the UTF-8 size of a cut text: a lone
+       half and U+FFFD are both 3 bytes, and NUL is already gone from a cleaned report. The why
+       is cut to the route's 500 characters first. #>
+    param([string]$Round, [AllowEmptyString()][string]$StagingSha = "", $Counts, [AllowEmptyString()][AllowNull()][string]$Unfinished = "", [AllowEmptyString()][string]$Markdown = "")
+    $why = [string]$Unfinished
+    if ($why.Length -gt $script:TestTeamUnfinishedMax) { $why = $why.Substring(0, $script:TestTeamUnfinishedMax) }
+    $text = ConvertTo-TestTeamCleanText -Text (Limit-TestTeamReportText -Text (ConvertTo-TestTeamCleanText -Text $Markdown))
+    return [pscustomobject]@{
+        round       = $Round
+        staging_sha = $StagingSha
+        counts      = $Counts
+        unfinished  = (ConvertTo-TestTeamCleanText -Text $why)
+        text        = $text
+    }
 }
 
 function New-TestTeamJobCard {

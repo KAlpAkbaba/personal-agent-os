@@ -413,13 +413,7 @@ function Write-RoundIoReport {
         [System.IO.File]::WriteAllText($file, $io.Markdown, (New-Object System.Text.UTF8Encoding($false)))
         Write-Host "girdi/çıktı raporu: $file"
         if ($null -eq $apiStore) { Write-Host "  Cloud Core adresi yok; rapor yalnız tur klasöründe"; return }
-        $body = [pscustomobject]@{
-            round       = $Round
-            staging_sha = $sha
-            counts      = $io.Counts
-            unfinished  = (ConvertTo-TestTeamCleanText -Text $Unfinished)
-            text        = (Limit-TestTeamReportText -Text $io.Markdown)
-        }
+        $body = New-TestTeamReportBody -Round $Round -StagingSha $sha -Counts $io.Counts -Unfinished $Unfinished -Markdown $io.Markdown
         try { [void](Invoke-TeamApi -Store $apiStore -Method "POST" -Path "/v1/team/test-reports" -Body $body); Write-Host "  rapor Cloud Core'a yazıldı (Ofis: Test raporları)" }
         catch { Write-Host "  rapor Cloud Core'a yazılamadı: $($_.Exception.Message -replace '\s+', ' ')" }
     }

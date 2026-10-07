@@ -211,10 +211,15 @@ def test_the_round_script_posts_to_this_route_with_these_fields() -> None:
     # The other half of the contract: scripts/testteam/test-round.ps1 is what POSTs here.
     source = (REPO / "scripts" / "testteam" / "test-round.ps1").read_text(encoding="utf-8-sig")
     assert f'-Path "{REPORTS}"' in source
-    for field in ("round", "staging_sha", "counts", "unfinished", "text"):
-        assert f"{field} " in source or f"{field}=" in source, field
+    assert "$body = New-TestTeamReportBody " in source
     team = (REPO / "scripts" / "testteam" / "TestTeam.ps1").read_text(encoding="utf-8-sig")
+    team = team.replace("\r\n", "\n")
+    body = team[team.index("function New-TestTeamReportBody") :]
+    body = body[: body.index("\n}\n")]
+    for field in ("round", "staging_sha", "counts", "unfinished", "text"):
+        assert f"        {field} " in body, field
     assert f"$script:TestTeamReportMaxBytes = {test_reports.TEXT_MAX_BYTES}" in team
+    assert f"$script:TestTeamUnfinishedMax = {test_reports.UNFINISHED_MAX_CHARS}" in team
 
 
 def test_the_real_application_serves_the_reports(tmp_path: Path) -> None:

@@ -613,6 +613,32 @@ Test-Case "a cut body cut again keeps the first length; a cut never splits a sur
     Assert-True -Condition ($md.Contains("yarım kaldı: kopma␀")) -Because "nor in its why"
 }
 
+Test-Case "the POST body is cleaned after the last cut: an emoji-heavy report over 256 KB never sends a lone surrogate; the why is at most 500 characters, cleaned" {
+    # Inspector, 2026-10-07: the 256 KB cut backs off on a character index and landed between the
+    # halves of a pair in 43 of 123 reports; the Cloud Core then refused the round's report (422).
+    $emoji = [char]::ConvertFromUtf32(0x1F600)
+    $strict = New-Object System.Text.UTF8Encoding($false, $true)
+    $counts = [ordered]@{ passed = 0; failed = 1; broke = 0 }
+    $lone = @()
+    # 16 leading letters move the cut across the pairs; before the fix lead 11 sent a lone half.
+    for ($lead = 0; $lead -lt 16; $lead++) {
+        $md = ("a" * $lead) + ($emoji * 70000)
+        $body = New-TestTeamReportBody -Round "r-e" -StagingSha "" -Counts $counts -Unfinished "" -Markdown $md
+        try { $bytes = $strict.GetByteCount([string]$body.text) } catch { $lone += $lead; continue }
+        Assert-True -Condition ($bytes -le $script:TestTeamReportMaxBytes) -Because "at most 256 KB: $bytes"
+        Assert-True -Condition ([string]$body.text).EndsWith("tamamı tur klasöründe]`n") -Because "cut with the marker"
+    }
+    Assert-Equal -Expected "" -Actual ($lone -join ",") -Because "no body with a lone surrogate (leads listed)"
+    $why = [string][char]0 + [char]0xD83D + "x" + ("ö" * 700)
+    $body = New-TestTeamReportBody -Round "r-u" -StagingSha ("d" * 40) -Counts $counts -Unfinished $why -Markdown "# Test turu r-u"
+    Assert-Equal -Expected 500 -Actual ([string]$body.unfinished).Length -Because "the route takes at most 500 characters"
+    Assert-True -Condition ([string]$body.unfinished).StartsWith("␀" + [char]0xFFFD + "xö") -Because "NUL shown, the lone half replaced: $(([string]$body.unfinished).Substring(0, 4))"
+    Assert-Equal -Expected "r-u" -Actual ([string]$body.round) -Because "the round"
+    Assert-Equal -Expected ("d" * 40) -Actual ([string]$body.staging_sha) -Because "the staging sha"
+    Assert-Equal -Expected 1 -Actual ([int]$body.counts.failed) -Because "the counts"
+    Assert-Equal -Expected "# Test turu r-u" -Actual ([string]$body.text) -Because "a short report is sent whole"
+}
+
 Test-Case "the round report: Girdi / Beklenen / Çıktı / Sonuç for every step, the plan's why, the ladder table, the forwarded cards; a dead round says 'yarım kaldı'" {
     $cards = @(
         [pscustomobject]@{ id = "tj-r-1"; tester = "tester-1"; family = "saglik"; state = "passed" },
