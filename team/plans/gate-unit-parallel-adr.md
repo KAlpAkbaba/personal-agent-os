@@ -11,7 +11,8 @@ int-catchup gate), leaving the 48 GB machine 0.5-2 GB free.
 
 ## Decision
 - `pytest-xdist>=3.6` is a dev dependency of services/api.
-- `scripts/quality-gate.ps1` runs `pytest tests/unit -q -n <N> --dist load -m "not serial_tail"`,
+- `scripts/quality-gate.ps1` runs `pytest tests/unit -q -n <N> --dist loadgroup -m "not serial_tail"`
+  (the corpus files are one `xdist_group` each, item 4; LONG_FIRST, item 5),
   then `pytest tests/unit -q -m serial_tail` serially; either part red fails the step, and the
   tail runs after a red parallel part too. N = min(8, cores-2), lowered to
   floor((free memory - floor) / 2 GB); the floor is `team/cycle-settings.json`
@@ -62,5 +63,6 @@ owner-corpus group on one worker (~20 min), not the worker count. Eight stays th
   worker count, the floor, the -n call and the tail, the serial fallback, failure propagation of
   both parts, identical collection across workers, the freed apps, the SERIAL_TAIL ids and
   LONG_FIRST order.
-- `test_ci_covers_every_suite.py::test_ci_runs_every_powershell_suite` is red until
-  `.github/workflows/ci.yml` lists the new suite (outside this card's area; one line).
+- `.github/workflows/ci.yml` lists the new suite in its PowerShell 5.1 suites step, so
+  `test_ci_covers_every_suite.py::test_ci_runs_every_powershell_suite` is green again (the
+  "1 known red" of the table above).

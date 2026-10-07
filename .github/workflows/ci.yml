@@ -248,7 +248,8 @@ jobs:
           powershell -NoProfile -File scripts\tests\team-test-slots.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\web-tailnet-https.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\gate-steps.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\gate-database.tests.ps1
+          powershell -NoProfile -File scripts\tests\gate-database.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\gate-unit-parallel.tests.ps1
       # The staged update, end to end, against the REAL DeviceService this job just built:
       # candidate identity, the complete capability manifest (40 with -DisplayPower and a
       # browser worker, browser.media_* included), promotion, Cloud Core verification,
