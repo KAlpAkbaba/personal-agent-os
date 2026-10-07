@@ -27,7 +27,7 @@ const REPORTS: TestReportSummary[] = [
     round: "t202610070100",
     at: "2026-10-07T01:00:00.000000Z",
     staging_sha: "e".repeat(40),
-    counts: { passed: 2, failed: 1, broke: 1 },
+    counts: { passed: 3, failed: 1, broke: 2 },
     unfinished: "",
   },
   {
@@ -65,7 +65,7 @@ describe("the Ofis' test reports", () => {
     expect(html.match(/data-test-report="/g)).toHaveLength(2);
     expect(html).toContain('data-test-report="t202610070100"');
     expect(html).toContain("2026-10-07 01:00");
-    expect(html).toMatch(/2 geçti · 1 kaldı · 1 koptu/);
+    expect(html).toMatch(/3 geçti · 1 kaldı · 2 koptu/);
     expect(html).toMatch(/0 geçti · 0 kaldı · 0 koptu/);
     expect(html).toContain("yarım kaldı: kuyruk okunamadı");
     // newest first, as the Cloud Core sends them

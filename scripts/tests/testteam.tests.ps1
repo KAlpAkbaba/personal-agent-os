@@ -580,8 +580,12 @@ Test-Case "masking and cutting: token, secret and password fields, Bearer values
     Assert-Equal -Expected "Authorization: ***" -Actual (Protect-TestTeamText -Text "Authorization: Bearer abc.def") -Because "a header line"
     Assert-Equal -Expected "oturum *** bitti" -Actual (Protect-TestTeamText -Text "oturum ABCDEFGH123 bitti" -Secrets @("ABCDEFGH123")) -Because "the session token wherever it stands"
     Assert-Equal -Expected "kısa" -Actual (Limit-TestTeamText -Text "kısa") -Because "a short body is whole"
-    $cut = ConvertTo-TestTeamShownText -Text (("a" * 4090) + '"token":"GIZLIGIZLIGIZLI"')
+    $cut = ConvertTo-TestTeamShownText -Text (("a" * 4080) + '"token":"GIZLIGIZLIGIZLI"')
     Assert-True -Condition (-not $cut.Contains("GIZLI")) -Because "masked first, so the cut never shows half a secret: $($cut.Substring(4080))"
+    # The session itself across the cut: cut first, its first half would no longer match it.
+    $session = "QWERTYUIOPASDFGHJKLZ"
+    $cut = ConvertTo-TestTeamShownText -Text (("a" * 4090) + $session) -Secrets @($session)
+    Assert-True -Condition (-not $cut.Contains("QWERTY")) -Because "no half of the session shows: $($cut.Substring(4085))"
 }
 
 Test-Case "the round report: Girdi / Beklenen / Çıktı / Sonuç for every step, the plan's why, the ladder table, the forwarded cards; a dead round says 'yarım kaldı'" {
