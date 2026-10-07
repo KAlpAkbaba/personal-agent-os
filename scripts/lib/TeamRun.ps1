@@ -20,6 +20,9 @@
 
 Set-StrictMode -Version Latest
 
+# The repository this file is in (scripts\lib\..\..): the cycle report's default for its orphan check.
+$script:TeamRunRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+
 function Get-TeamGit {
     $command = Get-Command "git.exe" -ErrorAction SilentlyContinue
     if ($null -ne $command -and $command.Source) { return $command.Source }
@@ -114,27 +117,126 @@ function Merge-TeamBranch {
     .DESCRIPTION
         A branch that is already merged is reported as merged. A conflict is aborted, the
         integration branch is left as it was, and the answer says so: the task goes back.
+        When the integration branch is made by this call, older integration branches with
+        merged, unreleased cards are carried into it first (-Queue; CarriedForward says how).
     #>
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$CycleId,
         [Parameter(Mandatory = $true)][string]$Branch,
-        [string]$Base = "main"
+        [string]$Base = "main",
+        $Queue = $null
     )
     $integration = "integrate/$CycleId"
     $tree = New-TeamWorktree -RepoRoot $RepoRoot -Branch $integration -Base $Base
+    # A branch made just now starts from main alone: what an older cycle merged and no release
+    # took is carried over first (Invoke-TeamCarryForward), or it is never released.
+    $carried = @()
+    if ($tree.Created) {
+        if ($null -eq $Queue) {
+            # The cycle (scripts/team/cycle.ps1) keeps its live queue in $script:queue and saves
+            # the whole document; a caller without one (integration-branch.ps1, a test) carries nothing.
+            $found = Get-Variable -Name "queue" -Scope Script -ErrorAction SilentlyContinue
+            if ($null -ne $found) { $Queue = $found.Value }
+        }
+        if ($null -ne $Queue) {
+            $carried = @(Invoke-TeamCarryForward -RepoRoot $RepoRoot -TreePath $tree.Path -Integration $integration -Queue $Queue -Base $Base)
+        }
+    }
     $ancestor = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge-base", "--is-ancestor", $Branch, "HEAD")
     if ($ancestor.ExitCode -eq 0) {
-        return [pscustomobject]@{ Merged = $true; Already = $true; Conflict = $false; Integration = $integration; Detail = "" }
+        return [pscustomobject]@{ Merged = $true; Already = $true; Conflict = $false; Integration = $integration; Detail = ""; CarriedForward = $carried }
     }
     $message = "merge: $Branch into $integration"
     $merge = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--no-ff", "-m", $message, $Branch)
     if ($merge.Success) {
-        return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; Integration = $integration; Detail = "" }
+        return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; Integration = $integration; Detail = ""; CarriedForward = $carried }
     }
     [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--abort"))
     $detail = ($merge.StdOut + "`n" + $merge.StdErr).Trim()
-    return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail }
+    return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail; CarriedForward = $carried }
+}
+
+function Get-TeamOrphanMerges {
+    <#
+    .SYNOPSIS
+        The cards 'merged' into an integration branch that is neither the current cycle's nor in
+        main: work that passed and that no release will take (2026-10-05..07: five cards on
+        integrate/d20261004 while integrate/d20261005 and the releases were cut from main).
+        Pure: which branches main holds is the caller's answer (Get-TeamBranchesInMain).
+    #>
+    param($Queue, [Parameter(Mandatory = $true)][string]$Current, [string[]]$InMain = @())
+    return @(Get-TeamTasks -Queue $Queue | Where-Object {
+            $branch = [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "")
+            ([string](Get-TeamProperty -InputObject $_ -Name "state" -Default "")) -eq "merged" -and
+            $branch.Trim() -and $branch -ne $Current -and @($InMain) -notcontains $branch
+        } | Sort-Object -Property @{ Expression = { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") } }, id)
+}
+
+function Get-TeamBranchesInMain {
+    <# Of the named branches, the ones whose tip main holds. A branch that does not exist is not in it. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [string[]]$Branches = @(), [string]$Base = "main")
+    $held = New-Object System.Collections.ArrayList
+    foreach ($branch in @($Branches | Where-Object { $_ } | Sort-Object -Unique)) {
+        if (-not (Test-TeamBranch -RepoRoot $RepoRoot -Branch $branch)) { continue }
+        $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("merge-base", "--is-ancestor", "refs/heads/$branch", $Base)
+        if ($result.ExitCode -eq 0) { [void]$held.Add($branch) }
+    }
+    return @($held.ToArray())
+}
+
+function Invoke-TeamCarryForward {
+    <#
+    .SYNOPSIS
+        Into a cycle's integration branch made just now: every older integration branch that
+        holds 'merged' cards and is not in main, oldest first, --no-ff, "carried forward: <branch>".
+
+    .DESCRIPTION
+        Carried, its cards name the new branch, so the integration step gates them with it. A
+        conflict is aborted, the branch is left as it was, and the cards are STOPPED with the
+        reason "yetim entegrasyon: <branch>" - the Danışman's, never dropped without a word.
+        Returns one row per branch: Branch, Tasks (ids), Carried, Line (Turkish).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$TreePath,
+        [Parameter(Mandatory = $true)][string]$Integration,
+        [Parameter(Mandatory = $true)]$Queue,
+        [string]$Base = "main"
+    )
+    $candidates = @(Get-TeamTasks -Queue $Queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") })
+    $inMain = @(Get-TeamBranchesInMain -RepoRoot $RepoRoot -Branches $candidates -Base $Base)
+    $orphans = @(Get-TeamOrphanMerges -Queue $Queue -Current $Integration -InMain $inMain)
+    $rows = New-Object System.Collections.ArrayList
+    foreach ($group in @($orphans | Group-Object -Property { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") })) {
+        $branch = [string]$group.Name
+        $tasks = @($group.Group)
+        $ids = (@($tasks | ForEach-Object { [string]$_.id }) -join ", ")
+        if (-not (Test-TeamBranch -RepoRoot $RepoRoot -Branch $branch)) {
+            $merge = [pscustomobject]@{ Success = $false; StdOut = ""; StdErr = "the branch does not exist" }
+        }
+        elseif ((Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("merge-base", "--is-ancestor", "refs/heads/$branch", "HEAD")).ExitCode -eq 0) {
+            $merge = [pscustomobject]@{ Success = $true; StdOut = ""; StdErr = "" }
+        }
+        else {
+            $merge = Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("merge", "--no-ff", "-m", "carried forward: $branch", "refs/heads/$branch")
+        }
+        if ($merge.Success) {
+            foreach ($task in $tasks) { Set-TeamProperty -InputObject $task -Name "integration_branch" -Value $Integration }
+            $line = "$branch $Integration dalına taşındı (birleşmiş ama yayınlanmamış): $ids"
+            [void]$rows.Add([pscustomobject]@{ Branch = $branch; Tasks = @($tasks | ForEach-Object { [string]$_.id }); Carried = $true; Line = $line })
+            continue
+        }
+        [void](Invoke-TeamGit -WorkingDirectory $TreePath -Arguments @("merge", "--abort"))
+        foreach ($task in $tasks) {
+            Set-TeamProperty -InputObject $task -Name "state" -Value "stopped"
+            Set-TeamProperty -InputObject $task -Name "reason" -Value "yetim entegrasyon: $branch"
+            Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+        }
+        $line = "$branch $Integration dalına taşınamadı (çakışma ya da dal yok); işler durduruldu, Danışman'a: $ids"
+        [void]$rows.Add([pscustomobject]@{ Branch = $branch; Tasks = @($tasks | ForEach-Object { [string]$_.id }); Carried = $false; Line = $line })
+    }
+    return @($rows.ToArray())
 }
 
 function Undo-TeamMerge {
@@ -682,8 +784,12 @@ function New-TeamCycleReport {
     param(
         [Parameter(Mandatory = $true)][string]$CycleId,
         [Parameter(Mandatory = $true)]$Queue,
-        [Parameter(Mandatory = $true)]$Cycle
+        [Parameter(Mandatory = $true)]$Cycle,
+        # The repository whose main the orphan check reads; by default the one this file is in.
+        [string]$RepoRoot = "",
+        [string]$Base = "main"
     )
+    if (-not $RepoRoot) { $RepoRoot = $script:TeamRunRepoRoot }
     $tasks = @(Get-TeamTasks -Queue $Queue)
     $gates = Get-TeamOwnerGates
     $lines = New-Object System.Collections.ArrayList
@@ -708,6 +814,18 @@ function New-TeamCycleReport {
             "$($_.id) — $($_.title) [$($_.state)] ($shaText)"
         })
     Add-Section -Title "Hazır olanlar (sha)" -Rows $ready
+
+    # Merged work no release will take: named on the day it happens, not found days later.
+    $current = "integrate/$CycleId"
+    $held = @($tasks | Where-Object { [string]$_.state -eq "merged" } | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") } |
+            Where-Object { $_ -and $_ -ne $current })
+    if (@($held).Count -gt 0 -and $RepoRoot) {
+        $inMain = @(Get-TeamBranchesInMain -RepoRoot $RepoRoot -Branches $held -Base $Base)
+        $orphans = @(Get-TeamOrphanMerges -Queue $Queue -Current $current -InMain $inMain | ForEach-Object {
+                "$($_.id) — $($_.title): $([string](Get-TeamProperty -InputObject $_ -Name 'integration_branch' -Default '')) dalında birleşmiş, $Base'de değil ve bu döngünün dalı değil - yayına ulaşmaz"
+            })
+        if (@($orphans).Count -gt 0) { Add-Section -Title "Yetim entegrasyon (yayına ulaşmayan birleşmiş işler)" -Rows $orphans }
+    }
 
     $ideas = @($tasks | Where-Object { $_.state -eq "awaiting_owner" } | ForEach-Object {
             $proposal = [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "")

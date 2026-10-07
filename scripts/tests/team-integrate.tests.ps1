@@ -2597,6 +2597,127 @@ exit 0
         Assert-True -Condition ($run.Report -match "task-d") -Because "the report names what was dropped with it: $($run.Report)"
         Assert-True -Condition ((Get-TaskById -Queue $run.Queue -Id "task-d").reason -match "task-a") -Because "task-d says whom it waits for: $((Get-TaskById -Queue $run.Queue -Id 'task-d').reason)"
     }
+
+    Write-Host ""
+    Write-Host "an older cycle's integration branch that holds merged, unreleased cards is carried forward"
+
+    function New-CarrySandbox {
+        <#
+            main; integrate/da with task-a's work, never released (2026-10-05: integrate/d20261004,
+            26 commits ahead of main); integrate/din, whose work main already has; and
+            team/db/worker-x, the new cycle's first approved branch. -Conflict: main changed
+            task-a's file another way after integrate/da left it.
+        #>
+        param([switch]$Conflict)
+        $root = Join-Path $env:TEMP ("pagentos-carry-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+        [void]$sandboxes.Add($root)
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "src"))
+        Set-Content -LiteralPath (Join-Path $root ".gitignore") -Value ".claude/worktrees/" -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $root "src\shared.txt") -Value "base" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $root -Arguments @("init", "-q", "-b", "main"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("config", "user.name", "team test"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("config", "user.email", "team@example.invalid"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("config", "core.autocrlf", "false"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "the sandbox"))
+        $commitOn = {
+            param([string]$Branch, [hashtable]$Files, [string]$Message)
+            [void](Invoke-SandboxGit -Root $root -Arguments @("branch", $Branch, "main"))
+            $tree = "$root-wt"
+            [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", "-q", $tree, $Branch))
+            foreach ($name in $Files.Keys) { Set-Content -LiteralPath (Join-Path $tree $name) -Value $Files[$name] -Encoding ASCII }
+            [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
+            [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", $Message))
+            [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "remove", "--force", $tree))
+        }
+        & $commitOn "integrate/da" @{ "src\shared.txt" = "task-a changed it"; "src\a.txt" = "work on task-a" } "work on task-a"
+        & $commitOn "integrate/din" @{ "src\in.txt" = "work on task-in" } "work on task-in"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("merge", "-q", "--no-ff", "-m", "released: integrate/din", "integrate/din"))
+        if ($Conflict) {
+            Set-Content -LiteralPath (Join-Path $root "src\shared.txt") -Value "main changed it another way" -Encoding ASCII
+            [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-am", "main moved on"))
+        }
+        & $commitOn "team/db/worker-x" @{ "src\x.txt" = "work on task-x" } "work on task-x"
+        return $root
+    }
+
+    function New-CarryQueue {
+        return (New-Queue -Tasks @(
+                (New-Task -Id "task-a" -Integration "integrate/da"), (New-Task -Id "task-a2" -Integration "integrate/da"),
+                (New-Task -Id "task-in" -Integration "integrate/din"),
+                (New-Task -Id "task-gone" -State "awaiting_release" -Integration "integrate/da"),
+                (New-Task -Id "task-now" -Integration "integrate/db")))
+    }
+
+    Test-Case "carry (a): the new cycle's integration branch takes in an older one whose merged cards main does not have, by a 'carried forward' merge" {
+        $root = New-CarrySandbox
+        $queue = New-CarryQueue
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "db" -Branch "team/db/worker-x" -Base "main" -Queue $queue
+        Assert-True -Condition ([bool]$merge.Merged -and -not [bool]$merge.Already) -Because "the worker's branch is merged: $($merge.Detail)"
+        $log = Invoke-SandboxGit -Root $root -Arguments @("log", "--first-parent", "--format=%s", "main..integrate/db")
+        Write-Host "        git log --first-parent main..integrate/db:`n          $($log -replace "`n", "`n          ")"
+        Assert-Equal -Expected "merge: team/db/worker-x into integrate/db`ncarried forward: integrate/da" -Actual $log -Because "the carry-over first, then the cycle's own merge"
+        Assert-True -Condition (Test-TeamAncestor -RepoRoot $root -Ancestor "integrate/da" -Of "integrate/db") -Because "task-a's commit is on the new branch"
+        Assert-True -Condition (-not (Test-TeamAncestor -RepoRoot $root -Ancestor "integrate/da" -Of "main")) -Because "and still not on main: the release takes it"
+        foreach ($id in @("task-a", "task-a2")) {
+            $task = Get-TaskById -Queue $queue -Id $id
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "$id is still merged"
+            Assert-Equal -Expected "integrate/db" -Actual $task.integration_branch -Because "$id is gated with the new branch now"
+        }
+        Assert-Equal -Expected "integrate/da" -Actual (Get-TaskById -Queue $queue -Id "task-gone").integration_branch -Because "a card that is not 'merged' is not moved"
+        Assert-Equal -Expected 1 -Actual @($merge.CarriedForward).Count -Because "one branch carried"
+        Assert-True -Condition ([bool]$merge.CarriedForward[0].Carried -and $merge.CarriedForward[0].Branch -eq "integrate/da") -Because "it says which"
+        $again = Merge-TeamBranch -RepoRoot $root -CycleId "db" -Branch "team/db/worker-x" -Base "main" -Queue (New-CarryQueue)
+        Assert-True -Condition ([bool]$again.Already -and @($again.CarriedForward).Count -eq 0) -Because "a branch that is already there carries nothing again"
+    }
+
+    Test-Case "carry (b): an older integration branch main already holds is not merged again" {
+        $root = New-CarrySandbox
+        $queue = New-Queue -Tasks @((New-Task -Id "task-in" -Integration "integrate/din"))
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "db" -Branch "team/db/worker-x" -Base "main" -Queue $queue
+        Assert-True -Condition ([bool]$merge.Merged) -Because "the worker's branch is merged: $($merge.Detail)"
+        Assert-Equal -Expected "2" -Actual (Invoke-SandboxGit -Root $root -Arguments @("rev-list", "--count", "main..integrate/db")) -Because "the worker's commit and its merge, nothing else"
+        Assert-Equal -Expected "merge: team/db/worker-x into integrate/db" -Actual (Invoke-SandboxGit -Root $root -Arguments @("log", "--first-parent", "--format=%s", "main..integrate/db")) -Because "no carry-over"
+        Assert-Equal -Expected 0 -Actual @($merge.CarriedForward).Count -Because "nothing carried"
+        Assert-Equal -Expected "integrate/din" -Actual (Get-TaskById -Queue $queue -Id "task-in").integration_branch -Because "task-in is left as it was"
+    }
+
+    Test-Case "carry (c): a carry-over that conflicts leaves the new branch at main and stops the cards for the Danisman, by name" {
+        $root = New-CarrySandbox -Conflict
+        $queue = New-CarryQueue
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "db" -Branch "team/db/worker-x" -Base "main" -Queue $queue
+        Assert-True -Condition ([bool]$merge.Merged) -Because "the worker's own branch is still merged: $($merge.Detail)"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "integrate/db^1") -Because "integrate/db was at main when the worker's branch came in"
+        Assert-True -Condition (-not (Test-TeamAncestor -RepoRoot $root -Ancestor "integrate/da" -Of "integrate/db")) -Because "nothing of integrate/da is on it"
+        $tree = Get-TeamWorktreePath -RepoRoot $root -Branch "integrate/db"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $tree -Arguments @("status", "--porcelain")) -Because "the conflict was aborted"
+        foreach ($id in @("task-a", "task-a2")) {
+            $task = Get-TaskById -Queue $queue -Id $id
+            Assert-Equal -Expected "stopped" -Actual $task.state -Because "$id goes to the Danisman"
+            Assert-Equal -Expected "yetim entegrasyon: integrate/da" -Actual $task.reason -Because "$id says why"
+        }
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $queue -Id "task-in").state -Because "task-in is main's already"
+        $carry = @($merge.CarriedForward)
+        Assert-True -Condition ($carry.Count -eq 1 -and -not [bool]$carry[0].Carried) -Because "one carry-over, not made"
+        Assert-True -Condition ($carry[0].Line -match "integrate/da" -and $carry[0].Line -match "task-a, task-a2" -and $carry[0].Line -match "Danışman") -Because "a Turkish line names the branch and the cards: $($carry[0].Line)"
+        Write-Host "        $($carry[0].Line)"
+    }
+
+    Test-Case "carry (d): Get-TeamOrphanMerges names the merged cards of a branch neither current nor in main, and the cycle report says so" {
+        $root = New-CarrySandbox
+        $queue = New-CarryQueue
+        $inMain = @(Get-TeamBranchesInMain -RepoRoot $root -Branches @("integrate/da", "integrate/din", "integrate/db") -Base "main")
+        Assert-Equal -Expected "integrate/din" -Actual ($inMain -join ",") -Because "only integrate/din is in main (integrate/db does not exist yet)"
+        $orphans = @(Get-TeamOrphanMerges -Queue $queue -Current "integrate/db" -InMain $inMain)
+        Assert-Equal -Expected "task-a,task-a2" -Actual (@($orphans | ForEach-Object { $_.id }) -join ",") -Because "exactly the cards of (a)"
+        Assert-Equal -Expected "task-now" -Actual ((@(Get-TeamOrphanMerges -Queue $queue -Current "integrate/da" -InMain $inMain) | ForEach-Object { $_.id }) -join ",") -Because "the current branch is nobody's orphan (and a branch that does not exist is not in main)"
+        Assert-Equal -Expected 0 -Actual @(Get-TeamOrphanMerges -Queue (New-Queue) -Current "integrate/db" -InMain @()).Count -Because "an empty queue"
+        $cycle = [pscustomobject]@{ machine = "test"; started_at = "s"; ended_at = "e"; runs = @(); stops = @(); risks = @(); gaps = @() }
+        $report = New-TeamCycleReport -CycleId "db" -Queue $queue -Cycle $cycle -RepoRoot $root -Base "main"
+        Assert-True -Condition ($report -match "task-a .*integrate/da" -and $report -match "task-a2 .*integrate/da") -Because "the report names them: $report"
+        Assert-True -Condition ($report -notmatch "task-in .*integrate/din" -and $report -notmatch "task-now .*integrate/db") -Because "and none other: $report"
+    }
 }
 finally {
     foreach ($step in $stepProcesses) { try { if (-not $step.HasExited) { Stop-TeamProcessTree -ProcessId $step.Id } } catch { } }
