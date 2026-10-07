@@ -26,6 +26,14 @@
       5. The 'kopma noktası' report: <OutRoot>/<round>/kopma-noktasi.md, and one board note
          addressed to the Danışman's seat ('danisman') (never to the owner).
 
+    Before the plan (staging-follows-release, the Danışman 2026-10-06): staging must serve
+    origin/main's tip (/v1/system/health release.version) and the seeded owner session
+    (seed.ps1's owner.json) must answer 200 on /v1/identity/sessions/current. Otherwise the
+    round REFUSES - exit 4, a board note naming both shas or 'oturum yok', no plan, no card,
+    no tester: a round on an old build judged old code (every step 404) and one on an
+    unseeded staging got 401 everywhere. -AllowStaleStaging skips the sha check for a
+    deliberate test of an old build; -NoAuth skips the session check.
+
     -Retest: for every failed card of -Round whose forwarded task is released, done or
     awaiting_real_evidence (NOT merged: an integration branch is not staging) AND whose staging
     now answers a sha other than the one the failure was found on (found_sha), the scenario is
@@ -63,6 +71,12 @@ param(
     [string]$BaseUrl = "http://127.0.0.1:28001",
     [int]$AllowTestPort = 0,
     [switch]$NoAuth,
+    # A deliberate round on a staging that does not serve main's tip.
+    [switch]$AllowStaleStaging,
+    # The sha staging must serve; empty = origin/main's tip, fetched now (the tests name it).
+    [string]$MainSha = "",
+    # seed.ps1's record of the staging owner session; empty = %LOCALAPPDATA%\PagentOS\staging\owner.json.
+    [string]$SessionFile = "",
     # The Cloud Core's queue, as in the cycle: the failures go there as create-only writes (the
     # feeder's Save-TeamFeedCreates). -QueueToken is the PATH of the token file.
     [string]$QueueUrl = "",
@@ -200,6 +214,75 @@ if ($Retest) {
     }
     Write-Json -Path $cardsPath -Document $document
     exit 0
+}
+
+# ------------------------------------------------------------------------------ staging is main's tip, with a session
+
+function Stop-StagingNotReady {
+    # A refusal, not a failure: exit 4, said on the board; no plan, no card, no tester.
+    param([string]$Why)
+    Write-Host "TUR BAŞLAMADI: $Why"
+    Send-Note -Seat "test-lead" -Text ("Test PY: tur {0} başlamadı - {1}" -f $Round, $Why)
+    exit 4
+}
+
+if (-not (Test-TestTeamStagingUrl -Url $BaseUrl -AllowTestPort $AllowTestPort)) {
+    Write-Host "TUR REDDEDİLDİ: $BaseUrl staging değil"
+    exit 2
+}
+$api = $BaseUrl.TrimEnd("/")
+if ($AllowStaleStaging) { Write-Host "staging sürümü denetlenmedi (-AllowStaleStaging: eski bir sürümün bilerek denenmesi)" }
+else {
+    $mainTip = $MainSha
+    if (-not $mainTip) {
+        $fetched = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("fetch", "--quiet", "origin", "refs/heads/main:refs/remotes/origin/main") -TimeoutSeconds 300
+        if ($fetched.Success) {
+            $parsed = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}")
+            if ($parsed.Success) { $mainTip = ([string]$parsed.StdOut).Trim() }
+        }
+    }
+    if ($mainTip -notmatch '^[0-9a-f]{40}$') { Stop-StagingNotReady -Why "origin/main'in ucu okunamadı; staging'in sürümü karşılaştırılamadı" }
+    $servedSha = ""
+    try {
+        $health = Invoke-RestMethod -UseBasicParsing -Uri "$api/v1/system/health" -TimeoutSec 15
+        $release = Get-TeamProperty -InputObject $health -Name "release"
+        if ($null -ne $release) { $servedSha = [string](Get-TeamProperty -InputObject $release -Name "version" -Default "") }
+    }
+    catch { Write-Host "  staging sağlığı okunamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+    if ($servedSha -ne $mainTip) {
+        $shown = if ($servedSha) { $servedSha } else { "okunamadı" }
+        Stop-StagingNotReady -Why "staging eski: staging $shown, main $mainTip (önce scripts\staging\deploy.ps1 $mainTip; bilerek eski sürüm için -AllowStaleStaging)"
+    }
+    Write-Host "staging main'in ucunda: $mainTip"
+}
+if ($NoAuth) { Write-Host "staging oturumu denetlenmedi (-NoAuth)" }
+else {
+    $sessionPath = if ($SessionFile) { $SessionFile } else { Join-Path $env:LOCALAPPDATA "PagentOS\staging\owner.json" }
+    $token = ""
+    if (Test-Path -LiteralPath $sessionPath) {
+        try {
+            $session = Read-TeamJson -Path $sessionPath
+            $recorded = [string](Get-TeamProperty -InputObject $session -Name "api" -Default "")
+            if (-not $recorded -or (Test-TestTeamStagingUrl -Url $recorded)) { $token = [string](Get-TeamProperty -InputObject $session -Name "session_token" -Default "") }
+        }
+        catch { $token = "" }
+    }
+    $status = 0
+    if ($token) {
+        try {
+            $answer = Invoke-WebRequest -UseBasicParsing -Uri "$api/v1/identity/sessions/current" -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 15
+            $status = [int]$answer.StatusCode
+        }
+        catch {
+            $response = $_.Exception.Response
+            if ($null -ne $response) { $status = [int]$response.StatusCode }
+        }
+    }
+    if ($status -ne 200) {
+        $seen = if (-not $token) { "oturum dosyası yok ya da boş ($sessionPath)" } elseif ($status -gt 0) { "/v1/identity/sessions/current $status" } else { "staging cevap vermedi" }
+        Stop-StagingNotReady -Why "staging'de oturum yok: $seen (önce scripts\staging\seed.ps1)"
+    }
+    Write-Host "staging oturumu geçerli (200)"
 }
 
 # ------------------------------------------------------------------------------ the plan

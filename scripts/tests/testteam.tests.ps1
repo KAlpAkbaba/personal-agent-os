@@ -406,6 +406,8 @@ public static class FakeStaging {
             if (p == "/load" && failAbove > 0 && load > failAbove) { code = 503; body = "{}"; }
             if (p == "/slowone" && Interlocked.Increment(ref slowSeen) == 1) { Thread.Sleep(1500); }
             if (p == "/flaky" && load == 16 && Interlocked.Increment(ref flakySeen) == 1) { code = 503; body = "{}"; }
+            // The seeded owner session: 'good-token' opens it, anything else is 401 (a redeploy without seed.ps1).
+            if (p == "/v1/identity/sessions/current" && (c.Request.Headers["Authorization"] ?? "") != "Bearer good-token") { code = 401; body = "{\"detail\":\"no session\"}"; }
             byte[] bytes = Encoding.UTF8.GetBytes(body);
             c.Response.StatusCode = code;
             c.Response.OutputStream.Write(bytes, 0, bytes.Length);
@@ -556,7 +558,7 @@ Test-Case "a round deals four jobs to four testers at once, gets four results ba
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "r9" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "r9" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
         Assert-Equal -Expected 4 -Actual @($calls).Count -Because "four tester runs"
@@ -573,7 +575,7 @@ Test-Case "a round deals four jobs to four testers at once, gets four results ba
         Assert-True -Condition ($breaking -match "16") -Because "the first failing load"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "testteam"))) -Because "no run data beside the team's files"
         # A second round over the same queue forwards nothing twice.
-        $out = & $powershell -NoProfile -File $testRound -Round "r10" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "r10" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -AllowStaleStaging -NoAuth 2>&1
         $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
         Assert-Equal -Expected 1 -Actual @($queue.tasks).Count -Because "an open card for the same failure is not opened again: $out"
     }
@@ -623,7 +625,7 @@ while (`$true) {
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "api1" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "api1" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $written = @(Get-Content -LiteralPath $puts -Encoding UTF8 | Where-Object { $_ })
         Assert-Equal -Expected 1 -Actual @($written).Count -Because "one failure, one create: $out"
@@ -633,7 +635,7 @@ while (`$true) {
         # The same failure next round: the store has the id, nothing is written.
         $id = [regex]::Match($written[0], 'tasks/(\S+) ').Groups[1].Value
         Write-Utf8 (Join-Path $work "queue-answer.json") ('{"version":1,"tasks":[{"id":"' + $id + '","state":"proposed"}]}')
-        $out = & $powershell -NoProfile -File $testRound -Round "api2" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "api2" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 1 -Actual @(Get-Content -LiteralPath $puts -Encoding UTF8 | Where-Object { $_ }).Count -Because "a known id is not written again: $out"
     }
     finally {
@@ -655,10 +657,10 @@ Test-Case "under the memory floor a round starts no tester and says so; while a 
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "low" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 3 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "low" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 3 -AssumeGateRunning 0 -NoBoard -AllowStaleStaging -NoAuth 2>&1
         Assert-True -Condition (-not (Test-Path -LiteralPath $env:PAGENTOS_FAKE_TESTER_LOG)) -Because "no tester started: $out"
         Assert-True -Condition (($out -join " ") -match "bellek") -Because "it says why: $out"
-        $out = & $powershell -NoProfile -File $testRound -Round "gate" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 1 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "gate" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 1 -NoBoard -AllowStaleStaging -NoAuth 2>&1
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
         Assert-Equal -Expected 2 -Actual @($calls).Count -Because "both jobs ran: $out"
         $t1 = [datetime]::Parse((@($calls)[0] -split " ")[4]); $t2 = [datetime]::Parse((@($calls)[1] -split " ")[4])
@@ -689,7 +691,7 @@ Test-Case "measured, not assumed: the machine's own free memory and the test-slo
         Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"},{"family":"b","scenario":"b.json"}]}'
         $fake = New-FakeTester -Dir $work
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
-        $out = & $powershell -NoProfile -File $testRound -Round "measured" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -SlotStore $slots -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "measured" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -SlotStore $slots -NoBoard -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         Assert-True -Condition (($out -join " ") -match "kap") -Because "the measured gate is said: $out"
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
@@ -720,7 +722,7 @@ Test-Case "the cap is measured again before every tester start: memory that runs
         $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
         $env:PAGENTOS_FAKE_SQUEEZE = $settings
         $outRoot = Join-Path $work "out"
-        $out = & $powershell -NoProfile -File $testRound -Round "squeeze" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "squeeze" -TeamRoot $team -OutRoot $outRoot -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $calls = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
         Assert-Equal -Expected 4 -Actual @($calls).Count -Because "the fifth job did not start: $out"
@@ -748,12 +750,12 @@ Test-Case "a round's run data goes under run_temp_root, never into the checkout"
         Write-Utf8 (Join-Path $team "cycle-settings.json") ('{"test_parallel":4,"run_temp_root":' + (ConvertTo-Json -InputObject $runTemp) + '}')
         $plan = Join-Path $work "plan.json"
         Write-Utf8 $plan '{"jobs":[{"family":"a","scenario":"a.json"}]}'
-        $out = & $powershell -NoProfile -File $testRound -Round "where" -TeamRoot $team -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "where" -TeamRoot $team -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends (no memory, no tester): $out"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $runTemp "testteam\where\cards.json")) -Because "the cards are under run_temp_root: $out"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "testteam"))) -Because "nothing beside the team's files"
         $inside = Join-Path $repoRoot "team\testteam-refused-$([guid]::NewGuid().ToString('N').Substring(0, 6))"
-        $out = & $powershell -NoProfile -File $testRound -Round "where" -TeamRoot $team -OutRoot $inside -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "where" -TeamRoot $team -OutRoot $inside -PlanPath $plan -AssumeFreeGb 0 -AssumeGateRunning 0 -NoBoard -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 2 -Actual $LASTEXITCODE -Because "an out root in the checkout is refused: $out"
         Assert-True -Condition (-not (Test-Path -LiteralPath $inside)) -Because "and nothing was created there"
     }
@@ -804,6 +806,92 @@ Test-Case "a retest after the fix is released AND staging was redeployed closes 
     }
 }
 
+# ============================================================================ staging must be main's tip
+
+Write-Host ""
+Write-Host "a round on a stale staging, or one without a session (the Danışman, 2026-10-06)"
+
+function Invoke-StagingRound {
+    # A round against a fake staging serving -Sha, main's tip -MainSha, the session file holding
+    # -Token; what is returned is the exit code, the output, the fake testers' calls, whether a
+    # cards.json was written and the board posts.
+    param([string]$Sha, [string]$MainSha, [string]$Token = "good-token", [string]$Extra = "")
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $staging = Start-FakeStaging -Port $port -Sha $Sha
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"saglik","scenario":"s.json"}]}'
+        $session = Join-Path $work "owner.json"
+        Write-Utf8 $session ('{"api":"http://127.0.0.1:28001","session_token":"' + $Token + '"}')
+        $fake = New-FakeTester -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        $posts = Join-Path $work "posts.log"
+        $fakeBoard = Join-Path $work "board.ps1"
+        Write-Utf8 $fakeBoard ("[IO.File]::AppendAllText('$posts', ((@(`$args) -join '|') + [Environment]::NewLine), (New-Object Text.UTF8Encoding(`$false)))")
+        $outRoot = Join-Path $work "out"
+        $arguments = @("-NoProfile", "-File", $testRound, "-Round", "st", "-TeamRoot", $team, "-OutRoot", $outRoot, "-PlanPath", $plan,
+            "-ClaudePath", $powershell, "-ClaudePrefixArguments", "-NoProfile,-File,$fake", "-AssumeFreeGb", "30", "-AssumeGateRunning", "0",
+            "-BoardScript", $fakeBoard, "-BaseUrl", "http://127.0.0.1:$port", "-AllowTestPort", "$port", "-SessionFile", $session, "-MainSha", $MainSha)
+        if ($Extra) { $arguments += $Extra }
+        $out = & $powershell @arguments 2>&1
+        $code = $LASTEXITCODE
+        return [pscustomobject]@{
+            ExitCode = $code; Output = ($out -join " ")
+            Calls    = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
+            Cards    = (Test-Path -LiteralPath (Join-Path $outRoot "st\cards.json"))
+            Queue    = @((Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json).tasks)
+            Posts    = $(if (Test-Path -LiteralPath $posts) { [System.IO.File]::ReadAllText($posts, [System.Text.Encoding]::UTF8) } else { "" })
+        }
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $staging.HasExited) { $staging.Kill() }
+        Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a round whose staging serves another sha than main's tip starts no tester, opens no card and says both shas" {
+    # 2026-10-06 13:05: staging 6a21294c, production 72884b71 - every watch step 404, false failures.
+    $old = "a" * 40; $main = "b" * 40
+    $run = Invoke-StagingRound -Sha $old -MainSha $main
+    Assert-Equal -Expected 4 -Actual $run.ExitCode -Because "refused, an exit of its own (not a failure, 1): $($run.Output)"
+    Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no tester started: $($run.Output)"
+    Assert-Equal -Expected $false -Actual $run.Cards -Because "no card of the round is written"
+    Assert-Equal -Expected 0 -Actual @($run.Queue).Count -Because "nothing reaches the software queue"
+    Assert-True -Condition ($run.Output.Contains($old) -and $run.Output.Contains($main)) -Because "it says both shas: $($run.Output)"
+    Assert-True -Condition ($run.Posts.Contains($old) -and $run.Posts.Contains($main)) -Because "and posts them on the board: $($run.Posts)"
+}
+
+Test-Case "-AllowStaleStaging starts a deliberate round on an old build" {
+    $run = Invoke-StagingRound -Sha ("a" * 40) -MainSha ("b" * 40) -Extra "-AllowStaleStaging"
+    Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "the round ends: $($run.Output)"
+    Assert-Equal -Expected 2 -Actual @($run.Calls).Count -Because "both jobs ran: $($run.Output)"
+}
+
+Test-Case "staging at main's tip with a valid seeded session starts the round" {
+    $sha = "c" * 40
+    $run = Invoke-StagingRound -Sha $sha -MainSha $sha
+    Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "the round ends: $($run.Output)"
+    Assert-Equal -Expected 2 -Actual @($run.Calls).Count -Because "both jobs ran: $($run.Output)"
+}
+
+Test-Case "a round whose staging session answers 401 (redeployed, not seeded) starts no tester and says 'oturum yok'" {
+    # 2026-10-06 13:20: right after a staging redeploy every authenticated step answered 401.
+    $sha = "c" * 40
+    $run = Invoke-StagingRound -Sha $sha -MainSha $sha -Token "stale-token"
+    Assert-Equal -Expected 4 -Actual $run.ExitCode -Because "refused: $($run.Output)"
+    Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no tester started: $($run.Output)"
+    Assert-Equal -Expected $false -Actual $run.Cards -Because "no card of the round is written"
+    Assert-True -Condition ($run.Output -match "oturum yok") -Because "it says why: $($run.Output)"
+    Assert-True -Condition ($run.Posts -match "oturum yok") -Because "on the board too: $($run.Posts)"
+}
+
 # ============================================================================ the board
 
 Write-Host ""
@@ -838,7 +926,7 @@ Test-Case "a round sends its breaking report to the board as test-lead, addresse
         $posts = Join-Path $work "posts.log"
         $fakeBoard = Join-Path $work "board.ps1"
         Write-Utf8 $fakeBoard ("[IO.File]::AppendAllText('$posts', ((@(`$args) -join '|') + [Environment]::NewLine), (New-Object Text.UTF8Encoding(`$false)))")
-        $out = & $powershell -NoProfile -File $testRound -Round "rb" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -BoardScript $fakeBoard 2>&1
+        $out = & $powershell -NoProfile -File $testRound -Round "rb" -TeamRoot $team -OutRoot (Join-Path $work "out") -PlanPath $plan -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -BoardScript $fakeBoard -AllowStaleStaging -NoAuth 2>&1
         Assert-Equal -Expected 0 -Actual $LASTEXITCODE -Because "the round ends: $out"
         $lines = @([System.IO.File]::ReadAllLines($posts, [System.Text.Encoding]::UTF8) | Where-Object { $_ -match "kopma noktası" })
         Assert-Equal -Expected 1 -Actual @($lines).Count -Because "one breaking report note: $out"
