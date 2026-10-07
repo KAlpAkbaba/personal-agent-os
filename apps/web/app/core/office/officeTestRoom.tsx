@@ -122,11 +122,9 @@ const STATE_TR: Record<TestSeatState, string> = {
 // where a sad or angry returned seat raises it; a waiting or working seat raises none.
 const WARNS: ReadonlySet<TestSeatState> = new Set(["failed", "broke", "error"]);
 
-/**
- * The spoken name of a test seat: "Test çalışanı 1: iş bekliyor, dinleniyor" - in the owner's
- * words (officePlain.ts), never the job id (the owner, 2026-10-07).
- */
+/** The spoken name of a test seat: "Test çalışanı 1: iş bekliyor, dinleniyor". */
 export function testSeatAriaLabel(seat: TestSeat, now: Date): string {
+  // In the owner's words (officePlain.ts), never the job id (the owner, 2026-10-07).
   const base = `${seatTitle(seat.seat)}: ${STATE_TR[seat.state]}, ${MOOD_TR[testMoodOf(seat, now)]}`;
   const job = seat.job ? `, iş: ${plainJobLabel(seat.job)}` : "";
   const breaking = seat.breaking ? `, son kopma noktası: ${plainBreaking(seat.breaking)}` : "";
