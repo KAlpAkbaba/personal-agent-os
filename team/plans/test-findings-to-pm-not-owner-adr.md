@@ -35,3 +35,17 @@ Danışman folded by hand (done, "BİRLEŞTİRİLDİ") did not stop the next rou
 - A burst of failures costs at most 11 cards a round.
 - Folding detection keys on the reason words "birleştirildi"/"bölündü"; a fold recorded with
   other words would let the step open a card again (visible, not silent).
+
+## Addendum (return 1, inspection of 2026-10-07)
+
+- A test card's `proposal` is ONE line free of newlines, control characters and `"<>|`
+  (`ConvertTo-TestTeamProposalLine`: lines joined ` ; `, `->` as `→`, `<>` as `‹›`, `"` as `'`,
+  `|` as `/`). The split run's prompt carries only id/title/roadmap_row/proposal, so the finding
+  stays in it; but cycle.ps1 `Send-IdeaTexts` runs `Path.GetFileName` on every `proposed` card's
+  proposal, and on PowerShell 5.1 a multi-line proposal threw there and stopped the cycle.
+  The guard in cycle.ps1 itself (test the `team/proposals/` pattern before `GetFileName`) is
+  outside this card's area and is asked for (alan isteği): any other card with a prose proposal
+  would still stop the cycle.
+- A second failure of a signature in the SAME round is held by the id of the card opened for the
+  first (or `test-fail-ozet-<round>` when it was summarised), never a placeholder, so the retest
+  finds and closes that card.

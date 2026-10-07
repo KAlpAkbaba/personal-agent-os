@@ -349,6 +349,41 @@ Test-Case "at most ten forwards a round; the rest go into one summary card that 
     Assert-True -Condition ($null -eq $ten.Summary) -Because "ten fit: no summary"
 }
 
+Test-Case "a test card's proposal is one path-safe line: the cycle reads every proposal as a path" {
+    # Inspection of 2026-10-07: cycle.ps1 Send-IdeaTexts runs Path.GetFileName on the proposal
+    # of every 'proposed' card; on PowerShell 5.1 a newline, '"', '<', '>' or '|' throws there
+    # ("Yolda geçersiz karakterler var") and, under ErrorAction Stop, stops every cycle.
+    $failure = [pscustomobject]@{
+        card = "tj-r1-4"; tester = "tester-4"; family = "alarm"; scenario = "scripts/testteam/scenarios/alarm.json"
+        step = "alarm `"yarın 7`" <kur> | sil`r`nikinci satır`t"; steps = @("POST /v1/alarms"); expected = "201 -> liste"; actual = "500 <html>"; screenshot = ""
+    }
+    $task = ConvertTo-TestTeamFailureTask -Failure $failure -Round "r1" -Now "2026-10-07T06:00:00Z"
+    $summary = ConvertTo-TestTeamSummaryTask -Failures @($failure, $failure) -Round "r1" -Now "2026-10-07T06:00:00Z"
+    foreach ($card in @($task, $summary)) {
+        $p = [string]$card.proposal
+        $bad = @($p.ToCharArray() | Where-Object { [int]$_ -lt 32 -or '"<>|'.IndexOf($_) -ge 0 })
+        Assert-Equal -Expected 0 -Actual @($bad).Count -Because "$($card.id): no newline, control character or '`"<>|' in: $p"
+        $threw = $null
+        try { [void][System.IO.Path]::GetFileName($p) } catch { $threw = $_.Exception.Message }
+        Assert-True -Condition ($null -eq $threw) -Because "$($card.id): Path.GetFileName must not throw: $threw"
+        Assert-True -Condition ($p.StartsWith("Test PY bulgusu:")) -Because "$($card.id): the PM's prefix stays: $p"
+        Assert-True -Condition ($p -match "ikinci satır" -and $p -match "Önerilen ilk alan: services/api/app/alarms/") -Because "$($card.id): the finding and the first area stay in it: $p"
+    }
+}
+
+Test-Case "the same failing step twice in one round: the second is held by the card this round opens, not by a placeholder" {
+    # Inspection of 2026-10-07: the second failure's job card got forwarded_task '(bu tur)', so
+    # the retest never found its card and never retested or closed it.
+    $mk = { param($n, $actual) [pscustomobject]@{ card = "tj-$n"; tester = "tester-1"; family = "alarm"; scenario = "a.json"; step = "adım $n"; steps = @(); expected = "200"; actual = $actual; screenshot = "" } }
+    $first = & $mk 1 "500"; $again = & $mk 1 "502"; $again.card = "tj-1b"
+    $pick = Select-TestTeamForwards -Failures @($first, $again) -Tasks @() -Round "r6"
+    Assert-Equal -Expected 1 -Actual @($pick.Held).Count -Because "the second is held"
+    Assert-Equal -Expected (Get-TestTeamFailureTaskId -Failure $first) -Actual ([string]$pick.Held[0].By) -Because "by the card opened this round"
+    $many = @(for ($i = 1; $i -le 11; $i++) { & $mk $i "500" }) + @(& $mk 11 "504")
+    $over = Select-TestTeamForwards -Failures $many -Tasks @() -Round "r7"
+    Assert-Equal -Expected "test-fail-ozet-r7" -Actual ([string]@($over.Held)[0].By) -Because "a duplicate of a summarised step is held by the summary card"
+}
+
 Test-Case "a failure's id does not hang on how the scenario path was spelled" {
     # The inspector, 2026-10-05: an absolute and a relative path of one scenario were two cards.
     $base = [pscustomobject]@{ family = "nobet"; step = "nöbet listesi"; actual = "500"; scenario = "scripts/testteam/scenarios/watches.json" }

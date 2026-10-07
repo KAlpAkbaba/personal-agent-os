@@ -331,16 +331,33 @@ function Select-TestTeamForwards {
     foreach ($failure in @($Failures)) {
         $signature = Get-TestTeamFailureSignature -Failure $failure
         if ($held.ContainsKey($signature)) { [void]$skipped.Add([pscustomobject]@{ Failure = $failure; By = $held[$signature] }); continue }
-        $held[$signature] = "(bu tur)"
-        if ($forward.Count -lt $script:TestTeamMaxForwards) { [void]$forward.Add($failure) } else { [void]$rest.Add($failure) }
+        # Held by the card this round opens for it - its id, so the retest finds that card.
+        if ($forward.Count -lt $script:TestTeamMaxForwards) { [void]$forward.Add($failure); $held[$signature] = Get-TestTeamFailureTaskId -Failure $failure }
+        else { [void]$rest.Add($failure); $held[$signature] = Get-TestTeamSummaryTaskId -Round $Round }
     }
     $summary = $null
     if ($rest.Count -gt 0) { $summary = ConvertTo-TestTeamSummaryTask -Failures @($rest.ToArray()) -Round $Round -StagingSha $StagingSha -Now $Now }
     return [pscustomobject]@{ Forward = @($forward.ToArray()); Summary = $summary; Summarised = @($rest.ToArray()); Held = @($skipped.ToArray()) }
 }
 
+function Get-TestTeamSummaryTaskId {
+    param([Parameter(Mandatory = $true)][string]$Round)
+    return ("test-fail-ozet-" + $Round)
+}
+
+function ConvertTo-TestTeamProposalLine {
+    <# A proposal as ONE line free of what a Windows path refuses: cycle.ps1 Send-IdeaTexts reads
+       every proposal with Path.GetFileName, which on PowerShell 5.1 throws on a newline, a control
+       character or '"<>|' and stops the cycle (inspection of 2026-10-07). Lines are joined ' ; '. #>
+    param([string]$Text)
+    $t = ([string]$Text).Replace("->", [string][char]0x2192).Replace('"', "'").Replace("<", [string][char]0x2039).Replace(">", [string][char]0x203A).Replace("|", "/")
+    $t = $t -replace '\s*[\r\n]+\s*', ' ; '
+    $t = $t -replace '[\x00-\x1F]', ' '
+    return (($t -replace ' {2,}', ' ').Trim())
+}
+
 function New-TestTeamPmTask {
-    # A test card's common shape: 'proposed' with a prose proposal and NO area, so the cycle
+    # A test card's common shape: 'proposed' with a one-line, path-safe proposal and NO area, so the cycle
     # hands it to the Proje Yöneticisi's split (Test-TeamSplitCandidate) - never to the owner's
     # gate, where a plain 'proposed' card goes (Get-TeamNextRole).
     param([string]$Id, [string]$Title, [string]$Goal, [string]$Proposal, [string]$Acceptance, [string]$Reason, [string]$Now)
@@ -361,7 +378,7 @@ function New-TestTeamPmTask {
         acceptance        = $Acceptance
         evidence_expected = "regresyon testi, staging'de yeniden test dökümü"
         reason            = "$($script:TestTeamPmPrefix) $Reason"
-        proposal          = $Proposal
+        proposal          = (ConvertTo-TestTeamProposalLine $Proposal)
     }
 }
 
@@ -388,7 +405,7 @@ function ConvertTo-TestTeamSummaryTask {
     foreach ($failure in @($Failures)) { [void]$lines.Add("İmza: " + (Get-TestTeamFailureSignature -Failure $failure)) }
     $goal = ($lines.ToArray()) -join "`n"
     $instruction = (@($families | ForEach-Object { Get-TestTeamPmInstruction -Family $_ }) -join "`n")
-    return (New-TestTeamPmTask -Id ("test-fail-ozet-" + $Round) -Title ("Test ekibi: tur {0} - {1} hata daha (özet)" -f $Round, @($Failures).Count) `
+    return (New-TestTeamPmTask -Id (Get-TestTeamSummaryTaskId -Round $Round) -Title ("Test ekibi: tur {0} - {1} hata daha (özet)" -f $Round, @($Failures).Count) `
             -Goal $goal -Proposal ("$($script:TestTeamPmPrefix) tur $Round özeti, $(@($Failures).Count) hata ($($families -join ', ')).`n$goal`n$instruction") `
             -Acceptance "Her hatanın senaryosu staging'de geçer; her hata için bir regresyon testi." -Reason "tur $Round, sınır üstü $(@($Failures).Count) hata" -Now $Now)
 }
