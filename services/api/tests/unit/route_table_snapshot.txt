@@ -20,6 +20,7 @@ DELETE /v1/watches/{watch_id} remove_watch
 DELETE /v1/webpush/subscriptions/{subscription_id} delete_subscription
 GET /v1/accounts list_accounts
 GET /v1/accounts/oauth/callback oauth_callback
+GET /v1/aktivra/status aktivra_status
 GET /v1/alarms list_alarms
 GET /v1/alarms/audio/{token} get_greeting_audio
 GET /v1/alarms/history get_alarm_history
@@ -210,6 +211,7 @@ PATCH /v1/news/sources/{news_source_id} update_source
 PATCH /v1/security/assets/{ref} change_asset_scope
 PATCH /v1/voice/preferences patch_preferences
 POST /v1/accounts/connect connect
+POST /v1/aktivra/events aktivra_event
 POST /v1/alarms create_alarm
 POST /v1/alarms/{alarm_id}/cancel cancel_alarm
 POST /v1/alarms/{alarm_id}/snooze snooze_alarm
