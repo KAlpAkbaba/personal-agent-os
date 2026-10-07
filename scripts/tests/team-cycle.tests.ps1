@@ -1368,7 +1368,10 @@ function Invoke-Cycle {
         # The Proje Yöneticisi's duty for stopped tasks is on by default too (pm-duty-stopped): the
         # harness passes -NoDuty unless a test asks for it, so the runs every other case counts stay
         # what they were.
-        [switch]$Duty
+        [switch]$Duty,
+        # Started without pipes (no output captured): a child the cycle leaves running (a test
+        # round) inherits the cycle's handles, and a captured run would wait for that child too.
+        [switch]$Detached
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
@@ -1391,8 +1394,17 @@ function Invoke-Cycle {
             $(if (@($Brief).Count -gt 0) { " -ResearchBrief " + ((@($Brief) | ForEach-Object { "'" + $_ + "'" }) -join ",") } else { "" }) +
             "; exit `$LASTEXITCODE")
         )
-        $result = Invoke-NativeProcess -FilePath $powershell -Arguments $arguments -WorkingDirectory $Root `
-            -TimeoutSeconds 300 -SuccessExitCodes @(0, 2, 3)
+        if ($Detached) {
+            $quoted = @($arguments[0..3]) + @("`"" + $arguments[4] + "`"")
+            $process = Start-Process -FilePath $powershell -ArgumentList $quoted -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+            [void]$process.Handle  # PS 5.1: ExitCode stays empty unless the handle was taken before the exit
+            if (-not $process.WaitForExit(300000)) { Stop-Process -Id $process.Id -Force; throw "the detached cycle ran past 300 s" }
+            $result = [pscustomobject]@{ ExitCode = $process.ExitCode; StdOut = ""; StdErr = "" }
+        }
+        else {
+            $result = Invoke-NativeProcess -FilePath $powershell -Arguments $arguments -WorkingDirectory $Root `
+                -TimeoutSeconds 300 -SuccessExitCodes @(0, 2, 3)
+        }
     }
     finally {
         Remove-Item Env:\PAGENTOS_FAKE_CLAUDE_SCENARIO -ErrorAction SilentlyContinue
@@ -1608,6 +1620,190 @@ try {
         $run = Invoke-Cycle -Root $plain -Scenario "approve" -ExtraArguments "-TestRoundScript '$fakeRound'"
         Start-Sleep -Milliseconds 800
         Assert-True -Condition (-not (Test-Path -LiteralPath $marker)) -Because "without -TestTeam no round starts"
+    }
+
+    # test-rounds-after-release-and-hourly (the owner, 2026-10-06: 'neden testçiler iş bekliyor'): a
+    # round also after every release that reaches staging and every 'test_round_every_hours' while
+    # the cycle lives; never two at once; each its own name. The cycle is kept alive by a worker run
+    # of ten-odd seconds; staging is a file the stand-in round itself rewrites (no clock in a test).
+    function Invoke-RoundCycle {
+        param([string]$Root, [string]$RoundBody, [double]$EveryHours, [int]$WorkerSeconds = 12, [int]$Testers = 4, [switch]$Detached)
+        $staging = Join-Path $Root "staging-health.json"
+        [System.IO.File]::WriteAllText($staging, '{"release":{"version":"aaaaaaa"}}', (New-Object System.Text.UTF8Encoding($false)))
+        Write-TeamJson -Path (Join-Path $Root "team\cycle-settings.json") -Document ([pscustomobject]@{ max_parallel = 2; test_parallel = $Testers; test_round_every_hours = $EveryHours })
+        $fakeRound = Join-Path $Root "fake-round.ps1"
+        [System.IO.File]::WriteAllText($fakeRound, $RoundBody.Replace("@ROOT@", $Root), (New-Object System.Text.UTF8Encoding($true)))
+        $env:PAGENTOS_FAKE_CLAUDE_SECONDS = "worker:*=$WorkerSeconds"
+        try {
+            return Invoke-Cycle -Root $Root -Scenario "approve" -Detached:$Detached -ExtraArguments "-TestTeam -TestRoundScript '$fakeRound' -StagingHealthUrl '$staging' -StagingPollSeconds 1"
+        }
+        finally { Remove-Item Env:\PAGENTOS_FAKE_CLAUDE_SECONDS -ErrorAction SilentlyContinue }
+    }
+    function Get-StartedRounds {
+        param([string]$Root)
+        $path = Join-Path $Root "rounds.log"
+        for ($i = 0; $i -lt 10 -and -not (Test-Path -LiteralPath $path); $i++) { Start-Sleep -Milliseconds 200 }
+        if (-not (Test-Path -LiteralPath $path)) { return @() }
+        return @([System.IO.File]::ReadAllLines($path) | Where-Object { $_ })
+    }
+    # Writes its -Round to rounds.log; the FIRST round turns staging to a new sha (a release landed).
+    $releasingRound = @'
+$i = [array]::IndexOf($args, '-Round'); $name = $args[$i + 1]
+[System.IO.File]::AppendAllText('@ROOT@\rounds.log', $name + "`r`n")
+$staging = '@ROOT@\staging-health.json'
+if ([System.IO.File]::ReadAllText($staging) -match 'aaaaaaa') { [System.IO.File]::WriteAllText($staging, '{"release":{"version":"bbbbbbb"}}') }
+'@
+
+    Test-Case "test rounds: one at the start, another when the staging sha changes, each with its own name" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-RoundCycle -Root $root -RoundBody $releasingRound -EveryHours 100
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $rounds = @(Get-StartedRounds -Root $root)
+        Assert-Equal -Expected "t-c1-1,t-c1-2" -Actual ($rounds -join ",") -Because "the start's round, then the release's (and no third: staging did not change again): $($run.StdOut)"
+        Assert-True -Condition ($run.StdOut -match "staging") -Because "the cycle says why the second round started: $($run.StdOut)"
+    }
+
+    Test-Case "test rounds: 'test_round_every_hours' starts another while the cycle lives; the names differ" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        # Staging never changes here: only the interval (0.0008 h = about 3 s) can start a round.
+        $steady = $releasingRound.Replace("if ([System.IO.File]", "if (`$false -and [System.IO.File]")
+        $run = Invoke-RoundCycle -Root $root -RoundBody $steady -EveryHours 0.0008
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $rounds = @(Get-StartedRounds -Root $root)
+        Assert-True -Condition (@($rounds).Count -ge 2) -Because "the interval started more rounds than the start's one: $($rounds -join ',') / $($run.StdOut)"
+        Assert-Equal -Expected @($rounds).Count -Actual @($rounds | Select-Object -Unique).Count -Because "every round its own name: $($rounds -join ',')"
+        Assert-Equal -Expected "t-c1-1" -Actual $rounds[0] -Because "numbered from one"
+
+        # With the interval at 0 and staging steady, the start's round is the only one.
+        $off = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-RoundCycle -Root $off -RoundBody $steady -EveryHours 0 -WorkerSeconds 6
+        Assert-Equal -Expected "t-c1-1" -Actual (@(Get-StartedRounds -Root $off) -join ",") -Because "0 = no interval: $($run.StdOut)"
+    }
+
+    Test-Case "test rounds: a round still running blocks a second one, whatever staging and the interval say" {
+        # The round in flight is one an earlier cycle process started: the test starts it and names
+        # it in the lock (a round the cycle starts itself would inherit the cycle's output pipe and
+        # hold the harness). Staging turns over mid-cycle and the interval is due all along.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $holder = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 120") -WindowStyle Hidden -PassThru
+        $flip = $null
+        try {
+            [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "team\reports"))
+            Write-TeamJson -Path (Join-Path $root "team\reports\test-round.json") -Document ([pscustomobject]@{
+                    pid = $holder.Id; process_started = [string]$holder.StartTime.ToUniversalTime().Ticks; round = "t-c0-1"; cycle_id = "c0"; why = "test"
+                })
+            $staging = Join-Path $root "staging-health.json"
+            $flip = Start-Job -ArgumentList $staging -ScriptBlock {
+                param($Path)
+                Start-Sleep -Seconds 5
+                [System.IO.File]::WriteAllText($Path, '{"release":{"version":"ccccccc"}}')
+            }
+            $steady = $releasingRound.Replace("if ([System.IO.File]", "if (`$false -and [System.IO.File]")
+            $run = Invoke-RoundCycle -Root $root -RoundBody $steady -EveryHours 0.0008
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+            Assert-Equal -Expected "ccccccc" -Actual ([string](Get-Content -Raw -LiteralPath $staging | ConvertFrom-Json).release.version) -Because "staging did change while the cycle lived (else this case proves nothing)"
+            Assert-Equal -Expected "" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "the running round is the lock - at the start, on the release, on the interval: $($run.StdOut)"
+            Assert-True -Condition ($run.StdOut -match "turu zaten") -Because "the cycle says why: $($run.StdOut)"
+
+            # The round ends: the next cycle starts one again.
+            Stop-Process -Id $holder.Id -Force
+            $holder.WaitForExit(10000) | Out-Null
+            $again = Invoke-RoundCycle -Root $root -RoundBody $steady -EveryHours 100 -WorkerSeconds 1
+            Assert-Equal -Expected "t-c1-1" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "the lock went with its process: $($again.StdOut)"
+        }
+        finally {
+            if ($null -ne $flip) { $flip | Wait-Job -Timeout 30 | Out-Null; $flip | Remove-Job -Force }
+            Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test-Case "test rounds: the lock one cycle process writes keeps the next cycle process from starting a second round" {
+        # tick.ps1 restarts the cycle every tick, so the writer and the reader of the lock are two
+        # processes. The first cycle runs without pipes (its round outlives it); the round notes its
+        # own pid and start ticks, so the lock is checked against the round, not against the cycle.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $longRound = @'
+$i = [array]::IndexOf($args, '-Round'); $name = $args[$i + 1]
+[System.IO.File]::AppendAllText('@ROOT@\rounds.log', $name + "`r`n")
+$me = Get-Process -Id $PID
+[System.IO.File]::WriteAllText('@ROOT@\round-self.txt', "$PID|" + $me.StartTime.ToUniversalTime().Ticks)
+Start-Sleep -Seconds 120
+'@
+        $roundPid = 0
+        try {
+            $first = Invoke-RoundCycle -Root $root -RoundBody $longRound -EveryHours 100 -WorkerSeconds 2 -Detached
+            Assert-Equal -Expected 0 -Actual $first.ExitCode -Because "the first cycle process"
+            Assert-Equal -Expected "t-c1-1" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "the first cycle's round"
+            $selfPath = Join-Path $root "round-self.txt"
+            for ($i = 0; $i -lt 25 -and -not (Test-Path -LiteralPath $selfPath); $i++) { Start-Sleep -Milliseconds 200 }
+            $self = ([System.IO.File]::ReadAllText($selfPath)).Split('|')
+            $roundPid = [int]$self[0]
+            Assert-True -Condition (-not (Get-Process -Id $roundPid -ErrorAction SilentlyContinue).HasExited) -Because "the round outlives the cycle that started it"
+            $held = Get-Content -Raw -LiteralPath (Join-Path $root "team\reports\test-round.json") | ConvertFrom-Json
+            Assert-Equal -Expected $roundPid -Actual ([int]$held.pid) -Because "the lock names the round's process"
+            Assert-Equal -Expected $self[1] -Actual ([string]$held.process_started) -Because "and its start ticks"
+            Assert-Equal -Expected "t-c1-1" -Actual ([string]$held.round) -Because "and the round"
+
+            # The next cycle process: the start and the interval are due; the round of the first holds.
+            $second = Invoke-RoundCycle -Root $root -RoundBody $longRound -EveryHours 0.0008
+            Assert-Equal -Expected 0 -Actual $second.ExitCode -Because ($second.StdOut + $second.StdErr)
+            Assert-Equal -Expected "t-c1-1" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "the first cycle's lock held the second: $($second.StdOut)"
+            Assert-True -Condition ($second.StdOut -match "turu zaten") -Because "the cycle says why: $($second.StdOut)"
+        }
+        finally {
+            if ($roundPid -gt 0) { Stop-Process -Id $roundPid -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    Test-Case "test rounds: a lock naming a live pid with other start ticks is a reused pid, not a round" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $holder = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 60") -WindowStyle Hidden -PassThru
+        try {
+            [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "team\reports"))
+            $otherTicks = [string]($holder.StartTime.ToUniversalTime().Ticks - [timespan]::TicksPerSecond)
+            Write-TeamJson -Path (Join-Path $root "team\reports\test-round.json") -Document ([pscustomobject]@{
+                    pid = $holder.Id; process_started = $otherTicks; round = "t-c0-1"; cycle_id = "c0"; why = "test"
+                })
+            $steady = $releasingRound.Replace("if ([System.IO.File]", "if (`$false -and [System.IO.File]")
+            $run = Invoke-RoundCycle -Root $root -RoundBody $steady -EveryHours 100 -WorkerSeconds 1
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+            Assert-Equal -Expected "t-c1-1" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "a reused pid holds nothing: $($run.StdOut)"
+        }
+        finally { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case "test rounds: a lock whose round has ended is removed - no untracked file is left in the checkout" {
+        # The inspector's follow-up (2026-10-07): team/reports/test-round.json outlived its round and
+        # showed up untracked in the main checkout. A dead pid's lock goes at the next look, and the
+        # cycle looks once more at its end.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $gone = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-Command", "exit 0") -WindowStyle Hidden -PassThru
+        $gone.WaitForExit(10000) | Out-Null
+        $lock = Join-Path $root "team\reports\test-round.json"
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "team\reports"))
+        Write-TeamJson -Path $lock -Document ([pscustomobject]@{ pid = $gone.Id; process_started = "1"; round = "t-c0-1"; cycle_id = "c0"; why = "test" })
+        $steady = $releasingRound.Replace("if ([System.IO.File]", "if (`$false -and [System.IO.File]")
+        $run = Invoke-RoundCycle -Root $root -RoundBody $steady -EveryHours 100 -WorkerSeconds 4
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "t-c1-1" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "the dead lock held nothing: $($run.StdOut)"
+        Assert-True -Condition (-not (Test-Path -LiteralPath $lock)) -Because "the ended round's lock is gone at the cycle's end: $(if (Test-Path -LiteralPath $lock) { Get-Content -Raw -LiteralPath $lock })"
+
+        # test_parallel 0 starts nothing, and a dead lock left by an earlier round still goes.
+        $off = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $offLock = Join-Path $off "team\reports\test-round.json"
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $off "team\reports"))
+        Write-TeamJson -Path $offLock -Document ([pscustomobject]@{ pid = $gone.Id; process_started = "1"; round = "t-c0-1"; cycle_id = "c0"; why = "test" })
+        $run = Invoke-RoundCycle -Root $off -RoundBody $steady -EveryHours 100 -WorkerSeconds 1 -Testers 0
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition (-not (Test-Path -LiteralPath $offLock)) -Because "a dead lock goes even when no round may start"
+    }
+
+    Test-Case "test rounds: test_parallel 0 starts no round (start, release, interval) and says so once" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-RoundCycle -Root $root -RoundBody $releasingRound -EveryHours 0.0008 -Testers 0
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "" -Actual (@(Get-StartedRounds -Root $root) -join ",") -Because "cap 0: nothing starts: $($run.StdOut)"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "test_parallel 0").Count) -Because "one risk line, not one a tick: $($run.Report)"
     }
 
     Test-Case "the report is the protocol's, in Turkish, and the queue holds forty lines of each run" {

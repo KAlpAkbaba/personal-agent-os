@@ -164,6 +164,11 @@ param(
     [switch]$TestTeam,
     # For the tests: the script started as the round (default scripts/testteam/test-round.ps1).
     [string]$TestRoundScript = "",
+    # test-rounds-after-release-and-hourly: a round also starts when the sha staging serves
+    # changes (a release reached staging), read here at most every -StagingPollSeconds. For the
+    # tests the URL may be a file path holding the same JSON.
+    [string]$StagingHealthUrl = "http://127.0.0.1:28001/v1/system/health",
+    [int]$StagingPollSeconds = 60,
     [switch]$DryRun,
     # The Cloud Core's queue (pilot-02): with -QueueUrl the queue, the lock and the report go
     # through /v1/team/queue there, so an approval can be given with this PC off and the other
@@ -198,6 +203,7 @@ if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is low
 if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
 if ($MaxInspectors -lt 1 -or $MaxIntegrators -lt 1) { throw "-MaxInspectors and -MaxIntegrators are at least 1" }
 if ($MaxHours -lt 0 -or $RefillSeconds -lt 1 -or $PollMilliseconds -lt 10) { throw "-MaxHours is 0 or more, -RefillSeconds at least 1, -PollMilliseconds at least 10" }
+if ($StagingPollSeconds -lt 1) { throw "-StagingPollSeconds is at least 1" }
 # A parameter is never assigned over (provision.tests.ps1 holds every script to it).
 $runResearch = (-not $NoResearch) -or [bool]$ResearchOnly
 # The researcher's last finished run, on this machine: the throttle of -ResearchEveryHours.
@@ -213,6 +219,9 @@ $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
 $reportsRoot = Join-Path $TeamRoot "reports"
 $cycleDir = Join-Path $reportsRoot $CycleId
+# The test team's round in flight on this machine, whichever cycle process started it: the lock
+# that keeps two rounds from running at once outlives the process that wrote it.
+$testRoundLockPath = Join-Path $reportsRoot "test-round.json"
 $agentsRoot = Join-Path $repoRoot ".claude\agents"
 
 $useApi = [bool]$QueueUrl
@@ -494,13 +503,20 @@ function Start-CycleTestRound {
     <# The test team's round beside this cycle (-TestTeam): its own process, its own seats - the
        round measures its cap itself (Get-TeamTestCap: none under the memory floor, one while
        the gate holds a heavy slot) and says why on the board. The cycle neither waits for it
-       nor gives it a software seat; a round that cannot start is a line under the risks. #>
+       nor gives it a software seat; a round that cannot start is a line under the risks.
+       Each round its own name, t-<cycle>-<n> (n: the first number with no log in the cycle's
+       folder), so its folder and cards never mix with an earlier round of the same cycle. #>
+    param([string]$Why = "döngü başı")
+    $number = 1
+    while (Test-Path -LiteralPath (Join-Path $cycleDir "test-round-$number.log")) { $number++ }
+    $suffix = "-$number"
     $round = ("t-" + $CycleId).ToLowerInvariant() -replace '[^a-z0-9-]', '-'
-    if ($round.Length -gt 41) { $round = $round.Substring(0, 41).TrimEnd('-') }
+    if ($round.Length -gt 41 - $suffix.Length) { $round = $round.Substring(0, 41 - $suffix.Length).TrimEnd('-') }
+    $round += $suffix
     $script = if ($TestRoundScript) { $TestRoundScript } else { Join-Path $repoRoot "scripts\testteam\test-round.ps1" }
     $arguments = @("-NoProfile", "-File", "`"$script`"", "-Round", $round, "-TeamRoot", "`"$TeamRoot`"", "-ClaudePath", "`"$ClaudePath`"")
     if ($useApi) { $arguments += @("-QueueUrl", $QueueUrl, "-QueueToken", "`"$QueueToken`"") }
-    $log = Join-Path $cycleDir "test-round.log"
+    $log = Join-Path $cycleDir "test-round-$number.log"
     # The board's address, as the cycle's own runs get it (test-round-board-address): in API mode
     # the queue URL and the token file's PATH, in file mode neither. Start-Process has no
     # environment of its own in PowerShell 5.1: the child inherits this process', so the two are
@@ -511,8 +527,16 @@ function Start-CycleTestRound {
     try {
         foreach ($name in $boardAddress.Keys) { [Environment]::SetEnvironmentVariable($name, $boardAddress[$name]) }
         $process = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList $arguments -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $log -RedirectStandardError (Join-Path $cycleDir "test-round.err.log")
-        Write-Host "test ekibi turu $round yazılım ekibinin yanında başladı (pid $($process.Id)); yazılım koltukları değişmedi"
+            -RedirectStandardOutput $log -RedirectStandardError (Join-Path $cycleDir "test-round-$number.err.log")
+        $script:testRoundProcess = $process
+        try {
+            Write-TeamJson -Path $testRoundLockPath -Document ([pscustomobject]@{
+                    pid = $process.Id; process_started = [string]$process.StartTime.ToUniversalTime().Ticks
+                    round = $round; cycle_id = $CycleId; why = $Why
+                })
+        }
+        catch { Add-CycleNote -List "risks" -Text "test turu kilidi yazılamadı ($testRoundLockPath): $($_.Exception.Message -replace '\s+', ' ')" }
+        Write-Host "test ekibi turu $round yazılım ekibinin yanında başladı (pid $($process.Id); neden: $Why); yazılım koltukları değişmedi"
         return $process
     }
     catch {
@@ -522,6 +546,111 @@ function Start-CycleTestRound {
     finally {
         foreach ($name in $inherited.Keys) { [Environment]::SetEnvironmentVariable($name, $inherited[$name]) }
     }
+}
+
+function Test-CycleTestRoundRunning {
+    <# The round's own process is the lock: the one this cycle started, or the one the lock file
+       names (an earlier cycle process of this machine) - that pid with that start time, so a
+       reused pid is not taken for the round. A lock whose round has ended is removed, so it is
+       never left untracked in the checkout. #>
+    if ($null -ne $script:testRoundProcess) {
+        try { if (-not $script:testRoundProcess.HasExited) { return $true } } catch { }
+        $script:testRoundProcess = $null
+    }
+    if (-not (Test-Path -LiteralPath $testRoundLockPath)) { return $false }
+    $alive = $false
+    try {
+        $held = Read-TeamJson -Path $testRoundLockPath
+        $process = Get-Process -Id ([int]$held.pid) -ErrorAction Stop
+        $alive = ([string]$process.StartTime.ToUniversalTime().Ticks -eq [string]$held.process_started)
+    }
+    catch { }
+    if (-not $alive) { Remove-Item -LiteralPath $testRoundLockPath -Force -ErrorAction SilentlyContinue }
+    return $alive
+}
+
+function Get-CycleStagingSha {
+    <# The sha staging serves now (/v1/system/health's release.version), "" when unreadable: an
+       unreadable staging is no release. #>
+    try {
+        $health = if ([System.IO.Path]::IsPathRooted($StagingHealthUrl)) { Read-TeamJson -Path $StagingHealthUrl }
+        else { Invoke-RestMethod -UseBasicParsing -Uri $StagingHealthUrl -TimeoutSec 5 }
+        $release = Get-TeamProperty -InputObject $health -Name "release"
+        if ($null -ne $release) { return [string](Get-TeamProperty -InputObject $release -Name "version" -Default "") }
+    }
+    catch { }
+    return ""
+}
+
+function Get-CycleTestRoundSettings {
+    <# 'test_round_every_hours' (0 to 48, default 2; 0 = no interval) and the test team's cap from
+       team/cycle-settings.json, read at every look: a setting changed mid-cycle counts. #>
+    $path = Join-Path $TeamRoot "cycle-settings.json"
+    $hours = 2.0
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $value = Get-TeamProperty -InputObject (Read-TeamJson -Path $path) -Name "test_round_every_hours" -Default $null
+            if ($null -ne $value) {
+                $parsed = [double]$value
+                if ($parsed -ge 0 -and $parsed -le 48) { $hours = $parsed }
+                else { throw "0 ile 48 arasında değil: $value" }
+            }
+        }
+        catch {
+            $problem = "test_round_every_hours okunamadı ($($_.Exception.Message -replace '\s+', ' ')); 2 saat"
+            if (@($script:cycle.risks) -notcontains $problem) { Add-CycleNote -List "risks" -Text $problem }
+        }
+    }
+    $testers = (Read-TeamCycleSettings -Path $path -Workers $MaxParallel -Inspectors $MaxInspectors -Integrators $MaxIntegrators).Testers
+    return [pscustomobject]@{ EveryHours = $hours; Testers = [int]$testers }
+}
+
+# The test rounds of this cycle (-TestTeam): when the last one started, the sha staging served at
+# the last look and when that look was, and why a round is owed but not started yet.
+$testRoundProcess = $null
+$testRoundStartedAt = $null
+$stagingSha = ""
+$stagingLookedAt = [datetime]::MinValue
+$testRoundOwed = ""
+
+function Invoke-CycleTestRoundTick {
+    <# test-rounds-after-release-and-hourly (the owner, 2026-10-06: 'neden testçiler iş bekliyor'):
+       a round at the cycle's start, again when staging's sha changes, again every
+       test_round_every_hours while the cycle lives. A reason that comes while a round runs is
+       kept and served when it ends - never two rounds at once. A test cap of 0 starts nothing;
+       the memory floor and the gate are the round's own to measure and say. #>
+    param([switch]$First)
+    $now = [datetime]::UtcNow
+    if ($First) { $script:testRoundStartedAt = $now }
+    if ($First -or ($now - $script:stagingLookedAt).TotalSeconds -ge $StagingPollSeconds) {
+        $script:stagingLookedAt = $now
+        $sha = Get-CycleStagingSha
+        if ($sha) {
+            if ($script:stagingSha -and $sha -ne $script:stagingSha) { $script:testRoundOwed = "staging $($script:stagingSha) -> $sha (yeni yayın)" }
+            $script:stagingSha = $sha
+        }
+    }
+    $settings = Get-CycleTestRoundSettings
+    if ($First) { $script:testRoundOwed = "döngü başı" }
+    elseif (-not $script:testRoundOwed -and $settings.EveryHours -gt 0 -and ($now - $script:testRoundStartedAt).TotalHours -ge $settings.EveryHours) {
+        $script:testRoundOwed = "aralık: $($settings.EveryHours) saatte bir"
+    }
+    if (-not $script:testRoundOwed) { return }
+    if ($settings.Testers -le 0) {
+        $line = "test ekibi kapalı (test_parallel 0): tur başlamadı"
+        if (@($script:cycle.risks) -notcontains $line) { Add-CycleNote -List "risks" -Text $line }
+        $script:testRoundOwed = ""
+        $script:testRoundStartedAt = $now
+        return
+    }
+    if (Test-CycleTestRoundRunning) {
+        # The round already running covers the start; a later reason waits for it to end.
+        if ($First) { Write-Host "test ekibi turu zaten çalışıyor; döngü başında yenisi başlamadı"; $script:testRoundOwed = "" }
+        return
+    }
+    [void](Start-CycleTestRound -Why $script:testRoundOwed)
+    $script:testRoundOwed = ""
+    $script:testRoundStartedAt = $now
 }
 
 function Get-LimitsDocument {
@@ -845,7 +974,7 @@ try {
     if (Set-QueueAside -Problems $queueProblems) { Save-Queue -Document $script:queue }
     Write-CycleStatus
     if (-not (Test-Path -LiteralPath $cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $cycleDir) }
-    if ($TestTeam -and -not $ResearchOnly) { [void](Start-CycleTestRound) }
+    if ($TestTeam -and -not $ResearchOnly) { Invoke-CycleTestRoundTick -First }
     $runCount = @{}
 
     function Test-CapReached {
@@ -2193,6 +2322,14 @@ try {
             [void](Test-CapReached)
             break
         }
+        # The test team's next round: a release on staging, the interval (never one beside another).
+        if ($TestTeam -and -not $ResearchOnly) {
+            try { Invoke-CycleTestRoundTick }
+            catch {
+                $failedRound = "test turu bakışı başarısız: $($_.Exception.Message -replace '\s+', ' ')"
+                if (@($cycle.risks) -notcontains $failedRound) { Add-CycleNote -List "risks" -Text $failedRound }
+            }
+        }
         # The heartbeat: a status nobody refreshed for ten minutes reads as "no cycle".
         if (([datetime]::UtcNow - $statusWrittenAt).TotalSeconds -ge $statusTickSeconds) { Write-CycleStatus }
         Start-Sleep -Milliseconds $(if (@($pool).Count -eq 0) { [Math]::Max($PollMilliseconds, 1000) } else { $PollMilliseconds })
@@ -2221,6 +2358,8 @@ finally {
     }
     $pool.Clear()
     $liveRuns.Clear()
+    # A test round that has ended leaves no lock behind (one still running keeps it).
+    if ($TestTeam) { try { [void](Test-CycleTestRoundRunning) } catch { } }
     Write-CycleStatus
     if ($useApi) {
         try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId }
