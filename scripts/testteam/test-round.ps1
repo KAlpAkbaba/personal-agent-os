@@ -23,6 +23,10 @@
       4. The failures are deduplicated and each becomes a normal card of the software queue
          (state 'proposed', steps/expected/actual/scenario/screenshot/staging sha); a card whose
          id is already in the queue is not opened again.
+      4a. The proof (proof-from-test-rounds-and-trials): per JARVIS roadmap row a plan job names
+         ('roadmap_row'), the scenarios that passed and failed on staging, with the staging sha,
+         POSTed to the Cloud Core (/v1/team/queue/proof) - the Ofis' 'staging'de kanıtlı'.
+         -PostProof posts a finished round's proof again and does nothing else.
       5. The 'kopma noktası' report: <OutRoot>/<round>/kopma-noktasi.md, and one board note
          addressed to the Danışman's seat ('danisman') (never to the owner).
 
@@ -69,6 +73,8 @@ param(
     # For the tests: a stand-in for scripts\team\board.ps1.
     [string]$BoardScript = "",
     [switch]$Retest,
+    # Only post the proof of the finished round -Round (its cards.json, plan and result files).
+    [switch]$PostProof,
     [string]$BaseUrl = "http://127.0.0.1:28001",
     [int]$AllowTestPort = 0,
     # The stand-in staging of the tests needs no session: no seed, no session check.
@@ -193,6 +199,77 @@ function Read-Queue {
     if ($null -ne $apiStore) { return (Get-TeamQueueApi -Store $apiStore) }
     if (-not (Test-Path -LiteralPath $queuePath)) { return [pscustomobject]@{ version = 1; tasks = @() } }
     return (Read-TeamJson -Path $queuePath)
+}
+
+# ------------------------------------------------------------------------------ the proof
+
+function Get-RoundProof {
+    <# The round's proof per JARVIS roadmap row (proof-from-test-rounds-and-trials): a plan job
+       names its row ('roadmap_row') when it has one, otherwise its 'why' (or, with neither, its
+       family) is sent as written and the Cloud Core resolves the row (app.team.progress
+       resolve_row: a wording that names no row is counted 'satır dışı', never a row). A card
+       that passed is a passed scenario of that row, one that failed or broke a failed one. A
+       card with no result file (the tester wrote none) or one that never ran proves nothing.
+       $null, said, when the round's results do not name ONE staging sha. #>
+    param($Document, [string]$Plan)
+    $rowOf = @{}
+    if ($Plan -and (Test-Path -LiteralPath $Plan)) {
+        foreach ($job in @((Read-TeamJson -Path $Plan).jobs)) {
+            $row = ([string](Get-TeamProperty -InputObject $job -Name "roadmap_row" -Default "")).Trim()
+            if (-not $row) { $row = ([string](Get-TeamProperty -InputObject $job -Name "why" -Default "")).Trim() }
+            if (-not $row) { $row = ([string]$job.family).Trim() }
+            if ($row.Length -gt 300) { $row = $row.Substring(0, 300).Trim() }  # the Core's ROW_NAME_MAX
+            if ($row) { $rowOf[[string]$job.family] = $row }
+        }
+    }
+    $rows = [ordered]@{}
+    $shas = @{}
+    foreach ($card in @($Document.cards)) {
+        $state = [string]$card.state
+        if (@("passed", "failed", "broke") -notcontains $state) { continue }
+        if (-not $rowOf.ContainsKey([string]$card.family)) { continue }
+        $resultFile = Join-Path $roundDir "$($card.id).result.json"
+        if (-not (Test-Path -LiteralPath $resultFile)) { continue }
+        try { $result = Read-TeamJson -Path $resultFile } catch { continue }
+        $sha = ([string](Get-TeamProperty -InputObject $result -Name "staging_sha" -Default "")).Trim().ToLowerInvariant()
+        if ($sha) { $shas[$sha] = $true }
+        $row = $rowOf[[string]$card.family]
+        if (-not $rows.Contains($row)) { $rows[$row] = [ordered]@{ row = $row; passed = 0; failed = 0; families = @() } }
+        if ($state -eq "passed") { $rows[$row].passed += 1 } else { $rows[$row].failed += 1 }
+        if ($rows[$row].families -notcontains [string]$card.family) { $rows[$row].families += [string]$card.family }
+    }
+    if ($rows.Count -eq 0) { Write-Host "  kanıt: bu turda yol haritası satırına bağlı sonuç yok"; return $null }
+    if ($shas.Count -ne 1) { Write-Host "  kanıt: sonuçlar tek bir staging sha'sı adlandırmıyor ($($shas.Count)); gönderilmedi"; return $null }
+    return [ordered]@{
+        round       = $Round
+        staging_sha = @($shas.Keys)[0]
+        at          = [datetime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        rows        = @($rows.Values)
+    }
+}
+
+function Send-RoundProof {
+    <# Kept in the Cloud Core (POST /v1/team/queue/proof), never a document edit; the proof is
+       also written beside the cards. A failure is said and never stops the round. #>
+    param($Document, [string]$Plan)
+    $proof = Get-RoundProof -Document $Document -Plan $Plan
+    if ($null -eq $proof) { return }
+    Write-Json -Path (Join-Path $roundDir "proof.json") -Document $proof
+    if ($null -eq $apiStore) { Write-Host "  kanıt: -QueueUrl yok; yalnız $(Join-Path $roundDir 'proof.json')"; return }
+    try {
+        [void](Invoke-TeamApi -Store $apiStore -Method "POST" -Path "/v1/team/queue/proof" -Body $proof)
+        Write-Host ("  kanıt Cloud Core'a yazıldı: {0} satır, staging {1}" -f @($proof.rows).Count, $proof.staging_sha.Substring(0, [Math]::Min(12, $proof.staging_sha.Length)))
+    }
+    catch { Write-Host "  kanıt yazılamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+}
+
+if ($PostProof) {
+    # The proof of a finished round, again (a round that ran before this step, or a store that was down).
+    if (-not (Test-Path -LiteralPath $cardsPath)) { Write-Host "kanıt: $cardsPath yok"; exit 2 }
+    $document = Read-TeamJson -Path $cardsPath
+    $plan = if ($PlanPath) { $PlanPath } else { [string](Get-TeamProperty -InputObject $document -Name "plan" -Default "") }
+    Send-RoundProof -Document $document -Plan $plan
+    exit 0
 }
 
 # ------------------------------------------------------------------------------ the re-test
@@ -459,6 +536,7 @@ if ($added.Count -gt 0) {
     }
 }
 Write-Json -Path $cardsPath -Document $document
+Send-RoundProof -Document $document -Plan $PlanPath
 
 # ------------------------------------------------------------------------------ the breaking point
 

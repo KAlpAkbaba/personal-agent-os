@@ -28,6 +28,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.identity.dependencies import require_owner_session
 from app.ledger import service as ledger_service
@@ -563,13 +564,41 @@ async def read_office(request: Request) -> dict[str, Any]:
             approvals.list_pending(queue, root, store),
             team_store.utcnow(),
             models=_models_in_force(store),
-        ) | {"progress": _progress(request)}
+        ) | {"progress": _progress(request, store=store, queue=queue)}
 
     return await asyncio.to_thread(load)
 
 
-def _progress(request: Request) -> dict[str, Any]:
-    """The İlerleme strip (office-progress): additive, so a page that predates it ignores it."""
+@router.post("/v1/team/queue/proof")
+async def post_proof(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    """A test round's proof per JARVIS row (scripts/testteam/test-round.ps1 posts it): kept
+    in the store, read back by the Ofis's İlerleme strip. A second post of a round replaces it."""
+    store = _store(request)
+    try:
+        await asyncio.to_thread(store.put_proof, body)
+    except (team_store.Invalid, OSError) as error:
+        raise _refuse(error) from error
+    return {"stored": body.get("round")}
+
+
+def _rounds(store: team_store.TeamStore) -> list[Any]:
+    # A store without the proof (an older fake) or one that cannot be read leaves the strip
+    # without staging proof, never without the office.
+    read = getattr(store, "read_proofs", None)
+    try:
+        return list(read()) if read is not None else []
+    except (OSError, ValueError, SQLAlchemyError):
+        return []
+
+
+def _progress(
+    request: Request,
+    *,
+    store: team_store.TeamStore | None = None,
+    queue: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The İlerleme strip (office-progress): additive, so a page that predates it ignores it.
+    ``store`` gives the test rounds' proofs and ``queue`` the owner's trials."""
     # The api image ships neither document: production mounts the two, read-only, under
     # PAGENTOS_PROGRESS_ROOT (infra/docker/docker-compose.prod.yml); a checkout reads its tree.
     root = (
@@ -579,4 +608,9 @@ def _progress(request: Request) -> dict[str, Any]:
     )
     settings = getattr(request.app.state, "settings", None)
     release = (getattr(settings, "release", None) or "").strip()
-    return progress.progress(Path(root), as_of=release or None)
+    return progress.progress(
+        Path(root),
+        as_of=release or None,
+        rounds=_rounds(store) if store is not None else None,
+        queue=queue,
+    )

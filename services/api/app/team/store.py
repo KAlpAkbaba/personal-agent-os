@@ -30,7 +30,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.team import models_setting
+from app.team import models_setting, progress
 from app.team.models import KIND_LOCK, KIND_PROPOSAL, KIND_REPORT, KIND_TASK, TeamStateRow
 
 LOCK_STALE_HOURS = 6  # TeamQueue.ps1: $script:TeamLockStaleHours
@@ -42,6 +42,11 @@ KIND_STATUS = "status"  # a team_state row of its own kind (String(16)): no new 
 STATUS_KEY = "status"
 KIND_MODELS = "models"  # the model setting (ADR-0214 addendum 7): one row, as the status is
 MODELS_KEY = "models"
+#: A test round's proof per JARVIS row (proof-from-test-rounds-and-trials): one row per round,
+#: key = the round id; a kind, never a new table.
+KIND_PROOF = "proof"
+#: The strip reads the newest rounds only: older ones are on an older release anyway.
+PROOFS_READ = 200
 SCHEMA_PATH = Path(__file__).with_name("queue.schema.json")
 _REPORT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.md$")
 #: A proposal's file name under ``team/proposals/`` (``scripts/team/cycle.ps1`` posts it).
@@ -319,6 +324,27 @@ def _check_proposal(name: Any, text: Any) -> None:
         raise Invalid(problems)
 
 
+def _check_proof(document: Any) -> None:
+    """A test round's proof (proof-from-test-rounds-and-trials): ``progress.round_problems``
+    holds the shape; the store adds what either kind of storage cannot keep."""
+    problems = progress.round_problems(document)
+    if not problems:
+        names = [r["row"] for r in document["rows"]]
+        names += [f for r in document["rows"] for f in r.get("families", [])]
+        for name in names:
+            problems.extend(_text_problems("a round row's", name))
+        if _is_device_name(document["round"] + ".json"):
+            problems.append(f"a round id is not a Windows device name: {document['round']!r}")
+    if problems:
+        raise Invalid(problems)
+
+
+def _newest_proofs(documents: list[Any]) -> list[dict[str, Any]]:
+    kept = [d for d in documents if isinstance(d, dict) and not progress.round_problems(d)]
+    kept.sort(key=lambda d: (d["at"], d["round"]), reverse=True)
+    return kept[:PROOFS_READ]
+
+
 def _check_models(document: Any) -> None:
     """What a store keeps is the whole setting, stamped: all five roles, ``fallback`` and the
     ``updated_at`` its writer gave it (``models_setting`` holds the rules)."""
@@ -356,6 +382,8 @@ class TeamStore(Protocol):
     def put_status(self, document: dict[str, Any]) -> None: ...
     def read_models(self) -> dict[str, Any] | None: ...
     def put_models(self, document: dict[str, Any]) -> None: ...
+    def put_proof(self, document: dict[str, Any]) -> None: ...
+    def read_proofs(self) -> list[dict[str, Any]]: ...
 
 
 def _check_put(
@@ -497,6 +525,23 @@ class FileStore:
             return (self.root / "proposals" / name).read_bytes().decode("utf-8")
         except (OSError, ValueError):
             return None
+
+    def put_proof(self, document: dict[str, Any]) -> None:
+        """``proofs/<round>.json``; a second post of one round replaces it."""
+        _check_proof(document)
+        folder = self.root / "proofs"
+        with _WRITE_LOCK:
+            folder.mkdir(parents=True, exist_ok=True)
+            self._write(folder / f"{document['round']}.json", _copy(document))
+
+    def read_proofs(self) -> list[dict[str, Any]]:
+        documents = []
+        for path in (self.root / "proofs").glob("*.json"):
+            try:
+                documents.append(json.loads(path.read_bytes().decode("utf-8")))
+            except (OSError, ValueError):
+                continue
+        return _newest_proofs(documents)
 
 
 class DbStore:
@@ -740,3 +785,37 @@ class DbStore:
                 return None
             text = row.doc.get("text")
             return text if isinstance(text, str) else None
+
+    def put_proof(self, document: dict[str, Any]) -> None:
+        """One row per round, ``key`` = the round id; a second post replaces the row."""
+        _check_proof(document)
+        doc = _copy(document)
+        key, at = doc["round"], doc["at"]
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_PROOF, key))
+            if row is None:
+                session.add(TeamStateRow(kind=KIND_PROOF, key=key, doc=doc, updated_at=at))
+            else:
+                row.doc = doc
+                row.updated_at = at
+            try:
+                session.commit()
+            except IntegrityError:
+                # Two first posts of one round raced and the other's row is there: ours replaces.
+                session.rollback()
+                session.execute(
+                    update(TeamStateRow)
+                    .where(TeamStateRow.kind == KIND_PROOF, TeamStateRow.key == key)
+                    .values(doc=doc, updated_at=at)
+                )
+                session.commit()
+
+    def read_proofs(self) -> list[dict[str, Any]]:
+        with self._factory() as session:
+            rows = session.execute(
+                select(TeamStateRow.doc)
+                .where(TeamStateRow.kind == KIND_PROOF)
+                .order_by(TeamStateRow.updated_at.desc(), TeamStateRow.key.desc())
+                .limit(PROOFS_READ)
+            ).scalars()
+            return _newest_proofs([_copy(doc) for doc in rows])
