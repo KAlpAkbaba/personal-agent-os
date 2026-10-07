@@ -62,3 +62,7 @@ Dönüş 4 (T1 `target=_blank`; M13 açılır pencere kapatma AYNEN kalır, work
    scheme://host` ya da şemasız yazılanın ilk sözcüğü; yol/sorgu asla) ve planlayıcının
    ipucu "adres https:// ile başlar, kamuya açık bir host adlandırır" der. Koşu 3'teki
    açıklanamayan ret büyük olasılıkla şemasız bir adresti; artık izde görünür.
+12. Planlayıcının geçmiş satırı turun eylem yaptığı öğenin adını taşır (`1. fill textbox
+   "Customer name:" - acted`, ad ELEMENTS'teki gibi etkisizleştirilir). Koşu 4a/4b'de T2
+   ilk alanı iki kez doldurdu: geçmiş yalnız "fill textbox" diyordu, hangi alan olduğunu
+   değil. Koşu 4c'de iki alan da doldu.
