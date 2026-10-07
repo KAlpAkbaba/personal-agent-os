@@ -1,6 +1,8 @@
 # ADR taslağı: memory-search-ascii-fold — hafıza kelime ayağı ASCII katlaması
 
-**Durum:** taslak (kırmızı test işlendi; uygulama alan isteğini bekliyor).
+**Durum:** taslak. `trgm` (SQLite) yarısı uygulandı: `lexical.search_key`/`search_key_sql` =
+konuşma aramasının `search_fold`/`search_fold_sql`'i (kopya yok), `lexical.term_matches` iki
+tarafı `search_key` ile karşılaştırır. `like` yarısı `retrieval.py` alan isteğini bekliyor.
 
 **Bağlam.** Test turu t-w10070808 (staging b1f8ef94): hafızada 'sukru' araması 'Şükrü' anısını
 bulmadı. Staging'de `PAGENTOS_MEMORY_LEXICAL` ayarlı değil, yani varsayılan `like` modu çalışıyor:
@@ -11,8 +13,10 @@ diye sorguluyor; Türkçe harfler hiç katlanmıyor. `trgm` modunda `lexical.fol
 1. Tek katlama fonksiyonu: konuşma aramasının `app.conversations.search.search_fold` /
    `search_fold_sql` fonksiyonları (ş->s, ü->u, ğ->g, ı/İ/I->i, ç->c, ö->o, â/î/û, küçük harf).
    İkinci bir kopya yazılmaz; `lexical` bunu `search_key` adıyla dışarı verir.
-2. `like` modu: terim `search_key(term)`, sütun `search_fold_sql(Memory.text)`.
-3. `trgm` modu, SQLite yolu: terim ve metin `search_key` ile karşılaştırılır.
+2. `like` modu (retrieval.py, alan isteği): terim `lexical.search_key(term)`, sütun
+   `lexical.search_key_sql(Memory.text)`; terim seçimi (`_QUERY_WORD`, ilk 8) değişmez, böylece
+   `test_like_mode_keeps_todays_terms` / `test_like_mode_buries_a_name_said_once` yeşil kalır.
+3. `trgm` modu, SQLite yolu: `term_matches` terimi, kökünü ve metni `search_key` ile katlar.
    `lexical.fold` (ı->i) ve `stem_root` olduğu gibi kalır: `tsquery_text`, PG `turkish`
    sözlüğü ve 0073 göçünün dizini ona bağlı.
 4. `trgm` modu, PostgreSQL yolu: ASCII katlaması ayrı bir iş (göç 0073'ün dizini
