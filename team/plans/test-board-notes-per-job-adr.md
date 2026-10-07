@@ -1,6 +1,7 @@
 # ADR draft: the test team's board notes are written per job (test-board-notes-per-job)
 
-Status: proposed (worker-3, cycle d20261006). Number: the lead's.
+Status: applied (worker-3, cycle d20261006; the wiring is in test-round.ps1 on this branch).
+Evidence class: PROVEN_AUTOMATED. Number: the lead's.
 
 ## Context
 
@@ -34,7 +35,7 @@ share 20 notes an hour; the Ofis' Test odası then shows stale seats (an 'iş:' 
 - The Ofis' Test odası (`officeTestRoom.tsx`) reads a note by `seat` and text only, and the board
   route has no task filter, so it needs no change.
 
-## The wiring (scripts/testteam/test-round.ps1, outside this card's area)
+## The wiring (scripts/testteam/test-round.ps1, applied; no other line of the file changed)
 
 ```
  if ($Round -notmatch '^[a-z0-9][a-z0-9-]{0,40}$') { throw ... }
@@ -57,11 +58,13 @@ share 20 notes an hour; the Ofis' Test odası then shows stale seats (an 'iş:' 
 
 `scripts/tests/testteam-board-notes.tests.ps1` (10 cases): a stand-in board holding board.py's
 `TASK_PATTERN` (case-sensitive) and `RATE_PER_TASK_HOUR`, both read from the source.
-- On the branch's test-round.ps1: 6 rule/helper/Ofis cases green, the 4 end-to-end cases red
+- Before the wiring (cc28d82e): 6 rule/helper/Ofis cases green, the 4 end-to-end cases red
   (5 jobs x 6 notes -> 11 refused, 429 `test-team`, as t-r10070152).
-- On a scratch copy with the wiring above: 10/10. Mutations of the wiring: the tester run back
-  under the round task -> 5x6 and guard cases RED; a fresh task per note -> guard and round-note
-  cases RED.
+- With the wiring, on the branch: 10/10; `scripts/tests/testteam.tests.ps1` 30/30. No
+  `"test-team"` literal is left in test-round.ps1.
+- Mutations of the wiring in the repository file itself (restored from a backup copy, sha256
+  b15458fc... before = after): the tester run back under the round task -> 5x6 and guard cases
+  RED (8/10); a fresh task per note -> 5x6, round-note, guard and R1 cases RED (6/10).
 - Mutations of `Get-TestTeamBoardTask` (no lowercase / no `test-` fallback / no empty guard /
   pattern drift) -> each RED; restored from a backup, sha256 equal.
 
