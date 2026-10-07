@@ -575,7 +575,10 @@ def test_t2_off_the_list_the_gate_refuses_in_turkish(stack: Stack) -> None:
     refusals = [r for r in final["rounds"] if r["detail"] == "not_on_owner_allow_list"]
     assert refusals, final["rounds"]
     assert not [r for r in final["rounds"] if r["action"] == "fill" and r["outcome"] == "acted"]
-    assert final["message"] == NOT_ON_LIST_TR or NOT_ON_LIST_TR in (final["message"] or ""), final
+    # The refusal is the task's last word: only the owner can lift it (Onay Merkezi).
+    assert final["status"] == "failed", final
+    assert final["failure"] == "not_on_owner_allow_list", final
+    assert final["message"] == NOT_ON_LIST_TR, final
     assert re.search(r"[çğıöşüÇĞİÖŞÜ]", NOT_ON_LIST_TR)
 
 

@@ -63,9 +63,11 @@ class TaskSpec:
 
 
 TASKS: dict[str, TaskSpec] = {
+    # The goal NAMES the site: a model may open only an address the owner said or the page
+    # showed (the gate's url_not_from_owner_or_page - by design, not a defect).
     "T1": TaskSpec(
         "T1",
-        "bugünkü yapay zeka haberlerinden birini bul ve özetle",
+        f"{NEWS_HOST} sitesinde bugünkü yapay zeka haberlerinden birini bul ve özetle",
         allowed_hosts=(NEWS_HOST,),
     ),
     "T2": TaskSpec(
