@@ -20,8 +20,16 @@ from __future__ import annotations
 import re
 from typing import Final
 
-_DIGITS: Final = re.compile(r"^\d+$")
+_DIGITS: Final = re.compile(r"^[0-9]+$")
 _CURRENCY_MARKS: Final = ("tl", "try", "₺")
+
+#: Arabic-Indic (٠-٩) and Persian (۰-۹) digits are read as ASCII; any other non-ASCII digit
+#: ("７５０", "७५०") is refused - ``\d`` and ``int()`` would take it silently.
+_ARABIC_DIGITS: Final = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "0123456789" * 2)
+
+#: Longer than a bank ever writes an amount: refused before any int() (Python refuses a
+#: string of more than 4300 digits with a ValueError - a 500 at the route).
+MAX_AMOUNT_CHARS: Final = 64
 
 UNITS: Final[dict[str, int]] = {
     "sıfır": 0,
@@ -95,10 +103,13 @@ _LIRA_WORDS: Final = frozenset(
 def parse_amount(raw: str) -> int | None:
     """Digits as a bank writes them -> kuruş; None for anything that is not one amount."""
     text = raw.strip()
+    if len(text) > MAX_AMOUNT_CHARS:
+        return None
+    text = text.translate(_ARABIC_DIGITS)
     for mark in ("TL", "TRY", "₺", "tl", "try"):
         text = text.replace(mark, " ")
     text = text.strip().rstrip("'").strip()
-    if not text or not re.fullmatch(r"[\d.,]+", text) or not re.search(r"\d", text):
+    if not text or not re.fullmatch(r"[0-9.,]+", text) or not re.search(r"[0-9]", text):
         return None
     if "," in text and "." in text:
         decimal = "," if text.rfind(",") > text.rfind(".") else "."
