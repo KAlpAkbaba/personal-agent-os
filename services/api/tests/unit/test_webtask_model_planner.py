@@ -550,3 +550,63 @@ def test_the_tool_says_expect_value_is_the_elements_name_for_an_element_check() 
     described = STEP_TOOL["input_schema"]["properties"]["expect_value"]["description"]
     assert "field_has_value" in described and "name" in described
     assert "never the value" in described
+
+
+# A model names the element of an element check in whatever way comes to it - live
+# 2026-10-07: first the value it typed ("Deneme Kisi"), then the reference ("e1"). Both
+# point at ONE element of the observation the step was planned on: the check is bound to
+# that element's listed name, so the verification reads the field that was filled.
+
+FORM = Observation(
+    observation_id="obs-f",
+    url="https://httpbin.org/forms/post",
+    title="Form",
+    page_kind="ok",
+    elements=(
+        Element(ref="e1", role="textbox", name="Customer name:"),
+        Element(ref="e2", role="textbox", name="Telephone:"),
+    ),
+    text="Customer name: Telephone:",
+)
+
+
+@pytest.mark.parametrize("named_as", ["e1", "Deneme Kisi", "Customer name:"])
+def test_a_fill_check_is_bound_to_the_field_that_was_filled(named_as: str) -> None:
+    arguments = {
+        "action": "fill",
+        "ref": "e1",
+        "value": "Deneme Kisi",
+        "expect_kind": "field_has_value",
+        "expect_value": named_as,
+        "why": "the owner's name",
+    }
+    model, _ = planner(FakeSend((200, tool_use(arguments))))
+    step = model.plan(request(observation=FORM))
+    assert step is not None
+    assert step.expect == Expectation("field_has_value", "Customer name:", "textbox")
+
+
+def test_a_check_naming_another_reference_is_bound_to_that_element() -> None:
+    arguments = {
+        "action": "click",
+        "ref": "e1",
+        "expect_kind": "element_present",
+        "expect_value": "e2",
+        "why": "x",
+    }
+    model, _ = planner(FakeSend((200, tool_use(arguments))))
+    step = model.plan(request(observation=FORM))
+    assert step is not None and step.expect == Expectation("element_present", "Telephone:", "textbox")
+
+
+def test_a_text_or_address_check_is_left_as_the_model_wrote_it() -> None:
+    arguments = {
+        "action": "click",
+        "ref": "e1",
+        "expect_kind": "text_present",
+        "expect_value": "e2",
+        "why": "x",
+    }
+    model, _ = planner(FakeSend((200, tool_use(arguments))))
+    step = model.plan(request(observation=FORM))
+    assert step is not None and step.expect == Expectation("text_present", "e2")
