@@ -580,6 +580,83 @@ Test-Case "the verification wants RELEASE, APPROVED_SHA, the reconcile's last li
     Assert-True -Condition (-not (Test-TeamReleaseVerified -Probe $old -Sha $shaB).Ok) -Because "a RECONCILE OK for ANOTHER sha is not the reconcile of this release"
 }
 
+# ---------------------------------------------------------------------------- the evidence: a 'gate A + rerun B' record
+
+Write-Host ""
+Write-Host "the evidence: a full gate's record, or a 'gate A + rerun B' one that chains (card gate-rerun-failed-steps)"
+
+function New-ChainedGateRecords {
+    <#
+        A git repository in TEMP (A, its child B, and 'side': A's other child) and team/reports/c1 with
+        gate-1 red on -A in "API integration tests" (its log FAIL in that step) and gate-2 green for
+        main 'm'*40: gate A + rerun -B of -Steps, its rerun log green for those steps.
+    #>
+    param([string]$A = "", [string]$B = "", [string[]]$Steps = @("Required files", "API integration tests"))
+    $root = Join-Path $env:TEMP ("pagentos-relchain-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
+    [void](New-Item -ItemType Directory -Force -Path $root)
+    foreach ($g in @(@("init", "-q", "-b", "main"), @("config", "user.name", "t"), @("config", "user.email", "t@example.invalid"))) { [void](Invoke-TeamGit -WorkingDirectory $root -Arguments $g) }
+    $commit = { param([string]$Name) Set-Content -LiteralPath (Join-Path $root $Name) -Value $Name -Encoding ASCII; [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("add", "-A")); [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("commit", "-q", "-m", $Name)); (Invoke-TeamGit -WorkingDirectory $root -Arguments @("rev-parse", "HEAD")).StdOut.Trim() }
+    $shas = @{ A = (& $commit "a.txt") }
+    $shas.B = & $commit "b.txt"
+    [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("checkout", "-q", "-b", "side", $shas.A))
+    $shas.Side = & $commit "side.txt"
+    $gateA = $(if ($A) { $shas[$A] } else { $shas.A })
+    $rerunB = $(if ($B) { $shas[$B] } else { $shas.B })
+    $reports = Join-Path $root "team\reports"
+    $dir = Join-Path $reports "c1"
+    [void](New-Item -ItemType Directory -Force -Path $dir)
+    $all = @("Required files", "API unit tests", "API integration tests", "Web shell build")
+    $log = { param([string[]]$Red, [string[]]$Ran)
+        $lines = New-Object System.Collections.ArrayList
+        foreach ($s in $Ran) { [void]$lines.Add(""); [void]$lines.Add("=== $s ==="); [void]$lines.Add($(if ($Red -contains $s) { "FAILED: the step failed" } else { "ok" })) }
+        [void]$lines.Add(""); [void]$lines.Add("=== Quality gate summary ===")
+        foreach ($s in $all) { [void]$lines.Add("$s $(if ($Ran -notcontains $s) { 'SKIPPED' } elseif ($Red -contains $s) { 'FAIL' } else { 'PASS' }) 1.0 0") }
+        [void]$lines.Add($(if (@($Red).Count -gt 0) { "QUALITY GATE: FAIL" } else { "QUALITY GATE: PASS" }))
+        ($lines.ToArray()) -join "`n" }
+    [System.IO.File]::WriteAllText((Join-Path $dir "gate-1.log"), (& $log @("API integration tests") $all), (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText((Join-Path $dir "gate-2.log"), (& $log @() $Steps), (New-Object System.Text.UTF8Encoding($false)))
+    Write-TeamJson -Path (Join-Path $dir "gate-1.json") -Document ([pscustomobject]@{ n = 1; branch = "integrate/c1"; at = "2026-10-07T00:00:00Z"; result = "red"; sha = $gateA; steps = @("API integration tests"); log = "team/reports/c1/gate-1.log" })
+    # The green record's `log` is A's (red) log, as integrate.ps1 writes it: only the chain makes it evidence.
+    Write-TeamJson -Path (Join-Path $dir "gate-2.json") -Document ([pscustomobject]@{ n = 2; branch = "integrate/c1"; at = "2026-10-07T01:00:00Z"; result = "green"; sha = $rerunB; main = "m" * 40
+        log = "team/reports/c1/gate-1.log"; rerun_of = 1; gate_sha = $gateA; gate_log = "team/reports/c1/gate-1.log"; rerun_log = "team/reports/c1/gate-2.log"; rerun_steps = @($Steps) })
+    return [pscustomobject]@{ Root = $root; Reports = $reports }
+}
+
+function Remove-ChainedGateRecords {
+    param([string]$Root)
+    for ($attempt = 0; $attempt -lt 5; $attempt++) { try { Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 400 } }
+}
+
+Test-Case "a chained 'gate A + rerun B' record (B descends from A, the red step rerun green) is the gate's evidence; its log is the rerun's" {
+    $box = New-ChainedGateRecords
+    try {
+        $found = Find-TeamReleaseGate -ReportsRoot $box.Reports -Sha ("m" * 40) -RepoRoot $box.Root
+        Assert-True -Condition ([bool]$found.Found -and [bool]$found.Pass) -Because "chained: $($found.Why)"
+        Assert-Equal -Expected "team/reports/c1/gate-2.log" -Actual $found.Log -Because "the evidence is the rerun's log, not A's red one"
+        Assert-Equal -Expected "c1" -Actual $found.CycleId -Because "the record's cycle"
+        # Without the repository the chain cannot be checked (does B descend from A?): closed, as before.
+        $blind = Find-TeamReleaseGate -ReportsRoot $box.Reports -Sha ("m" * 40)
+        Assert-True -Condition ([bool]$blind.Found -and -not [bool]$blind.Pass) -Because "no -RepoRoot: A's FAIL log is read and refused: $($blind.Why)"
+    }
+    finally { Remove-ChainedGateRecords -Root $box.Root }
+}
+
+Test-Case "a broken chain is refused: B not descended from A, or the red step not rerun" {
+    $cases = @(
+        @{ Name = "B does not descend from A"; Box = { New-ChainedGateRecords -A "Side" -B "B" } },
+        @{ Name = "the red step was not rerun"; Box = { New-ChainedGateRecords -Steps @("Required files") } }
+    )
+    foreach ($case in $cases) {
+        $box = & $case.Box
+        try {
+            $found = Find-TeamReleaseGate -ReportsRoot $box.Reports -Sha ("m" * 40) -RepoRoot $box.Root
+            Assert-True -Condition ([bool]$found.Found -and -not [bool]$found.Pass) -Because "$($case.Name): refused, not passed ($($found.Why))"
+            Assert-True -Condition ([string]$found.Why -match 'zincir|yeniden') -Because "$($case.Name): the chain's own reason: $($found.Why)"
+        }
+        finally { Remove-ChainedGateRecords -Root $box.Root }
+    }
+}
+
 # ============================================================================ the step
 
 Write-Host ""
@@ -615,7 +692,7 @@ function New-Sandbox {
     [void]$sandboxes.Add($root); [void]$sandboxes.Add($hostDir); [void]$sandboxes.Add("$root-origin.git")
     foreach ($folder in @("scripts\lib", "scripts\team", "team", "src")) { [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $folder)) }
     [void](New-Item -ItemType Directory -Force -Path $hostDir)
-    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamIntegrate.ps1", "TeamRelease.ps1")) {
+    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamIntegrate.ps1", "TeamGateRerun.ps1", "TeamRelease.ps1")) {
         $from = Join-Path $repoRoot "scripts\lib\$name"
         if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination (Join-Path $root "scripts\lib\$name") }
     }
@@ -655,7 +732,20 @@ function New-Sandbox {
 
     $reports = Join-Path $root "team\reports\c1"
     [void](New-Item -ItemType Directory -Force -Path $reports)
-    if ($Gate -ne "none") {
+    if ($Gate -eq "chained") {
+        # gate A (the served commit) red in one step, then rerun B (the tip, A's child) of that step green.
+        $sectionLog = { param([string]$Result)
+            "`n=== Required files ===`nok`n`n=== API integration tests ===`n" + $(if ($Result -eq "FAIL") { "FAILED: the step failed" } else { "ok" }) +
+            "`n`n=== Quality gate summary ===`nRequired files PASS 1.0 0`nAPI integration tests $Result 1.0 0`nQUALITY GATE: $Result" }
+        Write-TeamJson -Path (Join-Path $reports "gate-1.json") -Document ([pscustomobject]@{
+                n = 1; branch = "integrate/c1"; at = "2026-10-03T09:00:00Z"; result = "red"; sha = $served; steps = @("API integration tests"); log = "team/reports/c1/gate-1.log" })
+        [System.IO.File]::WriteAllText((Join-Path $reports "gate-1.log"), (& $sectionLog "FAIL"), $utf8)
+        Write-TeamJson -Path (Join-Path $reports "gate-2.json") -Document ([pscustomobject]@{
+                n = 2; branch = "integrate/c1"; at = "2026-10-03T10:00:00Z"; result = "green"; sha = $tip; main = $tip; log = "team/reports/c1/gate-1.log"
+                rerun_of = 1; gate_sha = $served; gate_log = "team/reports/c1/gate-1.log"; rerun_log = "team/reports/c1/gate-2.log"; rerun_steps = @("Required files", "API integration tests") })
+        [System.IO.File]::WriteAllText((Join-Path $reports "gate-2.log"), (& $sectionLog "PASS"), $utf8)
+    }
+    elseif ($Gate -ne "none") {
         $gatedMain = if ($Gate -eq "other-sha") { $served } else { $tip }
         Write-TeamJson -Path (Join-Path $reports "gate-1.json") -Document ([pscustomobject]@{
                 n = 1; branch = "integrate/c1"; at = "2026-10-03T10:00:00Z"; result = "green"; sha = $gatedMain; main = $gatedMain; log = "team/reports/c1/gate-1.log" })
@@ -782,6 +872,14 @@ try {
         $run = Invoke-Release -Box $box
         Assert-Stopped -Run $run -Words "kapı PASS demiyor"
         Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no command at all: $($run.Calls -join ' / ')"
+    }
+
+    Test-Case "a chained 'gate A + rerun B' record is the step's evidence: the step passes its repository and releases the tip" {
+        $box = New-Sandbox -Gate "chained"
+        $run = Invoke-Release -Box $box
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "released on the chain: $($run.Task.reason)"
+        Assert-True -Condition ($run.Report -match "gate-2\.log") -Because "the report names the rerun's log as the gate's record: $($run.Report)"
     }
 
     Test-Case "a gate log for ANOTHER sha: stop, nothing run" {

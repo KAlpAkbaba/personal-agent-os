@@ -72,14 +72,20 @@ record exists, red on A; every red step was rerun; B descends from A; A's log fi
 only in those steps; B's log is green for every rerun step (each ran, none SKIPPED, no unmatched
 pattern). A partial red record carries the same `rerun_of` fields, so the next red is full.
 
+## The release step reads the chain (closed; area widened on the inspector's return)
+
+`Find-TeamReleaseGate -RepoRoot` (scripts/lib/TeamRelease.ps1): for the newest green record of
+the sha that carries `rerun_of`, it calls `Test-TeamGateRerunChain`; a chain that holds is
+`Pass = true` and `Log` is the rerun's log (`rerun_log`); a broken one (B not descended from A, a
+red step not rerun, A's log red elsewhere, a red slice) is refused with the chain's reason.
+Without `-RepoRoot`, or without TeamGateRerun.ps1 loaded, the old reading stays: the record's
+`log` (A's FAIL) is read and the record refused - fail-closed, and the RepoRoot-less caller in
+team-integrate.tests.ps1 unchanged. `scripts/team/release.ps1` passes its own `$repoRoot`.
+Proven by team-release.tests.ps1 (two library cases and one step case in the sandbox, which now
+copies TeamGateRerun.ps1) and team-gate-rerun.tests.ps1's release case.
+
 ## Open (for the lead at merge)
 
-- `scripts/lib/TeamRelease.ps1` (outside this card's area): `Find-TeamReleaseGate` must, for a
-  green record with `rerun_of`, call `Test-TeamGateRerunChain` and read `rerun_log` instead of
-  `log`; until then a rerun green on main is refused by the release step (no auto-release; the
-  Danışman releases by hand as on 2026-10-06). The suite's case "release (scripts/lib/TeamRelease.ps1
-  - ALAN_ISTEGI)" is RED until that is wired. `Test-TeamGateRerunChain` needs git, so
-  `Find-TeamReleaseGate` takes a `-RepoRoot` (the case passes it) and release.ps1 must pass its own.
 - `scripts/quality-gate.ps1`: add `scripts\tests\team-gate-rerun.tests.ps1` as a step (PS5.1,
   git, fakes, ~2-3 min).
 - `scripts/tests/team-integrate.tests.ps1`'s sandbox copies five libraries by name; without
