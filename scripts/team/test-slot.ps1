@@ -161,21 +161,22 @@ function Restore-SlotSchema {
     )
     $expected = [string]$Guard.expected
     $dir = [string]$Guard.tree
+    $database = [string]$Guard.database
     $found = "?"
+    $url = ""
     $problem = ""
-    if (-not $expected -or -not $dir) { $problem = "the guard record has no revision or tree to restore" }
+    if (-not $expected -or -not $dir -or -not $database -or $database -eq "?") { $problem = "the guard record has no revision, tree or database to restore" }
     else {
-        $after = Get-TestSlotSchemaRevision -AlembicDir $dir
+        # The record names the database; this run's settings never redirect the restore.
+        $after = Get-TestSlotSchemaRevision -AlembicDir $dir -Database $database
         $problem = $after.Error
-        if ($after.Ok -and $after.Database -ne [string]$Guard.database) {
-            # The tree's settings point elsewhere now: restoring there would touch the wrong database.
-            $problem = "the tree's settings now point at '$($after.Database)', not '$($Guard.database)'"
-        }
+        $url = $after.SafeUrl
+        if ($after.Ok -and $after.Missing) { Write-Problem "SEMA_KORUMA ${Label}kayit_dusuruldu $database (sunucuda yok - geri alınacak bir şey yok)"; return $true }
         elseif ($after.Ok -and $after.Revision -eq $expected) { Write-Problem "SEMA_KORUMA ${Label}ayni $expected"; return $true }
         elseif ($after.Ok) {
             $found = $after.Revision
-            $restore = Invoke-TestSlotSchemaRestore -AlembicDir $dir -Revision $expected
-            $check = Get-TestSlotSchemaRevision -AlembicDir $dir
+            $restore = Invoke-TestSlotSchemaRestore -AlembicDir $dir -Revision $expected -DatabaseUrl $after.Url
+            $check = Get-TestSlotSchemaRevision -AlembicDir $dir -Database $database
             if ($restore.Ok -and $check.Ok -and $check.Revision -eq $expected) {
                 Write-Problem "SEMA_KORUMA ${Label}geri_alindi $found -> $expected ('$($Guard.database)')"
                 return $true
@@ -185,7 +186,7 @@ function Restore-SlotSchema {
     }
     $hold = [pscustomobject][ordered]@{
         at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); task = [string]$Guard.task; role = [string]$Guard.role
-        ticket = [string]$Guard.ticket; database = [string]$Guard.database; tree = $dir; found = $found; expected = $expected; error = $problem
+        ticket = [string]$Guard.ticket; database = $database; tree = $dir; found = $found; expected = $expected; error = $problem; url = $url
     }
     Set-TestSlotDatabaseHold -Store $store -Hold $hold
     Write-Problem "SEMA_KORUMA BASARISIZ: $found -> $expected geri alınamadı ($problem)"
