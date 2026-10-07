@@ -237,8 +237,15 @@ def build_prompt(request: PlanRequest) -> dict[str, str]:
         name = defuse(element.name).replace("\n", " ")
         address = f" -> {defuse(element.href)}" if element.href else ""
         lines.append(f'[{element.ref}] {element.role} "{name}"{state}{note}{address}')
+
+    def acted_on(r: Round) -> str:
+        # WHICH element, not only its role: live 2026-10-07 a form's first field was
+        # filled twice because the history said only "fill textbox".
+        name = defuse(r.element).replace("\n", " ")
+        return " ".join(p for p in (r.action, r.role, f'"{name}"' if name else "") if p)
+
     history = [
-        f"{r.index}. {r.action} {r.role} - {r.outcome}"
+        f"{r.index}. {acted_on(r)} - {r.outcome}"
         + ("" if r.verified is None else f" (verified: {str(r.verified).lower()})")
         for r in request.history[-MAX_HISTORY_ROUNDS:]
     ]
