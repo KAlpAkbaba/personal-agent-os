@@ -93,6 +93,40 @@ function New-RedRecord {
 
 $shaA = "a" * 40
 $shaB = "b" * 40
+# Real files' names are spelled with $dot: this suite only makes them in sandboxes, and a literal name
+# would make it look like their reader (Get-TeamGateReaderSteps) and send every change to them to the full gate.
+$dot = "."
+
+function New-ChainRepo {
+    $root = Join-Path $env:TEMP ("pagentos-rerun-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
+    [void]$sandboxes.Add($root)
+    [void](New-Item -ItemType Directory -Force -Path $root)
+    foreach ($a in @(@("init", "-q", "-b", "main"), @("config", "user.name", "t"), @("config", "user.email", "t@example.invalid"))) { [void](Invoke-TeamGit -WorkingDirectory $root -Arguments $a) }
+    $commit = { param([string]$Name) Set-Content -LiteralPath (Join-Path $root $Name) -Value $Name -Encoding ASCII; [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("add", "-A")); [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("commit", "-q", "-m", $Name)); (Invoke-TeamGit -WorkingDirectory $root -Arguments @("rev-parse", "HEAD")).StdOut.Trim() }
+    $a = & $commit "a.txt"
+    $b = & $commit "b.txt"
+    [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("checkout", "-q", "-b", "side", "$a~0"))
+    [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("reset", "-q", "--hard", $a))
+    $side = & $commit "side.txt"
+    $reports = Join-Path $root "reports\c1"
+    [void](New-Item -ItemType Directory -Force -Path $reports)
+    return [pscustomobject]@{ Root = $root; A = $a; B = $b; Side = $side; Reports = $reports }
+}
+
+function Write-ChainRecords {
+    param($Repo, [string]$B, [string[]]$RerunSteps, [string]$ALog = "", [string]$BLog = "")
+    $red = New-RedRecord -N 1 -Sha $Repo.A -Steps @("API integration tests")
+    Write-TeamJson -Path (Join-Path $Repo.Reports "gate-1.json") -Document $red
+    if (-not $ALog) { $ALog = New-GateLog -Red @("API integration tests") }
+    [System.IO.File]::WriteAllText((Join-Path $Repo.Reports "gate-1.log"), $ALog, $utf8)
+    if (-not $BLog) { $BLog = New-GateLog -Skipped @($fakeSteps | Where-Object { $RerunSteps -notcontains $_ }) }
+    [System.IO.File]::WriteAllText((Join-Path $Repo.Reports "gate-2.log"), $BLog, $utf8)
+    $green = [pscustomobject]@{ n = 2; branch = "integrate/c1"; at = "2026-10-07T01:00:00Z"; result = "green"; sha = $B; main = "m" * 40; log = "team/reports/c1/gate-1.log"
+        rerun_of = 1; gate_sha = $Repo.A; gate_log = "team/reports/c1/gate-1.log"; rerun_log = "team/reports/c1/gate-2.log"; rerun_steps = @($RerunSteps) }
+    Write-TeamJson -Path (Join-Path $Repo.Reports "gate-2.json") -Document $green
+    return $green
+}
+
 
 # ============================================================================ the decision
 
@@ -112,7 +146,7 @@ Test-Case "a fix inside the map: only the red step, what it needs and the cheap 
 
 Test-Case "a fix outside the map, in code a green step shares, in the gate, a lock file or a migration: the full gate" {
     $log = New-GateLog -Red @("API integration tests")
-    foreach ($file in @("services/browser-agent/src/x.ts", "services/api/app/conversations/service.py", "scripts/quality-gate.ps1", "services/api/uv.lock", "services/api/alembic/versions/0073_x.py", "apps/web/package.json", "scripts/lib/TeamQueue.ps1")) {
+    foreach ($file in @("services/browser-agent/src/x.ts", "services/api/app/conversations/service$($dot)py", "scripts/quality-gate.ps1", "services/api/uv.lock", "services/api/alembic/versions/0073_x.py", "apps/web/package.json", "scripts/lib/TeamQueue.ps1")) {
         $d = Get-TeamGateRerunDecision -Records @(New-RedRecord) -Sha $shaB -Changed @("services/api/tests/integration/test_x.py", $file) -Descends $true -GateText $fakeGateText -LastLogText $log
         Assert-Equal -Expected "full" -Actual $d.Mode -Because "$file must send it to the full gate: $($d.Why)"
     }
@@ -158,31 +192,92 @@ Test-Case "never two partial reruns in a row: after a rerun's red, the cleared m
 
 Test-Case "a document a test reads: its readers' steps are added; a reader no step owns sends it to the full gate" {
     $log = New-GateLog -Red @("API unit tests")
-    $d = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("API unit tests")) -Sha $shaB -Changed @("services/api/tests/unit/test_x.py", "docs/HANDOFF.md") -Descends $true -GateText $fakeGateText -LastLogText $log -Readers @{ "docs/HANDOFF.md" = [string[]]@("API unit tests", "API integration tests") }
+    $d = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("API unit tests")) -Sha $shaB -Changed @("services/api/tests/unit/test_x.py", "docs/HANDOFF$($dot)md") -Descends $true -GateText $fakeGateText -LastLogText $log -Readers @{ "docs/HANDOFF$($dot)md" = [string[]]@("API unit tests", "API integration tests") }
     Assert-Equal -Expected "partial" -Actual $d.Mode -Because $d.Why
     Assert-True -Condition (@($d.Steps) -contains "API integration tests") -Because "a reader's step is added: $($d.Steps -join '; ')"
-    $none = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("API unit tests")) -Sha $shaB -Changed @("docs/HANDOFF.md") -Descends $true -GateText $fakeGateText -LastLogText $log -Readers @{ "docs/HANDOFF.md" = [string[]]@() }
+    $none = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("API unit tests")) -Sha $shaB -Changed @("docs/HANDOFF$($dot)md") -Descends $true -GateText $fakeGateText -LastLogText $log -Readers @{ "docs/HANDOFF$($dot)md" = [string[]]@() }
     Assert-Equal -Expected "partial" -Actual $none.Mode -Because "nobody reads it: $($none.Why)"
-    $unknown = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("API unit tests")) -Sha $shaB -Changed @("docs/HANDOFF.md") -Descends $true -GateText $fakeGateText -LastLogText $log -Readers @{ "docs/HANDOFF.md" = $null }
+    $unknown = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("API unit tests")) -Sha $shaB -Changed @("docs/HANDOFF$($dot)md") -Descends $true -GateText $fakeGateText -LastLogText $log -Readers @{ "docs/HANDOFF$($dot)md" = $null }
     Assert-Equal -Expected "full" -Actual $unknown.Mode -Because "an unknown reader"
+}
+
+Test-Case "the green-family rule: a file whose family has no red step (web code while only integration was red) is the full gate" {
+    $log = New-GateLog -Red @("API integration tests")
+    foreach ($file in @("apps/web/src/components/x.tsx", "services/api/tests/unit/test_y.py")) {
+        $d = Get-TeamGateRerunDecision -Records @(New-RedRecord) -Sha $shaB -Changed @("services/api/tests/integration/test_x.py", $file) -Descends $true -GateText $fakeGateText -LastLogText $log
+        Assert-Equal -Expected "full" -Actual $d.Mode -Because "$file is tested only by steps that were green: $($d.Why)"
+    }
+}
+
+Test-Case "a sha that does not descend from the red one is the full gate, even when no change list could be read (environment red)" {
+    $envLog = New-GateLog -Red @("API integration tests") -RedLine "E   psycopg.OperationalError: FATAL: sorry, too many clients already"
+    $d = Get-TeamGateRerunDecision -Records @(New-RedRecord) -Sha $shaB -Changed @() -Descends $false -GateText $fakeGateText -LastLogText $envLog
+    Assert-Equal -Expected "full" -Actual $d.Mode -Because "B is not A and does not descend from it: $($d.Why)"
+    # The same through the plan, on a real repository: red on B, the branch rebuilt as 'side' (A's child, not B's).
+    $repo = New-ChainRepo
+    Write-TeamJson -Path (Join-Path $repo.Reports "gate-1.json") -Document (New-RedRecord -N 1 -Sha $repo.B)
+    [System.IO.File]::WriteAllText((Join-Path $repo.Reports "gate-1.log"), $envLog, $utf8)
+    $plan = Get-TeamGateRerunPlan -RepoRoot $repo.Root -Directory $repo.Reports -Records @(Read-TeamJson -Path (Join-Path $repo.Reports "gate-1.json")) -Sha $repo.Side -GateText $fakeGateText
+    Assert-Equal -Expected "full" -Actual $plan.Mode -Because "a rebuilt branch is not a rerun: $($plan.Why)"
+}
+
+Test-Case "a changed test file another step's test reads: that step is added; a reader no step owns is the full gate" {
+    $log = New-GateLog -Red @("Web shell build")
+    $gate = $fakeGateText + "`nInvoke-Step `"Agent team roadmap feeder (PS5.1 + git, no model)`" {`n}"
+    $file = "apps/web/tests/approvals/fixtures$($dot)ts"
+    $d = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("Web shell build")) -Sha $shaB -Changed @($file) -Descends $true -GateText $gate -LastLogText $log -Readers @{ $file = [string[]]@("Agent team roadmap feeder (PS5.1 + git, no model)") }
+    Assert-Equal -Expected "partial" -Actual $d.Mode -Because $d.Why
+    Assert-True -Condition (@($d.Steps) -contains "Agent team roadmap feeder (PS5.1 + git, no model)") -Because "the suite that reads the fixture runs: $($d.Steps -join '; ')"
+    $unknown = Get-TeamGateRerunDecision -Records @(New-RedRecord -Steps @("Web shell build")) -Sha $shaB -Changed @($file) -Descends $true -GateText $gate -LastLogText $log -Readers @{ $file = $null }
+    Assert-Equal -Expected "full" -Actual $unknown.Mode -Because "an unknown reader of a test file: $($unknown.Why)"
+}
+
+Test-Case "the plan finds who reads a changed test file: a gate suite reads a web fixture, an API test reads a gate suite" {
+    $repo = New-ChainRepo
+    $root = $repo.Root
+    foreach ($f in @("apps\web\tests\approvals", "scripts\tests", "services\api\tests\unit")) { [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $f)) }
+    Set-Content -LiteralPath (Join-Path $root "apps\web\tests\approvals\fixtures$($dot)ts") -Value "export const FEED_SHAPE = 1;" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $root "scripts\tests\team-feed.tests$($dot)ps1") -Value ("`$f = Join-Path `$repoRoot `"apps\web\tests\approvals\fixtures$($dot)ts`"") -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $root "scripts\tests\gate-database.tests$($dot)ps1") -Value "# the gate's database" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $root "services\api\tests\unit\test_gate_database_contract$($dot)py") -Value ("SUITE = `"scripts/tests/gate-database.tests$($dot)ps1`"") -Encoding ASCII
+    foreach ($a in @(@("checkout", "-q", "main"), @("add", "--", "apps", "scripts", "services"), @("commit", "-q", "-m", "the tree"))) { [void](Invoke-TeamGit -WorkingDirectory $root -Arguments $a) }
+    $a = (Invoke-TeamGit -WorkingDirectory $root -Arguments @("rev-parse", "HEAD")).StdOut.Trim()
+    $gate = $fakeGateText + "`nInvoke-Step `"Agent team roadmap feeder (PS5.1 + git, no model)`" {`n  `$s = Join-Path `$repoRoot `"scripts\tests\team-feed.tests$($dot)ps1`"`n}" +
+        "`nInvoke-Step `"Gate database tool (PS5.1 + the dev server)`" {`n  `$s = Join-Path `$repoRoot `"scripts\tests\gate-database.tests$($dot)ps1`"`n}"
+    $cases = @(
+        @{ Red = "Web shell build"; File = "apps\web\tests\approvals\fixtures$($dot)ts"; Reader = "Agent team roadmap feeder (PS5.1 + git, no model)" },
+        @{ Red = "Gate database tool (PS5.1 + the dev server)"; File = "scripts\tests\gate-database.tests$($dot)ps1"; Reader = "API unit tests" }
+    )
+    foreach ($case in $cases) {
+        [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("reset", "-q", "--hard", $a))
+        Add-Content -LiteralPath (Join-Path $root $case.File) -Value "// the fix" -Encoding ASCII
+        # The records stay out of the commits: only the fix is A..B.
+        foreach ($g in @(@("add", "--", "apps", "scripts", "services"), @("commit", "-q", "-m", "the fix"))) { [void](Invoke-TeamGit -WorkingDirectory $root -Arguments $g) }
+        $b = (Invoke-TeamGit -WorkingDirectory $root -Arguments @("rev-parse", "HEAD")).StdOut.Trim()
+        Write-TeamJson -Path (Join-Path $repo.Reports "gate-1.json") -Document (New-RedRecord -N 1 -Sha $a -Steps @($case.Red))
+        [System.IO.File]::WriteAllText((Join-Path $repo.Reports "gate-1.log"), (New-GateLog -Steps @(Get-TeamGateStepNames -GateText $gate) -Red @($case.Red)), $utf8)
+        $plan = Get-TeamGateRerunPlan -RepoRoot $root -Directory $repo.Reports -Records @(Read-TeamJson -Path (Join-Path $repo.Reports "gate-1.json")) -Sha $b -GateText $gate -Tree $root
+        Assert-True -Condition ($plan.Mode -eq "full" -or @($plan.Steps) -contains $case.Reader) -Because "$($case.File) changed: its reader's step '$($case.Reader)' runs or the gate is full: $($plan.Mode) $($plan.Steps -join '; ')"
+        Assert-Equal -Expected "partial" -Actual $plan.Mode -Because "the readers are known here: $($plan.Why)"
+    }
 }
 
 Test-Case "who reads a document: an API test reads it for both API steps, a gate suite for its step; a suite the gate does not run is not known" {
     $tree = Join-Path $env:TEMP ("pagentos-readers-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
     [void]$sandboxes.Add($tree)
     foreach ($f in @("services\api\tests\unit", "scripts\tests", "scripts\lib")) { [void](New-Item -ItemType Directory -Force -Path (Join-Path $tree $f)) }
-    Set-Content -LiteralPath (Join-Path $tree "services\api\tests\unit\test_adr.py") -Value "DOC = 'docs/DECISIONS.md'" -Encoding ASCII
-    Set-Content -LiteralPath (Join-Path $tree "scripts\lib\Lists.ps1") -Value "'docs/HANDOFF.md', 'docs/DECISIONS.md'" -Encoding ASCII
-    $gate = $fakeGateText + "`nInvoke-Step `"Agent team area widening rules (PS5.1, no model)`" {`n  `$s = Join-Path `$repoRoot `"scripts\tests\team-area.tests.ps1`"`n}"
-    $found = Get-TeamGateReaderSteps -Tree $tree -Path "docs/DECISIONS.md" -GateText $gate
+    Set-Content -LiteralPath (Join-Path $tree "services\api\tests\unit\test_adr.py") -Value "DOC = 'docs/DECISIONS$($dot)md'" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $tree "scripts\lib\Lists.ps1") -Value "'docs/HANDOFF$($dot)md', 'docs/DECISIONS$($dot)md'" -Encoding ASCII
+    $gate = $fakeGateText + "`nInvoke-Step `"Agent team area widening rules (PS5.1, no model)`" {`n  `$s = Join-Path `$repoRoot `"scripts\tests\team-area.tests$($dot)ps1`"`n}"
+    $found = Get-TeamGateReaderSteps -Tree $tree -Path "docs/DECISIONS$($dot)md" -GateText $gate
     Assert-True -Condition ($found.Known -and @($found.Steps) -contains "API unit tests" -and @($found.Steps) -contains "API integration tests") -Because "an API test reads it: $($found.Steps -join '; ')"
-    $nobody = Get-TeamGateReaderSteps -Tree $tree -Path "docs/HANDOFF.md" -GateText $gate
+    $nobody = Get-TeamGateReaderSteps -Tree $tree -Path "docs/HANDOFF$($dot)md" -GateText $gate
     Assert-True -Condition ($nobody.Known -and @($nobody.Steps).Count -eq 0) -Because "a library's list of names is not a reader"
-    Set-Content -LiteralPath (Join-Path $tree "scripts\tests\team-area.tests.ps1") -Value "# reads docs/HANDOFF.md" -Encoding ASCII
-    $suite = Get-TeamGateReaderSteps -Tree $tree -Path "docs/HANDOFF.md" -GateText $gate
+    Set-Content -LiteralPath (Join-Path $tree "scripts\tests\team-area.tests$($dot)ps1") -Value "# reads docs/HANDOFF$($dot)md" -Encoding ASCII
+    $suite = Get-TeamGateReaderSteps -Tree $tree -Path "docs/HANDOFF$($dot)md" -GateText $gate
     Assert-True -Condition ($suite.Known -and @($suite.Steps) -contains "Agent team area widening rules (PS5.1, no model)") -Because "the suite's step: $($suite.Steps -join '; ')"
-    Set-Content -LiteralPath (Join-Path $tree "scripts\tests\not-in-gate.tests.ps1") -Value "# reads docs/HANDOFF.md" -Encoding ASCII
-    $unknown = Get-TeamGateReaderSteps -Tree $tree -Path "docs/HANDOFF.md" -GateText $gate
+    Set-Content -LiteralPath (Join-Path $tree "scripts\tests\not-in-gate.tests.ps1") -Value "# reads docs/HANDOFF$($dot)md" -Encoding ASCII
+    $unknown = Get-TeamGateReaderSteps -Tree $tree -Path "docs/HANDOFF$($dot)md" -GateText $gate
     Assert-True -Condition (-not $unknown.Known) -Because "a suite the gate does not run reads it: not known"
 }
 
@@ -194,7 +289,7 @@ Test-Case "the map is the real gate's: every step it names, needs or always runs
     foreach ($pattern in $named) { Assert-True -Condition (@($real | Where-Object { $_ -like $pattern }).Count -gt 0) -Because "'$pattern' names no step of the real gate" }
     foreach ($s in $fakeSteps) { Assert-True -Condition ($real -contains $s) -Because "the fake gate's '$s' is a real step" }
     $suites = @(Get-TeamGateSuiteFamilies -GateText ([System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\quality-gate.ps1"))))
-    Assert-True -Condition (@($suites | Where-Object { $_.Paths[0] -eq "scripts/tests/team-integrate.tests.ps1" -and $_.Steps[0] -like "Agent team integrate step*" }).Count -eq 1) -Because "a suite file maps to the step that runs it"
+    Assert-True -Condition (@($suites | Where-Object { $_.Paths[0] -eq "scripts/tests/team-integrate.tests$($dot)ps1" -and $_.Steps[0] -like "Agent team integrate step*" }).Count -eq 1) -Because "a suite file maps to the step that runs it"
 }
 
 Test-Case "the -OnlyStep patterns: a name with a comma is cut before it; the list is one comma-joined argument" {
@@ -220,36 +315,6 @@ Test-Case "a slice is green only when every step it was asked for ran and passed
     Assert-True -Condition (-not $unmatched.Ok) -Because "a pattern that matched nothing"
     $red = Test-TeamGateRerunLog -Text (New-GateLog -Red @("API integration tests")) -ExitCode 1 -Steps $steps
     Assert-True -Condition (-not $red.Ok) -Because "red is red"
-}
-
-function New-ChainRepo {
-    $root = Join-Path $env:TEMP ("pagentos-rerun-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
-    [void]$sandboxes.Add($root)
-    [void](New-Item -ItemType Directory -Force -Path $root)
-    foreach ($a in @(@("init", "-q", "-b", "main"), @("config", "user.name", "t"), @("config", "user.email", "t@example.invalid"))) { [void](Invoke-TeamGit -WorkingDirectory $root -Arguments $a) }
-    $commit = { param([string]$Name) Set-Content -LiteralPath (Join-Path $root $Name) -Value $Name -Encoding ASCII; [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("add", "-A")); [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("commit", "-q", "-m", $Name)); (Invoke-TeamGit -WorkingDirectory $root -Arguments @("rev-parse", "HEAD")).StdOut.Trim() }
-    $a = & $commit "a.txt"
-    $b = & $commit "b.txt"
-    [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("checkout", "-q", "-b", "side", "$a~0"))
-    [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("reset", "-q", "--hard", $a))
-    $side = & $commit "side.txt"
-    $reports = Join-Path $root "reports\c1"
-    [void](New-Item -ItemType Directory -Force -Path $reports)
-    return [pscustomobject]@{ Root = $root; A = $a; B = $b; Side = $side; Reports = $reports }
-}
-
-function Write-ChainRecords {
-    param($Repo, [string]$B, [string[]]$RerunSteps, [string]$ALog = "", [string]$BLog = "")
-    $red = New-RedRecord -N 1 -Sha $Repo.A -Steps @("API integration tests")
-    Write-TeamJson -Path (Join-Path $Repo.Reports "gate-1.json") -Document $red
-    if (-not $ALog) { $ALog = New-GateLog -Red @("API integration tests") }
-    [System.IO.File]::WriteAllText((Join-Path $Repo.Reports "gate-1.log"), $ALog, $utf8)
-    if (-not $BLog) { $BLog = New-GateLog -Skipped @($fakeSteps | Where-Object { $RerunSteps -notcontains $_ }) }
-    [System.IO.File]::WriteAllText((Join-Path $Repo.Reports "gate-2.log"), $BLog, $utf8)
-    $green = [pscustomobject]@{ n = 2; branch = "integrate/c1"; at = "2026-10-07T01:00:00Z"; result = "green"; sha = $B; main = "m" * 40; log = "team/reports/c1/gate-1.log"
-        rerun_of = 1; gate_sha = $Repo.A; gate_log = "team/reports/c1/gate-1.log"; rerun_log = "team/reports/c1/gate-2.log"; rerun_steps = @($RerunSteps) }
-    Write-TeamJson -Path (Join-Path $Repo.Reports "gate-2.json") -Document $green
-    return $green
 }
 
 Test-Case "release: a 'gate A + rerun B' record is accepted only when B descends from A and both logs say what it says" {
@@ -278,14 +343,15 @@ Test-Case "release (scripts/lib/TeamRelease.ps1 - ALAN_ISTEGI): Find-TeamRelease
     $repo = New-ChainRepo
     $steps = @("Required files", "Dev stack up (docker compose)", "Alembic upgrade head", "API integration tests", "Gate database dropped")
     [void](Write-ChainRecords -Repo $repo -B $repo.B -RerunSteps $steps)
-    $found = Find-TeamReleaseGate -ReportsRoot (Join-Path $repo.Root "reports") -Sha ("m" * 40)
+    # The chain check needs git (does B descend from A): the release step passes its repository.
+    $found = Find-TeamReleaseGate -ReportsRoot (Join-Path $repo.Root "reports") -Sha ("m" * 40) -RepoRoot $repo.Root
     Assert-True -Condition ([bool]$found.Found -and [bool]$found.Pass) -Because "a chained rerun record is the gate's evidence: $($found.Why)"
     $record = Read-TeamJson -Path (Join-Path $repo.Reports "gate-2.json")
     $record.sha = $repo.Side
     Write-TeamJson -Path (Join-Path $repo.Reports "gate-1.json") -Document (New-RedRecord -N 1 -Sha $repo.B -Steps @("API integration tests"))
     $record.gate_sha = $repo.B
     Write-TeamJson -Path (Join-Path $repo.Reports "gate-2.json") -Document $record
-    $refused = Find-TeamReleaseGate -ReportsRoot (Join-Path $repo.Root "reports") -Sha ("m" * 40)
+    $refused = Find-TeamReleaseGate -ReportsRoot (Join-Path $repo.Root "reports") -Sha ("m" * 40) -RepoRoot $repo.Root
     Assert-True -Condition (-not [bool]$refused.Pass) -Because "an unchained one is not"
 }
 
@@ -365,7 +431,7 @@ function New-Sandbox {
     foreach ($role in @("lead", "researcher", "integrator", "worker", "inspector")) { Copy-Item -LiteralPath (Join-Path $repoRoot ".claude\agents\$role.md") -Destination (Join-Path $root ".claude\agents\$role.md") }
     Set-Content -LiteralPath (Join-Path $root ".gitignore") -Value ".claude/worktrees/`nteam/reports/" -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $root "services\api\tests\integration\README.txt") -Value "the area" -Encoding ASCII
-    Set-Content -LiteralPath (Join-Path $root "docs\DECISIONS.md") -Value "# decisions" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $root "docs\DECISIONS$($dot)md") -Value "# decisions" -Encoding ASCII
     [System.IO.File]::WriteAllText((Join-Path $tools "gate.ps1"), $fakeGateSource, $utf8)
     Set-Content -LiteralPath (Join-Path $tools "docker-ok.cmd") -Value "@exit /b 0" -Encoding ASCII
     foreach ($tool in @("uv", "pnpm")) { Set-Content -LiteralPath (Join-Path $tools "$tool.cmd") -Value "@exit /b 0" -Encoding ASCII }
@@ -468,6 +534,11 @@ Test-Case "end to end: a fix inside the map reruns only the red steps; the green
     Assert-True -Condition (Test-TeamAncestor -RepoRoot $root -Ancestor $a -Of ([string]$green.sha)) -Because "B descends from A"
     Assert-True -Condition (@($green.rerun_steps) -contains "API integration tests") -Because "the steps are named"
     Assert-True -Condition ([string]$green.main -match '^[0-9a-f]{40}$') -Because "main moved: $($green.main)"
+    # Fail-closed: the green record's `log` is A's FAIL log; the slice's own is `rerun_log`.
+    Assert-Equal -Expected (Split-Path -Leaf ([string]$first.Records[-1].log)) -Actual (Split-Path -Leaf ([string]$green.log)) -Because "the green record's log is the red gate's"
+    $logText = [System.IO.File]::ReadAllText((Join-Path (Join-Path $root "team\reports\c1") (Split-Path -Leaf ([string]$green.log))), [System.Text.Encoding]::UTF8)
+    Assert-True -Condition ($logText -match '(?m)^QUALITY GATE: FAIL\s*$') -Because "a release step that does not know the chain reads FAIL there"
+    Assert-True -Condition ((Split-Path -Leaf ([string]$green.rerun_log)) -ne (Split-Path -Leaf ([string]$green.log))) -Because "the slice's log is its own"
     $chain = Test-TeamGateRerunChain -RepoRoot $root -Directory (Join-Path $root "team\reports\c1") -Record $green
     Assert-True -Condition $chain.Ok -Because "the release check accepts the record integrate wrote: $($chain.Why)"
     $task = @($second.Queue.tasks)[0]

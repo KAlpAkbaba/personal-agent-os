@@ -22,7 +22,8 @@
         lock or project file, a migration, or infrastructure ($script:TeamGateRerunFullPaths);
       - a changed file is in no family of the map, or in a family none of whose steps was red
         (code shared with steps that were green);
-      - a document a test reads changed and no reader could be found for it, or a library reads it.
+      - a changed file (a document, a test, a fixture) is named by a suite the gate does not run:
+        who reads it is not known. One a known step's test names adds that step to the slice.
     A red with NO code change (B is A, or A..B changes nothing) reruns the same steps only when
     the red was the environment's (too many clients, Docker down, a junction node_modules);
     any other red on the same content is an answer already known: the full gate.
@@ -216,6 +217,9 @@ function Get-TeamGateRerunDecision {
     if (@($missing).Count -gt 0) { return (& $full ("kırmızı adım kapıda yok: " + ($missing -join ", ") + "; tam kapı")) }
 
     $files = @(@($Changed) | ForEach-Object { ([string]$_ -replace '\\', '/').Trim() } | Where-Object { $_ })
+    # Before "nothing changed": a sha that does not descend from A has no change list to read (the
+    # branch was rebuilt), and an empty one is not "the same content".
+    if ($Sha -ne $from -and -not $Descends) { return (& $full "$Sha, kırmızı kapının $from commit'inden inmiyor; tam kapı") }
     $same = ($Sha -eq $from) -or (@($files).Count -eq 0)
     $chosen = New-Object System.Collections.ArrayList
     foreach ($step in $red) { [void]$chosen.Add($step) }
@@ -226,7 +230,6 @@ function Get-TeamGateRerunDecision {
         }
     }
     else {
-        if ($Sha -ne $from -and -not $Descends) { return (& $full "$Sha, kırmızı kapının $from commit'inden inmiyor; tam kapı") }
         $families = @($script:TeamGateRerunFamilies) + @(Get-TeamGateSuiteFamilies -GateText $GateText)
         foreach ($file in $files) {
             if (Test-TeamGatePathAny -Path $file -Globs $script:TeamGateRerunFullPaths) { return (& $full "$file her adımı ilgilendirir (kapı, kilit, göç ya da altyapı); tam kapı") }
@@ -246,6 +249,12 @@ function Get-TeamGateRerunDecision {
                     return (& $full ("$file yeşil adımları da ilgilendiriyor (" + ($steps -join ", ") + "); tam kapı"))
                 }
                 foreach ($step in $steps) { if ($chosen -notcontains $step) { [void]$chosen.Add($step) } }
+            }
+            # A test file another step's test reads (the two halves of a contract): that step runs too.
+            if ($Readers.ContainsKey($file)) {
+                $readSteps = $Readers[$file]
+                if ($null -eq $readSteps) { return (& $full "$file okuyan, adımı bilinmeyen bir test var; tam kapı") }
+                foreach ($step in @($readSteps)) { if ($chosen -notcontains $step) { [void]$chosen.Add([string]$step) } }
             }
         }
     }
@@ -267,6 +276,26 @@ function Get-TeamGateRerunDecision {
     }
 }
 
+function Get-TeamGateReaderCorpus {
+    <# The files whose text may name another file a step tests: services/api's tests and app code, apps/web, the suites. #>
+    param([Parameter(Mandatory = $true)][string]$Tree)
+    $files = New-Object System.Collections.ArrayList
+    foreach ($root in @("services\api\tests", "services\api\app", "apps\web\src", "apps\web\tests")) {
+        $folder = Join-Path $Tree $root
+        if (Test-Path -LiteralPath $folder) { foreach ($f in @(Get-ChildItem -LiteralPath $folder -Recurse -File -Include *.py, *.ts, *.tsx -ErrorAction SilentlyContinue)) { [void]$files.Add($f) } }
+    }
+    $suiteFolder = Join-Path $Tree "scripts\tests"
+    if (Test-Path -LiteralPath $suiteFolder) { foreach ($f in @(Get-ChildItem -LiteralPath $suiteFolder -File -Filter "*.tests.ps1")) { [void]$files.Add($f) } }
+    $corpus = New-Object System.Collections.ArrayList
+    foreach ($file in @($files.ToArray())) {
+        if ($file.FullName -match '[\\/](node_modules|\.venv|__pycache__)[\\/]') { continue }
+        $text = ""
+        try { $text = [System.IO.File]::ReadAllText($file.FullName) } catch { continue }
+        [void]$corpus.Add([pscustomobject]@{ Relative = ($file.FullName.Substring($Tree.TrimEnd('\').Length + 1) -replace '\\', '/'); Text = $text })
+    }
+    return @($corpus.ToArray())
+}
+
 function Get-TeamGateReaderSteps {
     <#
         The steps whose TESTS read a document: its name in services/api's tests or app code (the
@@ -275,7 +304,7 @@ function Get-TeamGateReaderSteps {
         the answer is the full gate. A script library naming it (a list of protected files) is
         not a reader: the suites that run those libraries run them on sandbox copies.
     #>
-    param([Parameter(Mandatory = $true)][string]$Tree, [Parameter(Mandatory = $true)][string]$Path, [string]$GateText = "")
+    param([Parameter(Mandatory = $true)][string]$Tree, [Parameter(Mandatory = $true)][string]$Path, [string]$GateText = "", [object[]]$Corpus = $null)
     $forward = ([string]$Path -replace '\\', '/')
     $needles = @(Split-Path -Leaf ($forward -replace '/', '\'))
     if ($forward -like "team/*") {
@@ -287,21 +316,15 @@ function Get-TeamGateReaderSteps {
     foreach ($family in @(Get-TeamGateSuiteFamilies -GateText $GateText)) { $suites[[string]$family.Paths[0]] = [string]$family.Steps[0] }
     $steps = New-Object System.Collections.ArrayList
     $add = { param([string[]]$More) foreach ($s in @($More)) { if ($s -and $steps -notcontains $s) { [void]$steps.Add($s) } } }
-    $files = New-Object System.Collections.ArrayList
-    foreach ($root in @("services\api\tests", "services\api\app", "apps\web\src", "apps\web\tests")) {
-        $folder = Join-Path $Tree $root
-        if (Test-Path -LiteralPath $folder) { foreach ($f in @(Get-ChildItem -LiteralPath $folder -Recurse -File -Include *.py, *.ts, *.tsx -ErrorAction SilentlyContinue)) { [void]$files.Add($f) } }
-    }
-    $suiteFolder = Join-Path $Tree "scripts\tests"
-    if (Test-Path -LiteralPath $suiteFolder) { foreach ($f in @(Get-ChildItem -LiteralPath $suiteFolder -File -Filter "*.tests.ps1")) { [void]$files.Add($f) } }
-    foreach ($file in @($files.ToArray())) {
-        if ($file.FullName -match '[\\/](node_modules|\.venv|__pycache__)[\\/]') { continue }
-        $text = ""
-        try { $text = [System.IO.File]::ReadAllText($file.FullName) } catch { continue }
+    if ($null -eq $Corpus) { $Corpus = @(Get-TeamGateReaderCorpus -Tree $Tree) }
+    foreach ($entry in @($Corpus)) {
+        $relative = [string]$entry.Relative
+        # A file is not its own reader.
+        if ($relative -ieq $forward) { continue }
+        $text = [string]$entry.Text
         $hit = $false
         foreach ($needle in $needles) { if ($text.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $hit = $true; break } }
         if (-not $hit) { continue }
-        $relative = $file.FullName.Substring($Tree.TrimEnd('\').Length + 1) -replace '\\', '/'
         if ($relative -like "services/api/*") { & $add @("API unit tests", "API integration tests") }
         elseif ($relative -like "apps/web/*") { & $add @(Resolve-TeamGateStepPattern -Pattern "Web shell*" -StepNames $names) }
         elseif ($suites.ContainsKey($relative)) { & $add @($suites[$relative]) }
@@ -340,13 +363,17 @@ function Get-TeamGateRerunPlan {
         if ($descends) {
             $changed = @(Get-TeamCommittedFiles -Worktree $RepoRoot -From $from -To $Sha)
             $where = if ($Tree) { $Tree } else { $RepoRoot }
+            # Every changed file, not only the documents: a suite reads a web fixture, an API test reads
+            # a gate suite (the inspector's finds of 2026-10-07). The files the full gate judges anyway
+            # are skipped; the tree is read once.
+            $corpus = $null
             foreach ($file in $changed) {
                 $path = ([string]$file -replace '\\', '/')
-                if (Test-TeamGatePathAny -Path $path -Globs $script:TeamGateRerunDocuments) {
-                    $found = Get-TeamGateReaderSteps -Tree $where -Path $path -GateText $GateText
-                    $readers[$path] = $null
-                    if ($found.Known) { $readers[$path] = [string[]]@($found.Steps) }
-                }
+                if (Test-TeamGatePathAny -Path $path -Globs $script:TeamGateRerunFullPaths) { continue }
+                if ($null -eq $corpus) { $corpus = @(Get-TeamGateReaderCorpus -Tree $where) }
+                $found = Get-TeamGateReaderSteps -Tree $where -Path $path -GateText $GateText -Corpus $corpus
+                $readers[$path] = $null
+                if ($found.Known) { $readers[$path] = [string[]]@($found.Steps) }
             }
         }
     }

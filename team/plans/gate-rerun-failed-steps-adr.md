@@ -47,6 +47,21 @@ its step; apps/web -> the web steps). A suite the gate does not run naming it ->
 script library naming it (a protected-file list) is not counted as a reader: the suites that
 exercise the libraries run them on sandbox copies. This is a judged risk, named here.
 
+The same reader search runs for EVERY changed file the full gate does not already take (first
+inspection, 2026-10-07: `scripts/tests/team-feed.tests.ps1` reads `apps/web/tests/approvals/
+fixtures.ts`; `services/api/tests/unit/test_gate_database_contract.py` reads
+`scripts/tests/gate-database.tests.ps1`): a test file, fixture or suite another step's test names
+adds that step to the slice; a name found in a suite the gate does not run is the full gate. The
+search is by the file's leaf name over services/api tests and app, apps/web src and tests, and
+the gate-run suites, read once per plan; a file is not its own reader. A generic leaf name
+(`index.ts`) over-matches - that only adds steps or sends it to the full gate (fail-closed). On
+the real tree: fixtures.ts -> the web steps + "Agent team roadmap feeder"; gate-database.tests.ps1
+-> both API steps. A suite naming a real file only to build a sandbox must spell it indirectly
+(team-gate-rerun.tests.ps1 uses `$dot`), or it is counted as a reader.
+
+Ancestry is checked BEFORE "nothing changed": a B that does not descend from A has no change list
+(the branch was rebuilt), and an empty list there is not "the same content" - the full gate.
+
 ## The record
 
 A partial green record: `result: green`, `sha: B`, `log:` A's (red) full-gate log,
@@ -63,7 +78,8 @@ pattern). A partial red record carries the same `rerun_of` fields, so the next r
   green record with `rerun_of`, call `Test-TeamGateRerunChain` and read `rerun_log` instead of
   `log`; until then a rerun green on main is refused by the release step (no auto-release; the
   Danışman releases by hand as on 2026-10-06). The suite's case "release (scripts/lib/TeamRelease.ps1
-  - ALAN_ISTEGI)" is RED until that is wired.
+  - ALAN_ISTEGI)" is RED until that is wired. `Test-TeamGateRerunChain` needs git, so
+  `Find-TeamReleaseGate` takes a `-RepoRoot` (the case passes it) and release.ps1 must pass its own.
 - `scripts/quality-gate.ps1`: add `scripts\tests\team-gate-rerun.tests.ps1` as a step (PS5.1,
   git, fakes, ~2-3 min).
 - `scripts/tests/team-integrate.tests.ps1`'s sandbox copies five libraries by name; without
