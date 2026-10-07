@@ -28,7 +28,8 @@
         `integrate/<cycle>` (Select-TeamWorkerChangedFiles, Get-TeamWorkerChangedFiles).
 
     As in `TeamQueue.ps1`, every rule is a function that takes its inputs and returns its
-    answer: this file starts no process, reads no file and writes no store. The one named
+    answer: this file starts no process, reads no file (beyond dot-sourcing its protected list,
+    TeamAreaProtected.ps1) and writes no store. The one named
     exception is Get-TeamWorkerChangedFiles: it asks git, but through the -Git scriptblock
     its caller gives (by default TeamRun.ps1's Invoke-TeamGit, which the caller loads). Nothing here is
     called by the cycle yet; the wiring is a later card, and the fields `area_widenings` and
@@ -50,69 +51,18 @@ $script:TeamAreaRequestKeys = @{
 # How many times the cycle widens one task's area by itself. The next request is the lead's.
 $script:TeamAreaMaxWidenings = 2
 
-function New-TeamAreaProtectedEntry {
-    param([string]$Name, [string]$Kind, [string]$Value, [string]$Source)
-    return [pscustomobject]@{ Name = $Name; Kind = $Kind; Value = $Value; Source = $Source }
+# The protected list has its own file (scripts/lib/TeamAreaProtected.ps1), so that the file a
+# request must not shorten is the list alone and this file's area logic stays grantable. When
+# that file is missing, nothing is protected-checked: Get-TeamAreaProtection is then NOT
+# defined, Test-TeamDuty (TeamQueue.ps1) refuses every decision and Resolve-TeamAreaRequest
+# refuses every request - a judge that cannot judge refuses.
+$script:TeamAreaProtected = @()
+$script:TeamAreaProtectedFile = Join-Path $PSScriptRoot "TeamAreaProtected.ps1"
+$script:TeamAreaProtectedLoaded = $false
+if (Test-Path -LiteralPath $script:TeamAreaProtectedFile -PathType Leaf) {
+    . $script:TeamAreaProtectedFile
+    $script:TeamAreaProtectedLoaded = $true
 }
-
-# Never widened into, whoever asks. ONE list:
-#   path     the path itself, anything under it, and any directory that holds it;
-#   pattern  a regular expression on the path as Get-TeamAreaKey spells it (lower case,
-#            forward slashes).
-# The shared files are TeamQueue.ps1's own list, taken as it is: two lists would drift.
-$script:TeamAreaProtected = @(
-    @($script:TeamSharedFiles | ForEach-Object {
-            New-TeamAreaProtectedEntry -Name $_ -Kind "path" -Value $_ -Source "scripts/lib/TeamQueue.ps1 `$script:TeamSharedFiles (TEAM_PROTOCOL section 4: the lead writes it)"
-        })
-
-    # The lead itself may not edit these without the owner.
-    New-TeamAreaProtectedEntry -Name "docs/ROADMAP.md" -Kind "path" -Value "docs/ROADMAP.md" -Source ".claude/agents/lead.md (never edit ROADMAP without an owner decision)"
-    New-TeamAreaProtectedEntry -Name "docs/TEAM_PROTOCOL.md" -Kind "path" -Value "docs/TEAM_PROTOCOL.md" -Source ".claude/agents/lead.md (never edit TEAM_PROTOCOL without an owner decision)"
-    New-TeamAreaProtectedEntry -Name ".claude/agents" -Kind "path" -Value ".claude/agents" -Source "docs/TEAM_PROTOCOL.md section 2 (the role files are the roles' own rules)"
-    New-TeamAreaProtectedEntry -Name "hand-gestures" -Kind "pattern" -Value "hand[-_]?gestures" -Source ".claude/agents/worker.md (feat/hand-gestures-stage1 is frozen); Test-TeamSplit refuses the same"
-
-    # Secrets: what .gitignore keeps out of git, and the secret root (constitution section 6).
-    New-TeamAreaProtectedEntry -Name "env-file" -Kind "pattern" -Value "(^|/)\.env(\.[^/]*)?$" -Source ".gitignore '# Secrets': .env, .env.*"
-    New-TeamAreaProtectedEntry -Name "key-material" -Kind "pattern" -Value "\.(key|pem|pfx)$" -Source ".gitignore '# Secrets': *.key, *.pem, *.pfx"
-    New-TeamAreaProtectedEntry -Name "tofu-state" -Kind "pattern" -Value "(\.tfstate(\.[^/]*)?|\.tfvars|\.tfplan|(^|/)tfplan\.binary)$" -Source ".gitignore: *.tfstate, *.tfvars, tfplan.binary, *.tfplan (they hold the tokens)"
-    New-TeamAreaProtectedEntry -Name "secrets" -Kind "path" -Value "secrets" -Source ".gitignore '# Secrets': secrets/local/"
-    New-TeamAreaProtectedEntry -Name "services/api/var" -Kind "path" -Value "services/api/var" -Source ".gitignore: the owner identity root (the hash of the owner credential)"
-    New-TeamAreaProtectedEntry -Name "scripts/lib/SecretStore.ps1" -Kind "path" -Value "scripts/lib/SecretStore.ps1" -Source "PROJECT_CONSTITUTION.md section 6 'secret root': the DPAPI store"
-    New-TeamAreaProtectedEntry -Name "scripts/secret-store.ps1" -Kind "path" -Value "scripts/secret-store.ps1" -Source "PROJECT_CONSTITUTION.md section 6 'secret root': the store's entry point"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/install-env-secret.sh" -Kind "path" -Value "scripts/cloud/install-env-secret.sh" -Source "PROJECT_CONSTITUTION.md section 6 'secret root': writes the Cloud Core's .env"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/set-cloud-secret.ps1" -Kind "path" -Value "scripts/cloud/set-cloud-secret.ps1" -Source "PROJECT_CONSTITUTION.md section 6 'secret root': sends a secret to the Cloud Core"
-
-    # Last-known-good metadata: the pointer and the two places that write it.
-    New-TeamAreaProtectedEntry -Name "last-known-good" -Kind "pattern" -Value "last[-_]?known[-_]?good" -Source "PROJECT_CONSTITUTION.md section 6 'last-known-good release pointer'; docs/DEVELOPMENT_POLICY.md section 11"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/release-cloud-core-bluegreen.sh" -Kind "path" -Value "scripts/cloud/release-cloud-core-bluegreen.sh" -Source "writes RELEASE and LAST_KNOWN_GOOD on the host; installed as the recovery root's reconcile.sh (scripts/cloud/install-recovery-supervisor.sh)"
-    New-TeamAreaProtectedEntry -Name "services/recovery-supervisor" -Kind "path" -Value "services/recovery-supervisor" -Source "PROJECT_CONSTITUTION.md section 6 'recovery supervisor'; recovery_supervisor/workspace.py holds last_known_good.txt; services/api/app/evolution/sandbox.py PROTECTED_TREES"
-
-    # The recovery roots: what must run when the main application is broken.
-    New-TeamAreaProtectedEntry -Name "services/api/app/identity/root.py" -Kind "path" -Value "services/api/app/identity/root.py" -Source "PROJECT_CONSTITUTION.md section 6 'owner identity root'"
-    New-TeamAreaProtectedEntry -Name "infra/docker/docker-compose.prod.yml" -Kind "path" -Value "infra/docker/docker-compose.prod.yml" -Source "copied into /opt/pagentos-recovery (scripts/cloud/install-recovery-supervisor.sh)"
-    New-TeamAreaProtectedEntry -Name "infra/docker/edge" -Kind "path" -Value "infra/docker/edge" -Source "nginx.conf is copied into /opt/pagentos-recovery (scripts/cloud/install-recovery-supervisor.sh)"
-    New-TeamAreaProtectedEntry -Name "infra/systemd" -Kind "path" -Value "infra/systemd" -Source "the root units of the reconcile timer and the backup (services/api/app/evolution/risk.py: 'the recovery timer')"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/install-recovery-supervisor.sh" -Kind "path" -Value "scripts/cloud/install-recovery-supervisor.sh" -Source "writes the recovery root and its pin (APPROVED_SHA)"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/uninstall-recovery-supervisor.sh" -Kind "path" -Value "scripts/cloud/uninstall-recovery-supervisor.sh" -Source "removes the recovery root"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/backup-cloud-core.sh" -Kind "path" -Value "scripts/cloud/backup-cloud-core.sh" -Source "PROJECT_CONSTITUTION.md section 6 'backup/restore primitives'"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/restore-cloud-core.sh" -Kind "path" -Value "scripts/cloud/restore-cloud-core.sh" -Source "PROJECT_CONSTITUTION.md section 6 'backup/restore primitives'"
-
-    # The lead's ruling at merge (ADR-0253, 'Protected by the lead'): what governs the agents
-    # themselves and what sends a tree to production is never widened into by a request.
-    # Shared code that cards hold every day (the gate, the CI file, cycle.ps1, TeamQueue.ps1)
-    # is deliberately NOT here: a holder in work makes the request wait, the inspector reads
-    # the diff, and a new suite needs its gate line - refusing that would stop the very
-    # cards this file exists for.
-    New-TeamAreaProtectedEntry -Name "scripts/lib/TeamArea.ps1" -Kind "path" -Value "scripts/lib/TeamArea.ps1" -Source "this list: a request must not be able to shorten it"
-    New-TeamAreaProtectedEntry -Name ".claude/hooks" -Kind "path" -Value ".claude/hooks" -Source "CLAUDE.md 'Session continuity': the hook that hands every session its handoff"
-    New-TeamAreaProtectedEntry -Name "claude-settings" -Kind "pattern" -Value "(^|/)\.claude/settings(\.[^/]*)?\.json$" -Source "the agents' own permissions and hooks"
-    New-TeamAreaProtectedEntry -Name "claude-md" -Kind "pattern" -Value "(^|/)claude\.md$" -Source "the engineering contract every agent is given, in any directory"
-    New-TeamAreaProtectedEntry -Name "PROJECT_CONSTITUTION.md" -Kind "path" -Value "PROJECT_CONSTITUTION.md" -Source "the product's constitution: the owner's"
-    New-TeamAreaProtectedEntry -Name "docs/DEVELOPMENT_POLICY.md" -Kind "path" -Value "docs/DEVELOPMENT_POLICY.md" -Source "the owner's permanent directive of 2026-09-07 (CLAUDE.md 'Engineering operating mode')"
-    New-TeamAreaProtectedEntry -Name "git-internals" -Kind "pattern" -Value "(^|/)\.git(/|$)" -Source "the repository's own files and hooks are not source"
-    New-TeamAreaProtectedEntry -Name "gitignore" -Kind "pattern" -Value "(^|/)\.gitignore$" -Source "its '# Secrets' block is what keeps secrets out of git"
-    New-TeamAreaProtectedEntry -Name "scripts/cloud/release-cloud-core.ps1" -Kind "path" -Value "scripts/cloud/release-cloud-core.ps1" -Source "sends a tree to the production host (ADR-0214 addendum 9: the release is the lead's)"
-)
 
 function Get-TeamAreaProtected { return @($script:TeamAreaProtected) }
 
@@ -211,17 +161,20 @@ function Get-TeamAreaRequest {
     }
 }
 
-function Get-TeamAreaProtection {
-    <# The entry of the protected list a path falls under, or $null. #>
-    param([AllowEmptyString()][string]$Path)
-    $key = Get-TeamAreaKey -Area $Path
-    foreach ($entry in $script:TeamAreaProtected) {
-        if ($entry.Kind -eq "pattern") {
-            if ($key -match $entry.Value) { return $entry }
+if ($script:TeamAreaProtectedLoaded) {
+    function Get-TeamAreaProtection {
+        <# The entry of the protected list a path falls under, or $null. Defined only when the
+           list file loaded (see the loader above). #>
+        param([AllowEmptyString()][string]$Path)
+        $key = Get-TeamAreaKey -Area $Path
+        foreach ($entry in $script:TeamAreaProtected) {
+            if ($entry.Kind -eq "pattern") {
+                if ($key -match $entry.Value) { return $entry }
+            }
+            elseif (Test-TeamAreasOverlap -First $key -Second $entry.Value) { return $entry }
         }
-        elseif (Test-TeamAreasOverlap -First $key -Second $entry.Value) { return $entry }
+        return $null
     }
-    return $null
 }
 
 function Test-TeamAreaWaitsFor {
@@ -299,6 +252,9 @@ function Resolve-TeamAreaRequest {
         return (New-TeamAreaResolution -Decision "refuse" -Why "İstenen dosyaların hepsi zaten kartın alanında; genişletilecek bir şey yok.")
     }
 
+    if ($null -eq (Get-Command -Name "Get-TeamAreaProtection" -CommandType Function -ErrorAction SilentlyContinue)) {
+        return (New-TeamAreaResolution -Decision "refuse" -Why "Korunan yol listesi (scripts/lib/TeamAreaProtected.ps1) yüklenemedi; istek yargılanamaz, alan genişletilmedi.")
+    }
     foreach ($path in $asked) {
         $entry = Get-TeamAreaProtection -Path $path
         if ($null -ne $entry) {

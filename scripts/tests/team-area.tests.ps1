@@ -505,7 +505,7 @@ $protectedSamples = @{
     "scripts/cloud/restore-cloud-core.sh"          = "scripts/cloud/restore-cloud-core.sh"
     # The lead's ruling at merge (the inspector's finding: each of these answered `widen`).
     "scripts/lib/TeamAreaProtected.ps1"            = "scripts/lib/TeamAreaProtected.ps1"
-    ".claude/hooks"                              = ".claude/hooks/session-start.ps1"
+    ".claude/hooks"                                = ".claude/hooks/session-start.ps1"
     "claude-settings"                              = ".claude/settings.local.json"
     "claude-md"                                    = "apps/web/CLAUDE.md"
     "PROJECT_CONSTITUTION.md"                      = "PROJECT_CONSTITUTION.md"
