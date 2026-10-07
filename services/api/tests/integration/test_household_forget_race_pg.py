@@ -99,9 +99,7 @@ def _mixed(client, requests: list[tuple[str, str, dict | None]], meet: str, held
                 await barrier.wait()
                 return await http.request(method, path, json=body)
 
-            return await asyncio.wait_for(
-                asyncio.gather(*(one(*r) for r in requests)), timeout=120
-            )
+            return await asyncio.wait_for(asyncio.gather(*(one(*r) for r in requests)), timeout=120)
 
     with _meeting(meet, held, 3.0) as meeting:
         answers = asyncio.run(run())

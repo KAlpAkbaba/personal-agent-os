@@ -219,9 +219,43 @@ def known_item(key: str) -> bool:
     return key in _ITEM_BY_KEY or key.split()[-1] in _WORDS
 
 
+#: Words (folded) that describe the head noun after them: "TAZE süt", "ESMER şeker", "tam
+#: YAĞLI süt" - an adjective, so the head stays nominative ("taze sütü" is its accusative).
+_ADJECTIVES: Final = frozenset(
+    {
+        "taze",
+        "esmer",
+        "beyaz",
+        "kirmizi",
+        "yesil",
+        "siyah",
+        "sari",
+        "yagli",
+        "yagsiz",
+        "organik",
+        "dogal",
+        "light",
+        "laktozsuz",
+        "sekersiz",
+        "tuzlu",
+        "tuzsuz",
+        "kepekli",
+        "toz",
+        "kup",
+        "kuru",
+        "sade",
+        "koy",
+        "buyuk",
+        "kucuk",
+    }
+)
+
+
 def display_name(words: list[str]) -> str:
     """The name to keep and say: the vocabulary's own nominative when the key is known
-    ("sütü" -> "süt", "kedi mamasını" -> "kedi maması"), else the words as said."""
+    ("sütü" -> "süt", "kedi mamasını" -> "kedi maması"), else the words as said. A head said
+    in the nominative, or after an adjective, stays nominative: "taze süt" is not "taze sütü"
+    (test team round t-r10070152)."""
     said = " ".join(words)
     key = item_key(said)
     if key in _ITEM_BY_KEY:
@@ -229,8 +263,8 @@ def display_name(words: list[str]) -> str:
     head = key.split()[-1] if key else ""
     if head in _WORDS:
         nominative, compound = _WORDS[head]
-        if len(words) == 1:
-            return nominative
+        if len(words) == 1 or fold(words[-1]) == fold(nominative) or fold(words[-2]) in _ADJECTIVES:
+            return " ".join([*words[:-1], nominative])
         return " ".join([*words[:-1], compound])
     return said
 
@@ -762,6 +796,19 @@ def quantity_problem(raw: str) -> str | None:
     return None
 
 
+def split_amount(name: str) -> tuple[str, str | None]:
+    """A typed name that starts with its amount, split: "iki şişe süt" -> ("süt", "iki şişe"),
+    "2 litre süt" -> ("süt", "2 litre"). Anything else, or an amount with nothing after it,
+    comes back whole with None (test team round t-r10070152)."""
+    words = name.split()
+    if len(words) < 2 or not _number(fold(words[0])):
+        return name, None
+    rest, amount = _quantity(words)
+    if not rest:
+        return name, None
+    return " ".join(rest), amount
+
+
 def parse_tokens(tokens: tuple[str, ...]) -> HouseholdCommand | None:
     """The router's entry: its normalized tokens (lower-case; an apostrophe kept)."""
     return parse_words(_clean_words(" ".join(tokens)))
@@ -790,4 +837,5 @@ __all__ = [
     "parse_tokens",
     "parse_words",
     "quantity_problem",
+    "split_amount",
 ]

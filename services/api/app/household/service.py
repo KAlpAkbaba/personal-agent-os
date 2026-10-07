@@ -117,6 +117,16 @@ def clean_quantity(raw: object) -> str | None:
     return quantity or None
 
 
+def _split(raw: object) -> tuple[str, str | None]:
+    """The name and the amount said in it: "iki şişe süt" is süt, "iki şişe"."""
+    name, amount = parse.split_amount(clean_name(raw))
+    if amount is not None:
+        problem = parse.quantity_problem(amount)
+        if problem is not None:
+            raise HouseholdRefused(problem)
+    return name, clean_quantity(amount)
+
+
 def clean_level(raw: object) -> str:
     level = _LEVEL_ALIASES.get(parse.turkish_lower(raw).strip()) if isinstance(raw, str) else None
     if level is None:
@@ -198,7 +208,8 @@ def _get_or_create(db: Session, name: str, now: datetime) -> HouseholdItem:
 
 def set_level(db: Session, name: str, level: str, *, now: datetime) -> ItemChange:
     level = clean_level(level)
-    row = _get_or_create(db, name, now)
+    said, _ = _split(name)
+    row = _get_or_create(db, said, now)
     previous = row.level
     if level == parse.LEVEL_FULL:
         was_listed = row.on_list
@@ -228,8 +239,9 @@ def set_level(db: Session, name: str, level: str, *, now: datetime) -> ItemChang
 
 
 def add_to_list(db: Session, name: str, *, quantity: object, now: datetime) -> ItemChange:
-    amount = clean_quantity(quantity)
-    row = _get_or_create(db, name, now)
+    said, spoken = _split(name)
+    amount = clean_quantity(quantity) or spoken
+    row = _get_or_create(db, said, now)
     if row.on_list and (amount is None or amount == row.list_quantity):
         db.commit()
         return ItemChange(item=row, speech=f"{_cap(row.name)} zaten listede.", already=True)
