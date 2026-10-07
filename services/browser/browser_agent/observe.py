@@ -36,6 +36,7 @@ import re
 import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 from .errors import BrowserError, ErrorClass
 from .injection import count_injection_markers, normalize_for_markers
@@ -46,6 +47,9 @@ MAX_ELEMENTS_CEILING: Final = 120
 DEFAULT_MAX_TEXT_CHARS: Final = 6_000
 MAX_TEXT_CHARS_CEILING: Final = 6_000
 MAX_NAME_CHARS: Final = 80
+#: A link's address, as the observation hands it out: http(s), no query, no fragment.
+#: Longer than this it is no address a planner should be typing back.
+MAX_HREF_CHARS: Final = 512
 #: What the elements and the text of ONE observation may weigh together, as UTF-8 JSON.
 #: Every browser result is held to 48 KiB (contract section 3); the counts above are in
 #: characters, and 120 names of 80 Turkish letters plus 6 000 characters of Turkish text
@@ -145,6 +149,7 @@ ELEMENT_KEYS: Final[tuple[str, ...]] = (
     "in_form",
     "submits",
     "href_host",
+    "href",
     "in_viewport",
     "sensitive",
     "risk_hint",
@@ -267,6 +272,15 @@ COLLECT_JS: Final = r"""
       return null;
     }
   };
+  const hrefOf = (el) => {
+    // The address without its query and fragment: those carry sessions and tracking.
+    try {
+      const u = new URL(el.href, document.baseURI);
+      return /^https?:$/.test(u.protocol) ? u.protocol + '//' + u.host + u.pathname : null;
+    } catch (e) {
+      return null;
+    }
+  };
   const out = [];
   let truncated = false;
   let order = 0;
@@ -322,6 +336,7 @@ COLLECT_JS: Final = r"""
         in_form: !!form,
         submits: !!form && isSubmitControl,
         href_host: hasHref ? hostOf(el) : null,
+        href: hasHref ? hrefOf(el) : null,
         autocomplete: (el.getAttribute('autocomplete') || '').toLowerCase(),
         field_id: text(fieldId),
         has_onclick: !!el.onclick || el.hasAttribute('onclick'),
@@ -352,13 +367,15 @@ class ObservedElement:
     in_viewport: bool
     sensitive: bool
     risk_hint: str
+    #: A link's address (``clean_href``); ``None`` for anything that is not an http(s) link.
+    href: str | None = None
     #: Worker-side only, never in a result: how to find the element again, and what it
     #: looked like, so a reference can be refused when the element is no longer the one.
     path: tuple[str, ...] = field(default=(), compare=False)
     fingerprint: tuple[str, str, str] = field(default=("", "", ""), compare=False)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "ref": self.ref,
             "role": self.role,
             "name": self.name,
@@ -367,10 +384,15 @@ class ObservedElement:
             "in_form": self.in_form,
             "submits": self.submits,
             "href_host": self.href_host,
+            "href": self.href,
             "in_viewport": self.in_viewport,
             "sensitive": self.sensitive,
             "risk_hint": self.risk_hint,
         }
+        if self.href is None:
+            # Only a link has an address; on a button the key would be weight for nothing.
+            del out["href"]
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +416,32 @@ def clean_name(raw: Any) -> str:
     if len(name) > MAX_NAME_CHARS:
         name = name[: MAX_NAME_CHARS - 1].rstrip() + "…"
     return name
+
+
+_HREF_RE: Final = re.compile(r"^https?://[^\s/?#@]+(?:/[^\s?#]*)?$", re.IGNORECASE)
+
+
+def clean_href(raw: Any) -> str | None:
+    """A link's address as DATA: http(s) only, without credentials, query or fragment.
+
+    The collector already sends ``protocol//host/path``; this is the worker's own check,
+    so a record that carries anything else - ``javascript:``, ``data:``, a relative path,
+    a space, a control character, an address too long to be one - carries no address.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return None
+    host = parts.hostname.lower() + (f":{port}" if port is not None else "")
+    href = f"{parts.scheme.lower()}://{host}{parts.path or '/'}"
+    if len(href) > MAX_HREF_CHARS or not href.isprintable() or not _HREF_RE.match(href):
+        return None
+    return href
 
 
 def is_sensitive(raw: dict[str, Any]) -> bool:
@@ -516,6 +564,7 @@ def reduce_elements(
                 in_viewport=bool(raw.get("in_viewport")),
                 sensitive=is_sensitive(raw),
                 risk_hint=risk_hint(raw, name),
+                href=clean_href(raw.get("href")) if raw.get("has_href") else None,
                 path=tuple(str(p) for p in path if isinstance(p, str)),
                 fingerprint=(tag, role, name),
             )
@@ -549,7 +598,8 @@ def fit_to_budget(
 ) -> tuple[Observation, str, bool, bool]:
     """(observation, text, elements were cut, text was cut) - together under ``max_bytes``.
 
-    The text gives way first, down to ``MIN_TEXT_CHARS``; then elements are dropped from
+    The text gives way first, down to ``MIN_TEXT_CHARS``; then links' addresses, from the
+    END of the list (the link is still there to click); then elements are dropped from
     the END of the list (the far end of the page - the order ``reduce_elements`` made),
     and only then the rest of the text. The observation that is returned is the one the
     worker must hold: a reference that was cut from the result does not exist.
@@ -559,6 +609,20 @@ def fit_to_budget(
     while _weight(elements, text) > max_bytes and len(text) > MIN_TEXT_CHARS:
         text = text[: max(MIN_TEXT_CHARS, (len(text) * 3) // 4)].rstrip()
         text_cut = True
+    addressed = [i for i, element in enumerate(observation.elements) if element.href]
+    stripped: set[int] = set()
+    while addressed and _weight(elements, text) > max_bytes:
+        index = addressed.pop()
+        del elements[index]["href"]
+        stripped.add(index)
+    if stripped:
+        observation = replace(
+            observation,
+            elements=tuple(
+                replace(e, href=None) if i in stripped else e
+                for i, e in enumerate(observation.elements)
+            ),
+        )
     kept = len(elements)
     while kept > 1 and _weight(elements[:kept], text) > max_bytes:
         kept -= 1
@@ -606,6 +670,7 @@ __all__ = [
     "DEFAULT_MAX_ELEMENTS",
     "DEFAULT_MAX_TEXT_CHARS",
     "ELEMENT_KEYS",
+    "MAX_HREF_CHARS",
     "MAX_NAME_CHARS",
     "MAX_OBSERVATION_BYTES",
     "MIN_TEXT_CHARS",
@@ -614,6 +679,7 @@ __all__ = [
     "Observation",
     "ObservedElement",
     "clamp",
+    "clean_href",
     "clean_name",
     "fit_to_budget",
     "is_sensitive",

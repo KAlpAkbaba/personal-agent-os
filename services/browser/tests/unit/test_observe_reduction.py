@@ -254,7 +254,10 @@ def test_state_is_a_closed_vocabulary() -> None:
 
 def test_an_element_carries_exactly_the_documented_keys() -> None:
     observed = reduce_elements([_raw(1)])
-    assert tuple(observed.elements[0].as_dict()) == ELEMENT_KEYS
+    # Only a link has an address; every other key is always there.
+    assert tuple(observed.elements[0].as_dict()) == tuple(k for k in ELEMENT_KEYS if k != "href")
+    link = _raw(2, tag="a", role="link", has_href=True, href="https://haber.example.org/a")
+    assert tuple(reduce_elements([link]).elements[0].as_dict()) == ELEMENT_KEYS
     # The path and the fingerprint stay in the worker.
     assert "path" not in observed.elements[0].as_dict()
     assert "fingerprint" not in observed.elements[0].as_dict()
@@ -275,7 +278,10 @@ def test_an_element_carries_exactly_the_documented_keys() -> None:
             "https://www.trthaber.com/haber/bilim-teknoloji/yapay-zeka-123.html",
             "https://www.trthaber.com/haber/bilim-teknoloji/yapay-zeka-123.html",
         ),
-        ("https://haber.example.org/a?utm_source=x&session=abc#yorumlar", "https://haber.example.org/a"),
+        (
+            "https://haber.example.org/a?utm_source=x&session=abc#yorumlar",
+            "https://haber.example.org/a",
+        ),
         ("http://Haber.Example.org:8080/b#top", "http://haber.example.org:8080/b"),
         ("https://kullanici:parola@haber.example.org/c", "https://haber.example.org/c"),
         ("https://haber.example.org", "https://haber.example.org/"),
@@ -299,15 +305,41 @@ def test_a_link_carries_its_address_without_query_or_fragment(
     record = _raw(1, tag="a", role="link", has_href=True, href=raw_href)
     element = reduce_elements([record]).elements[0]
     assert element.href == expected
-    assert element.as_dict()["href"] == expected
+    assert element.as_dict().get("href") == expected
     if expected is not None:
         assert len(expected) <= observe.MAX_HREF_CHARS == 512
+
+
+def test_addresses_give_way_before_any_element_far_end_first() -> None:
+    """A link without its address can still be clicked; a link that was cut cannot."""
+    records = [
+        _raw(
+            i,
+            tag="a",
+            role="link",
+            name=f"Haber {i}",
+            has_href=True,
+            href="https://haber.example.org/" + "yapay-zeka-" * 40 + str(i),
+        )
+        for i in range(1, 500)
+    ]
+    text, _, _ = reduce_text("ğüşıöç " * 5000)
+    fitted, fitted_text, elements_cut, _ = observe.fit_to_budget(reduce_elements(records), text)
+
+    assert _bytes(fitted, fitted_text) <= observe.MAX_OBSERVATION_BYTES
+    assert len(fitted.elements) >= 100
+    kept = [e.href is not None for e in fitted.elements]
+    # The addresses that went are the far end's: no address after the first gap.
+    assert kept[0] is True and not kept[-1]
+    assert kept == sorted(kept, reverse=True)
 
 
 def test_the_collector_sends_a_links_address_and_only_for_http() -> None:
     script = observe.COLLECT_JS
     assert "href: hasHref ? hrefOf(el) : null" in script
-    assert "u.protocol + '//' + u.host + u.pathname" in script
+    assert "? u.protocol + '//' + u.host + u.pathname : null;" in script
+    # The query and the fragment never leave the page: they carry sessions and tracking.
+    assert "u.search" not in script and "u.hash" not in script
 
 
 def test_records_that_are_not_records_are_ignored() -> None:
