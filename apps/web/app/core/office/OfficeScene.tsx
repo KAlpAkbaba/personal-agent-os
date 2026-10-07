@@ -2,11 +2,21 @@
  * The office: a room with one desk and one character per seat the API sends, each seat a
  * button, and the room's furniture along its walls. Pure rendering of `DrawnSeat`s -
  * selection and motion preference come in as props. The characters are in officeRobots.tsx.
+ * The label above a head is plain Turkish (officePlain.ts): the card's summary_tr, else its
+ * title cut to one short sentence; the whole title stays in the panel a click opens.
  */
 
 import { QUEUED_TR, type DrawnSeat } from "./officeModel";
+import { plainSoftwareLabel } from "./officePlain";
 import { Figure, RoomDecor } from "./officeRobots";
 import { TestSeatCells, type TestSeat } from "./officeTestRoom";
+
+/** A seat as drawn, with its card's plain summary when the card carries one. */
+type SceneSeat = DrawnSeat & { summaryTr?: string | null };
+
+function shownLabel(seat: SceneSeat): string | null {
+  return seat.label === null ? null : plainSoftwareLabel(seat.label, seat.summaryTr);
+}
 
 export default function OfficeScene({
   seats,
@@ -17,7 +27,7 @@ export default function OfficeScene({
   testSeats,
   now,
 }: {
-  seats: DrawnSeat[];
+  seats: SceneSeat[];
   selected: string | null;
   reducedMotion: boolean;
   onSelect: (seat: string) => void;
@@ -48,11 +58,11 @@ export default function OfficeScene({
             {/* cut with an ellipsis at the cell's width; the title attribute keeps it whole */}
             <span
               className="office-label"
-              title={seat.label ?? undefined}
+              title={shownLabel(seat) ?? undefined}
               aria-hidden="true"
               {...(seat.queued ? { style: { color: "var(--muted)" } } : {})}
             >
-              {seat.label ?? " "}
+              {shownLabel(seat) ??" "}
             </span>
             <Figure
               seat={seat.seat}

@@ -101,11 +101,13 @@ describe("the test room", () => {
     // the name stands on its own white name card, never run into the state text
     expect(html).toContain('<span class="office-name" aria-hidden="true">Test Proje Yöneticisi</span>');
     expect(html).toContain('<span class="office-name" aria-hidden="true">Test çalışanı 4</span>');
-    expect(html).toMatch(/<span class="office-label" title="nobet \(tj-r1-1\)" aria-hidden="true">nobet \(tj-r1-1\)<\/span>/);
+    // plain Turkish above the head (the owner, 2026-10-07; officePlain.ts), the job id in the detail
+    expect(html).toMatch(/<span class="office-label" title="Nöbetleri test ediyor" aria-hidden="true">Nöbetleri test ediyor<\/span>/);
+    expect(html).toContain("iş: nobet (tj-r1-1)");
     expect(html).toMatch(/<span class="office-label" title="iş bekliyor" aria-hidden="true">iş bekliyor<\/span>/);
-    expect(html).toMatch(/class="office-test-breaking"[^>]*>Son kopma noktası: Danışman&#x27;a, test turu r1: kopma noktası yük 256/);
+    expect(html).toMatch(/class="office-test-breaking"[^>]*>Aynı anda 256 istekte zorlanıyor</);
     expect(html).toContain('aria-label="Test çalışanı 2: iş bekliyor, dinleniyor"');
-    expect(html).toContain('aria-label="Test çalışanı 1: test ediyor, odaklanmış, iş: nobet (tj-r1-1)"');
+    expect(html).toContain('aria-label="Test çalışanı 1: test ediyor, odaklanmış, iş: Nöbetleri test ediyor"');
     expect(html).toMatch(/--office-shirt:\s*#f4b13a/);
     expect(html).toMatch(/--office-navy:\s*#14b8a6/);
   });
@@ -126,7 +128,7 @@ describe("the test room", () => {
       <OfficeView view={twoWorkers()} selected={null} offline={false} reducedMotion={false} onSelect={() => {}} testSeats={seats} />,
     );
     expect(html.match(/data-test-seat="/g)?.length).toBe(5);
-    expect(html).toContain("saglik (tj-r1-2)");
+    expect(html).toContain("Sistemin yoğun yükte ayakta kalmasını test ediyor");
   });
 
   // The owner, 2026-10-06: "Aynı ofiste olsunlar". The test team sits on the software team's

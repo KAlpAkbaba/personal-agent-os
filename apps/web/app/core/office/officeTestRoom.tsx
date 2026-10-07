@@ -16,6 +16,7 @@ import type { CSSProperties } from "react";
 import { apiFetch } from "../../lib/session";
 import { BOARD_PATH, BOARD_READ_LIMIT, type BoardNote } from "./officeBoard";
 import { MOOD_TR, TIRED_AFTER_MIN, type Mood } from "./officeMood";
+import { plainBreaking, plainJobLabel } from "./officePlain";
 import { Figure } from "./officeRobots";
 
 export const TEST_SEATS = ["test-lead", "tester-1", "tester-2", "tester-3", "tester-4"] as const;
@@ -44,6 +45,9 @@ const PALETTE = {
   "--office-navy": "#14b8a6",
   "--office-navy-shade": "#0f766e",
 } as CSSProperties;
+
+/** The seat's technical detail, small and muted under the plain text (office.css is not this card's). */
+const DETAIL: CSSProperties = { maxWidth: "100%", fontSize: "0.65rem", color: "var(--muted)", overflowWrap: "anywhere" };
 
 function seatTitle(seat: TestSeatId): string {
   return seat === "test-lead" ? "Test Proje Yöneticisi" : `Test çalışanı ${seat.slice("tester-".length)}`;
@@ -113,11 +117,14 @@ const STATE_TR: Record<TestSeatState, string> = {
   error: "kendi işinde sorun",
 };
 
-/** The spoken name of a test seat: "Test çalışanı 1: iş bekliyor, dinleniyor". */
+/**
+ * The spoken name of a test seat: "Test çalışanı 1: iş bekliyor, dinleniyor" - in the owner's
+ * words (officePlain.ts), never the job id (the owner, 2026-10-07).
+ */
 export function testSeatAriaLabel(seat: TestSeat, now: Date): string {
   const base = `${seatTitle(seat.seat)}: ${STATE_TR[seat.state]}, ${MOOD_TR[testMoodOf(seat, now)]}`;
-  const job = seat.job ? `, iş: ${seat.job}` : "";
-  const breaking = seat.breaking ? `, son kopma noktası: ${seat.breaking}` : "";
+  const job = seat.job ? `, iş: ${plainJobLabel(seat.job)}` : "";
+  const breaking = seat.breaking ? `, son kopma noktası: ${plainBreaking(seat.breaking)}` : "";
   return base + job + breaking;
 }
 
@@ -125,7 +132,8 @@ export function testSeatAriaLabel(seat: TestSeat, now: Date): string {
  * The test team inside the office floor (the owner, 2026-10-06: "Aynı ofiste olsunlar"): a
  * full-row "Test ekibi" divider, then the five seats drawn like the software seats - the job
  * above, the figure in the test team's amber and teal, the white name card, a breaking point
- * under it. Rendered by OfficeScene inside `.office-floor`, never as a room of its own.
+ * under it. The job and the breaking point are plain Turkish (officePlain.ts); the job id and
+ * the raw numbers stay in the seat's detail, opened by a click. Rendered by OfficeScene inside `.office-floor`, never as a room of its own.
  */
 export function TestSeatCells({ seats, now, animated }: { seats: TestSeat[]; now: Date; animated: boolean }) {
   return (
@@ -136,7 +144,8 @@ export function TestSeatCells({ seats, now, animated }: { seats: TestSeat[]; now
       {seats.map((seat) => {
         const mood = testMoodOf(seat, now);
         const working = seat.state === "working";
-        const label = seat.job ?? "iş bekliyor";
+        const label = seat.job ? plainJobLabel(seat.job) : "iş bekliyor";
+        const breaking = seat.breaking ? plainBreaking(seat.breaking) : null;
         return (
           <div
             key={seat.seat}
@@ -162,10 +171,17 @@ export function TestSeatCells({ seats, now, animated }: { seats: TestSeat[]; now
             <span className="office-name" aria-hidden="true">
               {seatTitle(seat.seat)}
             </span>
-            {seat.breaking && (
-              <span className="office-test-breaking" title={seat.breaking} aria-hidden="true">
-                Son kopma noktası: {seat.breaking}
+            {breaking && (
+              <span className="office-test-breaking" title={breaking} aria-hidden="true">
+                {breaking}
               </span>
+            )}
+            {(seat.job || seat.breaking) && (
+              <details className="office-test-detail" style={DETAIL}>
+                <summary>ayrıntı</summary>
+                {seat.job && <span style={{ display: "block" }}>iş: {seat.job}</span>}
+                {seat.breaking && <span style={{ display: "block" }}>{seat.breaking}</span>}
+              </details>
             )}
           </div>
         );
