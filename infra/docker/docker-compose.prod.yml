@@ -132,6 +132,8 @@ services:
       PAGENTOS_TELEPHONY_OWNER_NUMBER: ${PAGENTOS_TELEPHONY_OWNER_NUMBER:-}
       PAGENTOS_TELEPHONY_FROM_NUMBER: ${PAGENTOS_TELEPHONY_FROM_NUMBER:-}
       PAGENTOS_TELEPHONY_PUBLIC_BASE_URL: ${PAGENTOS_TELEPHONY_PUBLIC_BASE_URL:-}
+      PAGENTOS_TELEPHONY_INBOUND_ENABLED: ${PAGENTOS_TELEPHONY_INBOUND_ENABLED:-false}
+      PAGENTOS_TELEPHONY_INBOUND_DAILY_MINUTES: ${PAGENTOS_TELEPHONY_INBOUND_DAILY_MINUTES:-30}
       # urgent-alert-wire: the phone rings through silent mode for IMPORTANT notifications
       # (Pushover priority=2). The app token and the user key are SECRETS, installed with
       # scripts/cloud/set-cloud-secret.ps1 (stdin only, never argv); the link root (the Cloud

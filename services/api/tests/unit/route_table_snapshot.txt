@@ -209,6 +209,8 @@ PATCH /v1/narration/sessions/{session_id}/cursor patch_cursor
 PATCH /v1/news/sources/{news_source_id} update_source
 PATCH /v1/security/assets/{ref} change_asset_scope
 PATCH /v1/voice/preferences patch_preferences
+POST /telephony/inbound/status inbound_status
+POST /telephony/inbound/voice inbound_voice
 POST /v1/accounts/connect connect
 POST /v1/alarms create_alarm
 POST /v1/alarms/{alarm_id}/cancel cancel_alarm
@@ -400,4 +402,5 @@ PUT /v1/team/queue/models put_models
 PUT /v1/team/queue/status put_status
 PUT /v1/team/queue/tasks/{task_id} put_task
 PUT /v1/voice/measurement/recordings/{place}/{index} put_recording
+WS /telephony/inbound/media inbound_media
 WS /v1/devices/connect device_connect

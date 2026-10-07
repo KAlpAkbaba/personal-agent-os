@@ -22,6 +22,7 @@ from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.notifications.service import QUIET_FROM, QUIET_UNTIL
 from app.telephony import policy
+from app.telephony.inbound_routes import router as inbound_router
 from app.telephony.provider import TelephonyError
 from app.telephony.service import (
     TEST_MESSAGE,
@@ -92,4 +93,9 @@ async def call_audio(request: Request, token: Annotated[str, Field(max_length=12
     return Response(content=payload, media_type=content_type, headers={"Cache-Control": "no-store"})
 
 
-__all__ = ["TRIAL_NOTE", "audio_router", "router"]
+# inbound-calls-wire: the inbound line's webhooks and media socket (Twilio-signed / bridge-token
+# authority, not owner-gated) are bound by app.registry. ``router`` and ``audio_router`` stay on
+# their main.py lines - listing them here too would bind them twice and stop start-up.
+ROUTERS = [inbound_router]
+
+__all__ = ["ROUTERS", "TRIAL_NOTE", "audio_router", "router"]

@@ -160,6 +160,11 @@ from app.state.routes import router as state_router
 from app.team.allowlist_routes import router as team_allowlist_router
 from app.team.routes import router as team_router
 from app.team.routes_board import router as team_board_router
+from app.telephony.inbound_bridge import InboundLine
+from app.telephony.inbound_realtime import OpenAIRealtimeLeg
+from app.telephony.inbound_records import InboundRecorder
+from app.telephony.inbound_settings import from_settings as inbound_from_settings
+from app.telephony.inbound_twilio import TwilioInbound
 from app.telephony.loop import HEALTH_NAME as TELEPHONY_HEALTH_NAME
 from app.telephony.loop import TelephonyLoop
 from app.telephony.routes import audio_router as telephony_audio_router
@@ -373,6 +378,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings, session_scope=dispatch_session_factory, audio_store=telephony_audio_store
     )
     telephony_loop = TelephonyLoop(telephony, interval_s=settings.telephony_loop_interval_s)
+    # inbound-calls-wire: the line that answers calls on the owner's behalf (OFF by default;
+    # its routes come from app.telephony.routes.ROUTERS). Same session factory as above.
+    telephony_inbound_settings = inbound_from_settings(settings)
+    telephony_inbound = InboundLine(
+        settings=telephony_inbound_settings,
+        provider=TwilioInbound(telephony_inbound_settings.twilio_auth_token),
+        recorder=InboundRecorder(dispatch_session_factory),
+        leg_factory=lambda: OpenAIRealtimeLeg(
+            api_key=telephony_inbound_settings.openai_api_key,
+            base_url=telephony_inbound_settings.realtime_base_url,
+            model=telephony_inbound_settings.realtime_model,
+            voice=telephony_inbound_settings.realtime_voice,
+            transcription_model=telephony_inbound_settings.transcription_model,
+        ),
+    )
     # urgent-alert-wire: the alarm rung (Pushover; None without both keys) and its receipt loop.
     urgent_alert_alarm_rung = build_alarm_rung(settings, dispatch_session_factory)
     urgent_alert_loop = build_receipt_loop(
@@ -995,6 +1015,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.telephony = telephony
     app.state.telephony_audio_store = telephony_audio_store
     app.state.telephony_loop = telephony_loop
+    app.state.telephony_inbound = telephony_inbound
     app.state.urgent_alert_alarm_rung = urgent_alert_alarm_rung
     app.state.urgent_alert_loop = urgent_alert_loop
     # Scoped CORS: the web shell is a separate origin from the API. Allow only

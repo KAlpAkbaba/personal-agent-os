@@ -174,6 +174,11 @@ EXPECTED_OPEN = {
     # jarvis-calls-owner: the short-lived audio TWILIO fetches while it rings the owner - it
     # holds no owner session; single-use, ten-minute, unguessable token, bare 404 otherwise.
     ("GET", "/v1/telephony/audio/{token}"),
+    # inbound-calls-bridge: Twilio's webhooks for a call JARVIS answers on the owner's behalf.
+    # Twilio holds no owner session; its X-Twilio-Signature (HMAC-SHA1 over the PUBLIC url +
+    # sorted fields, compare_digest) is the authority - unsigned or wrongly signed: a bodiless 403.
+    ("POST", "/telephony/inbound/voice"),
+    ("POST", "/telephony/inbound/status"),
     # M18.4 gap 1 (ADR-0081 addendum 3): the device handoff between the two colours. The
     # release script calls these from INSIDE the draining container, which holds no owner
     # session and must not need one to finish a release; the routes are loopback-only
@@ -338,11 +343,14 @@ def test_only_the_four_deliberate_endpoints_are_unauthenticated() -> None:
     assert open_endpoints == EXPECTED_OPEN
 
 
-def test_the_device_websocket_is_the_only_unauthenticated_socket() -> None:
+def test_the_device_and_inbound_media_sockets_are_the_only_unauthenticated_ones() -> None:
     _, _, app = build()
     sockets = {r.path for r in _walk(app.routes) if isinstance(r, WebSocketRoute)}
-    # It carries its own ECDSA device authentication (DEVICE_PROTOCOL §3-5).
-    assert sockets == {"/v1/devices/connect"}
+    # The device socket carries its own ECDSA device authentication (DEVICE_PROTOCOL §3-5).
+    # The inbound media socket's authority is the one-time, two-minute bridge_token the signed
+    # voice webhook issued, bound to its CallSid; without it the socket closes 1008 and no
+    # realtime connection is opened (inbound-calls-bridge).
+    assert sockets == {"/v1/devices/connect", "/telephony/inbound/media"}
 
 
 # -------------------------------------------------------------------- scopes

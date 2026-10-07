@@ -599,6 +599,11 @@ class Settings(BaseSettings):
     telephony_public_base_url: str = ""
     telephony_max_calls_per_hour: int = 3
     telephony_loop_interval_s: float = 30.0
+    # inbound-calls-bridge (app.telephony.inbound_*): JARVIS answers calls on the owner's
+    # behalf. OFF unless the owner turns it on (env file); the daily allowance caps the
+    # realtime minutes a day of callers may spend.
+    telephony_inbound_enabled: bool = False
+    telephony_inbound_daily_minutes: int = 30
 
     # urgent-alert-wire (app.urgent_alert): the alarm rung - Pushover priority=2 rings the
     # iPhone through silent mode for IMPORTANT rows. The app token and the user key are
