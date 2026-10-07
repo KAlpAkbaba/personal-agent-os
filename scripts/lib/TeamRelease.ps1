@@ -636,6 +636,29 @@ function Test-TeamReleaseVerified {
     return [pscustomobject]@{ Ok = (@($all).Count -eq 0); Problems = $all }
 }
 
+function Get-TeamStagingOutcome {
+    <#
+    .SYNOPSIS
+        After a verified release, staging follows (staging-follows-release): did deploy.ps1
+        reach the released sha ('STAGING DEPLOYED: <sha>') and did seed.ps1 make a valid
+        session ('STAGING SEEDED')? Either missing is a risk, never a failed release -
+        production is already promoted. $null for Seed: it was not run.
+    #>
+    param([Parameter(Mandatory = $true)]$Deploy, $Seed = $null, [Parameter(Mandatory = $true)][string]$Sha)
+    $reached = ""
+    $match = [regex]::Match([string]$Deploy.StdOut, 'STAGING DEPLOYED: ([0-9a-f]{40})')
+    if ($match.Success) { $reached = $match.Groups[1].Value }
+    $problem = ""
+    if ([int]$Deploy.ExitCode -ne 0 -or $reached -ne $Sha) {
+        $problem = "staging $Sha sürümüne güncellenemedi: deploy.ps1 çıkış $($Deploy.ExitCode)" + $(if ($reached) { ", ulaştığı $reached" } else { "" })
+    }
+    elseif ($null -eq $Seed -or [int]$Seed.ExitCode -ne 0 -or [string]$Seed.StdOut -notmatch 'STAGING SEEDED') {
+        $code = if ($null -eq $Seed) { "çalışmadı" } else { "çıkış $($Seed.ExitCode)" }
+        $problem = "staging $Sha sürümünde ama oturumu yenilenemedi: seed.ps1 $code"
+    }
+    return [pscustomobject]@{ Ok = (-not $problem); Reached = $reached; Problem = $problem }
+}
+
 # ---------------------------------------------------------------------------- the repository and the records
 
 function Find-TeamReleaseGate {
@@ -645,8 +668,13 @@ function Find-TeamReleaseGate {
         (team/reports/<cycle>/gate-<n>.json) whose `main` IS the sha, and its log beside it,
         which must say QUALITY GATE: PASS (Read-TeamGateLog, the integrate step's own reader).
         No record for that sha, or no log: Found is false.
+        A 'gate A + rerun B' record (one with `rerun_of`, card gate-rerun-failed-steps) is evidence
+        only through its chain (Test-TeamGateRerunChain: A's FAIL log red only in the steps B
+        reran green, B descends from A); Log is then the rerun's log. That needs git: without
+        -RepoRoot, or without scripts/lib/TeamGateRerun.ps1, the record's own log (A's, red) is
+        read as before and the record is refused.
     #>
-    param([Parameter(Mandatory = $true)][string]$ReportsRoot, [Parameter(Mandatory = $true)][string]$Sha)
+    param([Parameter(Mandatory = $true)][string]$ReportsRoot, [Parameter(Mandatory = $true)][string]$Sha, [string]$RepoRoot = "")
     $none = { param([string]$Why) [pscustomobject]@{ Found = $false; Pass = $false; Why = $Why; Directory = ""; CycleId = ""; Log = "" } }
     if (-not (Test-Path -LiteralPath $ReportsRoot)) { return (& $none "team/reports yok") }
     $best = $null
@@ -661,6 +689,15 @@ function Find-TeamReleaseGate {
         }
     }
     if ($null -eq $best) { return (& $none "main $Sha için yeşil kapı kaydı (team/reports/<döngü>/gate-<n>.json) bulunamadı") }
+    $rerunOf = Get-TeamProperty -InputObject $best.Record -Name "rerun_of" -Default $null
+    if ($null -ne $rerunOf -and $RepoRoot -and (Get-Command -Name Test-TeamGateRerunChain -ErrorAction SilentlyContinue)) {
+        $chain = Test-TeamGateRerunChain -RepoRoot $RepoRoot -Directory $best.Folder.FullName -Record $best.Record
+        $rerunLog = Split-Path -Leaf ([string](Get-TeamProperty -InputObject $best.Record -Name "rerun_log" -Default ""))
+        return [pscustomobject]@{
+            Found = $true; Pass = [bool]$chain.Ok; Why = $(if ($chain.Ok) { "" } else { "zincirli kapı kaydı reddedildi: $($chain.Why)" })
+            Directory = $best.Folder.FullName; CycleId = $best.Folder.Name; Log = $(if ($rerunLog) { "team/reports/$($best.Folder.Name)/$rerunLog" } else { "" })
+        }
+    }
     $logName = Split-Path -Leaf ([string](Get-TeamProperty -InputObject $best.Record -Name "log" -Default ""))
     $relative = "team/reports/$($best.Folder.Name)/$logName"
     $logPath = if ($logName) { Join-Path $best.Folder.FullName $logName } else { "" }

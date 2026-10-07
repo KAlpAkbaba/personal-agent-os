@@ -87,13 +87,15 @@ def test_without_the_owner_session_each_of_the_six_is_401(anonymous, store, meth
 # ------------------------------------------------------------------ the contract
 
 
-def test_the_sentences_are_owner_sentences_in_order_and_the_page_knows_the_rules(owner):
+def test_the_sentences_are_the_thirty_in_order_and_the_page_knows_the_rules(owner):
     response = owner.get(BASE)
     assert response.status_code == 200, response.text
     body = response.json()
     assert set(body) == {"sentences", "places", "retention_days", "max_seconds", "recordings"}
-    assert [s["text"] for s in body["sentences"]] == list(stt_compare.OWNER_SENTENCES)
-    assert [s["index"] for s in body["sentences"]] == list(range(1, 21))
+    # the owner's twenty keep their numbers; the ten offline command sentences are 21-30
+    assert [s["text"] for s in body["sentences"]] == list(stt_compare.MEASUREMENT_SENTENCES)
+    assert [s["text"] for s in body["sentences"]][:20] == list(stt_compare.OWNER_SENTENCES)
+    assert [s["index"] for s in body["sentences"]] == list(range(1, 31))
     assert all(set(s) == {"index", "text"} for s in body["sentences"])
     assert body["places"] == ["ev", "ofis"]
     assert body["retention_days"] == 30
@@ -237,7 +239,7 @@ def test_get_purges_before_it_lists(owner, store, monkeypatch):
         ("ev/1", {"audio_wav_base64": b64(wav(31))}, 422, "wav_too_long"),
         ("ev/1", {}, 422, "audio_missing"),
         ("araba/1", {"audio_wav_base64": b64(wav())}, 422, "invalid_place"),
-        ("ev/21", {"audio_wav_base64": b64(wav())}, 422, "invalid_index"),
+        ("ev/31", {"audio_wav_base64": b64(wav())}, 422, "invalid_index"),
         ("ev/bir", {"audio_wav_base64": b64(wav())}, 422, "invalid_index"),
         (
             "ev/1",

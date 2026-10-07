@@ -55,6 +55,7 @@ dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "websockets>=13",
+    "pytest-xdist>=3.6",
 ]
 
 [build-system]
@@ -68,6 +69,7 @@ packages = ["app"]
 markers = [
     "integration: requires the local docker compose stack (infra/docker/docker-compose.dev.yml)",
     "live: makes a real network call to a live third-party endpoint (never run by default CI)",
+    "serial_tail: cannot run beside another test; the gate runs it after the xdist part (tests/conftest.py SERIAL_TAIL)",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

@@ -429,11 +429,68 @@ Invoke-Step "Other services lint (ruff)" {
   }
 }
 
+# gate-unit-parallel (team/plans/gate-unit-parallel-adr.md): the unit suite ran 17,000 tests in
+# one process for 30-50 minutes (2026-10-06), the longest step of the gate. It runs under
+# pytest-xdist now, with a worker count from the machine; every test still runs and a failure
+# is still a failure. Without xdist (or on a small or full machine) it runs serially as before.
+# PAGENTOS_GATE_UNIT_WORKERS sets the count by hand (1 = serial).
+function Get-GateUnitMemoryFloorGb {
+  # The memory the machine keeps for everything else: team/cycle-settings.json
+  # test_memory_floor_gb (1..64, the test queue's own floor), 8 when missing or malformed.
+  param([string]$SettingsPath)
+  try {
+    $value = (Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json).test_memory_floor_gb
+    if ($null -ne $value -and [string]$value -match '^\d+$' -and [int]$value -ge 1 -and [int]$value -le 64) { return [int]$value }
+  } catch { }
+  return 8
+}
+
+function Get-GateUnitWorkerCount {
+  # 0 = serial. min(8, cores - 2), lowered to what the free memory above the floor holds.
+  # 2 GB a worker: measured 2026-10-06 on 28 cores - one worker is ~1.07 GB once it has
+  # collected the suite, and the whole tree peaked at 14.0 GB with 8 workers (1.75 a worker)
+  # and 10.9 GB with 12. Twelve workers were not faster than eight on the shared machine
+  # (1567 s against 1470 s), so eight stays the cap.
+  param([int]$Cores, [int64]$FreeBytes, [bool]$XdistPresent, [string]$Override = "", [int]$FloorGb = 8)
+  if (-not $XdistPresent) { return 0 }
+  if ($Override -match '^\s*\d+\s*$') {
+    $n = [int]$Override
+    if ($n -lt 2) { return 0 }
+    return $n
+  }
+  $max = 8; $floorGb = $FloorGb; $workerGb = 2
+  $n = [Math]::Min($max, $Cores - 2)
+  $byMemory = [int][Math]::Floor(($FreeBytes - [int64]$floorGb * 1GB) / ([int64]$workerGb * 1GB))
+  $n = [Math]::Min($n, $byMemory)
+  if ($n -lt 2) { return 0 }
+  return [int]$n
+}
+
 Invoke-Step "API unit tests" -Kinds heavy {
   if (-not $uv) { throw "uv not found" }
   Push-Location $apiRoot
   try {
-    & $uv run pytest tests/unit -q
+    & $uv run python -c "import xdist" 2>$null | Out-Null
+    $xdist = ($LASTEXITCODE -eq 0)
+    $freeBytes = [int64]0
+    try { $freeBytes = [int64](Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory * 1KB } catch { $freeBytes = [int64]0 }
+    $floorGb = Get-GateUnitMemoryFloorGb -SettingsPath (Join-Path $repoRoot "team\cycle-settings.json")
+    $workers = Get-GateUnitWorkerCount -Cores ([Environment]::ProcessorCount) -FreeBytes $freeBytes -XdistPresent $xdist -Override ([string]$env:PAGENTOS_GATE_UNIT_WORKERS) -FloorGb $floorGb
+    $machine = "{0} cores, {1:0.0} GB free, {2} GB floor" -f [Environment]::ProcessorCount, ($freeBytes / 1GB), $floorGb
+    if ($workers -ge 2) {
+      Write-Host "API unit tests: $workers xdist workers ($machine)"
+      & $uv run pytest tests/unit -q -n $workers --dist loadgroup -m "not serial_tail"
+      $parallelExit = $LASTEXITCODE
+      # The tests that cannot run beside another (tests/conftest.py SERIAL_TAIL, each with its
+      # reason), serially after the parallel part - also when it failed: their result is evidence.
+      Write-Host "API unit tests: the serial tail (tests/conftest.py SERIAL_TAIL)"
+      & $uv run pytest tests/unit -q -m serial_tail
+      if ($parallelExit -ne 0) { $global:LASTEXITCODE = $parallelExit }
+    } else {
+      $why = if (-not $xdist) { "pytest-xdist is not installed" } else { "the machine has room for fewer than two xdist workers, or PAGENTOS_GATE_UNIT_WORKERS says so" }
+      Write-Host "API unit tests: serial ($why; $machine)"
+      & $uv run pytest tests/unit -q
+    }
     Assert-ExitCode "pytest (unit)"
   } finally { Pop-Location }
 }
@@ -800,6 +857,17 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\team-board.tests.ps1"
     Invoke-GateSuite $script
     Assert-ExitCode "team-board tests"
+  }
+
+  Invoke-Step "API unit step in parallel (PS5.1, fake uv + pytest -n 2)" {
+    # gate-unit-parallel: the worker count, the -n call, the serial fallback without xdist and
+    # a failure under -n, against the gate itself with a fake uv; then the real pytest -n 2 on
+    # the files whose ids once differed between workers. Grouped: its folder is a GUID, it
+    # opens no port and pytest runs without its cache.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\gate-unit-parallel.tests.ps1"
+    Invoke-GateSuite $script
+    Assert-ExitCode "gate-unit-parallel tests"
   }
 
   Complete-GateGroup

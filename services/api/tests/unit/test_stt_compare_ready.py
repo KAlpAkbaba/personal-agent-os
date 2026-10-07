@@ -189,6 +189,15 @@ def test_the_item_row_carries_the_browser_engine(tmp_path: Path) -> None:
 
 # --------------------------------------------------- (5) a manifest without the fields
 
+#: The row fields schema 1.2 (local-tr-stt-measure) added; checked by value, then set aside.
+SCHEMA_1_2_FIELDS = (
+    "real_time_factor",
+    "cold_start_ms",
+    "peak_memory_bytes",
+    "commands_ran",
+    "intent_changes_commands",
+)
+
 #: What the pre-card code (schema 1.0) produced for these engines on these recordings -
 #: held here as literals, so the new code is compared against them and not against itself.
 PRE_CARD_ROWS: list[dict[str, Any]] = [
@@ -265,9 +274,25 @@ def test_a_manifest_without_the_fields_gives_the_rows_it_gave_before(tmp_path: P
         ],
         clock=lambda: next(ticks),
     )
-    # the one new field, named; everything else exactly as before
+    # the new fields, named; everything else exactly as before
     assert [row.get("source") for row in report["engines"]] == ["file", "file", "file"]
-    rows = [{k: v for k, v in row.items() if k != "source"} for row in report["engines"]]
+    audio_ms = sum(item["audio_ms"] for item in report["items"])
+    # 1.2 (local-tr-stt-measure): two files of 1000 ms processing each, no local row, no
+    # command sentence among the references
+    assert [{k: row[k] for k in SCHEMA_1_2_FIELDS} for row in report["engines"]] == [
+        {
+            "real_time_factor": round(2000.0 / audio_ms, 4),
+            "cold_start_ms": None,
+            "peak_memory_bytes": None,
+            "commands_ran": 0,
+            "intent_changes_commands": None,
+        },
+        *[dict.fromkeys(SCHEMA_1_2_FIELDS) | {"commands_ran": 0}] * 2,
+    ]
+    rows = [
+        {k: v for k, v in row.items() if k != "source" and k not in SCHEMA_1_2_FIELDS}
+        for row in report["engines"]
+    ]
     assert rows == PRE_CARD_ROWS
     assert report.get("heard_live_by", []) == []
     assert [entry["engine"] for entry in report["audio_sent_to"]] == ["a:heard"]
@@ -351,7 +376,14 @@ def test_an_unknown_label_gets_its_own_row_after_the_configured_ones(tmp_path: P
 # --------------------------------------------------------------- (8) the schema
 
 
-def test_the_report_schema_is_one_point_one(tmp_path: Path) -> None:
-    folder = _folder(tmp_path, [_item("01.wav", OFIS_REF)])
-    assert sc.REPORT_SCHEMA_VERSION == "1.1"
-    assert sc.run_comparison(folder, _chrome_only())["schema_version"] == "1.1"
+def test_the_report_schema_is_one_point_two_and_keeps_the_one_point_one_fields(
+    tmp_path: Path,
+) -> None:
+    """1.1's fields stay; 1.2 (local-tr-stt-measure) adds to them and moves the version."""
+    folder = _folder(tmp_path, [_item("01.wav", OFIS_REF, ready_transcripts={CHROME: OFIS_REF})])
+    assert sc.REPORT_SCHEMA_VERSION == "1.2"
+    report = sc.run_comparison(folder, _chrome_only())
+    assert report["schema_version"] == "1.2"
+    assert {"heard_live_by", "from_browser"} <= report.keys()
+    assert report["items"][0].keys() >= {"browser_engine"}
+    assert all({"source", *SCHEMA_1_2_FIELDS} <= row.keys() for row in report["engines"])

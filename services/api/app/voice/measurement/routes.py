@@ -25,7 +25,7 @@ from fastapi.responses import Response
 
 from app.identity.dependencies import require_owner_session
 from app.voice.measurement import service
-from app.voice.stt_compare import OWNER_SENTENCES
+from app.voice.stt_compare import MEASUREMENT_SENTENCES
 
 router = APIRouter(
     prefix="/v1/voice/measurement",
@@ -100,7 +100,7 @@ async def get_measurement(request: Request) -> dict[str, Any]:
     return {
         "sentences": [
             {"index": index, "text": sentence}
-            for index, sentence in enumerate(OWNER_SENTENCES, start=1)
+            for index, sentence in enumerate(MEASUREMENT_SENTENCES, start=1)
         ],
         "places": list(service.PLACES),
         "retention_days": service.RETENTION_DAYS,

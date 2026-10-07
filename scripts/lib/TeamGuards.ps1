@@ -19,7 +19,7 @@
 
     The list:   { version: 1, guards: [ { id, kind: 'pytest' | 'powershell', path, label } ] }
     The result: { at, sha, seconds, status: 'green' | 'red',
-                  rows: [ { id, path, outcome: 'green' | 'red' | 'hung' | 'missing',
+                  rows: [ { id, path, outcome: 'green' | 'red' | 'hung' | 'missing' | 'no-database',
                             seconds, label, detail } ] }
 
     Nothing here installs anything: no `uv sync`, no virtualenv in the worktree. The
@@ -138,19 +138,25 @@ function Get-TeamGuardDefaultPython {
 function Get-TeamGuardCommand {
     <#
     .SYNOPSIS
-        What is started for one guard: FilePath, Arguments, WorkingDirectory - and File, the
-        guard itself, which is always the WORKTREE's copy.
+        What is started for one guard: FilePath, Arguments, WorkingDirectory, Environment (set
+        for the child only) - and File, the guard itself, which is always the WORKTREE's copy -
+        and Database, the throwaway database the run makes and drops ("" for none).
 
     .DESCRIPTION
         The same commands `scripts/quality-gate.ps1` uses for these files ('API unit tests',
         'Script syntax'), with what a second tree needs: an explicit --rootdir (a pytest
         child whose working directory and file sat on different drives spent 300 s
         collecting on this machine) and no cache provider (it writes into the tree).
+
+        A pytest guard under services/api/tests/integration/ gets a database of its own: a new
+        pagentos_g_<id> name on the server of -DatabaseUrl, and PAGENTOS_DATABASE_URL naming it
+        (Test-TeamGuardNeedsDatabase). The URL holds a password: it is never printed.
     #>
     param(
         [Parameter(Mandatory = $true)]$Guard,
         [Parameter(Mandatory = $true)][string]$Worktree,
-        [string]$Python = ""
+        [string]$Python = "",
+        [string]$DatabaseUrl = ""
     )
     $file = Join-Path $Worktree (([string]$Guard.path) -replace "/", "\")
     if ([string]$Guard.kind -eq "ruff") {
@@ -161,15 +167,25 @@ function Get-TeamGuardCommand {
             Arguments        = @("-m", "ruff", "check", ".", "--no-cache")
             WorkingDirectory = $file
             File             = $file
+            Environment      = @{}
+            Database         = ""
         }
     }
     if ([string]$Guard.kind -eq "pytest") {
         $apiRoot = Join-Path $Worktree "services\api"
+        $environment = @{}
+        $database = ""
+        if (Test-TeamGuardNeedsDatabase -Guard $Guard) {
+            $database = New-TeamGuardDatabaseName
+            if ($DatabaseUrl) { $environment["PAGENTOS_DATABASE_URL"] = Get-TeamGuardDatabaseUrl -BaseUrl $DatabaseUrl -Name $database }
+        }
         return [pscustomobject]@{
             FilePath         = $Python
             Arguments        = @("-m", "pytest", $file, "-q", "--rootdir", $apiRoot, "-p", "no:cacheprovider")
             WorkingDirectory = $apiRoot
             File             = $file
+            Environment      = $environment
+            Database         = $database
         }
     }
     return [pscustomobject]@{
@@ -177,6 +193,99 @@ function Get-TeamGuardCommand {
         Arguments        = @("-NoProfile", "-File", $file)
         WorkingDirectory = $Worktree
         File             = $file
+        Environment      = @{}
+        Database         = ""
+    }
+}
+
+# ------------------------------------------------------------------ a database of its own (card guards-integration-tests-own-db)
+# 2026-10-07: a task's own Postgres test, run as a guard after its merge, ran on the dev server's
+# SHARED database `pagentos` (tests/integration/conftest.py migrates Settings().database_url). That
+# database was at a revision no released tree knows, every test errored at the fixture and the guard
+# said the task was red; on a healthy shared database it would have migrated it to the integration
+# branch's head. Such a guard now makes pagentos_g_<id> on the same server, points only its child at
+# it, and drops it whatever the run did. The shared database is never named.
+
+$script:TeamGuardDatabasePrefix = "pagentos_g_"
+$script:TeamGuardDatabaseSeconds = 120
+# Create / drop on the server of the application's URL, through the interpreter that already holds
+# psycopg. The URL comes in an environment variable (never on a command line); the name is checked
+# again here. An error says psycopg's own words, which carry host and port, never the password.
+$script:TeamGuardDatabaseScript = @'
+import os, re, sys
+import psycopg
+action, name = sys.argv[1], sys.argv[2]
+if not re.fullmatch(r"pagentos_g_[a-z0-9]{1,40}", name):
+    sys.exit("refused name: " + name)
+url = re.sub(r"^postgresql\+\w+://", "postgresql://", os.environ["PAGENTOS_TEAM_GUARD_SERVER_URL"])
+try:
+    with psycopg.connect(url, dbname="postgres", autocommit=True, connect_timeout=10) as admin:
+        if action == "drop":
+            admin.execute("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)")
+            sys.exit(0)
+        admin.execute("CREATE DATABASE " + name)
+    try:
+        with psycopg.connect(url, dbname=name, autocommit=True, connect_timeout=10) as own:
+            own.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    except Exception:
+        with psycopg.connect(url, dbname="postgres", autocommit=True, connect_timeout=10) as admin:
+            admin.execute("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)")
+        raise
+except Exception as error:
+    sys.exit(type(error).__name__ + ": " + " ".join(str(error).split()))
+'@
+
+function Test-TeamGuardNeedsDatabase {
+    <# A pytest guard whose file is under services/api/tests/integration/: it migrates a database. #>
+    param([Parameter(Mandatory = $true)]$Guard)
+    return ([string]$Guard.kind -eq "pytest" -and ([string]$Guard.path).StartsWith("services/api/tests/integration/", [System.StringComparison]::Ordinal))
+}
+
+function New-TeamGuardDatabaseName {
+    return ($script:TeamGuardDatabasePrefix + [guid]::NewGuid().ToString("N").Substring(0, 12))
+}
+
+function Get-TeamGuardDatabaseUrl {
+    <# The base URL with its database replaced by a pagentos_g_ name. Holds a password: never print it. #>
+    param([Parameter(Mandatory = $true)][string]$BaseUrl, [Parameter(Mandatory = $true)][string]$Name)
+    if ($Name -cnotmatch '^pagentos_g_[a-z0-9]{1,40}$') { throw "koruyucu veritabanı adı reddedildi: '$Name'" }
+    if ($BaseUrl -notmatch '^(?<head>[a-z0-9+]+://[^/?#]+/)(?<db>[^/?#]*)(?<tail>[?#].*)?$') {
+        throw "veritabanı ayarı veritabanı adı taşıyan bir adres değil (gösterilmez: parola taşır)"
+    }
+    $tail = if ($Matches.ContainsKey("tail")) { $Matches["tail"] } else { "" }
+    return $Matches["head"] + $Name + $tail
+}
+
+function Get-TeamGuardSettingsDatabaseUrl {
+    <# The database URL the application's Settings resolve in ApiRoot, asked of the application itself. Never printed. #>
+    param([Parameter(Mandatory = $true)][string]$Python, [Parameter(Mandatory = $true)][string]$ApiRoot)
+    $ran = Invoke-NativeProcess -FilePath $Python -Arguments @("-c", "from app.config import Settings; print(Settings().database_url)") `
+        -WorkingDirectory $ApiRoot -TimeoutSeconds $script:TeamGuardDatabaseSeconds -SuccessExitCodes @(0, 1, 2)
+    $line = @(([string]$ran.StdOut -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^postgres' }) | Select-Object -Last 1
+    if ($ran.ExitCode -ne 0 -or -not $line) { throw "uygulamanın veritabanı ayarı okunamadı (çıkış kodu $($ran.ExitCode))" }
+    return [string]$line
+}
+
+function Invoke-TeamGuardDatabase {
+    <# create | drop the guard's database on the server of BaseUrl. Throws with the server's words. #>
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("create", "drop")][string]$Action,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Python,
+        [Parameter(Mandatory = $true)][string]$BaseUrl
+    )
+    if ($Name -cnotmatch '^pagentos_g_[a-z0-9]{1,40}$') { throw "koruyucu veritabanı adı reddedildi: '$Name'" }
+    $before = [Environment]::GetEnvironmentVariable("PAGENTOS_TEAM_GUARD_SERVER_URL", "Process")
+    [Environment]::SetEnvironmentVariable("PAGENTOS_TEAM_GUARD_SERVER_URL", $BaseUrl, "Process")
+    try {
+        $ran = Invoke-NativeProcess -FilePath $Python -Arguments @("-c", $script:TeamGuardDatabaseScript, $Action, $Name) `
+            -TimeoutSeconds $script:TeamGuardDatabaseSeconds -SuccessExitCodes @(0, 1)
+    }
+    finally { [Environment]::SetEnvironmentVariable("PAGENTOS_TEAM_GUARD_SERVER_URL", $before, "Process") }
+    if ($ran.ExitCode -ne 0) {
+        $said = (([string]$ran.StdErr + " " + [string]$ran.StdOut) -replace '\s+', ' ').Trim()
+        if ($said.Length -gt 300) { $said = $said.Substring(0, 300) }
+        throw "$Action $Name (çıkış kodu $($ran.ExitCode)): $said"
     }
 }
 
@@ -241,6 +350,8 @@ function Invoke-TeamGuardProcess {
     # The run leaves the tree as it found it: no __pycache__ beside the worktree's sources.
     $psi.EnvironmentVariables["PYTHONDONTWRITEBYTECODE"] = "1"
     $psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"
+    $environment = Get-TeamProperty -InputObject $Command -Name "Environment" -Default @{}
+    if ($environment -is [hashtable]) { foreach ($name in @($environment.Keys)) { $psi.EnvironmentVariables[[string]$name] = [string]$environment[$name] } }
     $process = [System.Diagnostics.Process]::Start($psi)
     $process.StandardInput.Close()
     $stdout = $process.StandardOutput.ReadToEndAsync()
@@ -266,12 +377,17 @@ function Invoke-TeamGuards {
         order; a guard the tree does not have is 'missing', one stopped by the hang guard is
         'hung', and in both cases the guards after it still run. `status` is 'green' only
         when every row is.
+
+        A guard under services/api/tests/integration/ runs on a pagentos_g_ database of its own
+        on the server of -DatabaseUrl (default: what the worktree's Settings resolve), dropped
+        after it whatever it did. One that cannot get its database is 'no-database'.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Worktree,
         [Parameter(Mandatory = $true)][object[]]$List,
         [string]$Python = "",
-        [int]$HangSeconds = 0
+        [int]$HangSeconds = 0,
+        [string]$DatabaseUrl = ""
     )
     if ($HangSeconds -le 0) { $HangSeconds = $script:TeamGuardHangSeconds }
     $root = (Resolve-Path -LiteralPath $Worktree).ProviderPath
@@ -281,18 +397,47 @@ function Invoke-TeamGuards {
     $at = Get-TeamTimestamp
     $total = [System.Diagnostics.Stopwatch]::StartNew()
     $rows = New-Object System.Collections.ArrayList
+    $databaseProblem = ""
     foreach ($guard in @($List)) {
-        $command = Get-TeamGuardCommand -Guard $guard -Worktree $root -Python $Python
+        if ((Test-TeamGuardNeedsDatabase -Guard $guard) -and -not $DatabaseUrl -and -not $databaseProblem) {
+            try { $DatabaseUrl = Get-TeamGuardSettingsDatabaseUrl -Python $Python -ApiRoot (Join-Path $root "services\api") }
+            catch { $databaseProblem = [string]$_.Exception.Message }
+        }
+        $command = Get-TeamGuardCommand -Guard $guard -Worktree $root -Python $Python -DatabaseUrl $DatabaseUrl
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
         $outcome = "missing"
         $detail = ""
         $pathType = if ([string]$guard.kind -eq "ruff") { "Container" } else { "Leaf" }
         if (Test-Path -LiteralPath $command.File -PathType $pathType) {
-            $ran = Invoke-TeamGuardProcess -Command $command -Kind ([string]$guard.kind) -HangSeconds $HangSeconds
-            if ($ran.Hung) { $outcome = "hung" }
-            elseif ($ran.ExitCode -eq 0) { $outcome = "green" }
-            else { $outcome = "red" }
-            if ($outcome -ne "green") { $detail = Get-TeamGuardDetail -Kind ([string]$guard.kind) -Text $ran.Text }
+            $database = [string]$command.Database
+            $ready = $true
+            if ($database) {
+                try {
+                    if ($databaseProblem) { throw $databaseProblem }
+                    Invoke-TeamGuardDatabase -Action "create" -Name $database -Python $Python -BaseUrl $DatabaseUrl
+                }
+                catch { $ready = $false; $outcome = "no-database"; $detail = [string]$_.Exception.Message }
+            }
+            if ($ready) {
+                try {
+                    $ran = Invoke-TeamGuardProcess -Command $command -Kind ([string]$guard.kind) -HangSeconds $HangSeconds
+                    if ($ran.Hung) { $outcome = "hung" }
+                    elseif ($ran.ExitCode -eq 0) { $outcome = "green" }
+                    else { $outcome = "red" }
+                    if ($outcome -ne "green") { $detail = Get-TeamGuardDetail -Kind ([string]$guard.kind) -Text $ran.Text }
+                }
+                finally {
+                    if ($database) {
+                        try { Invoke-TeamGuardDatabase -Action "drop" -Name $database -Python $Python -BaseUrl $DatabaseUrl }
+                        catch {
+                            # A database left behind on the dev server is said, never hidden: not green.
+                            $outcome = "red"
+                            $detail = (("koruyucu veritabanı kaldırılamadı: " + $_.Exception.Message + " " + $detail).Trim())
+                        }
+                    }
+                }
+            }
+            if ($detail.Length -gt $script:TeamGuardDetailMax) { $detail = $detail.Substring(0, $script:TeamGuardDetailMax) }
         }
         $watch.Stop()
         [void]$rows.Add([pscustomobject]@{
@@ -322,6 +467,8 @@ function Get-TeamGuardLine {
         "red" { return "koruyucu kırmızı: $($Row.label)" }
         "hung" { return "koruyucu asılı kaldı, durduruldu: $($Row.label)" }
         "missing" { return "koruyucu dosyası bu ağaçta yok ($($Row.path)): $($Row.label)" }
+        # Not the label: the task's test never ran, so it is not said red.
+        "no-database" { return "koruyucunun veritabanı açılamadı, test koşmadı ($($Row.path))" }
     }
     return ""
 }
