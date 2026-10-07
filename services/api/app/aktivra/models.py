@@ -5,7 +5,7 @@ ringing the phone twice - and the row counts the hourly cap, so a restart resets
 row lives 30 days (``app.aktivra.service.sweep_expired``); the notification it made follows
 its own rules. No column holds the token, the title or anything of the company's.
 
-Migration: ``alembic/versions/20261007_0076_aktivra_events.py``.
+Migration: ``alembic/versions/aktivra_events.py``.
 """
 
 from __future__ import annotations

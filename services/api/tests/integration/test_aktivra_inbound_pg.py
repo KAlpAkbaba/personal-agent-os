@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import delete, func, select
@@ -41,12 +42,31 @@ from app.ledger.models import ActivityEventRow
 from app.main import create_app
 from app.notifications.models import NotificationRow
 from tests.identity_support import make_identity_engine
-from tests.integration.migration_ids import parent_of, revision_named
+from tests.integration.migration_ids import parent_of
 
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-REVISION = revision_named("aktivra_events")
+MIGRATION_FILE = "aktivra_events.py"
+
+
+def _revision_of_file(name: str) -> str:
+    """The revision alembic reads from ``alembic/versions/<name>``. The file carries no
+    ``<date>_<NNNN>_`` prefix (the card's area names it so), so migration_ids'
+    ``revision_named`` - which matches ``*_<suffix>.py`` - cannot find it; the revision is
+    still read from the tree, never typed here."""
+    cfg = AlembicConfig(str(API_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(API_ROOT / "alembic"))
+    found = [
+        s.revision
+        for s in ScriptDirectory.from_config(cfg).walk_revisions()
+        if Path(s.path).name == name
+    ]
+    assert len(found) == 1, f"'{name}' adında tek bir göç dosyası bekleniyordu: {found}"
+    return found[0]
+
+
+REVISION = _revision_of_file(MIGRATION_FILE)
 TOKEN = "pagentos_ak_" + "I" * 43
 KINDS = (service.KIND_IMPORTANT, service.KIND_INFO)
 COLUMNS = {
