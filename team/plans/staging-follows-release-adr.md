@@ -1,4 +1,4 @@
-# ADR (taslak): staging follows every release; a test round refuses a stale or unseeded staging
+# ADR (taslak): staging follows every release; a test round refuses a stale staging
 
 Status: proposed (staging-follows-release, cycle d20261006). The lead numbers it.
 
@@ -35,17 +35,20 @@ owner session had not been re-seeded.
      staging failure is never a failed release.
 
    A release that fails or is rolled back never touches staging.
-3. Before the plan, test-round.ps1 checks two things:
-   - staging's `/v1/system/health` `release.version` must equal origin/main's tip (fetched now;
-     `-MainSha` for the tests);
-   - the seeded session in owner.json must answer 200 on `/v1/identity/sessions/current`.
-
-   If either check fails, the round refuses. It exits with code 4, which is distinct from 1 (a
-   failure) and 2 (a refused host or path). It posts a board note: for a stale staging the note
-   names both shas, and for a missing session it says 'oturum yok'. It writes no plan, no
-   cards.json and no software card, and it starts no tester. `-AllowStaleStaging` skips the sha
-   check for a deliberate test of an old build. `-NoAuth` skips the session check, as it already
-   does in run-scenario.ps1.
+3. Before the plan, test-round.ps1 checks that staging's `/v1/system/health` `release.version`
+   equals origin/main's tip (fetched now; `-MainSha` for the tests). If not, the round refuses:
+   exit 4 (distinct from 1, a failure, and 2, a refused host or path), a board note naming both
+   shas, no plan, no cards.json, no software card, no tester, and no seed (a refused round does
+   not rotate staging's credential). `-AllowStaleStaging` skips the check for a deliberate test
+   of an old build. A test's stand-in staging (`-NoAuth` or `-AllowTestPort`) is checked only when
+   `-MainSha` names the sha it must serve; a real round passes neither flag.
+4. The session check is the round's own seed (test-round-keeps-staging-session, merged into the
+   same integration branch first): the round runs seed.ps1 once before its first tester and
+   starts no tester unless `/v1/identity/sessions/current` answers 200 (exit 1, a board note
+   saying 'staging oturumu açılamadı ... 401'). This task first had its own pre-plan session
+   check (exit 4, 'oturum yok'); it was dropped when the two branches met on the integration
+   branch (2026-10-07), so one mechanism owns the session. The release step's seed (point 1)
+   stays: it leaves staging usable for the Danışman's hand checks between rounds.
 
 ## Consequences
 
