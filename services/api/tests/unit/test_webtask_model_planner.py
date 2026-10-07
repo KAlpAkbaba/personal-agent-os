@@ -596,7 +596,9 @@ def test_a_check_naming_another_reference_is_bound_to_that_element() -> None:
     }
     model, _ = planner(FakeSend((200, tool_use(arguments))))
     step = model.plan(request(observation=FORM))
-    assert step is not None and step.expect == Expectation("element_present", "Telephone:", "textbox")
+    assert step is not None and step.expect == Expectation(
+        "element_present", "Telephone:", "textbox"
+    )
 
 
 def test_a_text_or_address_check_is_left_as_the_model_wrote_it() -> None:

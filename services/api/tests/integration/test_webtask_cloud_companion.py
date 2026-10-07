@@ -40,6 +40,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
 from typing import Any
 
 import pytest
@@ -466,11 +467,26 @@ class Watcher:
         return service.task_dict(row)
 
     def playback(self) -> dict[str, Any]:
+        """Did the clock move? Two readings that differ, or - the task usually ends on the
+        first observation of the playing video - one reading above 0:00 on a watch address
+        that starts the video at 0:00 (no ``t=``/``start=`` offset): it played that long."""
         readings = [s for _, s in self.player]
+        url = str((self.last_observation or {}).get("url") or "")
+        query = dict(parse_qsl(urlsplit(url).query))
+        from_zero = "/watch" in url and not ({"t", "start", "time_continue"} & set(query))
+        if len(readings) >= 2:
+            advanced: bool | None = readings[-1] > readings[0]
+            basis = "two readings"
+        elif readings and from_zero:
+            advanced = readings[0] > 0
+            basis = "one reading against the 0:00 start of a watch address with no offset"
+        else:
+            advanced, basis = None, "not measurable"
         return {
             "method": "player clock in the task's own observations, read while it ran",
             "readings_s": readings,
-            "advanced": None if len(readings) < 2 else readings[-1] > readings[0],
+            "basis": basis,
+            "advanced": advanced,
         }
 
 

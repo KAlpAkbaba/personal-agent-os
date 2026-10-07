@@ -41,7 +41,14 @@ from typing import Any, Final
 import httpx
 
 from app.logging import get_logger
-from app.webtask.planner import STEP_TOOL, PlannerError, PlanRequest, build_prompt, parse_step
+from app.webtask.planner import (
+    STEP_TOOL,
+    PlannerError,
+    PlanRequest,
+    bind_expectation,
+    build_prompt,
+    parse_step,
+)
 from app.webtask.types import ACTING, Step
 
 logger = get_logger("app.webtask.model_planner")
@@ -149,7 +156,7 @@ class ModelPlanner:
             step = self._ask(replace(request, hint=hint))
             if step.action in ACTING and step.expect is None:
                 raise PlannerError("the model's step names no expectation, asked twice")
-        return step
+        return bind_expectation(step, request.observation)
 
     def _ask(self, request: PlanRequest) -> Step:
         url, headers, body = self.request(request)

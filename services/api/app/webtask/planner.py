@@ -26,7 +26,7 @@ the guarantee is ``parse_step`` and the gate, which hold whatever the model says
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final, Protocol
 
 from app.webtask.risk import fold
@@ -36,7 +36,10 @@ from app.webtask.types import (
     ACTIONS,
     ASK_KINDS,
     ASK_QUESTION,
+    EXPECT_CHECKED,
     EXPECT_ELEMENT_ABSENT,
+    EXPECT_ELEMENT_PRESENT,
+    EXPECT_FIELD_HAS_VALUE,
     EXPECTATIONS,
     Expectation,
     Observation,
@@ -308,6 +311,37 @@ STEP_TOOL: Final[dict[str, Any]] = {
 _TOOL_KEYS: Final = frozenset(STEP_TOOL["input_schema"]["properties"])
 
 
+#: The checks that read ONE element by its name (``app.webtask.verify``).
+ELEMENT_CHECKS: Final = frozenset(
+    {EXPECT_FIELD_HAS_VALUE, EXPECT_CHECKED, EXPECT_ELEMENT_PRESENT, EXPECT_ELEMENT_ABSENT}
+)
+
+
+def _label(text: str) -> str:
+    return fold(text).rstrip(" :*")
+
+
+def bind_expectation(step: Step, observation: Observation) -> Step:
+    """An element check bound to the element it means, by its listed name and role.
+
+    A model names that element in whatever way comes to it (live 2026-10-07: the value it
+    typed, then the reference). A reference of THIS observation is that element; the
+    step's own typed value, or its own element's name, is the step's own element.
+    Anything else is left as written - the verification then says it found nothing."""
+    expect = step.expect
+    if expect is None or expect.kind not in ELEMENT_CHECKS:
+        return step
+    element = observation.by_ref(expect.value.strip())
+    own = observation.by_ref(step.ref)
+    if element is None and own is not None:
+        typed = step.value is not None and fold(expect.value) == fold(step.value)
+        if typed or _label(expect.value) == _label(own.name):
+            element = own
+    if element is None:
+        return step
+    return replace(step, expect=Expectation(expect.kind, element.name, element.role))
+
+
 def parse_step(arguments: Any) -> Step:
     """A model's tool arguments as a ``Step``, or ``PlannerError``.
 
@@ -384,6 +418,8 @@ __all__ = [
     "RuleTablePlanner",
     "ScriptedPlanner",
     "TaskPlanner",
+    "ELEMENT_CHECKS",
+    "bind_expectation",
     "build_prompt",
     "by_name",
     "parse_step",
