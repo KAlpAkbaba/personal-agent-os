@@ -119,7 +119,7 @@ function Invoke-TeamWatchCheck {
     $cycle = @(Test-TeamWatchCommandLine -Processes $Processes -Pattern 'scripts\\team\\cycle\.ps1')
     $updated = ConvertFrom-TeamTimestamp -Text ([string](Get-TeamProperty -InputObject $Status -Name "updated_at" -Default ""))
     $age = if ($null -ne $updated) { [int][Math]::Round(($Now - $updated).TotalMinutes) } else { -1 }
-    if ($cycle.Count -eq 0) {
+    if (@($cycle).Count -eq 0) {
         & $find "cycle-not-running" "dongu sureci calismiyor (son durum $age dk once)"
         [void]$actions.Add("start-cycle")
     }
@@ -132,10 +132,10 @@ function Invoke-TeamWatchCheck {
     $runs = @(Get-TeamProperty -InputObject $Status -Name "runs" -Default @() | Where-Object { $null -ne $_ })
     $workers = @($runs | Where-Object { [string](Get-TeamProperty -InputObject $_ -Name "role" -Default "") -eq "worker" })
     $runnable = @($tasks | Where-Object { [string]$_.state -eq "approved" -and @(Get-TeamUnmetDependencies -Task $_ -Queue $Queue).Count -eq 0 })
-    [void]$lines.Add(("kosular: {0} (calisan {1}/{2}), baslayabilir kart {3}" -f $runs.Count, $workers.Count, $MaxParallel, $runnable.Count))
-    if ($cycle.Count -gt 0 -and $workers.Count -lt $MaxParallel -and $runnable.Count -gt 0) { $next.idle_streak++ } else { $next.idle_streak = 0 }
+    [void]$lines.Add(("kosular: {0} (calisan {1}/{2}), baslayabilir kart {3}" -f @($runs).Count, @($workers).Count, $MaxParallel, @($runnable).Count))
+    if (@($cycle).Count -gt 0 -and @($workers).Count -lt $MaxParallel -and @($runnable).Count -gt 0) { $next.idle_streak++ } else { $next.idle_streak = 0 }
     if ($next.idle_streak -ge $script:TeamWatchIdleLooks) {
-        & $find "idle-seats" ("bos calisan koltugu var ({0}/{1}) ama baslayabilir {2} kart bekliyor (30+ dk): {3}" -f $workers.Count, $MaxParallel, $runnable.Count, ((@($runnable | Select-Object -First 4 | ForEach-Object { $_.id })) -join ", "))
+        & $find "idle-seats" ("bos calisan koltugu var ({0}/{1}) ama baslayabilir {2} kart bekliyor (30+ dk): {3}" -f @($workers).Count, $MaxParallel, @($runnable).Count, ((@($runnable | Select-Object -First 4 | ForEach-Object { $_.id })) -join ", "))
     }
     foreach ($r in $runs) {
         $task = [string](Get-TeamProperty -InputObject $r -Name "task" -Default "")
@@ -144,7 +144,7 @@ function Invoke-TeamWatchCheck {
             & $find ("run-idle-" + $task) ("{0} koltugu {1} ({2}) {3} dk hareketsiz" -f $r.role, (Get-TeamProperty -InputObject $r -Name "seat" -Default "?"), $task, $idle)
         }
         $stuck = @(Get-TeamProperty -InputObject $r -Name "stuck_children" -Default @() | Where-Object { $null -ne $_ })
-        if ($stuck.Count -gt 0) {
+        if (@($stuck).Count -gt 0) {
             & $find ("run-stuck-" + $task) ("{0} ({1}) takili alt surec: {2}" -f $r.role, $task, (ConvertTo-Json -InputObject $stuck -Compress -Depth 3))
         }
     }
@@ -155,7 +155,7 @@ function Invoke-TeamWatchCheck {
         $ids = @($tasks | Where-Object { [string]$_.state -eq $s } | ForEach-Object { [string]$_.id })
         foreach ($id in $ids) { [void]$current.Add("$s/$id") }
         $new = @($ids | Where-Object { @($State.last_cards) -notcontains "$s/$_" })
-        if ($new.Count -gt 0) { & $find ("cards-$s-" + ($new -join ",")) ("yeni '$s' kart: " + ($new -join ", ")) }
+        if (@($new).Count -gt 0) { & $find ("cards-$s-" + ($new -join ",")) ("yeni '$s' kart: " + ($new -join ", ")) }
     }
     $next.last_cards = @($current.ToArray())
     $prefix = Get-TeamDutyEscalatedPrefix
@@ -176,7 +176,7 @@ function Invoke-TeamWatchCheck {
 
     # 4. The test team.
     $round = @(Test-TeamWatchCommandLine -Processes $Processes -Pattern 'scripts\\testteam\\test-round\.ps1')
-    if ($round.Count -gt 0) { [void]$lines.Add("test turu calisiyor (pid $($round[0].ProcessId))") }
+    if (@($round).Count -gt 0) { [void]$lines.Add("test turu calisiyor (pid $($round[0].ProcessId))") }
     else {
         $lastEnd = if ($null -ne $LastRoundEnd) { ([datetime]$LastRoundEnd).ToUniversalTime() } else { [datetime]::MinValue }
         $lastStart = ConvertFrom-TeamTimestamp -Text $State.last_round_start
@@ -238,7 +238,7 @@ function ConvertTo-TeamWatchCards {
         $trial = [pscustomobject]@{ tasks = @(@($tasks.ToArray()) + $card) }
         foreach ($p in $Queue.PSObject.Properties) { if ($p.Name -ne "tasks") { Set-TeamProperty -InputObject $trial -Name $p.Name -Value $p.Value } }
         $problems = @(Test-TeamQueue -Queue $trial)
-        if ($problems.Count -gt 0) { [void]$skipped.Add("$id kuyruga uymadi: " + ($problems -join "; ")); continue }
+        if (@($problems).Count -gt 0) { [void]$skipped.Add("$id kuyruga uymadi: " + ($problems -join "; ")); continue }
         [void]$tasks.Add($card)
         [void]$cards.Add($card)
     }
