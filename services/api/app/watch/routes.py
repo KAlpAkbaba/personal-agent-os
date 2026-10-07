@@ -102,6 +102,9 @@ async def create_watch(request: Request) -> dict[str, Any]:
     _refuse_control_characters(payload)
 
     def run() -> dict[str, Any]:
+        # The quick look first, its connection given back before the locked turn takes one.
+        with artifacts.session() as session:
+            service.refuse_when_full(session)
         with artifacts.session() as session:
             view = service.create_watch(
                 session,
