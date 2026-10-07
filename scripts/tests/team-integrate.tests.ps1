@@ -2718,6 +2718,47 @@ exit 0
         Assert-True -Condition ($report -match "task-a .*integrate/da" -and $report -match "task-a2 .*integrate/da") -Because "the report names them: $report"
         Assert-True -Condition ($report -notmatch "task-in .*integrate/din" -and $report -notmatch "task-now .*integrate/db") -Because "and none other: $report"
     }
+
+    Test-Case "carry (e): a merged card with NO integration branch is an orphan when main holds neither its sha nor its branch; the report names it, the carry-over leaves it" {
+        # 2026-10-07: dev-db-branch-migration-leak, gpt-live-web-bridge, local-tr-stt-measure were
+        # 'merged' with an empty integration_branch and their schema restore never shipped.
+        $root = New-CarrySandbox
+        [void](Invoke-SandboxGit -Root $root -Arguments @("branch", "team/dz/worker-lost", "main"))
+        $tree = "$root-lost"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", "-q", $tree, "team/dz/worker-lost"))
+        Set-Content -LiteralPath (Join-Path $tree "src\lost.txt") -Value "work on task-lost" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", "work on task-lost"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "remove", "--force", $tree))
+        $lost = New-Task -Id "task-lost"
+        $lost | Add-Member -NotePropertyName sha -NotePropertyValue (Get-Sha -Root $root -Revision "team/dz/worker-lost")
+        $byBranch = New-Task -Id "task-lost-branch" -Branch "team/dz/worker-lost"
+        $old = New-Task -Id "task-old" -Branch "team/gone/worker-old"
+        $old | Add-Member -NotePropertyName sha -NotePropertyValue (Get-Sha -Root $root -Revision "integrate/din")
+        $blank = New-Task -Id "task-old-blank" -Integration " "
+        $blank | Add-Member -NotePropertyName sha -NotePropertyValue (Get-Sha -Root $root -Revision "integrate/din")
+        $queue = New-Queue -Tasks @(@((New-CarryQueue).tasks) + @($lost, $byBranch, $old, $blank, (New-Task -Id "task-nosha")))
+        $held = @(Get-TeamUnbranchedHeld -RepoRoot $root -Queue $queue -Current "integrate/db" -Base "main")
+        Assert-Equal -Expected "task-old,task-old-blank" -Actual (($held | Sort-Object) -join ",") -Because "main holds task-old's sha (its branch is gone); nothing holds task-lost's"
+        $inMain = @(Get-TeamBranchesInMain -RepoRoot $root -Branches @("integrate/da", "integrate/din") -Base "main")
+        $orphans = @(Get-TeamOrphanMerges -Queue $queue -Current "integrate/db" -InMain $inMain -HeldIds $held)
+        Assert-Equal -Expected "task-lost,task-lost-branch,task-nosha,task-a,task-a2" -Actual (@($orphans | ForEach-Object { $_.id }) -join ",") -Because "the unbranched ones whose work main lacks (a card with neither sha nor branch cannot be shown to be in main), then (a)'s"
+        $cycle = [pscustomobject]@{ machine = "test"; started_at = "s"; ended_at = "e"; runs = @(); stops = @(); risks = @(); gaps = @() }
+        $report = New-TeamCycleReport -CycleId "db" -Queue $queue -Cycle $cycle -RepoRoot $root -Base "main"
+        $section = ($report -split "## ") | Where-Object { $_ -like "Yetim entegrasyon*" }
+        Write-Host "        ## $($section.Trim() -replace "`n", "`n        ")"
+        foreach ($id in @("task-lost", "task-lost-branch", "task-nosha", "task-a", "task-a2")) {
+            Assert-True -Condition ($section -match "(?m)^- $id ") -Because "the report names $id"
+        }
+        Assert-True -Condition ($section -notmatch "task-old" -and $section -notmatch "task-in " -and $section -notmatch "task-now") -Because "and none other: $section"
+        Assert-True -Condition ($section -match "task-lost .*entegrasyon dalı yok") -Because "it says why: $section"
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "db" -Branch "team/db/worker-x" -Base "main" -Queue $queue
+        Assert-True -Condition ([bool]$merge.Merged) -Because "the worker's branch is merged: $($merge.Detail)"
+        Assert-Equal -Expected "integrate/da" -Actual ((@($merge.CarriedForward) | ForEach-Object { $_.Branch }) -join ",") -Because "only the named branch is carried; an empty one is no branch to merge"
+        foreach ($id in @("task-lost", "task-lost-branch", "task-nosha")) {
+            Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $queue -Id $id).state -Because "$id is not stopped by the carry-over"
+        }
+    }
 }
 finally {
     foreach ($step in $stepProcesses) { try { if (-not $step.HasExited) { Stop-TeamProcessTree -ProcessId $step.Id } } catch { } }

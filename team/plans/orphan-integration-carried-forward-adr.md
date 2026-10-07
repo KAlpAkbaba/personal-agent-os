@@ -43,3 +43,20 @@ was stopped because of it. Root cause: `Merge-TeamBranch` made `integrate/<cycle
   the first approved merge comes through `Merge-TeamBranch`, which creates the branch.
 - Suggested follow-up for the lead: pass `-Queue $script:queue` explicitly at cycle.ps1:1998,
   and copy `$merge.CarriedForward[].Line` into the cycle's risks.
+
+## Addendum: merged cards with no integration branch (inspector return, 2026-10-07)
+
+The live queue had five merged cards with an EMPTY `integration_branch`, including
+dev-db-branch-migration-leak. The first version left them out. Now:
+
+- `Get-TeamOrphanMerges -HeldIds` counts a merged card with no integration branch as an
+  orphan unless its id is in `HeldIds`.
+- `Get-TeamUnbranchedHeld` gives `HeldIds`. A card is held when main, or the current
+  integration branch, holds its `sha`. Without a sha, its task branch's tip is used.
+- A card with neither a sha nor a branch cannot be shown to be in main. It is named.
+- The cycle report names such a card as "birleşmiş ama entegrasyon dalı yok, işi (<sha|branch>)
+  main'de değil".
+- The carry-over skips these cards: there is no branch to merge, and they are not stopped.
+
+Follow-up (not in this card): a card whose sha the newly carried branch holds could take that
+branch as its `integration_branch`, so the gate and the release include it.

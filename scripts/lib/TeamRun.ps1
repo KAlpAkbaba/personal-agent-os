@@ -163,14 +163,45 @@ function Get-TeamOrphanMerges {
         The cards 'merged' into an integration branch that is neither the current cycle's nor in
         main: work that passed and that no release will take (2026-10-05..07: five cards on
         integrate/d20261004 while integrate/d20261005 and the releases were cut from main).
-        Pure: which branches main holds is the caller's answer (Get-TeamBranchesInMain).
+        A merged card with NO integration branch is an orphan too unless its id is in HeldIds
+        (2026-10-07: three of the five, dev-db-branch-migration-leak among them, had none).
+        Pure: which branches main holds is the caller's answer (Get-TeamBranchesInMain), and
+        which unbranched cards' work is held is too (Get-TeamUnbranchedHeld).
     #>
-    param($Queue, [Parameter(Mandatory = $true)][string]$Current, [string[]]$InMain = @())
+    param($Queue, [Parameter(Mandatory = $true)][string]$Current, [string[]]$InMain = @(), [string[]]$HeldIds = @())
     return @(Get-TeamTasks -Queue $Queue | Where-Object {
             $branch = [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "")
-            ([string](Get-TeamProperty -InputObject $_ -Name "state" -Default "")) -eq "merged" -and
-            $branch.Trim() -and $branch -ne $Current -and @($InMain) -notcontains $branch
-        } | Sort-Object -Property @{ Expression = { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") } }, id)
+            ([string](Get-TeamProperty -InputObject $_ -Name "state" -Default "")) -eq "merged" -and $(
+                if ($branch.Trim()) { $branch -ne $Current -and @($InMain) -notcontains $branch }
+                else { @($HeldIds) -notcontains [string]$_.id })
+        } | Sort-Object -Property @{ Expression = { ([string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "")).Trim() } }, id)
+}
+
+function Get-TeamUnbranchedHeld {
+    <#
+        Of the merged cards with no integration branch, the ids whose own work main (or the
+        current integration branch) holds: their sha, else their task branch's tip. A card with
+        neither cannot be shown to be in main and is not in the answer.
+    #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, $Queue, [string]$Current = "", [string]$Base = "main")
+    $targets = @($Base)
+    if ($Current -and (Test-TeamBranch -RepoRoot $RepoRoot -Branch $Current)) { $targets += "refs/heads/$Current" }
+    $held = New-Object System.Collections.ArrayList
+    foreach ($task in @(Get-TeamTasks -Queue $Queue)) {
+        if ([string](Get-TeamProperty -InputObject $task -Name "state" -Default "") -ne "merged") { continue }
+        if (([string](Get-TeamProperty -InputObject $task -Name "integration_branch" -Default "")).Trim()) { continue }
+        $revision = ([string](Get-TeamProperty -InputObject $task -Name "sha" -Default "")).Trim()
+        $branch = ([string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")).Trim()
+        if (-not $revision -and $branch -and (Test-TeamBranch -RepoRoot $RepoRoot -Branch $branch)) { $revision = "refs/heads/$branch" }
+        if (-not $revision) { continue }
+        foreach ($target in $targets) {
+            if ((Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("merge-base", "--is-ancestor", $revision, $target)).ExitCode -eq 0) {
+                [void]$held.Add([string]$task.id)
+                break
+            }
+        }
+    }
+    return @($held.ToArray())
 }
 
 function Get-TeamBranchesInMain {
@@ -206,7 +237,9 @@ function Invoke-TeamCarryForward {
     )
     $candidates = @(Get-TeamTasks -Queue $Queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") })
     $inMain = @(Get-TeamBranchesInMain -RepoRoot $RepoRoot -Branches $candidates -Base $Base)
-    $orphans = @(Get-TeamOrphanMerges -Queue $Queue -Current $Integration -InMain $inMain)
+    # A card with no integration branch has no branch to carry; the cycle report names it.
+    $orphans = @(Get-TeamOrphanMerges -Queue $Queue -Current $Integration -InMain $inMain | Where-Object {
+            ([string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "")).Trim() })
     $rows = New-Object System.Collections.ArrayList
     foreach ($group in @($orphans | Group-Object -Property { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") })) {
         $branch = [string]$group.Name
@@ -817,12 +850,21 @@ function New-TeamCycleReport {
 
     # Merged work no release will take: named on the day it happens, not found days later.
     $current = "integrate/$CycleId"
-    $held = @($tasks | Where-Object { [string]$_.state -eq "merged" } | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "") } |
-            Where-Object { $_ -and $_ -ne $current })
-    if (@($held).Count -gt 0 -and $RepoRoot) {
+    $mergedBranches = @($tasks | Where-Object { [string]$_.state -eq "merged" } | ForEach-Object { ([string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "")).Trim() })
+    $held = @($mergedBranches | Where-Object { $_ -and $_ -ne $current })
+    $unbranched = @($mergedBranches | Where-Object { -not $_ })
+    if ((@($held).Count -gt 0 -or @($unbranched).Count -gt 0) -and $RepoRoot) {
         $inMain = @(Get-TeamBranchesInMain -RepoRoot $RepoRoot -Branches $held -Base $Base)
-        $orphans = @(Get-TeamOrphanMerges -Queue $Queue -Current $current -InMain $inMain | ForEach-Object {
-                "$($_.id) — $($_.title): $([string](Get-TeamProperty -InputObject $_ -Name 'integration_branch' -Default '')) dalında birleşmiş, $Base'de değil ve bu döngünün dalı değil - yayına ulaşmaz"
+        $heldIds = @(Get-TeamUnbranchedHeld -RepoRoot $RepoRoot -Queue $Queue -Current $current -Base $Base)
+        $orphans = @(Get-TeamOrphanMerges -Queue $Queue -Current $current -InMain $inMain -HeldIds $heldIds | ForEach-Object {
+                $branch = ([string](Get-TeamProperty -InputObject $_ -Name 'integration_branch' -Default '')).Trim()
+                if ($branch) { "$($_.id) — $($_.title): $branch dalında birleşmiş, $Base'de değil ve bu döngünün dalı değil - yayına ulaşmaz" }
+                else {
+                    $sha = ([string](Get-TeamProperty -InputObject $_ -Name 'sha' -Default '')).Trim()
+                    $taskBranch = ([string](Get-TeamProperty -InputObject $_ -Name 'branch' -Default '')).Trim()
+                    $shaText = if ($sha) { $sha } elseif ($taskBranch) { $taskBranch } else { "sha yok" }
+                    "$($_.id) — $($_.title): birleşmiş ama entegrasyon dalı yok, işi ($shaText) $Base'de değil - yayına ulaşmaz"
+                }
             })
         if (@($orphans).Count -gt 0) { Add-Section -Title "Yetim entegrasyon (yayına ulaşmayan birleşmiş işler)" -Rows $orphans }
     }
