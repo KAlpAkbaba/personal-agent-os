@@ -13,8 +13,8 @@ from typing import Any
 
 from app.actions.receipt import FAKE_COMPLETION_PHRASES
 from app.voice.preferences import VoicePreferences
-from app.voice.wit import HUMOR_OFF, WIT_TR, normalize_humor
 from app.voice.realtime_sessions.carryover import continuation_line
+from app.voice.wit import HUMOR_OFF, WIT_TR, normalize_humor
 
 PERSONA_TR = (
     "Sen PagentOS'un sesli asistanısın: sahibinin kişisel yönetici asistanı. "
