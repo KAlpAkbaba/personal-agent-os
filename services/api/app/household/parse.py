@@ -221,6 +221,7 @@ def known_item(key: str) -> bool:
 
 #: Words (folded) that describe the head noun after them: "TAZE süt", "ESMER şeker", "tam
 #: YAĞLI süt" - an adjective, so the head stays nominative ("taze sütü" is its accusative).
+#: Nouns that also describe ("KÖY ekmeği", "TOZ bezi") are left out: they make a compound.
 _ADJECTIVES: Final = frozenset(
     {
         "taze",
@@ -240,11 +241,9 @@ _ADJECTIVES: Final = frozenset(
         "tuzlu",
         "tuzsuz",
         "kepekli",
-        "toz",
         "kup",
         "kuru",
         "sade",
-        "koy",
         "buyuk",
         "kucuk",
     }
@@ -799,14 +798,27 @@ def quantity_problem(raw: str) -> str | None:
 def split_amount(name: str) -> tuple[str, str | None]:
     """A typed name that starts with its amount, split: "iki şişe süt" -> ("süt", "iki şişe"),
     "2 litre süt" -> ("süt", "2 litre"). Anything else, or an amount with nothing after it,
-    comes back whole with None (test team round t-r10070152)."""
+    comes back whole with None (test team round t-r10070152). The amount is every number word
+    in a row ("on iki yumurta" is twelve eggs, not "iki yumurta" times ten); a number before an
+    adjective is part of the name ("yarım yağlı süt" is a kind of milk)."""
     words = name.split()
-    if len(words) < 2 or not _number(fold(words[0])):
+    folded = [fold(w) for w in words]
+    if folded and folded[0].isdigit():
+        count = 1
+    else:
+        count = 0
+        while count < len(folded) and folded[count] in _COUNT_WORDS:
+            count += 1
+    if count == 0:
         return name, None
-    rest, amount = _quantity(words)
-    if not rest:
+    end = count + 1 if count < len(folded) and folded[count] in _UNITS else count
+    rest = words[end:]
+    if not rest or fold(rest[0]) in _ADJECTIVES:
         return name, None
-    return " ".join(rest), amount
+    if folded[:end] == ["bir"]:
+        return " ".join(rest), None  # "bir süt" is one süt, said the way one says a thing
+    spoken = [_NUMBERS.get(f, w) for w, f in zip(words[:count], folded, strict=False)]
+    return " ".join(rest), " ".join([*spoken, *words[count:end]])
 
 
 def parse_tokens(tokens: tuple[str, ...]) -> HouseholdCommand | None:

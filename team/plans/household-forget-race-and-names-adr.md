@@ -14,6 +14,9 @@ da3e26b9, tester-4, ev-stoku; results under K:/AI/tmp-team/testteam/t-r10070152/
 | name "taze süt" | stored "taze sütü" | still | "taze süt" |
 | name "esmer şeker" (/items) | stored "esmer şekeri" | still | "esmer şeker" |
 | ham gövdeler: 100000-deep JSON | 500 | still (json.loads RecursionError) | NOT FIXED: routes.py outside the area - strict xfail + ALAN_ISTEGI |
+| (inspector) "köy ekmeği", "köy peyniri", "toz bezi" | - | main: kept | a50fd1bf: "köy ekmek", "toz bez" -> fixed: kept |
+| (inspector) "yarım yağlı süt" / "on iki yumurta" | - | main: one item as said | a50fd1bf: "yağlı süt"+yarım, "iki yumurta"+on -> fixed: one item "yarım yağlı süt"; yumurta + "on iki" |
+| (inspector) 16/32 DELETE /list/{id} racing unut | - | not run | a50fd1bf: 3x500 StaleDataError -> fixed: no 5xx, one forget 200, 0 rows |
 | RTL mark "\u202etüs" (not on this card) | 200 | not re-run; clean_name refuses only Cc, U+202E is Cf | not in scope |
 
 ## Decisions
@@ -33,9 +36,17 @@ da3e26b9, tester-4, ev-stoku; results under K:/AI/tmp-team/testteam/t-r10070152/
    "iki şişe süt" is süt with list_quantity "iki şişe"; a given `quantity` wins; the split
    amount passes `quantity_problem` ("0 litre süt" is 422). The test team's step expected 422
    for "iki sise sut"; the card (Danışman) asked for one item süt - the card was followed.
+   The amount is every number word in a row ("on iki" = twelve); a number before a known
+   adjective is part of the name ("yarım yağlı süt"); "bir" alone is no amount.
+4. **Nouns are not adjectives.** "köy" and "toz" left `_ADJECTIVES`: "köy ekmeği", "toz bezi"
+   are noun compounds and keep their head suffix; "toz şeker" said nominative stays so.
+5. **`remove_by_id` takes the row locked** like forget: a list removal that waited behind a
+   forget sees no row (no StaleDataError). The route then answers 200 with the row it read
+   first, not 404 - the 404 needs routes.py (outside the area).
 
 ## Open
 
 - `routes._payload` must catch RecursionError (deep JSON -> 422 body_invalid): ALAN_ISTEGI
   services/api/app/household/routes.py. Red test committed as strict xfail.
-- DELETE /list/{id} racing a forget still reads unlocked in routes.py (not reported; untested).
+- DELETE /list/{id} after a racing forget answers 200 (`or row` in routes.remove_list_item),
+  not 404: routes.py, outside the area. No 5xx, no row left (PG test).

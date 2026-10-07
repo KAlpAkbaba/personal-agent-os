@@ -279,7 +279,7 @@ def remove_from_list(db: Session, name: str, *, now: datetime) -> ItemChange | N
 
 
 def remove_by_id(db: Session, item_id: uuid.UUID, *, now: datetime) -> HouseholdItem | None:
-    row = db.get(HouseholdItem, item_id)
+    row = _locked(db, item_id)  # a forget racing this one deletes it first, or waits
     if row is None:
         return None
     row.on_list = False
