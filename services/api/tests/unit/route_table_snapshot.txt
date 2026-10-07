@@ -385,6 +385,7 @@ POST /v1/voice/realtime/sessions create_session
 POST /v1/voice/realtime/sessions/{session_id}/attach attach_session
 POST /v1/voice/realtime/sessions/{session_id}/close close_session
 POST /v1/voice/realtime/sessions/{session_id}/events report_events
+POST /v1/voice/realtime/sessions/{session_id}/live-sdp exchange_live_sdp
 POST /v1/voice/realtime/sessions/{session_id}/tool-calls relay_tool_call
 POST /v1/voice/realtime/sessions/{session_id}/tool-calls/{call_id}/complete complete_tool_call
 POST /v1/voice/speaker/enroll enroll_speaker
