@@ -24,7 +24,7 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.devices import affinity as device_affinity
@@ -33,6 +33,8 @@ from app.identity.service import SessionContext
 from app.logging import get_logger, trace_id_var
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.providers import TRANSPORTS
+from app.voice.providers_openai_live import OPENAI_LIVE_PROVIDER_NAME
+from app.voice.providers_openai_live import TICKET_HEADER as LIVE_TICKET_HEADER
 from app.voice.realtime_sessions import service
 from app.voice.realtime_sessions.models import REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
@@ -127,6 +129,11 @@ class CreateSessionRequest(BaseModel):
     # enrolled device is ignored (never an error that would say which ids exist), and
     # `client_kind` / owner session authority are untouched by it.
     device_id: uuid.UUID | None = None
+    # gpt-live-provider (contract v4): a provider name put FIRST in the preference order
+    # for this session only (e.g. "openai-live" to measure it). Selection is still by
+    # capability; a name that is not a registered candidate is ignored and the selection
+    # reasons say so - never a 422, which would tell the client what is registered.
+    prefer_provider: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,31}$")
 
     @field_validator("transport")
     @classmethod
@@ -258,7 +265,9 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
         # ADR-0173: `transport="text"` is the client's explicit ask for the local router
         # (no media leg, no vendor credential); anything else leaves the default
         # selection exactly as it was.
-        provider, selection = runtime.select(language=body.language, transport=body.transport)
+        provider, selection = runtime.select(
+            language=body.language, transport=body.transport, prefer_provider=body.prefer_provider
+        )
     except VoiceError as exc:
         _raise_http(exc)
     transport = body.transport or selection.transport
@@ -576,6 +585,49 @@ async def close_session(
     result = await asyncio.to_thread(work)
     logger.info("voice_realtime_session_closed", session_id=str(session_id), reason=body.reason)
     return result
+
+
+@router.post("/sessions/{session_id}/live-sdp", status_code=201)
+async def exchange_live_sdp(request: Request, session_id: uuid.UUID) -> Response:
+    """gpt-live-provider: the browser's SDP offer for an ``openai-live`` session,
+    exchanged by Cloud Core with the vendor (the documented Live path: the key stays on
+    the server). Owner-gated like the router, plus the session's single-use ticket in
+    ``X-PagentOS-Live-Ticket``. Answers ``application/sdp``, nothing else."""
+    runtime = _runtime(request)
+    ticket = request.headers.get(LIVE_TICKET_HEADER, "")
+    offer = (await request.body()).decode("utf-8", errors="replace")
+
+    def work() -> str:
+        with runtime.session() as db:
+            # a closed/expired session opens no vendor session, whatever its ticket says
+            return str(service.require_live(db, _load(db, session_id)).provider)
+
+    try:
+        provider_name = await asyncio.to_thread(work)
+    except VoiceError as exc:
+        _raise_http(exc)
+    provider = runtime.provider(provider_name)
+    exchange = getattr(provider, "exchange_sdp", None)
+    if provider_name != OPENAI_LIVE_PROVIDER_NAME or exchange is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_class": "validation_error",
+                "message": f"session provider {provider_name!r} has no Cloud Core SDP exchange",
+            },
+        )
+    try:
+        answer = await asyncio.to_thread(
+            exchange, session_id=str(session_id), ticket=ticket, sdp_offer=offer
+        )
+    except VoiceError as exc:
+        _raise_http(exc)
+    logger.info(
+        "voice_realtime_live_sdp_exchanged",
+        session_id=str(session_id),
+        session_ref=answer.session_ref,
+    )
+    return Response(content=answer.sdp_answer, status_code=201, media_type="application/sdp")
 
 
 @router.get("/sessions/{session_id}/activity")

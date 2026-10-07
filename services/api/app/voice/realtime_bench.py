@@ -40,6 +40,9 @@ from app.voice.providers import (
     RT_SPEECH_STOPPED,
     RT_TOOL_CALL,
 )
+from app.voice.providers_openai_live import OPENAI_LIVE_PROVIDER_NAME
+from app.voice.providers_openai_live import PRICE_VERIFIED as OPENAI_LIVE_PRICE_VERIFIED
+from app.voice.providers_openai_live import USD_PER_MINUTE as OPENAI_LIVE_USD_PER_MINUTE
 from app.voice.simulator import (
     SimulatedRealtimeProvider,
     SimulatedRealtimeSession,
@@ -48,7 +51,9 @@ from app.voice.simulator import (
     synth_frame,
 )
 
-REPORT_SCHEMA_VERSION = "m12.1"
+#: m12.2 (gpt-live-provider): the report names its provider and model, and
+#: ``compare_reports`` puts two of them side by side with a per-minute cost estimate.
+REPORT_SCHEMA_VERSION = "m12.2"
 SOURCE_SIMULATOR = "simulator"
 SOURCE_CLIENT = "client"
 
@@ -311,6 +316,8 @@ class RealtimeBenchReport:
     event_count: int
     notes: list[str] = field(default_factory=list)
     context: dict[str, Any] = field(default_factory=dict)
+    provider: str | None = None
+    model: str | None = None
 
     def target_check(self) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
@@ -356,6 +363,8 @@ class RealtimeBenchReport:
             "kind": "realtime_latency",
             "schema_version": REPORT_SCHEMA_VERSION,
             "source": self.source,
+            "provider": self.provider,
+            "model": self.model,
             "generated_at": self.generated_at,
             "is_acceptance_evidence": self.source == SOURCE_CLIENT,
             "targets": self.targets.to_dict(),
@@ -385,6 +394,8 @@ def build_report(
     targets: BenchTargets | None = None,
     false_barge_count: int = 0,
     context: dict[str, Any] | None = None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> RealtimeBenchReport:
     targets = targets or BenchTargets()
     evs = list(events)
@@ -415,7 +426,57 @@ def build_report(
         event_count=len(evs),
         notes=notes,
         context=dict(context or {}),
+        provider=provider,
+        model=model,
     )
+
+
+# ------------------------------------------------------------- comparison
+
+#: Per-minute list prices by provider, from the provider module's own constant. A provider
+#: billed otherwise (OpenAI Realtime: tokens) or unknown has NO entry: its cost is None,
+#: never 0 - a 0 would read as "free" in a side-by-side table.
+PER_MINUTE_USD: dict[str, tuple[float, str]] = {
+    OPENAI_LIVE_PROVIDER_NAME: (OPENAI_LIVE_USD_PER_MINUTE, OPENAI_LIVE_PRICE_VERIFIED),
+}
+_COST_BASIS_UNKNOWN = "no per-minute list price (token-billed or unknown); measure from usage"
+
+
+def per_minute_cost(provider: str | None) -> tuple[float | None, str]:
+    """(USD per minute or None, basis)."""
+    if provider and provider in PER_MINUTE_USD:
+        price, basis = PER_MINUTE_USD[provider]
+        return price, basis
+    return None, _COST_BASIS_UNKNOWN
+
+
+def compare_reports(a: RealtimeBenchReport, b: RealtimeBenchReport) -> dict[str, Any]:
+    """Two reports side by side (gpt-live-provider): every latency metric's summary, the
+    false-start (false barge) count and the gap count under the same names for ``a`` and
+    ``b``, plus each side's per-minute cost estimate. Pure; no verdict - the owner decides."""
+    metrics: dict[str, dict[str, Any]] = {
+        m: {"a": dict(a.metrics[m]), "b": dict(b.metrics[m])} for m in METRICS
+    }
+    metrics["false_barge_count"] = {"a": a.false_barge_count, "b": b.false_barge_count}
+    metrics["gap_count"] = {"a": len(a.gaps), "b": len(b.gaps)}
+    cost_a, basis_a = per_minute_cost(a.provider)
+    cost_b, basis_b = per_minute_cost(b.provider)
+    return {
+        "kind": "realtime_latency_comparison",
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "generated_at": _now(),
+        "sides": [
+            {"side": side, "provider": r.provider, "model": r.model, "source": r.source}
+            for side, r in (("a", a), ("b", b))
+        ],
+        "metrics": metrics,
+        "cost_per_minute_usd": {"a": cost_a, "b": cost_b},
+        "cost_basis": {"a": basis_a, "b": basis_b},
+        "notes": [
+            "Same metric names on both sides; n=0 means not measured, not zero.",
+            "Per-minute cost is the vendor list price where one exists, else null (never 0).",
+        ],
+    }
 
 
 # ------------------------------------------------------- simulator source
@@ -476,12 +537,12 @@ def events_from_simulator(session: SimulatedRealtimeSession) -> list[TimingEvent
     # dedupe (kind, t_ms, turn)
     seen: set[tuple[str, int, int]] = set()
     unique: list[TimingEvent] = []
-    for ev in out:
-        key = (ev.kind, ev.t_ms, ev.turn)
+    for timing in out:
+        key = (timing.kind, timing.t_ms, timing.turn)
         if key in seen:
             continue
         seen.add(key)
-        unique.append(ev)
+        unique.append(timing)
     return unique
 
 
@@ -573,6 +634,7 @@ def run_simulator_benchmark(
         source=SOURCE_SIMULATOR,
         targets=targets,
         false_barge_count=false_barge,
+        provider=provider.name,
         context={
             "provider": provider.name,
             "timings_ms": {
@@ -628,12 +690,15 @@ __all__ = [
     "BenchTargets",
     "RealtimeBenchReport",
     "TimingEvent",
+    "PER_MINUTE_USD",
     "build_report",
+    "compare_reports",
     "default_script",
     "detect_gaps",
     "events_from_client_reports",
     "events_from_simulator",
     "pair_metric",
+    "per_minute_cost",
     "run_simulator_benchmark",
     "summarize",
 ]

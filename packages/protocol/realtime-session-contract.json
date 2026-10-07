@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "kind": "pagentos.realtime_session_contract",
   "legacy": {
     "1": {
@@ -105,6 +105,19 @@
           ],
           "default": null,
           "title": "Narration Session Id"
+        },
+        "prefer_provider": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9-]{1,31}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prefer Provider"
         },
         "session_ttl_s": {
           "anyOf": [

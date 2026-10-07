@@ -71,14 +71,15 @@ const createBodies = (core: FakeCloudCore) =>
   core.requests.filter((r) => r.method === "POST" && r.path === "/v1/voice/realtime/sessions").map((r) => r.body);
 
 describe("bundled contract document", () => {
-  it("is v3 with voice and device_id on create; v1 is the frozen legacy list without them", () => {
-    expect(BUNDLED_CONTRACT_VERSION).toBe(3);
+  it("is v4 with voice, device_id and prefer_provider on create; v1 is the frozen legacy list without them", () => {
+    expect(BUNDLED_CONTRACT_VERSION).toBe(4);
     expect(BUNDLED_CONTRACT.kind).toBe("pagentos.realtime_session_contract");
-    expect(createSessionFields(3)).toEqual([
+    expect(createSessionFields(4)).toEqual([
       "client_kind",
       "device_id",
       "language",
       "narration_session_id",
+      "prefer_provider",
       "session_ttl_s",
       "transport",
       "voice",
@@ -160,13 +161,13 @@ describe("contract probe outcomes", () => {
     expect(t.log).toContain("contract.dropped:voice");
   });
 
-  it("200 with the current document keeps v3: the real payload goes out with `voice`, nothing dropped", async () => {
+  it("200 with the current document keeps v4: the real payload goes out with `voice`, nothing dropped", async () => {
     const t = rig({ contract: "served" });
     await t.controller.connect(CONNECT_OPTIONS);
     await tick();
     const snapshot = t.controller.getSnapshot();
     expect(snapshot.state).toBe("listening");
-    expect(snapshot.contract).toMatchObject({ version: 3, source: "server", known: true });
+    expect(snapshot.contract).toMatchObject({ version: 4, source: "server", known: true });
     expect(snapshot.contract?.createFields).toContain("voice");
     expect(createBodies(t.core)).toEqual([{ client_kind: "web", language: "tr-TR", voice: "marin" }]);
     expect(snapshot.contractNotice).toBeNull();
@@ -176,7 +177,7 @@ describe("contract probe outcomes", () => {
   it("200 with a newer property list is honoured over the bundled document", async () => {
     const newer: ContractDocument = {
       ...BUNDLED_CONTRACT,
-      contract_version: 4,
+      contract_version: 5,
       requests: {
         ...BUNDLED_CONTRACT.requests,
         create_session: {
@@ -190,15 +191,15 @@ describe("contract probe outcomes", () => {
     };
     const t = rig({ contract: newer });
     const resolved = await t.controller.probeContract();
-    expect(resolved).toMatchObject({ version: 4, source: "server", known: true });
-    expect(resolved?.createFields).toEqual([...createSessionFields(3), "persona"]);
+    expect(resolved).toMatchObject({ version: 5, source: "server", known: true });
+    expect(resolved?.createFields).toEqual([...createSessionFields(4), "persona"]);
     // the served schema, not the bundled one, decides what is accepted
-    const checked = validateCreateBody({ client_kind: "web", persona: "calm" }, 4, resolved?.createSession);
+    const checked = validateCreateBody({ client_kind: "web", persona: "calm" }, 5, resolved?.createSession);
     expect(checked).toEqual({ body: { client_kind: "web", persona: "calm" }, dropped: [], problems: [] });
-    expect(validateCreateBody({ persona: "calm" }, 3).dropped).toEqual(["persona"]);
+    expect(validateCreateBody({ persona: "calm" }, 4).dropped).toEqual(["persona"]);
     await t.controller.connect(CONNECT_OPTIONS);
     await tick();
-    expect(t.controller.getSnapshot().contract?.version).toBe(4);
+    expect(t.controller.getSnapshot().contract?.version).toBe(5);
     // cached per page load: one probe for probeContract() + connect()
     expect(t.core.requests.filter((r) => r.path === "/v1/voice/realtime/contract")).toHaveLength(1);
   });
@@ -226,7 +227,7 @@ describe("contract probe outcomes", () => {
     expect(t.controller.getSnapshot().state).toBe("error");
   });
 
-  it("a network failure on the probe never blocks Connect: bundled v3 assumed and SHOWN as unknown", async () => {
+  it("a network failure on the probe never blocks Connect: bundled v4 assumed and SHOWN as unknown", async () => {
     let probes = 0;
     const t = rig({}, (fetcher) => async (path, init) => {
       if (path === "/v1/voice/realtime/contract") {
@@ -239,9 +240,9 @@ describe("contract probe outcomes", () => {
     await tick();
     const snapshot = t.controller.getSnapshot();
     expect(snapshot.state).toBe("listening");
-    expect(snapshot.contract).toMatchObject({ version: 3, source: "bundled", known: false });
+    expect(snapshot.contract).toMatchObject({ version: 4, source: "bundled", known: false });
     expect(snapshot.contractNotice).toContain("Sunucu sözleşme sürümü bilinmiyor (Failed to fetch)");
-    expect(snapshot.contractNotice).toContain("v3 varsayıldı");
+    expect(snapshot.contractNotice).toContain("v4 varsayıldı");
     expect(createBodies(t.core)).toEqual([{ client_kind: "web", language: "tr-TR", voice: "marin" }]);
     // an unknown version is not cached: the next Connect asks again
     await t.controller.disconnect();
@@ -252,7 +253,7 @@ describe("contract probe outcomes", () => {
   it("resolveContract maps every outcome", () => {
     expect(resolveContract({ outcome: "unauthorized" })).toBeNull();
     expect(resolveContract({ outcome: "legacy" })).toMatchObject({ version: 1, source: "legacy", known: true });
-    expect(resolveContract({ outcome: "unknown", reason: "x" })).toMatchObject({ version: 3, source: "bundled", known: false });
+    expect(resolveContract({ outcome: "unknown", reason: "x" })).toMatchObject({ version: 4, source: "bundled", known: false });
     expect(resolveContract({ outcome: "served", version: 2, document: BUNDLED_CONTRACT })).toMatchObject({ version: 2, source: "server" });
   });
 });
@@ -304,7 +305,7 @@ describe("structured 422 display", () => {
     await t.controller.connect({ language: "tr-TR", voice: "Marin!" });
     const snapshot = t.controller.getSnapshot();
     expect(snapshot.state).toBe("error");
-    expect(snapshot.lastError).toBe("Oturum isteği sözleşmeye (v3) uymuyor");
+    expect(snapshot.lastError).toBe("Oturum isteği sözleşmeye (v4) uymuyor");
     expect(snapshot.lastErrorLines).toEqual(["alan: voice · neden: pattern:^[a-z]{2,16}$ | type:null"]);
     expect(createBodies(t.core)).toEqual([]);
   });

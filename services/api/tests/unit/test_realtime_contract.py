@@ -33,11 +33,12 @@ def test_committed_contract_matches_the_live_request_models() -> None:
 
 def test_contract_version_and_create_fields() -> None:
     doc = realtime_contract()
-    assert doc["contract_version"] == CONTRACT_VERSION == 3
+    assert doc["contract_version"] == CONTRACT_VERSION == 4
     current = set(create_fields())
     assert set(LEGACY_V1_CREATE_FIELDS) < current
-    # v2 added `voice` (ADR-0043), v3 added `device_id` (ADR-0208) - and nothing else.
-    assert current - set(LEGACY_V1_CREATE_FIELDS) == {"voice", "device_id"}
+    # v2 added `voice` (ADR-0043), v3 added `device_id` (ADR-0208), v4 added
+    # `prefer_provider` (gpt-live measurement) - and nothing else.
+    assert current - set(LEGACY_V1_CREATE_FIELDS) == {"voice", "device_id", "prefer_provider"}
     assert doc["legacy"]["1"]["create_session"] == list(LEGACY_V1_CREATE_FIELDS)
     props = doc["requests"]["create_session"]["properties"]
     assert set(props) == current
