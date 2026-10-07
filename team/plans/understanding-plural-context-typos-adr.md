@@ -64,8 +64,11 @@ was measured and refused: the tables read most plurals as they are ("Ekranları 
 
 * The household TOOL acts on `household_item` only; `household_items` reaches the relay
   record, but recording the second item needs `tools_household.py` (a card of its own).
-* The web controller reports a final transcript even when empty (`controller.ts`
-  `onOwnerTranscript`): such a batch now answers 422 and its timing events are lost with it.
-  The client should not report a blank utterance (web card).
+* CLOSED (return 3): the web controller reported a final transcript even when empty
+  (`controller.ts` `onOwnerTranscript`); the batch answered 422, `events.ts` retried it five
+  times and ended the reporter, dropping the session's later utterances. The controller now
+  reports an utterance only when `text.trim()` is non-empty (ownerText/remember unchanged);
+  the 422 rule in `routes.py`/`events.ts` stays. Pinned by the vitest "an empty or
+  whitespace-only final transcript is not reported as an utterance".
 * `_split` has no length cap (main, flag-independent): a 4000-letter token 9 s. Own card.
 * "sütler bitti" / "sut bitti" are not repaired (household plural / ASCII). Own card.

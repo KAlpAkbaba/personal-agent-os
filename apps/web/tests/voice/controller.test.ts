@@ -204,6 +204,15 @@ describe("VoiceSessionController", () => {
     ]);
   });
 
+  it("an empty or whitespace-only final transcript is not reported as an utterance (Cloud Core answers it 422)", async () => {
+    const t = await setup();
+    t.transport.emit({ type: "owner_transcript", at: 100, text: "", final: true });
+    t.transport.emit({ type: "owner_transcript", at: 200, text: "   ", final: true });
+    t.transport.emit({ type: "owner_transcript", at: 300, text: "alarmları kapat", final: true });
+    await t.controller.flushEvents();
+    expect(t.core.events.filter((e) => e.kind === "utterance").map((e) => e.text)).toEqual(["alarmları kapat"]);
+  });
+
   it("measures end-of-turn → first audio and reports response_done", async () => {
     const t = await setup();
     t.transport.emit({ type: "speech_started", at: 0 });

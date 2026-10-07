@@ -2256,8 +2256,9 @@ export class VoiceSessionController {
       // Something was said to the assistant: the interruption was not false.
       if (text.trim()) this.clearFalseInterruptionWatch();
       // Cloud Core resolves intents from the transcript (spec §5); the client
-      // only reports it.
-      this.reporter?.report({ kind: "utterance", turn: this.snapshot.turn, text });
+      // only reports it. An empty final (a noise burst) is not an utterance:
+      // Cloud Core answers it 422 and five retries would end the reporter.
+      if (text.trim()) this.reporter?.report({ kind: "utterance", turn: this.snapshot.turn, text });
     } else {
       this.ownerTranscriptTail += text;
       this.patch({ ownerText: this.ownerTranscriptTail });
