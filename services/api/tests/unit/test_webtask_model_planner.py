@@ -154,7 +154,13 @@ def test_one_request_forces_the_step_tool_and_is_small_and_sends_no_temperature(
     assert url == "https://api.example.invalid/v1/messages"
     assert headers["x-api-key"] == "sk-test" and headers["anthropic-version"]
     assert body["tools"] == [STEP_TOOL]
-    assert body["tool_choice"] == {"type": "tool", "name": "step"}
+    # ONE step: a forced tool may still be called twice in parallel (live 2026-10-07, haiku
+    # filled two fields in one answer) unless parallel use is switched off.
+    assert body["tool_choice"] == {
+        "type": "tool",
+        "name": "step",
+        "disable_parallel_tool_use": True,
+    }
     # The capable model refuses ``temperature`` (400 "deprecated for this model", seen live
     # 2026-10-06): it is not sent to either model. A forced tool call is the determinism.
     assert "temperature" not in body
