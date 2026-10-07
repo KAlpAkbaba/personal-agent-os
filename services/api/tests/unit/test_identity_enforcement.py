@@ -134,6 +134,9 @@ PROTECTED_ENDPOINTS = [
     # connected. The owner's session is enough (no step-up), but never no session.
     ("urgent-alert-test", "post", "/v1/urgent-alert/test"),
     ("urgent-alert-status", "get", "/v1/urgent-alert/status"),
+    # aktivra-inbound-events: whether Aktivra's channel is connected and when it last spoke -
+    # the owner's; the inbound POST beside it carries Aktivra's own token (EXPECTED_OPEN).
+    ("aktivra-status", "get", "/v1/aktivra/status"),
     ("identity", "get", "/v1/identity/sessions"),
 ]
 
@@ -187,6 +190,12 @@ EXPECTED_OPEN = {
     # POST /v1/accounts/connect issued (app.accounts.service); a forged, replayed or late
     # state is refused before any request leaves the process. Deliberately open.
     ("GET", "/v1/accounts/oauth/callback"),
+    # aktivra-inbound-events: Aktivra's assistant (a separate project, another machine) says
+    # "önemli". It holds no owner session and must never be handed one; its authority is its
+    # OWN 256-bit bearer token (``aktivra_inbound_token``, app.aktivra.auth), compared over
+    # hashes in constant time. No token configured = 404 (no channel); wrong token = 401 and
+    # an ``aktivra.rejected`` ledger line. Deliberately not owner-gated.
+    ("POST", "/v1/aktivra/events"),
 }
 
 

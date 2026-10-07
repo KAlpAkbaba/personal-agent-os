@@ -19,6 +19,7 @@ from app.accounts.routes import callback_router as accounts_callback_router
 from app.accounts.routes import router as accounts_router
 from app.accounts.service import AccountsService
 from app.accounts.wiring import AccountDirectory, build_account_calendar, build_account_mail
+from app.aktivra import service as aktivra_service
 from app.alarms.audio_store import AudioStore, get_audio_store
 from app.alarms.greeting_audio import build_greeting_tts
 from app.alarms.routes import audio_router as alarms_audio_router
@@ -720,6 +721,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "abandoned_research_runs": lambda: _in_session(
                 artifacts.session, research_service.sweep_abandoned_runs
             ),
+            "aktivra_events": lambda: _in_session(artifacts.session, aktivra_service.sweep_expired),
             # B07 req 679: the audit trail had no end - 13,560 events and nothing that
             # would ever remove one. Dry run by default; the Activity Ledger is never
             # swept at all (app.security.audit_retention names why).
