@@ -561,8 +561,10 @@ def test_t2_fills_a_listed_form_and_never_submits_it(stack: Stack) -> None:
 
 def test_t2_off_the_list_the_gate_refuses_in_turkish(stack: Stack) -> None:
     spec = ev.TASKS["T2"]
+    # Runnable on its own stack too (-k t2_off): the site may never have been added here.
     stack.client.allowlist_remove(ev.FORM_SITE)
-    stack.added_sites.remove(ev.FORM_SITE)
+    if ev.FORM_SITE in stack.added_sites:
+        stack.added_sites.remove(ev.FORM_SITE)
     usage_from = stack.worker_offset()
     task_id = _start(stack, spec)
     final = ev.wait_until_settled(stack.client.get_task, task_id)

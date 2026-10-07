@@ -458,7 +458,9 @@ def evidence_document(
     records: list[dict[str, Any]],
     companion: dict[str, Any],
     cleanup: dict[str, Any],
+    findings: list[str] | None = None,
 ) -> dict[str, Any]:
+    """``findings``: defects the run met (one sentence each), written above the owner trial."""
     costs = [r["cost_usd_estimate"] for r in records if r.get("cost_usd_estimate") is not None]
     return {
         "schema": SCHEMA,
@@ -470,6 +472,7 @@ def evidence_document(
         "total_model_calls": sum(int(r.get("planner_model_calls") or 0) for r in records),
         "total_cost_usd_estimate": round(sum(costs), 5),
         "cleanup": cleanup,
+        "findings": list(findings or []),
         "owner_trial": OWNER_TRIAL,
     }
 
@@ -588,6 +591,12 @@ def render_markdown(doc: dict[str, Any]) -> str:
         json.dumps(doc["cleanup"], ensure_ascii=False),
         "```",
         "",
+    ]
+    if doc.get("findings"):
+        lines += ["## Bulgular (koşunun bulduğu kusurlar)", ""]
+        lines += [f"- {finding}" for finding in doc["findings"]]
+        lines.append("")
+    lines += [
         "## Sahibin deneme satırı",
         "",
         doc["owner_trial"],
