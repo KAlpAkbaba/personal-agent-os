@@ -304,11 +304,11 @@ function Get-TeamQueueProblems {
         $stack = New-Object System.Collections.Stack
         $stack.Push(@($start, 0))
         $mark[$start] = 1
-        while ($stack.Count -gt 0) {
+        while (@($stack).Count -gt 0) {
             $top = $stack.Pop()
             $node = [string]$top[0]; $next = [int]$top[1]
             $out = @($edges[$node])
-            if ($next -lt $out.Count) {
+            if ($next -lt @($out).Count) {
                 $stack.Push(@($node, ($next + 1)))
                 $to = [string]$out[$next]
                 if ($to -eq $node -or -not $edges.ContainsKey($to)) { continue }
