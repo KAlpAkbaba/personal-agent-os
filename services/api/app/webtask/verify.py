@@ -35,10 +35,19 @@ class Verdict:
     detail: str
 
 
+#: What a form label ends with and a model leaves out: "Customer name:", "E-posta *"
+#: (live run 2026-10-07 - a filled field was "no element with that name").
+_LABEL_TAIL = " :*"
+
+
+def _label(text: str) -> str:
+    return fold(text).rstrip(_LABEL_TAIL)
+
+
 def _elements_named(observation: Observation, name: str, role: str) -> list:
-    wanted = fold(name)
+    wanted = _label(name)
     return [
-        e for e in observation.elements if fold(e.name) == wanted and (not role or e.role == role)
+        e for e in observation.elements if _label(e.name) == wanted and (not role or e.role == role)
     ]
 
 

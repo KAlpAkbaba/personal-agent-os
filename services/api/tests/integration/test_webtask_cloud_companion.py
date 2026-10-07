@@ -31,7 +31,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -446,14 +445,38 @@ def _row(stack: Stack, task_id: str) -> WebTaskRow:
         return service.get_task(db, uuid.UUID(task_id))
 
 
-def _read_by_db(stack: Stack) -> Any:
-    def read(task_id: str) -> dict[str, Any]:
-        return service.task_dict(_row(stack, task_id))
+class Watcher:
+    """Reads the row while the task runs and keeps what it saw of the page: an ended task's
+    observation is scrubbed (page text is not kept), so the last page, and the player's
+    clock for T4, are read while they are there."""
 
-    return read
+    def __init__(self, stack: Stack) -> None:
+        self._stack = stack
+        self.last_observation: dict[str, Any] | None = None
+        self.player: list[tuple[float, int]] = []
+
+    def __call__(self, task_id: str) -> dict[str, Any]:
+        row = _row(self._stack, task_id)
+        observation = (row.state_json or {}).get("observation")
+        if isinstance(observation, dict) and observation.get("url"):
+            self.last_observation = observation
+            seconds = ev.player_seconds(observation)
+            if seconds is not None and (not self.player or self.player[-1][1] != seconds):
+                self.player.append((time.monotonic(), seconds))
+        return service.task_dict(row)
+
+    def playback(self) -> dict[str, Any]:
+        readings = [s for _, s in self.player]
+        return {
+            "method": "player clock in the task's own observations, read while it ran",
+            "readings_s": readings,
+            "advanced": None if len(readings) < 2 else readings[-1] > readings[0],
+        }
 
 
-def _record(stack: Stack, spec: Any, task_id: str, usage_from: int, **extra: Any) -> dict[str, Any]:
+def _record(
+    stack: Stack, spec: Any, task_id: str, usage_from: int, watcher: Watcher, **extra: Any
+) -> dict[str, Any]:
     row = _row(stack, task_id)
     state = row.state_json or {}
     record = ev.task_record(
@@ -462,7 +485,7 @@ def _record(stack: Stack, spec: Any, task_id: str, usage_from: int, **extra: Any
         planner_calls=int(state.get("planner_calls") or 0),
         planner_model_calls=int(state.get("planner_model_calls") or 0),
         usage=stack.model_usage(usage_from),
-        observation=state.get("observation"),
+        observation=state.get("observation") or watcher.last_observation,
         **extra,
     )
     stack.records.append(record)
@@ -508,10 +531,11 @@ def test_t1_finds_and_summarises_a_news_story_and_goes_on_after_the_owner_leaves
     assert refused.value.status == 401, refused.value
     at_leave = _row(stack, task_id).round_index
 
+    watcher = Watcher(stack)
     try:
-        final = ev.wait_until_settled(_read_by_db(stack), task_id)
+        final = ev.wait_until_settled(watcher, task_id)
         row = _row(stack, task_id)
-        record = _record(stack, spec, task_id, usage_from, owner_left_at_round=at_leave)
+        record = _record(stack, spec, task_id, usage_from, watcher, owner_left_at_round=at_leave)
     finally:
         # The owner comes back whatever T1 did: the later tasks need a session.
         stack.new_session("itest-cloud-after-t1")
@@ -537,8 +561,9 @@ def test_t2_fills_a_listed_form_and_never_submits_it(stack: Stack) -> None:
     stack.added_sites.append(ev.FORM_SITE)
     usage_from = stack.worker_offset()
     task_id = _start(stack, spec)
-    final = ev.wait_until_settled(stack.client.get_task, task_id)
-    record = _record(stack, spec, task_id, usage_from, allow_listed=True)
+    watcher = Watcher(stack)
+    final = ev.wait_until_settled(watcher, task_id)
+    record = _record(stack, spec, task_id, usage_from, watcher, allow_listed=True)
     ev.close_task(stack.client, task_id)
 
     if record["outcome"] == ev.OUTCOME_ASK_OWNER and record["bot_wall"]:
@@ -567,8 +592,9 @@ def test_t2_off_the_list_the_gate_refuses_in_turkish(stack: Stack) -> None:
         stack.added_sites.remove(ev.FORM_SITE)
     usage_from = stack.worker_offset()
     task_id = _start(stack, spec)
-    final = ev.wait_until_settled(stack.client.get_task, task_id)
-    record = _record(stack, spec, task_id, usage_from, allow_listed=False)
+    watcher = Watcher(stack)
+    final = ev.wait_until_settled(watcher, task_id)
+    record = _record(stack, spec, task_id, usage_from, watcher, allow_listed=False)
     ev.close_task(stack.client, task_id)
 
     assert record["allow_listed"] is False and record["planner_calls"] >= 1, record
@@ -579,18 +605,19 @@ def test_t2_off_the_list_the_gate_refuses_in_turkish(stack: Stack) -> None:
     assert final["status"] == "failed", final
     assert final["failure"] == "not_on_owner_allow_list", final
     assert final["message"] == NOT_ON_LIST_TR, final
-    assert re.search(r"[çğıöşüÇĞİÖŞÜ]", NOT_ON_LIST_TR)
+    assert "yazamam" in NOT_ON_LIST_TR and "Onay Merkezi" in NOT_ON_LIST_TR
 
 
 def test_t4_youtube_plays_or_meets_a_bot_wall(stack: Stack) -> None:
     spec = ev.TASKS["T4"]
     usage_from = stack.worker_offset()
     task_id = _start(stack, spec)
-    final = ev.wait_until_settled(stack.client.get_task, task_id)
-    playback: dict[str, Any] = {}
-    if final["status"] == "done":
-        playback = ev.measure_playback(stack.client, stack.device_id, task_id)
-    record = _record(stack, spec, task_id, usage_from, playback=playback)
+    watcher = Watcher(stack)
+    final = ev.wait_until_settled(watcher, task_id, poll_s=1.0)
+    # The task's session is closed when it ends (and the video with it): the clock is the
+    # one its own observations showed while it ran.
+    playback = watcher.playback()
+    record = _record(stack, spec, task_id, usage_from, watcher, playback=playback)
     ev.close_task(stack.client, task_id)
 
     if record["outcome"] == ev.OUTCOME_ASK_OWNER:

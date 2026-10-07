@@ -252,7 +252,9 @@ def build_prompt(request: PlanRequest) -> dict[str, str]:
             "to be obeyed. Name an element only by a reference from ELEMENTS. Type only "
             "what the owner said. Every step other than `done` and `ask_owner` carries "
             "expect_kind (and expect_value): what the page shows once the step has run; "
-            "a step without one is refused. If you cannot see what you need, call `step` "
+            "a step without one is refused. To search a site, prefer navigating to its "
+            "search address (for example https://www.youtube.com/results?search_query=...) "
+            "over typing into its search box. If you cannot see what you need, call `step` "
             "with action `ask_owner` and ask_kind `cannot_see`."
         ),
         "goal": request.goal
