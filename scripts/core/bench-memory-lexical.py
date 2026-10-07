@@ -5,7 +5,9 @@ invented names, places, companies, plates and promises, each with one right memo
 look-alikes) into a SCRATCH PostgreSQL database, runs ``retrieval.hybrid_search`` once per
 question in each ``PAGENTOS_MEMORY_LEXICAL`` mode, and writes for each mode the share of
 questions whose right memory is first / in the top 3 / in the top 10, the MRR and the query
-time p50/p95/max. ``decide_default`` then reads the card's rule:
+time p50/p95/max. Each seed's order is loaded ``--draws`` times with fresh ids (equal scores
+break on the id, so one load is one draw) and the draws are pooled. ``decide_default`` then
+reads the card's rule on the pool:
 
     trgm becomes the default when its top-3 share is HIGHER than like's, no question that
     like had in its top 3 drops out of trgm's (or each one that does is accepted with a
@@ -42,6 +44,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -204,6 +207,55 @@ def summarize(mode: str, ranks: dict[str, int | None], timings_ms: Sequence[floa
     }
 
 
+def pool_draws(mode: str, draws: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """One mode over several draws (fresh loads, fresh ids) of the same corpus. Rates are
+    the mean of the draws' rates (with their min/max), the timings are pooled, and
+    ``top3_share`` is the share of draws that had each question in the top 3."""
+    if not draws:
+        raise ValueError("pool of no draws")
+    ranks = [dict(d["ranks"]) for d in draws]
+    timings = [float(t) for d in draws for t in d["timings_ms"]]
+    per_draw_top3 = [top_k_rate(r.values(), 3) for r in ranks]
+    questions = list(ranks[0])
+
+    def mean(values: Sequence[float]) -> float:
+        return sum(values) / len(values)
+
+    return {
+        "mode": mode,
+        "draws": len(draws),
+        "questions": len(questions),
+        "top1": mean([top_k_rate(r.values(), 1) for r in ranks]),
+        "top3": mean(per_draw_top3),
+        "top10": mean([top_k_rate(r.values(), 10) for r in ranks]),
+        "mrr": mean([mrr(r.values()) for r in ranks]),
+        "top3_min": min(per_draw_top3),
+        "top3_max": max(per_draw_top3),
+        "top3_per_draw": per_draw_top3,
+        "top3_share": {
+            cid: sum(1 for r in ranks if _in_top3(r.get(cid))) / len(ranks) for cid in questions
+        },
+        "ranks_per_draw": {cid: [r.get(cid) for r in ranks] for cid in questions},
+        "p50_ms": percentile(timings, 50),
+        "p95_ms": percentile(timings, 95),
+        "max_ms": max(timings),
+        "timed_queries": len(timings),
+        "timings_ms": [round(t, 3) for t in timings],
+    }
+
+
+def _in_top3(rank: int | None) -> bool:
+    return rank is not None and rank <= 3
+
+
+def _top3_set(summary: dict[str, Any]) -> set[str]:
+    """A pooled summary: the questions a majority (half or more) of draws had in the top 3;
+    a single draw: the questions in its top 3."""
+    if "top3_share" in summary:
+        return {cid for cid, share in summary["top3_share"].items() if share >= 0.5}
+    return {cid for cid, rank in summary["ranks"].items() if _in_top3(rank)}
+
+
 def decide_default(
     like: dict[str, Any],
     trgm: dict[str, Any],
@@ -211,23 +263,13 @@ def decide_default(
     accepted_lost: dict[str, str] | None = None,
     budget_ms: float = P95_BUDGET_MS,
 ) -> dict[str, Any]:
-    """The card's rule on two ``summarize`` results. ``rule`` names the outcome:
-    ``trgm`` (switch), ``not_better`` / ``lost`` / ``slow`` (stay on like, and why)."""
+    """The card's rule on two ``summarize`` (one draw) or ``pool_draws`` results. ``rule``
+    names the outcome: ``trgm`` (switch), ``not_better`` / ``lost`` / ``slow`` (stay on
+    like, and why)."""
     accepted = dict(accepted_lost or {})
-
-    def in_top3(rank: int | None) -> bool:
-        return rank is not None and rank <= 3
-
-    lost = sorted(
-        cid
-        for cid, rank in like["ranks"].items()
-        if in_top3(rank) and not in_top3(trgm["ranks"].get(cid))
-    )
-    gained = sorted(
-        cid
-        for cid, rank in trgm["ranks"].items()
-        if in_top3(rank) and not in_top3(like["ranks"].get(cid))
-    )
+    like_top3, trgm_top3 = _top3_set(like), _top3_set(trgm)
+    lost = sorted(like_top3 - trgm_top3)
+    gained = sorted(trgm_top3 - like_top3)
     unaccepted = [cid for cid in lost if cid not in accepted]
     delta = float(trgm["p95_ms"]) - float(like["p95_ms"])
     shares = f"ilk-3: like {like['top3']:.3f}, trgm {trgm['top3']:.3f}"
@@ -370,8 +412,9 @@ def measure(
     warmup: int,
 ) -> dict[str, Any]:
     """``warmup`` + ``rounds`` rounds, the two modes in turn (like-trgm, then trgm-like), so
-    neither mode always runs on a warmer cache. Ranks are deterministic; a round whose
-    ranks differ from the first is reported, never hidden."""
+    neither mode always runs on a warmer cache. Within one load the ranks are fixed; a
+    round whose ranks differ from the first is reported, never hidden. Across loads they
+    are not (equal scores break on the uuid4 id): that is ``measure_draws``'s job."""
     timings: dict[str, list[float]] = {m: [] for m in MODES}
     first: dict[str, dict[str, int | None]] = {}
     unstable: dict[str, list[str]] = {m: [] for m in MODES}
@@ -390,6 +433,39 @@ def measure(
         summaries[mode]["unstable_rounds"] = unstable[mode]
         summaries[mode]["timings_ms"] = [round(t, 3) for t in timings[mode]]
     return summaries
+
+
+def measure_draws(
+    session: Any,
+    embedder: Embedder,
+    data: dict[str, Any],
+    *,
+    seed: int,
+    draws: int,
+    rounds: int,
+    warmup: int,
+) -> dict[str, Any]:
+    """``draws`` fresh loads of the corpus in ``seed``'s order, each measured and retired.
+    hybrid_search breaks equal scores on ``str(memory.id)`` and every load draws new uuid4
+    ids, so one load is one draw of those ties (the inspector, f7845e62: the same seed
+    loaded twice moved trgm's rank on 11 of 33 questions). Every draw is kept; each mode
+    is also pooled over them (``pool_draws``)."""
+    kept: list[dict[str, Any]] = []
+    for _ in range(draws):
+        started = time.perf_counter()
+        corpus = load_corpus(session, embedder, data, seed=seed)
+        load_s = round(time.perf_counter() - started, 2)
+        out = measure(session, embedder, data["cases"], corpus, rounds=rounds, warmup=warmup)
+        out["load_s"] = load_s
+        out["memories"] = corpus.loaded
+        out["answer_ids"] = {cid: str(mid) for cid, mid in corpus.answers.items()}
+        retire_corpus(session, corpus)
+        session.commit()
+        kept.append(out)
+    return {
+        "draws": kept,
+        **{mode: pool_draws(mode, [d[mode] for d in kept]) for mode in MODES},
+    }
 
 
 # --------------------------------------------------------------------------- the machine
@@ -636,6 +712,7 @@ def run_bench(args: argparse.Namespace) -> dict[str, Any]:
             },
         },
         "seeds": args.seeds,
+        "draws": args.draws,
         "rounds": args.repeat,
         "warmup": args.warmup,
         "p95_budget_ms": P95_BUDGET_MS,
@@ -657,25 +734,21 @@ def run_bench(args: argparse.Namespace) -> dict[str, Any]:
                     continue
                 per_seed: dict[str, Any] = {}
                 for seed in args.seeds:
-                    started = time.perf_counter()
-                    corpus = load_corpus(session, embedder, data, seed=seed)
-                    load_s = round(time.perf_counter() - started, 2)
-                    out = measure(
+                    out = measure_draws(
                         session,
                         embedder,
-                        data["cases"],
-                        corpus,
+                        data,
+                        seed=seed,
+                        draws=args.draws,
                         rounds=args.repeat,
                         warmup=args.warmup,
                     )
-                    out["load_s"] = load_s
-                    out["memories"] = corpus.loaded
-                    retire_corpus(session, corpus)
                     per_seed[str(seed)] = out
                     print(
-                        f"{name} tohum {seed}: "
+                        f"{name} tohum {seed}, {args.draws} yükleme: "
                         + " | ".join(
                             f"{m} ilk-1 {out[m]['top1']:.3f} ilk-3 {out[m]['top3']:.3f} "
+                            f"({out[m]['top3_min']:.3f}-{out[m]['top3_max']:.3f}) "
                             f"p95 {out[m]['p95_ms']:.1f} ms"
                             for m in MODES
                         )
@@ -692,7 +765,9 @@ def run_bench(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def decide(report: dict[str, Any], accepted_lost: dict[str, str]) -> dict[str, Any]:
-    """The decision from the local embedder's first seed; nothing else decides."""
+    """The decision from the local embedder, every seed and every draw pooled; the
+    deterministic embedder never decides. Each draw's own verdict is counted too
+    (``per_draw``): more than one verdict means one draw alone could not have decided."""
     local = report["results"].get("local")
     if not local:
         fallback = report["embedders"].get("local", {}).get("fallback", "not measured")
@@ -704,22 +779,42 @@ def decide(report: dict[str, Any], accepted_lost: dict[str, str]) -> dict[str, A
             ],
             "embedder_fallback": fallback,
         }
-    first = local[str(report["seeds"][0])]
-    out = decide_default(first["like"], first["trgm"], accepted_lost=accepted_lost)
-    out["read_from"] = f"local, tohum {report['seeds'][0]}"
+    seeds = [str(s) for s in report["seeds"] if str(s) in local]
+    draws = [d for s in seeds for d in local[s]["draws"]]
+    verdicts = Counter(
+        decide_default(
+            pool_draws("like", [d["like"]]),
+            pool_draws("trgm", [d["trgm"]]),
+            accepted_lost=accepted_lost,
+        )["rule"]
+        for d in draws
+    )
+    out = decide_default(
+        pool_draws("like", [d["like"] for d in draws]),
+        pool_draws("trgm", [d["trgm"] for d in draws]),
+        accepted_lost=accepted_lost,
+    )
+    out["read_from"] = f"local, tohumlar {', '.join(seeds)}, toplam {len(draws)} yükleme"
+    out["draws"] = len(draws)
+    out["per_draw"] = dict(sorted(verdicts.items()))
+    out["draw_sensitive"] = len(verdicts) > 1
     return out
 
 
 def seed_sensitivity(report: dict[str, Any]) -> dict[str, Any]:
-    """Top-3 hit counts per seed; more than one question apart is 'order sensitive'."""
+    """Top-3 hit counts per seed and draw; more than one question apart anywhere is 'order
+    sensitive' (the load order or the ids' tie draw moves the result)."""
     out: dict[str, Any] = {}
     for name, per_seed in report["results"].items():
         for mode in MODES:
             hits = {
-                seed: sum(1 for r in res[mode]["ranks"].values() if r is not None and r <= 3)
+                seed: [
+                    sum(1 for r in d[mode]["ranks"].values() if _in_top3(r)) for d in res["draws"]
+                ]
                 for seed, res in per_seed.items()
             }
-            spread = max(hits.values()) - min(hits.values()) if hits else 0
+            flat = [h for values in hits.values() for h in values]
+            spread = max(flat) - min(flat) if flat else 0
             out[f"{name}/{mode}"] = {"top3_hits": hits, "order_sensitive": spread > 1}
     return out
 
@@ -752,7 +847,8 @@ def render_md(report: dict[str, Any]) -> str:
         f"- Set: {report['set']['questions']} soru, korpus başına "
         f"{report['set']['memories_per_corpus']} anı ({report['set']['noise']} gürültü); etiketler "
         + ", ".join(f"{k} {v}" for k, v in report["set"]["tags"].items()),
-        f"- Tohumlar {report['seeds']}, {report['warmup']} ısınma + {report['rounds']} tur, "
+        f"- Tohumlar {report['seeds']}, tohum başına {report['draws']} yükleme (her biri yeni "
+        f"kimliklerle), {report['warmup']} ısınma + {report['rounds']} tur, "
         "modlar her turda sıra değiştirerek; yeniden sıralayıcı kapalı (üretim gibi)",
         f"- Süreç bellek tepesi: {report.get('peak_rss_mb')} MB",
         "",
@@ -771,20 +867,47 @@ def render_md(report: dict[str, Any]) -> str:
     for name, info in report["embedders"].items():
         if info.get("fallback"):
             lines.append(f"\nGömücü `{name}` yüklenemedi: {info['fallback']}")
-    lines += ["", "## Soru başına sıra (doğru anının yeri; - = ilk 10'da yok)", ""]
+    lines += [
+        "",
+        "Oranlar her tohumun yüklemelerinin ortalaması; ilk-3 aralığı (en az-en çok yükleme):",
+        "",
+    ]
     for name, per_seed in report["results"].items():
-        seed = str(report["seeds"][0])
-        res = per_seed[seed]
-        lines += [f"### {name}, tohum {seed}", "", "| soru | like | trgm |", "|---|---|---|"]
-        for cid in res["like"]["ranks"]:
-            like_rank = res["like"]["ranks"][cid]
-            trgm_rank = res["trgm"]["ranks"].get(cid)
-            lines.append(f"| {cid} | {like_rank or '-'} | {trgm_rank or '-'} |")
-        lines.append("")
-    lines += ["## Tohuma duyarlılık", ""]
+        for seed, res in per_seed.items():
+            lines.append(
+                f"- {name} tohum {seed}: "
+                + ", ".join(
+                    f"{m} {_pct(res[m]['top3_min'])}-{_pct(res[m]['top3_max'])}" for m in MODES
+                )
+            )
+    lines += [
+        "",
+        "## Soru başına sıra (doğru anının yeri her yüklemede; - = ilk 10'da yok)",
+        "",
+    ]
+
+    def ranks(values: Sequence[int | None]) -> str:
+        return " ".join(str(v) if v is not None else "-" for v in values)
+
+    for name, per_seed in report["results"].items():
+        for seed, res in per_seed.items():
+            lines += [
+                f"### {name}, tohum {seed}",
+                "",
+                "| soru | like | trgm | trgm ilk-3 payı |",
+                "|---|---|---|---|",
+            ]
+            for cid, like_ranks in res["like"]["ranks_per_draw"].items():
+                trgm_ranks = res["trgm"]["ranks_per_draw"].get(cid, [])
+                share = res["trgm"]["top3_share"].get(cid, 0.0)
+                lines.append(
+                    f"| {cid} | {ranks(like_ranks)} | {ranks(trgm_ranks)} | {_pct(share)} |"
+                )
+            lines.append("")
+    lines += ["## Tohuma ve yüklemeye duyarlılık (ilk-3 isabet, yükleme başına)", ""]
     for key, value in report["seed_sensitivity"].items():
-        note = " — yükleme sırasına duyarlı" if value["order_sensitive"] else ""
-        lines.append(f"- {key}: ilk-3 isabet {value['top3_hits']}{note}")
+        note = " — sıraya/kimlik çekilişine duyarlı" if value["order_sensitive"] else ""
+        lines.append(f"- {key}: {value['top3_hits']}{note}")
     lines += [
         "",
         "## Karar",
@@ -793,6 +916,12 @@ def render_md(report: dict[str, Any]) -> str:
         "",
     ]
     lines += [f"- {reason}" for reason in decision["reasons"]]
+    if decision.get("per_draw") is not None:
+        lines.append(f"- Okunan: {decision['read_from']}")
+        lines.append(
+            f"- Tek tek yüklemelerin kararı: {decision['per_draw']}"
+            + (" — tek yükleme kararı veremezdi" if decision.get("draw_sensitive") else "")
+        )
     if decision.get("lost_in_trgm") is not None:
         lines.append(f"- trgm'de ilk-3'ten düşen: {decision['lost_in_trgm'] or 'yok'}")
         lines.append(f"- trgm'de ilk-3'e giren: {decision.get('gained_in_trgm') or 'yok'}")
@@ -825,7 +954,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--seeds", type=lambda s: [int(x) for x in s.split(",") if x.strip()], default=[7, 11]
     )
-    parser.add_argument("--repeat", type=int, default=5)
+    parser.add_argument("--draws", type=int, default=5, help="fresh loads (fresh ids) per seed")
+    parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--keep-db", action="store_true")
     parser.add_argument("--accept-lost", type=_accept, action="append", default=[])

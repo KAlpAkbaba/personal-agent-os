@@ -138,6 +138,28 @@ def test_validate_cases_names_what_is_wrong(bench: Any, data: dict) -> None:
     assert any("distractor" in e for e in errors)
 
 
+def test_validate_cases_refuses_a_tag_the_question_does_not_bear_out(
+    bench: Any, data: dict
+) -> None:
+    """``_tag_lies``: a case may not claim a shape its own text does not have (the
+    inspector's mutation - ``_tag_lies`` returning [] - left every test green)."""
+    broken = json.loads(json.dumps(data))
+    dotted = next(c for c in broken["cases"] if "dotted_i" in c["tags"])
+    dotted["query"] = dotted["query"].replace("İ", "i").replace("I", "ı")
+    suffix = next(c for c in broken["cases"] if "suffix" in c["tags"] and c is not dotted)
+    suffix["query"] = suffix["query"].replace("'", " ")
+    typo = next(c for c in broken["cases"] if "typo" in c["tags"])
+    typo["typo"] = "zzqq"
+    errors = bench.validate_cases(broken)
+    assert f"{dotted['id']}: tagged dotted_i but the question has no İ/I" in errors
+    assert f"{suffix['id']}: tagged suffix but the question has no apostrophe suffix" in errors
+    assert any(e.startswith(f"{typo['id']}: typo 'zzqq'") for e in errors)
+    no_pair = json.loads(json.dumps(data))
+    case = next(c for c in no_pair["cases"] if "typo" in c["tags"])
+    del case["typo_of"]
+    assert f"{case['id']}: tagged typo without typo/typo_of" in bench.validate_cases(no_pair)
+
+
 # --------------------------------------------------------------------------- arithmetic
 
 
@@ -252,6 +274,100 @@ def test_the_four_outcomes_are_four_different_reasons(bench: Any) -> None:
     assert len({o["reasons"][0] for o in outcomes}) == 4
 
 
+# --------------------------------------------------------------------------- draws
+#
+# hybrid_search breaks equal scores on str(memory.id), and every load draws new uuid4 ids:
+# the same seed, loaded twice, gave trgm a different rank on 11 of 33 questions (inspector,
+# f7845e62) and flipped the decision. One draw may not decide; the pooled draws do.
+
+
+def _draw(like: dict, trgm: dict, like_ms: float = 10.0, trgm_ms: float = 20.0) -> dict:
+    return {
+        "like": {"ranks": like, "timings_ms": [like_ms]},
+        "trgm": {"ranks": trgm, "timings_ms": [trgm_ms]},
+    }
+
+
+def test_pool_draws_averages_the_rates_and_pools_the_timings(bench: Any) -> None:
+    draws = [
+        {"ranks": {"a": 1, "b": 4}, "timings_ms": [1.0, 2.0]},
+        {"ranks": {"a": 4, "b": 2}, "timings_ms": [3.0, 4.0]},
+        {"ranks": {"a": 2, "b": None}, "timings_ms": [5.0, 6.0]},
+    ]
+    out = bench.pool_draws("trgm", draws)
+    assert out["draws"] == 3
+    assert out["top3"] == pytest.approx((0.5 + 0.5 + 0.5) / 3)
+    assert out["top1"] == pytest.approx((0.5 + 0 + 0) / 3)
+    assert (out["top3_min"], out["top3_max"]) == (0.5, 0.5)
+    assert out["top3_share"] == {"a": pytest.approx(2 / 3), "b": pytest.approx(1 / 3)}
+    assert out["ranks_per_draw"] == {"a": [1, 4, 2], "b": [4, 2, None]}
+    assert out["p95_ms"] == pytest.approx(bench.percentile([1, 2, 3, 4, 5, 6], 95))
+    assert out["timed_queries"] == 6
+
+
+def test_a_question_is_in_the_pooled_top3_when_a_majority_of_draws_has_it(bench: Any) -> None:
+    like = bench.pool_draws("like", [{"ranks": {"a": 1}, "timings_ms": [1.0]}] * 2)
+    split = bench.pool_draws(
+        "trgm",
+        [{"ranks": {"a": 1}, "timings_ms": [1.0]}, {"ranks": {"a": 5}, "timings_ms": [1.0]}],
+    )
+    minority = bench.pool_draws(
+        "trgm",
+        [{"ranks": {"a": r}, "timings_ms": [1.0]} for r in (1, 5, 5)],
+    )
+    assert bench.decide_default(like, split)["lost_in_trgm"] == []
+    assert bench.decide_default(like, minority)["lost_in_trgm"] == ["a"]
+
+
+def test_draws_that_disagree_are_caught_and_the_pool_decides(bench: Any) -> None:
+    """Draw 1 alone says like (trgm only equal), draw 2 alone says trgm: the old code read
+    whichever came first. The pooled rule decides and the split is reported."""
+    draws = [
+        _draw({"a": 1, "b": 5, "c": 1}, {"a": 1, "b": 5, "c": 2}),
+        _draw({"a": 1, "b": 5, "c": 1}, {"a": 1, "b": 1, "c": 2}),
+        _draw({"a": 1, "b": 5, "c": 1}, {"a": 2, "b": 3, "c": 1}),
+    ]
+    report = {
+        "seeds": [7],
+        "embedders": {"local": {}},
+        "results": {"local": {"7": {"draws": draws}}},
+    }
+    out = bench.decide(report, {})
+    assert out["per_draw"] == {"not_better": 1, "trgm": 2}
+    assert out["draw_sensitive"] is True
+    assert out["draws"] == 3
+    assert out["default"] == "trgm"
+    assert out["rule"] == "trgm"
+    agreeing = {
+        "seeds": [7],
+        "embedders": {"local": {}},
+        "results": {"local": {"7": {"draws": [draws[0], draws[0]]}}},
+    }
+    steady = bench.decide(agreeing, {})
+    assert steady["draw_sensitive"] is False
+    assert steady["default"] == "like"
+
+
+def test_decide_reads_every_seed_and_draw_of_the_local_embedder(bench: Any) -> None:
+    like_wins = _draw({"a": 1, "b": 1}, {"a": 5, "b": 1})
+    trgm_wins = _draw({"a": 1, "b": 5}, {"a": 1, "b": 1})
+    report = {
+        "seeds": [7, 11],
+        "embedders": {"local": {}, "deterministic": {}},
+        "results": {
+            "local": {"7": {"draws": [like_wins]}, "11": {"draws": [trgm_wins, trgm_wins]}},
+            "deterministic": {"7": {"draws": [like_wins] * 5}},
+        },
+    }
+    out = bench.decide(report, {})
+    assert out["draws"] == 3
+    assert out["per_draw"] == {"lost": 0, "not_better": 1, "trgm": 2} or out["per_draw"] == {
+        "not_better": 1,
+        "trgm": 2,
+    }
+    assert out["read_from"].startswith("local")
+
+
 # --------------------------------------------------------------------------- run_mode on SQLite
 
 MEMORY_TABLES = [
@@ -288,6 +404,33 @@ def test_a_second_seed_loads_whole_after_the_first_is_retired(
     second = bench.load_corpus(db, DeterministicEmbedder(), small, seed=11)
     assert second.loaded == first.loaded
     assert db.query(Memory).count() == second.loaded
+
+
+def test_each_draw_loads_new_ids_and_an_id_tie_break_moves_the_ranks(
+    bench: Any, data: dict, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The inspector's finding on SQLite: a search whose scores all tie and that breaks the
+    tie on ``str(memory.id)`` (as hybrid_search does) ranks the same seed differently in each
+    draw, because each draw is a fresh load with fresh uuid4 ids. measure_draws keeps every
+    draw, and the pool sees the spread one draw cannot."""
+
+    def tied_search(session: Any, embedder: Any, query: str, filters: Any, **_: Any) -> list:
+        rows = session.query(Memory).filter(Memory.conversation_id == filters.conversation_id)
+        return [type("R", (), {"memory": m})() for m in sorted(rows, key=lambda m: str(m.id))]
+
+    monkeypatch.setattr(bench, "hybrid_search", tied_search)
+    small = {"cases": data["cases"][:6], "noise": data["noise"][:20]}
+    out = bench.measure_draws(
+        db, DeterministicEmbedder(), small, seed=7, draws=6, rounds=1, warmup=0
+    )
+    assert len(out["draws"]) == 6
+    id_sets = [frozenset(d["answer_ids"].values()) for d in out["draws"]]
+    assert len(set(id_sets)) == 6
+    assert db.query(Memory).filter(Memory.status == "active").count() == 0
+    per_draw = [tuple(d["trgm"]["ranks"].values()) for d in out["draws"]]
+    assert len(set(per_draw)) > 1
+    assert out["trgm"]["draws"] == 6
+    assert out["trgm"]["top3_min"] <= out["trgm"]["top3"] <= out["trgm"]["top3_max"]
 
 
 def test_run_mode_on_sqlite_in_both_modes(
