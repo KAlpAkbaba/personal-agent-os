@@ -149,6 +149,9 @@ SUBSYSTEM_TELEPHONY = "telephony"
 #: urgent-alert-wire: the alarm rung rang the phone (Pushover priority=2) - sent, seen (on the
 #: phone or in the inbox), unseen, or refused by the text/link gate.
 SUBSYSTEM_URGENT_ALERT = "urgent_alert"
+#: aktivra-inbound-events: Aktivra's assistant said "önemli" (or "bilgi") over its own token,
+#: or a call on that route was refused. Never the company's data - a title and the event id.
+SUBSYSTEM_AKTIVRA = "aktivra"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -186,6 +189,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_WATCH,
     SUBSYSTEM_TELEPHONY,
     SUBSYSTEM_URGENT_ALERT,
+    SUBSYSTEM_AKTIVRA,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -612,6 +616,10 @@ EVENT_TYPE_ALERT_SENT = "alert.sent"
 EVENT_TYPE_ALERT_SEEN = "alert.seen"
 EVENT_TYPE_ALERT_UNSEEN = "alert.unseen"
 EVENT_TYPE_ALERT_REFUSED = "alert.refused"
+#: aktivra-inbound-events: an event accepted (``source_ref`` notification:<id>) and a call
+#: refused on the inbound route (``detail_json.fingerprint`` - never the token itself).
+EVENT_TYPE_AKTIVRA_RECEIVED = "aktivra.received"
+EVENT_TYPE_AKTIVRA_REJECTED = "aktivra.rejected"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -810,6 +818,8 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ALERT_SEEN,
     EVENT_TYPE_ALERT_UNSEEN,
     EVENT_TYPE_ALERT_REFUSED,
+    EVENT_TYPE_AKTIVRA_RECEIVED,
+    EVENT_TYPE_AKTIVRA_REJECTED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the
@@ -960,6 +970,8 @@ def validate_production_state(value: str) -> str:
 
 __all__ = [
     "ALARM_EVENT_TYPE_BY_STATE",
+    "EVENT_TYPE_AKTIVRA_RECEIVED",
+    "EVENT_TYPE_AKTIVRA_REJECTED",
     "EVENT_TYPE_ALERT_REFUSED",
     "EVENT_TYPE_ALERT_SEEN",
     "EVENT_TYPE_ALERT_SENT",
@@ -977,6 +989,7 @@ __all__ = [
     "SEVERITIES",
     "STATUSES",
     "SUBSYSTEMS",
+    "SUBSYSTEM_AKTIVRA",
     "SUBSYSTEM_URGENT_ALERT",
     "validate_event_type",
     "validate_production_state",

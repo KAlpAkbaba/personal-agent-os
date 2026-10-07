@@ -4,12 +4,20 @@
  *
  * 'bağlı / bağlı değil', the last alarm ('görüldü HH:MM' / 'görülmedi'), and the test button -
  * absent, not disabled, while nothing is connected: a button that can only be refused is noise.
+ * Below them Aktivra's channel (aktivra-inbound-events): 'Aktivra kanalı: bağlı, son olay HH:MM'.
  */
 
-import { lastSentence, type UrgentAlertStatus } from "./urgentAlertApi";
+import {
+  aktivraSentence,
+  lastSentence,
+  type AktivraStatus,
+  type UrgentAlertStatus,
+} from "./urgentAlertApi";
 
 export type UrgentAlertViewProps = {
   status: UrgentAlertStatus | null;
+  /** GET /v1/aktivra/status; null while unknown (the line is left out, never guessed). */
+  aktivra?: AktivraStatus | null;
   error: string | null;
   notice: string | null;
   busy: boolean;
@@ -19,6 +27,7 @@ export type UrgentAlertViewProps = {
 
 export default function UrgentAlertView({
   status,
+  aktivra = null,
   error,
   notice,
   busy,
@@ -50,6 +59,11 @@ export default function UrgentAlertView({
             </p>
           )}
         </>
+      )}
+      {aktivra && (
+        <p data-aktivra-channel={aktivra.configured ? "yes" : "no"}>
+          {aktivraSentence(aktivra, timeZone)}
+        </p>
       )}
     </>
   );

@@ -56,3 +56,31 @@ export function lastSentence(status: UrgentAlertStatus, timeZone?: string): stri
   }
   return null;
 }
+
+export const AKTIVRA_STATUS_PATH = "/v1/aktivra/status";
+
+/** Exactly what `GET /v1/aktivra/status` returns (app/aktivra/routes.py). No token, ever. */
+export type AktivraStatus = {
+  configured: boolean;
+  last_event_at: string | null;
+  events_24h: number;
+};
+
+export async function fetchAktivraStatus(): Promise<{ ok: true; status: AktivraStatus } | Refusal> {
+  const response = await apiFetch(AKTIVRA_STATUS_PATH);
+  if (!response.ok) return refusal(response);
+  return { ok: true, status: (await response.json()) as AktivraStatus };
+}
+
+/** "Aktivra kanalı: bağlı, son olay HH:MM" / "Aktivra kanalı: bağlı" / "... bağlı değil". */
+export function aktivraSentence(status: AktivraStatus, timeZone?: string): string {
+  if (!status.configured) return "Aktivra kanalı: bağlı değil";
+  if (status.last_event_at) {
+    const at = new Date(status.last_event_at);
+    if (!Number.isNaN(at.getTime())) {
+      const hhmm = at.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit", timeZone });
+      return `Aktivra kanalı: bağlı, son olay ${hhmm}`;
+    }
+  }
+  return "Aktivra kanalı: bağlı";
+}

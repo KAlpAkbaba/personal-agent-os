@@ -11,10 +11,17 @@ import { useCallback, useEffect, useState } from "react";
 
 import FamilyPage from "../../components/FamilyPage";
 import UrgentAlertView from "./UrgentAlertView";
-import { fetchStatus, sendTest, type UrgentAlertStatus } from "./urgentAlertApi";
+import {
+  fetchAktivraStatus,
+  fetchStatus,
+  sendTest,
+  type AktivraStatus,
+  type UrgentAlertStatus,
+} from "./urgentAlertApi";
 
 export default function UrgentAlertPage() {
   const [status, setStatus] = useState<UrgentAlertStatus | null>(null);
+  const [aktivra, setAktivra] = useState<AktivraStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -27,6 +34,9 @@ export default function UrgentAlertPage() {
     } else {
       setError(result.message);
     }
+    // Aktivra's line is a side note: a refusal leaves it out rather than taking the page down.
+    const channel = await fetchAktivraStatus();
+    setAktivra(channel.ok ? channel.status : null);
   }, []);
 
   useEffect(() => {
@@ -53,6 +63,7 @@ export default function UrgentAlertPage() {
     >
       <UrgentAlertView
         status={status}
+        aktivra={aktivra}
         error={error}
         notice={notice}
         busy={busy}

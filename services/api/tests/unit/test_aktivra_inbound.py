@@ -326,14 +326,22 @@ def test_status_says_not_configured_without_a_token() -> None:
 # ------------------------------------------------------------------- secrets
 
 
-def test_no_token_value_reaches_a_log_record_or_a_response(built, caplog) -> None:
+def test_no_token_value_reaches_a_log_record_or_a_response(built, caplog, capsys) -> None:
     client, _, _, _ = built
     caplog.set_level(logging.DEBUG)
+    capsys.readouterr()
     texts = [
         _post(client, _event(), token=WRONG).text,
         _post(client, _event()).text,
         _post(client, _event(title="a" * 121)).text,
     ]
+    # structlog renders to stdout here: the rejection and the acceptance were both logged,
+    # so the absence below is about lines that exist.
+    out = capsys.readouterr()
+    printed = out.out + out.err
+    assert "aktivra_event_rejected" in printed and "aktivra_event_accepted" in printed
+    assert auth.fingerprint_of(WRONG) in printed
+    assert TOKEN not in printed and WRONG not in printed
     for record in caplog.records:
         assert TOKEN not in record.getMessage() and WRONG not in record.getMessage()
         assert TOKEN not in repr(record.__dict__) and WRONG not in repr(record.__dict__)
@@ -379,11 +387,19 @@ def test_rows_older_than_30_days_are_swept_and_notifications_stay() -> None:
     now = datetime(2026, 10, 7, 9, 0, tzinfo=UTC)
     with factory() as db:
         service.accept(
-            db, event_id="old-event-001", title="t", summary="", severity="info",
+            db,
+            event_id="old-event-001",
+            title="t",
+            summary="",
+            severity="info",
             now=now - timedelta(days=31),
         )
         service.accept(
-            db, event_id="new-event-001", title="t", summary="", severity="info",
+            db,
+            event_id="new-event-001",
+            title="t",
+            summary="",
+            severity="info",
             now=now - timedelta(days=29),
         )
         assert service.sweep_expired(db, now=now) == 1

@@ -48,6 +48,17 @@
         .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_URGENT_ALERT_PUSHOVER_APP_TOKEN
         .\scripts\secret-store.ps1 -Set PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY
         .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY
+
+.EXAMPLE
+    Aktivra's 'onemli' channel (aktivra-inbound-events): the bearer token Aktivra's assistant
+    presents on POST /v1/aktivra/events. The owner mints it once (pagentos_ak_ + 256 bits) and
+    stores the same value in Aktivra's own secret store; no provider self-test runs (the
+    Kokpit's /core/urgent-alert shows 'Aktivra kanali: bagli'), packages/protocol/AKTIVRA_EVENTS.md
+    has the curl that sends a test event.
+
+        cd services\api; uv run python -c "from app.aktivra.auth import new_inbound_token as t; print(t())"
+        .\scripts\secret-store.ps1 -Set PAGENTOS_AKTIVRA_INBOUND_TOKEN
+        .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_AKTIVRA_INBOUND_TOKEN
 #>
 [CmdletBinding()]
 param(

@@ -140,6 +140,11 @@ services:
       PAGENTOS_URGENT_ALERT_PUSHOVER_APP_TOKEN: ${PAGENTOS_URGENT_ALERT_PUSHOVER_APP_TOKEN:-}
       PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY: ${PAGENTOS_URGENT_ALERT_PUSHOVER_USER_KEY:-}
       PAGENTOS_URGENT_ALERT_LINK_BASE: ${PAGENTOS_URGENT_ALERT_LINK_BASE:-}
+      # aktivra-inbound-events: the bearer token Aktivra's assistant presents on
+      # POST /v1/aktivra/events (packages/protocol/AKTIVRA_EVENTS.md). A SECRET, minted by the
+      # owner and installed with scripts/cloud/set-cloud-secret.ps1 (stdin only). OPTIONAL:
+      # absent means no channel (the route answers 404, the Kokpit says "bağlı değil").
+      PAGENTOS_AKTIVRA_INBOUND_TOKEN: ${PAGENTOS_AKTIVRA_INBOUND_TOKEN:-}
       # Production is never "dev": the simulated provider is barred from selection here.
       PAGENTOS_ENVIRONMENT: ${PAGENTOS_ENVIRONMENT:-prod}
       # The web shell is reached over the tailnet; set to the real private origin(s).

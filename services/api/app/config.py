@@ -606,6 +606,12 @@ class Settings(BaseSettings):
     # no alarm rung (every link would be refused).
     urgent_alert_link_base: str = ""
 
+    # aktivra-inbound-events (app.aktivra): the bearer token Aktivra's assistant presents on
+    # POST /v1/aktivra/events - its OWN credential, never the owner's session, valid on no
+    # other route. A SECRET (env file, scripts/cloud/set-cloud-secret.ps1; SecretStr, never
+    # returned, never logged). Empty = no channel: the route answers 404.
+    aktivra_inbound_token: SecretStr = SecretStr("")
+
     @field_validator("weather_provider")
     @classmethod
     def _validate_weather_provider(cls, v: str) -> str:
