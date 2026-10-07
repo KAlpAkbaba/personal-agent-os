@@ -1745,6 +1745,53 @@ try {
         Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_.role -eq "inspector" }).Count -Because "the inspector was never started"
     }
 
+    # area-check-wire-integrate-base: a worker branch built on integrate/<cycle> (the files it
+    # needs exist only there) is judged by its own files, not by the other cards' merges it carries.
+    function New-IntegrateBase {
+        param([string]$Root, [switch]$WorkerOnMain)
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("branch", "integrate/c1", "main"))
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("checkout", "-q", "integrate/c1"))
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $Root "docs"))
+        Set-Content -LiteralPath (Join-Path $Root "docs\foreign.md") -Value "another card's merge" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("commit", "-q", "-m", "merge: another card into integrate/c1"))
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("checkout", "-q", "main"))
+        $from = if ($WorkerOnMain) { "main" } else { "integrate/c1" }
+        [void](Invoke-SandboxGit -Root $Root -Arguments @("branch", "team/c1/worker-task-one", $from))
+    }
+
+    Test-Case "a worker branch on integrate/<cycle> touching only its area goes to inspection" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        New-IntegrateBase -Root $root
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $task.state -Because ("the merges it carries are not its files: " + (ConvertTo-Json -InputObject $task -Compress) + " " + $run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 1 -Actual @($run.Calls | Where-Object { $_.role -eq "inspector" }).Count -Because "the inspector was started"
+    }
+
+    Test-Case "a worker branch on integrate/<cycle> touching a file outside its area is still returned, by that file alone" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        New-IntegrateBase -Root $root
+        $run = Invoke-Cycle -Root $root -Scenario "outside"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "stopped" -Actual $task.state -Because "it left its area twice"
+        Assert-Equal -Expected "alan dışı dosya: docs/outside.md" -Actual ([string]$task.reason) -Because "its own file, not the merge it carries"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_.role -eq "inspector" }).Count -Because "the inspector was never started"
+    }
+
+    Test-Case "a worker branch on main beside an integrate/<cycle> branch is judged as before" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        New-IntegrateBase -Root $root -WorkerOnMain
+        $run = Invoke-Cycle -Root $root -Scenario "outside"
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "stopped" -Actual $task.state -Because "it left its area twice"
+        Assert-Equal -Expected "alan dışı dosya: docs/outside.md" -Actual ([string]$task.reason) -Because $task.reason
+        $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        New-IntegrateBase -Root $plain -WorkerOnMain
+        $kept = Invoke-Cycle -Root $plain -Scenario "approve"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $kept.Queue -Id "task-one").state -Because ($kept.StdOut + $kept.StdErr)
+    }
+
     Test-Case "a run that prints no result is a failure, and two of them stop the task" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $run = Invoke-Cycle -Root $root -Scenario "silent"

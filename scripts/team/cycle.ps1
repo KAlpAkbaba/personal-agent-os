@@ -2047,7 +2047,9 @@ try {
             }
             "worker" {
                 $branch = [string]$task.branch
-                $outside = @(Get-TeamChangedFiles -RepoRoot $repoRoot -Branch $branch -Base $Base |
+                # A branch built on integrate/<cycle> (the files it needs exist only there) is
+                # judged by its own files, not by the other cards' merges it carries.
+                $outside = @(Get-TeamWorkerChangedFiles -RepoRoot $repoRoot -Branch $branch -Base $Base -AlsoBase "integrate/$CycleId" |
                     Where-Object { -not (Test-TeamPathInsideArea -Path $_ -Area @($task.area)) })
                 if (@($outside).Count -gt 0) {
                     # Section 4: a worker never leaves its area. Not the inspector's to find.
