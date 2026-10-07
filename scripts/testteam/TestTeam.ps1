@@ -523,7 +523,8 @@ function Format-TestTeamRoundReport {
     )
     if (-not $At) { $At = Get-TeamTimestamp }
     $counts = Get-TestTeamRoundCounts -Cards $Cards
-    $word = @{ passed = "geçti"; failed = "kaldı"; broke = "koptu" }
+    # 'environment': the staging session was dead (run-scenario.ps1 exit 4); nothing was forwarded.
+    $word = @{ passed = "geçti"; failed = "kaldı"; broke = "koptu"; environment = "ortam" }
     $lines = New-Object System.Collections.ArrayList
     [void]$lines.Add("# Test turu $Round - girdi / çıktı raporu")
     [void]$lines.Add("")
@@ -557,6 +558,8 @@ function Format-TestTeamRoundReport {
         }
         [void]$lines.Add("")
         [void]$lines.Add("Senaryo: " + [string](Get-TeamProperty -InputObject $result -Name "scenario" -Default "?"))
+        $environment = [string](Get-TeamProperty -InputObject $card -Name "environment" -Default (Get-TeamProperty -InputObject $result -Name "environment" -Default ""))
+        if ($state -eq "environment" -and $environment) { [void]$lines.Add(""); [void]$lines.Add("Ortam: $environment") }
         $n = 0
         foreach ($step in @(Get-TeamProperty -InputObject $result -Name "steps" -Default @())) {
             $n++
@@ -601,6 +604,16 @@ function Format-TestTeamRoundReport {
             [void]$lines.Add("Sonuç: " + $(if ($ok) { "geçti" } else { "kaldı" }))
         }
         if ($n -eq 0) { [void]$lines.Add(""); [void]$lines.Add("(adım yok)") }
+        # Steps run-scenario.ps1 refused to send (an identity write): no input went out, no output came.
+        $refused = @(Get-TeamProperty -InputObject $result -Name "refused" -Default @())
+        if (@($refused).Count -gt 0) {
+            [void]$lines.Add("")
+            [void]$lines.Add("### Gönderilmeyen adımlar")
+            [void]$lines.Add("")
+            foreach ($skip in $refused) {
+                [void]$lines.Add(("- {0}: {1} {2} - {3}" -f (Get-TeamProperty -InputObject $skip -Name "name" -Default "?"), (Get-TeamProperty -InputObject $skip -Name "method" -Default ""), (Get-TeamProperty -InputObject $skip -Name "path" -Default ""), (Get-TeamProperty -InputObject $skip -Name "why" -Default "")))
+            }
+        }
         $breaking = Get-TeamProperty -InputObject $result -Name "breaking"
         if ($null -ne $breaking) {
             $first = ConvertTo-TestTeamLadderStep -Step (Get-TeamProperty -InputObject $breaking -Name "first_failure")

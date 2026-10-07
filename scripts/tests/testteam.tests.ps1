@@ -593,6 +593,21 @@ Test-Case "masking and cutting: token, secret and password fields, Bearer values
     Assert-True -Condition (-not $cut.Contains("QWERTY")) -Because "no half of the session shows: $($cut.Substring(4085))"
 }
 
+Test-Case "the round report says 'ortam' for a job of a dead session, with its steps, and lists the steps that were not sent" {
+    # The rebase onto the staging-session and refused-identity work (2026-10-07): a card in state
+    # 'environment' read 'koşmadı', and a refused step was not in the report at all.
+    $cards = @([pscustomobject]@{ id = "tj-o-1"; tester = "tester-1"; family = "kopuk"; state = "environment" })
+    $results = @([pscustomobject]@{ card = "tj-o-1"; state = "environment"; environment = "oturum geçersiz"; steps = @(
+                [pscustomobject]@{ name = "nöbet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = "401"; ok = $false; ms = 9
+                    output = [pscustomobject]@{ status = "401"; body = '{"detail":"oturum yok"}' } })
+            refused = @([pscustomobject]@{ name = "cihaz kaydı"; method = "POST"; path = "/v1/identity/devices"; state = "refused"; why = "kimlik değişikliği" }) })
+    $md = (Format-TestTeamRoundReport -Round "r-o" -Cards $cards -Results $results).Markdown
+    Assert-True -Condition ($md -match '## tester-1 - kopuk \(tj-o-1\) - sonuç: ortam') -Because "the environment is said, not 'koşmadı': $md"
+    Assert-True -Condition ($md.Contains("oturum geçersiz")) -Because "with its why"
+    Assert-True -Condition ($md.Contains('{"detail":"oturum yok"}')) -Because "its steps are shown"
+    Assert-True -Condition ($md -match '(?s)Gönderilmeyen adımlar.*cihaz kaydı: POST /v1/identity/devices - kimlik değişikliği') -Because "the refused step is listed with its why: $md"
+}
+
 Test-Case "a cut body cut again keeps the first length; a cut never splits a surrogate pair; NUL and lone surrogates are cleaned" {
     $once = Limit-TestTeamText -Text ("y" * 6012)
     Assert-Equal -Expected $once -Actual (Limit-TestTeamText -Text $once) -Because "a body already cut is left as it is"
@@ -881,7 +896,8 @@ while (`$true) {
         Assert-True -Condition ($written[0] -match '"expected_updated_at":null') -Because "create-only: $($written[0])"
         Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $team "queue.json"))) -Because "no local queue file is written in API mode"
         # The round's input/output report goes to the Cloud Core's owner-only route.
-        $posts = @(Get-ChildItem -LiteralPath $work -Filter "post-*.json" | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8) })
+        # (The round's proof is a POST too, to /v1/team/queue/proof: only the reports are counted.)
+        $posts = @(Get-ChildItem -LiteralPath $work -Filter "post-*.json" | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8) } | Where-Object { $_.StartsWith("/v1/team/test-reports ") })
         Assert-Equal -Expected 1 -Actual @($posts).Count -Because "one report a round: $out"
         $post = $posts[0]
         Assert-True -Condition ($post.StartsWith("/v1/team/test-reports Bearer test-token ")) -Because "the route, with the team token: $($post.Substring(0, 60))"
@@ -1209,6 +1225,8 @@ Test-Case "a round seeds the staging session once before the first tester; a see
         $notes = [System.IO.File]::ReadAllText($posts, [System.Text.Encoding]::UTF8)
         Assert-True -Condition ($notes -match "oturum") -Because "the board is told why: $notes"
         Assert-True -Condition (($out -join " ") -match "401") -Because "the console says what staging answered: $out"
+        $io = [System.IO.File]::ReadAllText((Join-Path $work "out\dead\test-raporu.md"), [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($io -match '\*\*yarım kaldı: staging oturumu açılamadı') -Because "the input/output report says why the round did not start: $io"
         # The same round with a session staging accepts: seeded once, before the first tester.
         Remove-Item -LiteralPath $env:PAGENTOS_FAKE_SEED_LOG -Force
         $env:PAGENTOS_FAKE_SEED_TOKEN = "good"
@@ -1258,6 +1276,10 @@ Test-Case "a job whose steps all answer 401 while the round's session is dead is
         $queue = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json
         Assert-Equal -Expected 0 -Actual @($queue.tasks).Count -Because "no software card for a dead session: $out"
         Assert-True -Condition (($out -join " ") -match "ortam") -Because "the round says it was the environment: $out"
+        $io = [System.IO.File]::ReadAllText((Join-Path $outRoot "env\test-raporu.md"), [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($io -match 'sonuç: ortam') -Because "the report says 'ortam': $io"
+        Assert-True -Condition ($io -notmatch 'sonuç dosyası yok') -Because "the environment job's steps are in the report: $io"
+        Assert-True -Condition ($io -notmatch 'yarım kaldı') -Because "the round itself finished"
     }
     finally {
         try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }

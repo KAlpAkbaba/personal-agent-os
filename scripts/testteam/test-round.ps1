@@ -393,6 +393,8 @@ else {
 $plan = $null
 $cards = @()
 $results = New-Object System.Collections.ArrayList
+# The results of jobs whose staging session was dead: never forwarded, but in the report.
+$environmentResults = New-Object System.Collections.ArrayList
 $added = New-Object System.Collections.ArrayList
 $stagingSha = ""
 $script:ioWritten = $false
@@ -408,7 +410,7 @@ function Write-RoundIoReport {
         $jobs = if ($null -ne $plan) { @(Get-TeamProperty -InputObject $plan -Name "jobs" -Default @()) } else { @() }
         $sha = $stagingSha
         foreach ($result in $results) { if (-not $sha) { $sha = [string](Get-TeamProperty -InputObject $result -Name "staging_sha" -Default "") } }
-        $io = Format-TestTeamRoundReport -Round $Round -StagingSha $sha -Jobs $jobs -Cards @($cards) -Results @($results.ToArray()) -Forwarded @($added) -Unfinished $Unfinished
+        $io = Format-TestTeamRoundReport -Round $Round -StagingSha $sha -Jobs $jobs -Cards @($cards) -Results @(@($results.ToArray()) + @($environmentResults.ToArray())) -Forwarded @($added) -Unfinished $Unfinished
         $file = Join-Path $roundDir "test-raporu.md"
         [System.IO.File]::WriteAllText($file, $io.Markdown, (New-Object System.Text.UTF8Encoding($false)))
         Write-Host "girdi/çıktı raporu: $file"
@@ -502,6 +504,7 @@ if (-not $NoAuth) {
         $why = "staging oturumu açılamadı: seed çıkış $seedCode, /v1/identity/sessions/current $status"
         Write-Host "TUR BAŞLAMADI: $why; test çalışanı başlatılmadı, kart açılmadı; kartlar planned: $cardsPath"
         Send-Note -Seat "test-lead" -Text "Test PY: tur $Round başlamadı - $why. Kart açılmadı."
+        $script:unfinished = $why
         exit 1
     }
     Write-Host "staging oturumu geçerli (/v1/identity/sessions/current 200)"
@@ -570,6 +573,7 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
             # product, nothing is forwarded, and the next round deals new cards.
             $entry.Card.state = "environment"
             Set-TeamProperty -InputObject $entry.Card -Name "environment" -Value $environment
+            if ($null -ne $result) { [void]$environmentResults.Add($result) }
             Write-Json -Path $cardsPath -Document $document
             Write-Host "  $($entry.Card.tester) -> $($entry.Card.id): ortam - $environment; iletilmedi"
             Send-Note -Seat $entry.Card.tester -Text ("sonuç: environment - {0} ({1}) - staging oturumu geçersiz, iletilmedi" -f $entry.Card.family, $entry.Card.id)

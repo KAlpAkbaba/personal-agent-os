@@ -65,6 +65,18 @@ with the temp sweep.
 - `unfinished` is cut to 500 characters (`$script:TestTeamUnfinishedMax`, the route's
   `UNFINISHED_MAX_CHARS`; the API contract test reads both), then cleaned.
 
+## After the rebase onto team/nightly/lead (2026-10-07)
+
+The lead branch added the staging session seed, the 'environment' result (a dead session),
+refused identity steps and the round's proof POST. The report now covers them:
+- a round whose seed fails (exit 1) writes `yarım kaldı: staging oturumu açılamadı ...`, not
+  "tur beklenmedik biçimde bitti";
+- a job in state `environment` reads `sonuç: ortam` with its why and its steps (its result is
+  kept for the report only; it is still never forwarded);
+- the steps run-scenario refused to send are listed under "Gönderilmeyen adımlar".
+The staging-is-main's-tip refusal (exit 4) comes before the plan and writes no report (no plan,
+no card: nothing to report; the board note says why).
+
 ## Not done here (outside the card's area)
 
 - A Postgres integration test of `DbRoundReports` (put/list/get/keep 50/NUL refused) belongs in
