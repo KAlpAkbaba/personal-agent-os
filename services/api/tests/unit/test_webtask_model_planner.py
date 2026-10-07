@@ -628,6 +628,12 @@ def test_an_element_carries_a_links_address_and_only_a_link_has_one() -> None:
     assert link.href == STORY and link.as_dict()["href"] == STORY
     button = Element.from_dict({"ref": "e2", "role": "button", "name": "Abone ol"})
     assert button.href is None and "href" not in button.as_dict()
+    # The device's promise is held here too: what is not one http(s) address is none.
+    for forged in ("javascript:alert(1)", "data:text/html,x", "https://a.example/b c", 7):
+        element = Element.from_dict({"ref": "e3", "role": "link", "name": "x", "href": forged})
+        assert element.href is None, forged
+    long = Element.from_dict({"ref": "e4", "role": "link", "href": STORY + "a" * 600})
+    assert long.href is None
 
 
 def test_the_prompt_lists_a_links_address_and_says_to_go_there_by_address() -> None:

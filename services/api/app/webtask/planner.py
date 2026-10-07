@@ -235,7 +235,8 @@ def build_prompt(request: PlanRequest) -> dict[str, str]:
         state = f" ({', '.join(element.state)})" if element.state else ""
         note = " [SENSITIVE: never fill]" if element.sensitive else ""
         name = defuse(element.name).replace("\n", " ")
-        lines.append(f'[{element.ref}] {element.role} "{name}"{state}{note}')
+        address = f" -> {defuse(element.href)}" if element.href else ""
+        lines.append(f'[{element.ref}] {element.role} "{name}"{state}{note}{address}')
     history = [
         f"{r.index}. {r.action} {r.role} - {r.outcome}"
         + ("" if r.verified is None else f" (verified: {str(r.verified).lower()})")
@@ -257,7 +258,9 @@ def build_prompt(request: PlanRequest) -> dict[str, str]:
             "expect_kind (and expect_value): what the page shows once the step has run; "
             "a step without one is refused. To search a site, prefer navigating to its "
             "search address (for example https://www.youtube.com/results?search_query=...) "
-            "over typing into its search box. If you cannot see what you need, call `step` "
+            "over typing into its search box. To open a link, navigate to its address (the "
+            "one after -> in ELEMENTS) instead of clicking it: a click may open a new window, "
+            "and that window is closed. If you cannot see what you need, call `step` "
             "with action `ask_owner` and ask_kind `cannot_see`."
         ),
         "goal": request.goal
