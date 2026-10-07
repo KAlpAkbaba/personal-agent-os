@@ -535,3 +535,12 @@ def test_the_prompt_prefers_a_sites_search_address_to_its_search_box() -> None:
     navigation, which the cloud may do anywhere."""
     system = build_prompt(request())["system"]
     assert "search address" in system
+
+
+def test_the_tool_says_expect_value_is_the_elements_name_for_an_element_check() -> None:
+    """Live run 2026-10-07: asked to fill "Customer name:", the model expected
+    field_has_value "Deneme Kisi" - the value it typed - and every fill was judged
+    "no element with that name"."""
+    described = STEP_TOOL["input_schema"]["properties"]["expect_value"]["description"]
+    assert "field_has_value" in described and "name" in described
+    assert "never the value" in described
