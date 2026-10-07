@@ -2759,6 +2759,106 @@ exit 0
             Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $queue -Id $id).state -Because "$id is not stopped by the carry-over"
         }
     }
+
+    Write-Host ""
+    Write-Host "an existing integration branch follows a release on its base"
+
+    function New-FollowSandbox {
+        <#
+            2026-10-07: the release d74a8daa reached main from a separate integration, and
+            integrate/d20261007 never took it. Here: main; integrate/rf made by Merge-TeamBranch with
+            team/rf/worker-one (src/one.txt; -Conflict: also src/shared.txt); then main moves on
+            (the 'release', src/shared.txt) and team/rf/worker-two (src/two.txt) is branched from
+            the NEW main, team/rf/worker-old from the OLD one.
+        #>
+        param([switch]$Conflict)
+        $root = Join-Path $env:TEMP ("pagentos-follow-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+        [void]$sandboxes.Add($root)
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "src"))
+        Set-Content -LiteralPath (Join-Path $root ".gitignore") -Value ".claude/worktrees/" -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $root "src\shared.txt") -Value "base" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $root -Arguments @("init", "-q", "-b", "main"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("config", "user.name", "team test"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("config", "user.email", "team@example.invalid"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("config", "core.autocrlf", "false"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("add", "-A"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "the sandbox"))
+        $commitOn = {
+            param([string]$Branch, [string]$From, [hashtable]$Files)
+            [void](Invoke-SandboxGit -Root $root -Arguments @("branch", $Branch, $From))
+            $tree = "$root-wt"
+            [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", "-q", $tree, $Branch))
+            foreach ($name in $Files.Keys) { Set-Content -LiteralPath (Join-Path $tree $name) -Value $Files[$name] -Encoding ASCII }
+            [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
+            [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", "work on $Branch"))
+            [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "remove", "--force", $tree))
+        }
+        $one = @{ "src\one.txt" = "work on one" }
+        if ($Conflict) { $one["src\shared.txt"] = "the integration changed it" }
+        & $commitOn "team/rf/worker-one" "main" $one
+        & $commitOn "team/rf/worker-old" "main" @{ "src\old.txt" = "work on old" }
+        $first = Merge-TeamBranch -RepoRoot $root -CycleId "rf" -Branch "team/rf/worker-one" -Base "main"
+        if (-not $first.Merged) { throw "the sandbox's first merge failed: $($first.Detail)" }
+        Set-Content -LiteralPath (Join-Path $root "src\shared.txt") -Value "the release changed it" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-am", "the release"))
+        & $commitOn "team/rf/worker-two" "main" @{ "src\two.txt" = "work on two" }
+        return $root
+    }
+
+    Test-Case "follow (1): an existing integration branch takes the release on its base first, by its own merge, then the card" {
+        $root = New-FollowSandbox
+        $release = Get-Sha -Root $root -Revision "main"
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "rf" -Branch "team/rf/worker-two" -Base "main"
+        Assert-True -Condition ([bool]$merge.Merged -and -not [bool]$merge.Already -and -not [bool]$merge.BaseBehind) -Because "the card is merged: $($merge.Detail)"
+        $log = Invoke-SandboxGit -Root $root -Arguments @("log", "--first-parent", "--format=%s", "-n", "3", "integrate/rf")
+        Write-Host "        git log --first-parent -n 3 integrate/rf:`n          $($log -replace "`n", "`n          ")"
+        Assert-Equal -Expected "merge: team/rf/worker-two into integrate/rf`nmerge: main into integrate/rf (the release follows)`nmerge: team/rf/worker-one into integrate/rf" -Actual $log -Because "the release follows first, then the card"
+        Assert-True -Condition (Test-TeamAncestor -RepoRoot $root -Ancestor $release -Of "integrate/rf^1") -Because "the integration branch held the release BEFORE the card came in"
+        Assert-True -Condition (Test-TeamAncestor -RepoRoot $root -Ancestor "team/rf/worker-one" -Of "integrate/rf") -Because "the earlier card is still there"
+        # A card branched before the release: without the follow the release never reaches the branch.
+        $old = Merge-TeamBranch -RepoRoot $root -CycleId "rf" -Branch "team/rf/worker-old" -Base "main"
+        Assert-True -Condition ([bool]$old.Merged -and -not [bool]$old.BaseBehind) -Because "the old card is merged: $($old.Detail)"
+        Assert-True -Condition (Test-TeamAncestor -RepoRoot $root -Ancestor $release -Of "integrate/rf") -Because "the release is on the integration branch"
+        Assert-Equal -Expected "merge: team/rf/worker-old into integrate/rf" -Actual (Invoke-SandboxGit -Root $root -Arguments @("log", "-n", "1", "--format=%s", "integrate/rf")) -Because "nothing new on main: no second follow"
+    }
+
+    Test-Case "follow (1b): a card from the OLD base still brings the release in when main moved on" {
+        $root = New-FollowSandbox
+        $release = Get-Sha -Root $root -Revision "main"
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "rf" -Branch "team/rf/worker-old" -Base "main"
+        Assert-True -Condition ([bool]$merge.Merged) -Because "the card is merged: $($merge.Detail)"
+        Assert-True -Condition (Test-TeamAncestor -RepoRoot $root -Ancestor $release -Of "integrate/rf") -Because "the integration branch follows the release even though the card does not carry it"
+    }
+
+    Test-Case "follow (2): a release that conflicts with the integration branch leaves it as it was and says BaseBehind, naming the file; the card is not tried" {
+        $root = New-FollowSandbox -Conflict
+        $before = Get-Sha -Root $root -Revision "integrate/rf"
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "rf" -Branch "team/rf/worker-two" -Base "main"
+        Write-Host "        Detail: $($merge.Detail)"
+        Assert-True -Condition (-not [bool]$merge.Merged -and -not [bool]$merge.Already) -Because "nothing is merged"
+        Assert-True -Condition ([bool]$merge.BaseBehind) -Because "the caller is told the base is the conflict, not the card"
+        Assert-True -Condition ($merge.Detail -match "entegrasyon dali tabanin gerisinde" -and $merge.Detail -match "src/shared\.txt") -Because "Detail names the file: $($merge.Detail)"
+        Assert-True -Condition ($merge.Detail -notmatch "two\.txt") -Because "the card's own files are not blamed: $($merge.Detail)"
+        Assert-Equal -Expected $before -Actual (Get-Sha -Root $root -Revision "integrate/rf") -Because "the integration tip is unchanged"
+        $tree = Get-TeamWorktreePath -RepoRoot $root -Branch "integrate/rf"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $tree -Arguments @("status", "--porcelain")) -Because "the worktree is clean"
+        $mergeHead = Invoke-TeamGit -WorkingDirectory $tree -Arguments @("rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+        Assert-True -Condition (-not $mergeHead.Success) -Because "no merge is in progress"
+        Assert-True -Condition (-not (Test-TeamAncestor -RepoRoot $root -Ancestor "team/rf/worker-two" -Of "integrate/rf")) -Because "the card was not merged"
+    }
+
+    Test-Case "follow (3): nothing new on the base: the merge and its answer are as before" {
+        $root = New-FollowSandbox
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "rf" -Branch "team/rf/worker-one" -Base "main"
+        Assert-True -Condition ([bool]$merge.Merged -and [bool]$merge.Already -and -not [bool]$merge.Conflict -and -not [bool]$merge.BaseBehind) -Because "an already merged card is reported as merged, with no follow"
+        Assert-Equal -Expected "" -Actual $merge.Detail -Because "no detail"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("reset", "-q", "--hard", "HEAD~1"))
+        $before = Get-Sha -Root $root -Revision "integrate/rf"
+        $old = Merge-TeamBranch -RepoRoot $root -CycleId "rf" -Branch "team/rf/worker-old" -Base "main"
+        Assert-True -Condition ([bool]$old.Merged -and -not [bool]$old.Already -and -not [bool]$old.Conflict -and -not [bool]$old.BaseBehind) -Because "merged: $($old.Detail)"
+        Assert-Equal -Expected $before -Actual (Get-Sha -Root $root -Revision "integrate/rf^1") -Because "the card's merge sits right on the old tip: no follow commit"
+        Assert-Equal -Expected "" -Actual $old.Detail -Because "no detail"
+    }
 }
 finally {
     foreach ($step in $stepProcesses) { try { if (-not $step.HasExited) { Stop-TeamProcessTree -ProcessId $step.Id } } catch { } }

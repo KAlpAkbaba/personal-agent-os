@@ -325,6 +325,9 @@ function Merge-TeamBranch {
         integration branch is left as it was, and the answer says so: the task goes back.
         When the integration branch is made by this call, older integration branches with
         merged, unreleased cards are carried into it first (-Queue; CarriedForward says how).
+        An integration branch behind -Base (a release went out) takes -Base first, by its own
+        merge; when that conflicts nothing changes and the answer is Merged=false,
+        BaseBehind=true, Detail 'entegrasyon dali tabanin gerisinde: <files>'.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
@@ -351,16 +354,32 @@ function Merge-TeamBranch {
     }
     $ancestor = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge-base", "--is-ancestor", $Branch, "HEAD")
     if ($ancestor.ExitCode -eq 0) {
-        return [pscustomobject]@{ Merged = $true; Already = $true; Conflict = $false; Integration = $integration; Detail = ""; CarriedForward = $carried }
+        return [pscustomobject]@{ Merged = $true; Already = $true; Conflict = $false; BaseBehind = $false; Integration = $integration; Detail = ""; CarriedForward = $carried }
+    }
+    # The branch follows a release on -Base first, by its own merge (2026-10-07: d74a8daa reached
+    # main from another integration; integrate/d20261007 never took it, and a card opened after it
+    # dragged the release in and was stopped for a conflict in a file it never touched). A follow
+    # that conflicts is aborted and answered BaseBehind: it is not the card's, and the card is not tried.
+    $behind = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge-base", "--is-ancestor", $Base, "HEAD")
+    if ($behind.ExitCode -ne 0) {
+        $follow = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--no-ff", "-m", "merge: $Base into $integration (the release follows)", $Base)
+        if (-not $follow.Success) {
+            $unmerged = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("diff", "--name-only", "--diff-filter=U")
+            $files = @($unmerged.StdOut -split "`r?`n" | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+            [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--abort"))
+            if (@($files).Count -eq 0) { $files = @(($follow.StdOut + " " + $follow.StdErr).Trim()) }
+            $detail = "entegrasyon dali tabanin gerisinde: " + ($files -join ", ")
+            return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; BaseBehind = $true; Integration = $integration; Detail = $detail; CarriedForward = $carried }
+        }
     }
     $message = "merge: $Branch into $integration"
     $merge = Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--no-ff", "-m", $message, $Branch)
     if ($merge.Success) {
-        return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; Integration = $integration; Detail = ""; CarriedForward = $carried }
+        return [pscustomobject]@{ Merged = $true; Already = $false; Conflict = $false; BaseBehind = $false; Integration = $integration; Detail = ""; CarriedForward = $carried }
     }
     [void](Invoke-TeamGit -WorkingDirectory $tree.Path -Arguments @("merge", "--abort"))
     $detail = ($merge.StdOut + "`n" + $merge.StdErr).Trim()
-    return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail; CarriedForward = $carried }
+    return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; BaseBehind = $false; Integration = $integration; Detail = $detail; CarriedForward = $carried }
 }
 
 function Get-TeamOrphanMerges {
