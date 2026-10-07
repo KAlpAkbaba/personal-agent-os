@@ -155,3 +155,24 @@ def test_bitti_racing_unut_ends_in_one_explained_state(factory, settings, n) -> 
         assert (row.name, row.level, row.on_list) == ("süt", "bitti", True)
         assert str(row.id) in {a.json()["item"]["id"] for a in outs}
     assert {e.item_id for e in events} <= {i.id for i in items}
+
+
+@pytest.mark.parametrize("n", [16, 32])
+def test_list_remove_racing_unut_never_500s(factory, settings, n) -> None:
+    """DELETE /list/{id} racing DELETE /items/{id} (the inspector, 2026-10-07): ``remove_by_id``
+    read the row unlocked and updated it after the forget deleted it - StaleDataError, 500."""
+    client = owner_client(settings)
+    made = client.post("/v1/household/list", json={"name": "süt"})
+    original = made.json()["item"]["id"]
+    forget = ("DELETE", f"/v1/household/items/{original}", None)
+    off = ("DELETE", f"/v1/household/list/{original}", None)
+    requests = [forget if i % 2 else off for i in range(n)]
+
+    answers = _mixed(client, requests, ITEM_READ, HELD)
+
+    assert all(a.status_code < 500 for a in answers), [a.text[:120] for a in answers][:3]
+    forgets = [a.status_code for a, r in zip(answers, requests, strict=True) if r is forget]
+    offs = [a.status_code for a, r in zip(answers, requests, strict=True) if r is off]
+    assert sorted(set(forgets)) <= [200, 404] and forgets.count(200) == 1, forgets
+    assert set(offs) <= {200, 404}, offs
+    assert _rows(factory) == ([], [])

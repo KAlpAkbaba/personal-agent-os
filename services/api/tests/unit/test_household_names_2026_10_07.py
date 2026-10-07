@@ -158,3 +158,60 @@ def test_a_deeply_nested_body_is_body_invalid_not_500(client, path) -> None:
     answer = client.post(path, content=deep, headers={"Content-Type": "application/json"})
     assert answer.status_code == 422, answer.status_code
     assert answer.json()["detail"]["code"] == "body_invalid"
+
+
+# ------------------------------------------------------------------ the inspector's return
+
+
+@pytest.mark.parametrize(
+    ("said", "kept"),
+    [
+        ("köy ekmeği", "köy ekmeği"),
+        ("köy peyniri", "köy peyniri"),
+        ("köy yumurtası", "köy yumurtası"),
+        ("toz bezi", "toz bezi"),
+        ("toz şeker", "toz şeker"),
+    ],
+)
+def test_a_noun_before_the_head_is_a_compound_not_an_adjective(said, kept) -> None:
+    """'köy' and 'toz' are nouns: 'köy EKMEĞİ' is a compound, its head keeps the suffix."""
+    assert parse.display_name(parse.turkish_lower(said).split()) == kept
+
+
+def test_the_voice_path_keeps_a_compound_head() -> None:
+    command = parse.parse_sentence("köy ekmeği bitti")
+    assert command is not None and command.item == "köy ekmeği"
+
+
+def test_a_head_said_in_the_nominative_stays_nominative_without_a_known_adjective() -> None:
+    """'çiğ' is not in the adjective set: the nominative 'süt' alone keeps 'çiğ süt'."""
+    assert parse.display_name(["çiğ", "süt"]) == "çiğ süt"
+
+
+@pytest.mark.parametrize(
+    ("said", "split"),
+    [
+        ("yarım yağlı süt", ("yarım yağlı süt", None)),
+        ("iki taze süt", ("iki taze süt", None)),
+        ("on iki yumurta", ("yumurta", "on iki")),
+        ("on iki paket peçete", ("peçete", "on iki paket")),
+        ("üç şişe süt", ("süt", "üç şişe")),
+        ("bir süt", ("süt", None)),
+    ],
+)
+def test_split_amount_reads_the_whole_number_and_never_an_adjective(said, split) -> None:
+    assert parse.split_amount(said) == split
+
+
+def test_yarim_yagli_sut_is_one_item_on_the_list(client) -> None:
+    answer = client.post("/v1/household/list", json={"name": "yarım yağlı süt"})
+    assert answer.status_code == 200, answer.text
+    item = answer.json()["item"]
+    assert (item["name"], item["list_quantity"]) == ("yarım yağlı süt", None)
+
+
+def test_on_iki_yumurta_is_twelve_eggs(client) -> None:
+    answer = client.post("/v1/household/list", json={"name": "on iki yumurta"})
+    assert answer.status_code == 200, answer.text
+    item = answer.json()["item"]
+    assert (item["name"], item["list_quantity"]) == ("yumurta", "on iki")
