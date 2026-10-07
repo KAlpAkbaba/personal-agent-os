@@ -22,6 +22,13 @@ Two things are built on the stripper for the rule tables (ADR-0224 addendum 4, t
 * :func:`lemma_reading` hands the router the sentence as layer 1 reads it: the polite forms
   of a known verb written as its bare imperative, the fused tokens split, everything else
   letter for letter. A sentence that carries a negative imperative has no such reading.
+
+The test team's findings of 2026-10-06 (card understanding-plural-context-typos) add three
+WORD repairs, asked for with ``lemma_reading(..., repair_words=True)`` and kept apart in
+``LemmaReading.repaired``, each from the grammar or one edit, never from a list of forms: a known
+noun said in the PLURAL is its singular ("alarmlarımı" -> "alarmı", "nöbetlerimden birini" ->
+"nöbeti"); ONE slip of the finger is undone (a doubled letter, a dropped vowel: "alarmmı",
+"alrmı", "sütt"); and a household sentence written as one word is split ("sütbitti").
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ from pathlib import Path
 from typing import Final, NamedTuple
 
 from app.devices import aliases as _device_aliases
+from app.household import parse as _household
 from app.operator import allowlists as _allowlists
 from app.voice.intents import normalize_transcript, turkish_casefold
 
@@ -70,6 +78,10 @@ class LemmaReading(NamedTuple):
     splits: tuple[tuple[str, str], ...]
     #: (the word with an ending nobody said, casefolded; the word): ("notü", "not").
     invented: tuple[tuple[str, str], ...] = ()
+    #: Only with ``repair_words``: (the words as said, casefolded; the word they are read as) -
+    #: a plural ("alarmları", "alarmı"; "nöbetlerimden birini", "nöbeti") or one typo
+    #: ("alrmı", "alarmı"; "sütt", "süt"). A fused household sentence is in ``splits``.
+    repaired: tuple[tuple[str, str], ...] = ()
 
 
 # ------------------------------------------------------------------ the closed vocabularies
@@ -262,6 +274,7 @@ _NOUNS: Final[tuple[str, ...]] = (
     "buçuk",
     "bug",
     "resim",
+    "nöbet",
 )
 #: Stems whose vowel harmony is lexical, not the last vowel's: saati, maili, rutini.
 _FRONT: Final[frozenset[str]] = frozenset({"saat", "mail", "rutin"})
@@ -550,6 +563,96 @@ def _invented(token: str) -> str | None:
 _LETTER_SWAPS: Final = str.maketrans("ıiöü", "iıou")
 
 
+# ------------------------------------------------------------------ the plural, the typo
+
+#: "nöbetlerimden BİRİNİ": the partitive pronoun, built by the noun grammar (bir + 3sg + acc).
+_PARTITIVE: Final = _attach_noun("bir", ("poss3sg", "acc"))
+#: A typo is repaired by inserting a vowel only into a word whose stem is at least this long:
+#: "hata" is one letter from "hafta" and must never be what "hafta" is read as.
+_TYPO_MIN_STEM: Final = 5
+
+
+def _singular(token: str) -> tuple[str, tuple[str, ...]] | None:
+    """(the stem, the case) of a known noun said with a plural ending: "alarmları" -> ("alarm",
+    ("acc",)), "alarmlarımızı" -> ("alarm", ("acc",)), "nöbetlerimden" -> ("nöbet", ("abl",)).
+    The suffix grammar reads the token; the noun keeps its case and loses its number and its
+    possessor - the tables read the singular, and "which of them" is the tool's question, not
+    the router's. None for anything else."""
+    if "'" in token or is_negative(token):
+        return None
+    lemma = _lemma(token)
+    if lemma.kind != NOUN or "pl" not in lemma.suffixes:
+        return None
+    return lemma.stem, (lemma.suffixes[-1:] if lemma.suffixes[-1] in _CASES else ())
+
+
+def _household_item(word: str) -> bool:
+    """The word is a household item as its own bare name ("süt"), not an inflected form."""
+    key = _household.item_key(word)
+    return (
+        bool(key) and " " not in key and key == _household.fold(word) and _household.known_item(key)
+    )
+
+
+def _typo(token: str) -> str | None:
+    """The word a token is once ONE slip of the finger is undone, or None. Two slips only,
+    each checked against what this layer knows - never against a list of misspellings:
+
+    * a doubled letter collapsed ("alarmmı" -> "alarmı", "sütt" -> "süt") into a known noun
+      form or a household item's bare name;
+    * a dropped vowel put back ("alrmı" -> "alarmı") into a known noun form whose stem has
+      at least ``_TYPO_MIN_STEM`` letters - only when no doubled letter explains the token.
+
+    A deletion is never a repair (it would read "hafta" as "hata"), a consonant is never
+    inserted ("takim" stays "takım", not "takvim"), a known word or a negative form is never
+    touched, and a token two words are one edit from is left whole."""
+    if len(token) < 4 or "'" in token or is_negative(token) or _known(token) is not None:
+        return None
+    if _household_item(token):
+        return None
+    found: set[str] = set()
+    for i in range(1, len(token)):
+        if token[i] == token[i - 1]:
+            candidate = token[:i] + token[i + 1 :]
+            if _known(candidate) == NOUN or _household_item(candidate):
+                found.add(candidate)
+    if found:  # a doubled letter is the slip: "alarmmı" is not "alarmımı" with a vowel lost
+        return found.pop() if len(found) == 1 else None
+    for i in range(len(token) + 1):
+        for vowel in _VOWELS:
+            candidate = token[:i] + vowel + token[i:]
+            if _known(candidate) == NOUN and len(_lemma(candidate).stem) >= _TYPO_MIN_STEM:
+                found.add(candidate)
+    return found.pop() if len(found) == 1 else None
+
+
+def _repaired(token: str, following: str) -> tuple[str, bool] | None:
+    """(the word, whether the next word went with it) the reading writes for a token said in
+    the plural (:func:`_singular`; "nöbetlerimden birini" is the one accusative "nöbeti") or
+    with a typo (:func:`_typo`), else None."""
+    single = _singular(token)
+    if single is not None:
+        stem, case = single
+        if case == ("abl",) and following == _PARTITIVE:
+            return _attach_noun(stem, ("acc",)), True
+        return _attach_noun(stem, case), False
+    typo = _typo(token)
+    return (typo, False) if typo is not None else None
+
+
+def _household_split(token: str) -> tuple[str, str] | None:
+    """The two words a fused household sentence is ("sütbitti" -> süt + bitti): a household
+    item's bare name, then words the household table itself reads with it as a command. One
+    way only."""
+    found = [
+        (token[:cut], token[cut:])
+        for cut in range(_MIN_HALF, len(token) - _MIN_HALF + 1)
+        if _household_item(token[:cut])
+        and _household.parse_words([token[:cut], token[cut:]]) is not None
+    ]
+    return found[0] if len(found) == 1 else None
+
+
 # ------------------------------------------------------------------ the STT confusion list
 
 CONFUSIONS_FILE: Final[str] = "stt-confusions.json"
@@ -681,7 +784,9 @@ def _says_dont(words: list[re.Match[str]], folded: list[str], text: str) -> bool
     return False
 
 
-def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | None:
+def lemma_reading(
+    text: str, *, keep: Collection[str] = (), repair_words: bool = False
+) -> LemmaReading | None:
     """The sentence as layer 1 reads it, for the rule tables - or None when layer 1 changes
     nothing, or must not.
 
@@ -690,6 +795,11 @@ def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | No
     misin" -> "kapat"), and a fused token becomes its two words. A form named in ``keep`` is
     left as said (the caller's "this is a question, not a request" list), and so is everything
     inside quotes. A sentence that says "don't" has no reading at all (:func:`_says_dont`).
+
+    ``repair_words`` adds the word repairs (``LemmaReading.repaired``): a plural noun read as
+    its singular, one slip of the finger undone, a fused household sentence split. Off by
+    default: the tables read most plurals as they are ("Ekranları kapat"), so the repairs are
+    a reading for a sentence the words as heard left unrouted, never a rewrite of one routed.
     """
     quoted = [m.span() for m in _QUOTED_RE.finditer(text)]
     words = [
@@ -704,22 +814,39 @@ def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | No
     dropped: list[tuple[str, str]] = []
     splits: list[tuple[str, str]] = []
     invented: list[tuple[str, str]] = []
+    repaired: list[tuple[str, str]] = []
     cursor = 0
     index = 0
     while index < len(words):
         match, token = words[index], folded[index]
         raw = match.group()
         parts = [(raw, token)]
-        halves = _split(token) if len(token) == len(raw) else None
-        word = _invented(token) if halves is None and len(token) == len(raw) else None
+        same_length = len(token) == len(raw)
+        halves = _split(token) if same_length else None
+        word = _invented(token) if halves is None and same_length else None
+        end = match.end()
+        if word is not None:
+            parts = [(raw[: len(word)], word)]
+            invented.append((token, word))
+        elif halves is None and same_length and repair_words:
+            if _known(token) is None and not _household_item(token):
+                halves = _household_split(token)
+            following = folded[index + 1] if index + 1 < len(words) else ""
+            if following and text[end : words[index + 1].start()].strip():
+                following = ""  # punctuation closes the phrase: that word is not its own
+            repair = None if halves is not None else _repaired(token, following)
+            if repair is not None:
+                word, took_next = repair
+                said = f"{token} {following}" if took_next else token
+                parts = [(word, word)]
+                repaired.append((said, word))
+                if took_next:
+                    end = words[index + 1].end()
+                    index += 1
         if halves is not None:
             cut = len(halves[0])
             parts = [(raw[:cut], halves[0]), (raw[cut:], halves[1])]
             splits.append((token, " ".join(halves)))
-        elif word is not None:
-            parts = [(raw[: len(word)], word)]
-            invented.append((token, word))
-        end = match.end()
         written: list[str] = []
         for position, (said, part) in enumerate(parts):
             lemma = _lemma(part)
@@ -745,10 +872,12 @@ def lemma_reading(text: str, *, keep: Collection[str] = ()) -> LemmaReading | No
         out.append(" ".join(written))
         cursor = end
         index += 1
-    if not dropped and not splits and not invented:
+    if not dropped and not splits and not invented and not repaired:
         return None
     out.append(text[cursor:])
-    return LemmaReading("".join(out), tuple(dropped), tuple(splits), tuple(invented))
+    return LemmaReading(
+        "".join(out), tuple(dropped), tuple(splits), tuple(invented), tuple(repaired)
+    )
 
 
 def lemma_tokens(text: str, *, confusions: dict[str, str] | None = None) -> tuple[str, ...]:
