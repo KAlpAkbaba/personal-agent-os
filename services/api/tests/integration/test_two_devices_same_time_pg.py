@@ -82,7 +82,6 @@ def _count(sessions: sessionmaker[Session], model: type) -> int:
         return session.execute(select(func.count()).select_from(model)).scalar_one()
 
 
-@pytest.mark.xfail(strict=True, reason="conversation-segment-race-loses-lines")
 def test_two_devices_add_a_line_to_one_conversation_and_both_lines_stay(factory, settings) -> None:
     client = owner_client(settings)
     started = client.post("/v1/conversations", json={"mode": "manual"})
@@ -104,7 +103,6 @@ def test_two_devices_add_a_line_to_one_conversation_and_both_lines_stay(factory,
     assert _count(factory, SegmentRow) == n
 
 
-@pytest.mark.xfail(strict=True, reason="household-item-create-race-500")
 def test_two_devices_say_the_same_new_item_ran_out_and_one_item_is_kept(factory, settings) -> None:
     client = owner_client(settings)
 

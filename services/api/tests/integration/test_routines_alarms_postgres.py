@@ -958,10 +958,16 @@ def test_the_cloud_rings_a_wake_alarm_through_the_routine_engine_on_postgres(
         assert fresh.get(Routine, routine_id).status == "completed"
 
 
+def _within_a_year() -> str:
+    """A date the alarm surface accepts: a month ahead, inside its one-year horizon."""
+    return (datetime.now() + timedelta(days=30)).date().isoformat()
+
+
 def test_one_character_too_many_is_refused_by_the_alarm_surface_not_by_postgres(
     settings: Settings, db: sessionmaker[Session], made: SimpleNamespace, token: str
 ) -> None:
-    when = {"date": "2099-01-01", "time": "07:30"}
+    # Within the alarm surface's one-year horizon (alarm-household-watch-input-edges).
+    when = {"date": _within_a_year(), "time": "07:30"}
     with _client(settings) as client:
         long_label = client.post(
             "/v1/alarms", json={"when": when, "label": _exactly(201, f"pgcov-{token} ")}
@@ -1063,15 +1069,6 @@ def test_a_nul_character_in_a_routine_is_refused_by_the_surface_not_by_postgres(
             assert answer.status_code == 422, answer.text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DataError,
-    reason=(
-        "DEFECT (queued for the lead): POST /v1/alarms answers 500 for a U+0000 in the "
-        "label, on the INSERT into wake_alarms - psycopg.DataError: PostgreSQL text fields "
-        "cannot contain NUL (0x00) bytes"
-    ),
-)
 def test_a_nul_character_in_an_alarm_label_is_refused_by_the_surface_not_by_postgres(
     settings: Settings, made: SimpleNamespace, token: str
 ) -> None:
@@ -1081,7 +1078,7 @@ def test_a_nul_character_in_an_alarm_label_is_refused_by_the_surface_not_by_post
         answer = client.post(
             "/v1/alarms",
             json={
-                "when": {"date": "2099-01-01", "time": "07:30"},
+                "when": {"date": _within_a_year(), "time": "07:30"},
                 "test": True,
                 "label": f"pgcov-{token} sıfır\x00bayt",
             },

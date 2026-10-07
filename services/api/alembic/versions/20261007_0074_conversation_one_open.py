@@ -1,7 +1,7 @@
 """One open conversation, held by the database (test team, 2026-10-06).
 
-Revision ID: 0071_conversation_one_open
-Revises: 0072_money_ledger
+Revision ID: 0074_conversation_one_open
+Revises: 0073_memory_text_trgm
 Create Date: 2026-10-06
 
 Round t-manual-20261006d: eight concurrent 'konuşmayı başlat' (phone and web at once) left
@@ -26,8 +26,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0071_conversation_one_open"
-down_revision: str | None = "0072_money_ledger"
+revision: str = "0074_conversation_one_open"
+down_revision: str | None = "0073_memory_text_trgm"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

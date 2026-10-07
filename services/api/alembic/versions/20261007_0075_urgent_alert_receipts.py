@@ -1,7 +1,7 @@
 """The alarm rung's receipts: one row per alarm Pushover accepted.
 
-Revision ID: 0073_urgent_alert_receipts
-Revises: 0072_money_ledger
+Revision ID: 0075_urgent_alert_receipts
+Revises: 0074_conversation_one_open
 Create Date: 2026-10-07
 
 Written on ``0072_money_ledger`` (the head of the integration base this card started from).
@@ -27,8 +27,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0073_urgent_alert_receipts"
-down_revision: str | None = "0072_money_ledger"
+revision: str = "0075_urgent_alert_receipts"
+down_revision: str | None = "0074_conversation_one_open"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

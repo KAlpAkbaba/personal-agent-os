@@ -170,7 +170,6 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
 from app.urgent_alert.loop import HEALTH_NAME as URGENT_ALERT_HEALTH_NAME
-from app.urgent_alert.routes import router as urgent_alert_router
 from app.urgent_alert.wiring import build_alarm_rung, build_receipt_loop
 from app.voice.crypto import ProfileCipher
 from app.voice.intent_router import (
@@ -1135,8 +1134,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # one-time call audio Twilio fetches (the token is the authority).
     app.include_router(telephony_router)
     app.include_router(telephony_audio_router)
-    # urgent-alert-wire: the Kokpit status and the important test alert (owner-gated).
-    app.include_router(urgent_alert_router)
     # conversation-transcripts: conversations as text (/v1/conversations).
     app.include_router(conversations_router)
     # home-stock-list: the house's stock and the shopping list (/v1/household).

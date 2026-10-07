@@ -8,7 +8,8 @@
 
 import { apiFetch } from "../../lib/session";
 
-export const URGENT_ALERT_PATH = "/v1/urgent-alert";
+export const URGENT_ALERT_STATUS_PATH = "/v1/urgent-alert/status";
+export const URGENT_ALERT_TEST_PATH = "/v1/urgent-alert/test";
 
 /** Exactly what `GET /v1/urgent-alert/status` returns (app/urgent_alert/routes.py). */
 export type UrgentAlertStatus = {
@@ -33,13 +34,13 @@ async function refusal(response: Response): Promise<Refusal> {
 }
 
 export async function fetchStatus(): Promise<{ ok: true; status: UrgentAlertStatus } | Refusal> {
-  const response = await apiFetch(`${URGENT_ALERT_PATH}/status`);
+  const response = await apiFetch(URGENT_ALERT_STATUS_PATH);
   if (!response.ok) return refusal(response);
   return { ok: true, status: (await response.json()) as UrgentAlertStatus };
 }
 
 export async function sendTest(): Promise<{ ok: true; id: string } | Refusal> {
-  const response = await apiFetch(`${URGENT_ALERT_PATH}/test`, { method: "POST" });
+  const response = await apiFetch(URGENT_ALERT_TEST_PATH, { method: "POST" });
   if (!response.ok) return refusal(response);
   return { ok: true, id: ((await response.json()) as { id: string }).id };
 }
