@@ -171,10 +171,23 @@ def list_items(db: Session) -> list[HouseholdItem]:
     )
 
 
+def _locked(db: Session, item_id: uuid.UUID) -> HouseholdItem | None:
+    """The row, locked until this request commits; None when it is gone - forgotten by another
+    device while this one waited (test team round t-r10070152: 8 concurrent 'unut' answered 200
+    twice, 'bitti' racing 'unut' answered 500). SQLite has no row locks and needs none."""
+    return db.scalars(
+        select(HouseholdItem)
+        .where(HouseholdItem.id == item_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).first()
+
+
 def _get_or_create(db: Session, name: str, now: datetime) -> HouseholdItem:
     clean = clean_name(name)
     key = _key(clean)
-    row = find_item(db, clean)
+    found = find_item(db, clean)
+    row = _locked(db, found.id) if found is not None else None
     if row is not None:
         return row
     count = len(db.scalars(select(HouseholdItem.id)).all())
@@ -196,10 +209,11 @@ def _get_or_create(db: Session, name: str, now: datetime) -> HouseholdItem:
     except IntegrityError:
         # Another device said the same new item between the read and this insert and its row
         # holds the key: only the savepoint is undone, and this request lands on that row.
-        existing = db.scalars(select(HouseholdItem).where(HouseholdItem.key == key)).first()
-        if existing is None:
+        existing = db.scalars(select(HouseholdItem.id).where(HouseholdItem.key == key)).first()
+        won = _locked(db, existing) if existing is not None else None
+        if won is None:
             raise
-        return existing
+        return won
     return row
 
 
@@ -276,7 +290,7 @@ def remove_by_id(db: Session, item_id: uuid.UUID, *, now: datetime) -> Household
 
 
 def forget_item(db: Session, item_id: uuid.UUID) -> int:
-    row = db.get(HouseholdItem, item_id)
+    row = _locked(db, item_id)
     if row is None:
         return 0
     db.execute(delete(HouseholdEvent).where(HouseholdEvent.item_id == item_id))
