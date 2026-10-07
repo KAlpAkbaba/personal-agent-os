@@ -500,7 +500,7 @@ def process_conversation(
                 relation=item.relation,
                 conversation_id=cid,
                 talked_at=talked_at,
-                topic=item.segment.text,
+                topic_seq=item.segment.seq,
             )
         db.add(
             FollowupRow(

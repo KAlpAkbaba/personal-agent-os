@@ -1,7 +1,7 @@
 """Person cards and the follow-ups taken from conversations.
 
-Revision ID: 0071_conversation_followups
-Revises: 0070_household_stock
+Revision ID: 0076_conversation_followups
+Revises: 0075_urgent_alert_receipts
 Create Date: 2026-10-06
 
 Another card's migration that lands first re-points ``down_revision`` at merge (the
@@ -12,8 +12,10 @@ name and its Turkish-folded key (unique), the relation when somebody said it, an
 conversation they were in. ``people_followups`` is one row per promise or date taken from a
 conversation; each cites its line (``conversation_id`` + ``segment_seq`` + ``quote``) and a
 calendar item waits in ``calendar_state='proposed'`` until the owner says 'tamam'. A deleted
-conversation leaves its follow-ups (the quote is on the row) with ``conversation_id`` NULL; a
-deleted card takes its follow-ups with it.
+conversation takes its follow-ups with it (``ON DELETE CASCADE``: 'unut' and deleting one
+conversation leave none of the other side's words anywhere - the owner's KVKK rule); a deleted
+card takes its follow-ups too. The card keeps no line's text: ``last_topic_seq`` points at the
+line, read from the transcript while it exists.
 
 **Expand-only and reversible.** Two new tables and their indexes, each foreign key pointing at
 ``conversations`` (0069) or at each other; nothing existing is touched, so both colours of a
@@ -29,8 +31,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0071_conversation_followups"
-down_revision: str | None = "0070_household_stock"
+revision: str = "0076_conversation_followups"
+down_revision: str | None = "0075_urgent_alert_receipts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -49,7 +51,7 @@ def upgrade() -> None:
             sa.ForeignKey("conversations.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("last_topic", sa.String(length=400), nullable=True),
+        sa.Column("last_topic_seq", sa.Integer(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("name_key", name="uq_people_cards_name_key"),
@@ -66,7 +68,7 @@ def upgrade() -> None:
         sa.Column(
             "conversation_id",
             sa.Uuid(),
-            sa.ForeignKey("conversations.id", ondelete="SET NULL"),
+            sa.ForeignKey("conversations.id", ondelete="CASCADE"),
             nullable=True,
         ),
         sa.Column("kind", sa.String(length=16), nullable=False),

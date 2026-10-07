@@ -120,7 +120,7 @@ async def list_cards(request: Request) -> dict[str, Any]:
                         "last_conversation_id": (
                             str(card.last_conversation_id) if card.last_conversation_id else None
                         ),
-                        "last_topic": card.last_topic,
+                        "last_topic_seq": card.last_topic_seq,
                         "open_promises": [
                             followups.item_dict(r, card.name)
                             for r in people.open_promises(db, card.id)
@@ -177,3 +177,7 @@ async def last_talk(name: str, request: Request) -> dict[str, Any]:
             }
 
     return await asyncio.to_thread(run)
+
+
+#: Bound by app.registry (create_app), not by a line in main.py.
+ROUTERS = [router]

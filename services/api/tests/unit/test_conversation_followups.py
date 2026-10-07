@@ -38,7 +38,6 @@ from app.main import create_app
 from app.operator.models import ObjectFocusRow
 from app.people import service as people
 from app.people.models import FollowupRow, PersonCardRow
-from app.people.routes import router as people_router
 from tests.identity_support import authenticate, install_identity
 from tests.mail_calendar_support import (
     build_fake_calendar_provider,
@@ -353,6 +352,66 @@ def test_last_talk_with_ayse_has_the_date(factory) -> None:
         assert talk.conversation_id == cid
 
 
+def test_last_talk_reads_the_topic_from_the_line_the_card_keeps_no_text(factory) -> None:
+    with factory() as db:
+        cid = _conversation(db)
+        _process(db, cid)
+        talk = people.last_talk(db, "Ahmet")
+        assert talk.topic == LINES[0][1]  # read from the transcript's line
+        assert LINES[0][1] in talk.speech
+        for card in db.scalars(select(PersonCardRow)):
+            kept = " ".join(str(v) for v in vars(card).values() if isinstance(v, str))
+            assert not any(text[:12] in kept for _, text in LINES), kept
+
+
+def _their_words_left(db) -> list[str]:
+    """Every stored value that still holds a piece of the conversation's lines."""
+    left = []
+    for model in (FollowupRow, PersonCardRow, SegmentRow, ConversationRow):
+        for row in db.scalars(select(model)):
+            for value in vars(row).values():
+                if isinstance(value, str) and any(
+                    piece in value
+                    for _, text in LINES
+                    for piece in (text[:12], "seni arayacak", "yarın seni ararım")
+                ):
+                    left.append(f"{model.__tablename__}: {value}")
+    return left
+
+
+def _foreign_keys_on(factory) -> None:
+    # SQLite enforces ON DELETE only with this pragma; the one StaticPool connection keeps it.
+    with factory.kw["bind"].connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def test_unut_leaves_none_of_their_words(factory) -> None:
+    _foreign_keys_on(factory)
+    with factory() as db:
+        cid = _conversation(db)
+        _process(db, cid)
+        assert service.forget_all(db, LiveConversations()) == 1
+        db.commit()
+        db.expire_all()
+        assert db.execute(select(func.count(FollowupRow.id))).scalar_one() == 0
+        assert _their_words_left(db) == []
+        talk = people.last_talk(db, "Ahmet")  # the card stays: the name and the day
+        assert talk.found and "5 Ekim 2026" in talk.speech and talk.topic is None
+        assert not people.recall_promises(db, "Ahmet").promises
+
+
+def test_deleting_the_conversation_takes_its_followups(factory) -> None:
+    _foreign_keys_on(factory)
+    with factory() as db:
+        cid = _conversation(db)
+        _process(db, cid)
+        assert service.delete_conversation(db, LiveConversations(), cid)
+        db.commit()
+        db.expire_all()
+        assert db.execute(select(func.count(FollowupRow.id))).scalar_one() == 0
+        assert _their_words_left(db) == []
+
+
 def test_unknown_person_is_said_so(factory) -> None:
     with factory() as db:
         assert not people.recall_promises(db, "Mehmet").found
@@ -398,11 +457,7 @@ def test_no_key_extracts_nothing_and_says_so(factory) -> None:
 
 def test_routes_through_the_application(factory) -> None:
     settings = Settings(_env_file=None, calendar_write_enabled=True)
-    app = create_app(settings)
-    # app/main.py is outside this card's area: the registration line is the lead's
-    # (ALAN_ISTEGI); until it lands, mount the router onto the real application here.
-    if not any(getattr(r, "path", "").startswith("/v1/people") for r in app.routes):
-        app.include_router(people_router)
+    app = create_app(settings)  # the router comes from people/routes.py's ROUTERS
     install_identity(app, settings=settings)
     artifacts = ArtifactRuntime(settings)
     artifacts._engine = factory.kw["bind"]

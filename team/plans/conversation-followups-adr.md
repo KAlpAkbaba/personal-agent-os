@@ -9,10 +9,16 @@ kişiler (a) bir kişi kartına, (b) takvime — ama 'tamam' demeden yazılmadan
 vermiştim', 'Ayşe ile en son ne konuştuk' tarihle cevaplansın. Hiçbir şey uydurulmasın.
 
 ## Karar
-1. **İki yeni tablo** (`people_cards`, `people_followups`; göç `0071_conversation_followups`,
-   genişletme-yalnız, geri alınabilir). Kart Türkçe katlanmış adla tekil; takip satırı alıntısını
-   (`quote`) ve satırını (`conversation_id` + `segment_seq`) taşır. Konuşma silinirse takip kalır
-   (`conversation_id` NULL, alıntı satırda); kart silinirse takipleri gider.
+1. **İki yeni tablo** (`people_cards`, `people_followups`; göç `0076_conversation_followups`,
+   `0075_urgent_alert_receipts` üstüne, genişletme-yalnız, geri alınabilir). Kart Türkçe katlanmış
+   adla tekil; takip satırı alıntısını (`quote`) ve satırını (`conversation_id` + `segment_seq`)
+   taşır. **KVKK (sahibin kuralı 2026-09-18/19: başkalarının konuşması 'unut'a kadar):** takip
+   konuşmasıyla yaşar — `conversation_id` `ON DELETE CASCADE`; 'unut' (`forget_all`) ya da tek
+   konuşmanın silinmesi karşı tarafın hiçbir sözünü hiçbir tabloda bırakmaz. Kart satır METNİ
+   tutmaz: `last_topic_seq` yalnız satırın numarasıdır, konu hatırlamada dökümden okunur; döküm
+   silinince konu yoktur, kartta yalnız ad, ilişki ve son konuşmanın günü kalır. Kart silinirse
+   takipleri gider. (İlk taslaktaki "konuşma silinse de takip alıntısıyla kalır" kararı denetimde
+   KVKK'ya aykırı bulundu ve kaldırıldı.)
 2. **Çıkarım bir sağlayıcı arayüzünün arkasında** (`FollowupExtractor`): Haiku
    (`assistant_chat_model`), sabit şema araç olarak ZORLANIR (`tool_choice`), döküm kullanıcı
    turunda VERİ olarak gider, sistem isteminde değil. Anahtar yoksa `NoFollowupExtractor` hiçbir şey
@@ -31,6 +37,8 @@ vermiştim', 'Ayşe ile en son ne konuştuk' tarihle cevaplansın. Hiçbir şey 
    eklemez).
 6. `CalendarService` iki küçük ek aldı: `configured` özelliği ve `read_proposal(proposal_id=…)`
    (odak yerine adla geri okuma — toplu soru birden çok öneriyi birlikte okur).
+7. **Rotalar `create_app`'ten**: `app/people/routes.py` `ROUTERS = [router]` ilan eder,
+   `app/registry.py` bağlar; `main.py`'ye satır eklenmez (registry-models-and-routers kuralı).
 
 ## Sonuçlar / açık kalanlar
 - Tetik: `POST /v1/conversations/{id}/followups` (konuşma bittikten sonra) ve

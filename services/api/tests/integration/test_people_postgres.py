@@ -3,7 +3,8 @@
 
 What SQLite cannot say and PostgreSQL does: the tables are the ones the MIGRATION makes (the
 model never builds them here), the foreign keys to ``conversations`` behave (a deleted
-conversation leaves its follow-ups with their quotes, a deleted card takes its follow-ups), the
+conversation takes its follow-ups, and 'unut' leaves none of the other side's words in any
+table - the owner's KVKK rule; a deleted card takes its follow-ups), the
 folded name is unique and the CHECKs refuse an unknown kind or calendar state in the database
 too, a timestamptz comes back aware, and ``downgrade()`` takes both tables away cleanly.
 
@@ -21,7 +22,6 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from alembic.script import ScriptDirectory
 from sqlalchemy import delete, func, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
@@ -35,6 +35,7 @@ from app.conversations.service import LiveConversations
 from app.db import build_engine, build_session_factory
 from app.people import service as people
 from app.people.models import FollowupRow, PersonCardRow
+from tests.integration.migration_ids import parent_of, revision_named
 from tests.mail_calendar_support import (
     build_fake_calendar_provider,
     build_fake_calendar_writer,
@@ -43,7 +44,6 @@ from tests.mail_calendar_support import (
 pytestmark = pytest.mark.integration
 
 API_ROOT = Path(__file__).resolve().parents[2]
-REVISION = "0071_conversation_followups"
 MARK = "followups-postgres-test"
 NOON = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
@@ -91,7 +91,7 @@ CARDS = {
     "relation": ("character varying", 60, "YES"),
     "last_talk_at": ("timestamp with time zone", None, "YES"),
     "last_conversation_id": ("uuid", None, "YES"),
-    "last_topic": ("character varying", 400, "YES"),
+    "last_topic_seq": ("integer", None, "YES"),
     "created_at": ("timestamp with time zone", None, "NO"),
     "updated_at": ("timestamp with time zone", None, "NO"),
 }
@@ -121,9 +121,9 @@ def _alembic() -> AlembicConfig:
 
 
 def _before() -> str:
-    revision = ScriptDirectory.from_config(_alembic()).get_revision(REVISION)
-    assert revision is not None and isinstance(revision.down_revision, str)
-    return revision.down_revision
+    # the card names the file conversation_followups.py (no number); "_followups.py" matches
+    # it now and after the lead numbers it at merge
+    return parent_of(revision_named("followups"))
 
 
 @pytest.fixture(scope="module")
@@ -246,16 +246,54 @@ def test_keys_checks_and_foreign_keys_hold_in_the_database(factory) -> None:
             session.commit()
         session.rollback()
     with factory() as session:
-        # A deleted conversation leaves the follow-ups, quotes and all.
+        # A deleted conversation takes its follow-ups (KVKK: their words go with it).
         assert service.delete_conversation(session, LiveConversations(), cid)
         session.commit()
-        rows = session.scalars(select(FollowupRow)).all()
-        assert len(rows) == 2 and all(r.conversation_id is None for r in rows)
-        assert all(r.quote for r in rows)
+        assert session.execute(select(func.count(FollowupRow.id))).scalar_one() == 0
+        card = session.scalars(select(PersonCardRow)).one()
+        assert card.last_conversation_id is None and card.last_topic_seq is not None
         # A deleted card takes its follow-ups.
+        cid = _conversation(session)
+        followups.process_conversation(session, cid, followups.FakeFollowupExtractor(ITEMS))
+        session.commit()
         session.execute(delete(PersonCardRow))
         session.commit()
         assert session.execute(select(func.count(FollowupRow.id))).scalar_one() == 0
+
+
+def _rows_holding(session: Session, table: str, piece: str) -> int:
+    """Rows of ``table`` with ``piece`` in ANY text column (read from the catalogue)."""
+    columns = [
+        name
+        for name, (kind, _, _) in _columns(session, table).items()
+        if kind in ("character varying", "text")
+    ]
+    where = " OR ".join(f"{c} ILIKE :piece" for c in columns)
+    return session.execute(
+        sql_text(f"SELECT count(*) FROM {table} WHERE {where}"), {"piece": f"%{piece}%"}
+    ).scalar_one()
+
+
+def test_unut_leaves_none_of_their_words_in_any_table(factory) -> None:
+    theirs = LINES[1][1]  # the other side's line, word for word
+    with factory() as session:
+        cid = _conversation(session)
+        followups.process_conversation(session, cid, followups.FakeFollowupExtractor(ITEMS))
+        session.commit()
+        assert _rows_holding(session, "people_followups", "seni ararım") == 1
+        others = session.execute(
+            select(func.count(ConversationRow.id)).where(ConversationRow.title != MARK)
+        ).scalar_one()
+        if others:  # 'unut' takes EVERY conversation: never on a database with the owner's
+            pytest.skip("conversations of the owner's on this database; run on a scratch one")
+        assert service.forget_all(session, LiveConversations()) >= 1
+        session.commit()
+        for table in ("people_followups", "people_cards", "conversation_segments", "conversations"):
+            for piece in (theirs, "seni ararım", "seni arayacak"):
+                assert _rows_holding(session, table, piece) == 0, (table, piece)
+        assert session.execute(select(func.count(FollowupRow.id))).scalar_one() == 0
+        talk = people.last_talk(session, "Ahmet")
+        assert talk.found and talk.topic is None
 
 
 def test_downgrade_drops_both_tables_and_upgrade_recreates_them(factory) -> None:

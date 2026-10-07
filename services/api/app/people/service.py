@@ -15,10 +15,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.conversations.models import SegmentRow
 from app.conversations.service import name_key
 from app.people.models import (
     NAME_WIDTH,
-    QUOTE_WIDTH,
     RELATION_WIDTH,
     FollowupRow,
     PersonCardRow,
@@ -75,7 +75,7 @@ def card_for(
     relation: str | None = None,
     conversation_id: uuid.UUID | None = None,
     talked_at: datetime | None = None,
-    topic: str | None = None,
+    topic_seq: int | None = None,
 ) -> PersonCardRow:
     """The card for ``name`` (made when missing); a newer talk moves 'last talk' forward."""
     clean = " ".join(name.split())[:NAME_WIDTH]
@@ -91,9 +91,10 @@ def card_for(
     if talked_at is not None and (
         row.last_talk_at is None or local(talked_at) >= local(row.last_talk_at)
     ):
+        if row.last_conversation_id != conversation_id or row.last_topic_seq is None:
+            row.last_topic_seq = topic_seq  # the first line of that conversation that named them
         row.last_talk_at = talked_at
         row.last_conversation_id = conversation_id
-        row.last_topic = (topic or "")[:QUOTE_WIDTH] or None
     row.updated_at = now
     db.flush()
     return row
@@ -186,11 +187,18 @@ def last_talk(db: Session, name: str) -> TalkView:
         return TalkView(name, False, f"{name} ile konuştuğunuza dair bir kaydım yok.")
     when = say_day(card.last_talk_at, year=True) + ", " + local(card.last_talk_at).strftime("%H:%M")
     speech = f"{card.name} ile en son konuşma: {when}."
-    if card.last_topic:
-        speech += f" Konu: '{card.last_topic}'."
-    return TalkView(
-        card.name, True, speech, card.last_talk_at, card.last_conversation_id, card.last_topic
-    )
+    topic = None
+    if card.last_conversation_id is not None and card.last_topic_seq is not None:
+        # Read from the transcript: once it is deleted ('unut') there is no topic to say.
+        topic = db.execute(
+            select(SegmentRow.text).where(
+                SegmentRow.conversation_id == card.last_conversation_id,
+                SegmentRow.seq == card.last_topic_seq,
+            )
+        ).scalar_one_or_none()
+    if topic:
+        speech += f" Konu: '{topic}'."
+    return TalkView(card.name, True, speech, card.last_talk_at, card.last_conversation_id, topic)
 
 
 def list_cards(db: Session) -> list[PersonCardRow]:

@@ -9,7 +9,9 @@ conversation - a promise (``direction`` 'owner' = he promised, 'them' = they pro
 date - and every row cites the line it came from (``conversation_id`` + ``segment_seq`` +
 ``quote``, the quote being a piece of that line's text). A calendar item is ``calendar_state``
 'proposed' until the owner says 'tamam' ('written') or no ('declined'); NULL is "not a
-calendar item". The quote is kept on the row: the follow-up survives the transcript's deletion.
+calendar item". A follow-up lives as long as its conversation (``ON DELETE CASCADE``): 'unut'
+and deleting a conversation leave none of the other side's words in either table, and the card
+keeps no line's text - ``last_topic_seq`` points at the line, read while the transcript exists.
 """
 
 from __future__ import annotations
@@ -52,8 +54,9 @@ class PersonCardRow(Base):
     last_conversation_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
     )
-    #: The first cited line of the last conversation that mentioned them.
-    last_topic: Mapped[str | None] = mapped_column(String(QUOTE_WIDTH), nullable=True)
+    #: The first cited line (``seq``) of the last conversation that mentioned them; its text
+    #: is read from the transcript, never copied here.
+    last_topic_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -79,7 +82,7 @@ class FollowupRow(Base):
         Uuid, ForeignKey("people_cards.id", ondelete="CASCADE"), nullable=True, index=True
     )
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True, index=True
     )
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     direction: Mapped[str | None] = mapped_column(String(8), nullable=True)
