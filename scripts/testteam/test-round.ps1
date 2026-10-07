@@ -115,6 +115,8 @@ $ClaudePrefixArguments = @($ClaudePrefixArguments | ForEach-Object { [string]$_ 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $Round) { $Round = "t" + [datetime]::UtcNow.ToString("yyyyMMddHHmm") }
 if ($Round -notmatch '^[a-z0-9][a-z0-9-]{0,40}$') { throw "-Round: a-z, 0-9 ve '-' (en çok 41)" }
+# The board allows RATE_PER_TASK_HOUR notes per task: the round posts under its id, a job under its card id.
+$roundTask = Get-TestTeamBoardTask -Id $Round
 $settingsPath = Join-Path $TeamRoot "cycle-settings.json"
 if (-not $OutRoot) {
     $tempRoot = Read-TeamRunTempRoot -Path $settingsPath
@@ -139,10 +141,10 @@ function Write-Json {
 
 function Send-Note {
     # The board never stops the round (board.ps1 says UYARI and exits 0 when it cannot post).
-    param([string]$Seat, [string]$Text, [string]$To = "")
+    param([string]$Seat, [string]$Text, [string]$To = "", [string]$Task = $roundTask)
     if ($NoBoard) { return }
     $board = if ($BoardScript) { $BoardScript } else { Join-Path $repoRoot "scripts\team\board.ps1" }
-    $arguments = @("-NoProfile", "-File", $board, "post", "-Seat", $Seat, "-Task", "test-team", "-Kind", "bilgi", "-Text", $Text)
+    $arguments = @("-NoProfile", "-File", $board, "post", "-Seat", $Seat, "-Task", $Task, "-Kind", "bilgi", "-Text", $Text)
     if ($To) { $arguments += @("-To", $To) }
     try { & $powershell @arguments 2>&1 | ForEach-Object { Write-Host "  pano: $_" } } catch { Write-Host "  pano: UYARI: $($_.Exception.Message)" }
 }
@@ -161,12 +163,12 @@ function Get-RoleModel {
 }
 
 function Start-RoleProcess {
-    param([string]$Role, [string]$Prompt, [string]$Seat)
+    param([string]$Role, [string]$Prompt, [string]$Seat, [string]$Task = $roundTask)
     # .claude/agents/ is the installed copy; scripts/testteam/roles/ is the source it is copied from.
     $roleFile = Join-Path $repoRoot ".claude\agents\$Role.md"
     if (-not (Test-Path -LiteralPath $roleFile)) { $roleFile = Join-Path $PSScriptRoot "roles\$Role.md" }
     $arguments = Get-TeamRunArguments -RoleFile $roleFile -Model (Get-RoleModel -Role $Role) -PrefixArguments $ClaudePrefixArguments
-    $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = "test-team" }
+    $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = $Task }
     return (Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $Prompt -WorkingDirectory $repoRoot -Environment $environment)
 }
 
@@ -412,12 +414,12 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         $resultFile = Join-Path $roundDir "$($card.id).result.json"
         Set-TestTeamCardState -Card $card -To "running"
         Write-Json -Path $cardsPath -Document $document
-        $run = Start-RoleProcess -Role "tester" -Prompt (New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round) -Seat $card.tester
+        $run = Start-RoleProcess -Role "tester" -Prompt (New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round) -Seat $card.tester -Task (Get-TestTeamBoardTask -Id $card.id)
         [void]$inFlight.Add([pscustomobject]@{ Card = $card; Run = $run; ResultFile = $resultFile; Deadline = [datetime]::UtcNow.AddMinutes($RunMinutes) })
         $busy += $card.tester
         Write-Host "  $($card.tester) <- $($card.id) ($($card.family))"
         # The Ofis' Test odası (officeTestRoom.tsx) reads "iş: <job>" and "sonuç: <state> - <job> - ...".
-        Send-Note -Seat $card.tester -Text (Format-TestTeamSeatNote -Card $card)
+        Send-Note -Seat $card.tester -Task (Get-TestTeamBoardTask -Id $card.id) -Text (Format-TestTeamSeatNote -Card $card)
     }
     $over = @($inFlight | Where-Object { Test-TeamRunOver -Run $_.Run -Deadline $_.Deadline })
     if (@($over).Count -eq 0) { Start-Sleep -Milliseconds 300; continue }
@@ -463,7 +465,7 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         if ($null -ne $result) { [void]$results.Add($result) }
         Write-Json -Path $cardsPath -Document $document
         Write-Host "  $($entry.Card.tester) -> $($entry.Card.id): $state"
-        Send-Note -Seat $entry.Card.tester -Text (Format-TestTeamSeatNote -Card $entry.Card -Result $result)
+        Send-Note -Seat $entry.Card.tester -Task (Get-TestTeamBoardTask -Id $entry.Card.id) -Text (Format-TestTeamSeatNote -Card $entry.Card -Result $result)
     }
 }
 
