@@ -1534,14 +1534,30 @@ function Get-TeamLockDecision {
         free      - nobody holds it;
         stale     - held for more than six hours: taken over, and said so;
         ours      - held by this machine: a run of ours died, or is running;
+        dead      - (with -ProcessAlive) held by this machine, and the pid that took it is gone;
         held      - held by the other machine: the cycle stops.
+
+        -ProcessAlive { param($ProcessId, $Since) -> bool } is this machine's process table. With
+        it, for THIS machine's lock the pid is looked at BEFORE the age: gone is "dead" (the
+        acquire then says takeover_dead, the one word the server gives our lock up to), alive
+        is "ours" whatever the age - a running cycle of ours is never taken over. Measured
+        2026-10-07: a 13-hour-old lock of a stopped run was judged "stale" here, sent as not
+        dead, and refused by the server, which counts the hours from the holder's last status.
     #>
-    param($Lock, [Parameter(Mandatory = $true)][string]$Machine, [datetime]$Now = [datetime]::UtcNow)
+    param($Lock, [Parameter(Mandatory = $true)][string]$Machine, [datetime]$Now = [datetime]::UtcNow, [scriptblock]$ProcessAlive = $null)
     if ($null -eq $Lock -or -not [bool](Get-TeamProperty -InputObject $Lock -Name "held" -Default $false)) {
         return [pscustomobject]@{ MayRun = $true; Kind = "free"; Holder = ""; Since = "" }
     }
     $holder = [string](Get-TeamProperty -InputObject $Lock -Name "machine" -Default "")
     $since = [string](Get-TeamProperty -InputObject $Lock -Name "acquired_at" -Default "")
+    if ($null -ne $ProcessAlive -and $holder -and $holder.ToUpperInvariant() -eq $Machine.ToUpperInvariant()) {
+        $holderPid = 0
+        [void][int]::TryParse([string](Get-TeamProperty -InputObject $Lock -Name "pid" -Default 0), [ref]$holderPid)
+        if ([bool](& $ProcessAlive $holderPid $since)) {
+            return [pscustomobject]@{ MayRun = $false; Kind = "ours"; Holder = $holder; Since = $since }
+        }
+        return [pscustomobject]@{ MayRun = $true; Kind = "dead"; Holder = $holder; Since = $since }
+    }
     $at = ConvertFrom-TeamTimestamp -Text $since
     # A lock that does not say when it was taken cannot be shown to be fresh.
     if ($null -eq $at -or ($Now.ToUniversalTime() - $at).TotalHours -ge $script:TeamLockStaleHours) {
@@ -1569,6 +1585,21 @@ function New-TeamLock {
 }
 
 function New-TeamLockReleased { return [pscustomobject]@{ held = $false } }
+
+function Test-TeamLockHolderAlive {
+    <# Whether the process that took a lock of this machine is still running: the pid exists, and
+       it did not start after the lock was taken (a pid reused by another process after a restart
+       is not the holder). A start time that cannot be read counts as the holder: alive. #>
+    param([int]$ProcessId, [string]$Since)
+    if ($ProcessId -le 0) { return $false }
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $process) { return $false }
+    $taken = ConvertFrom-TeamTimestamp -Text $Since
+    if ($null -eq $taken) { return $true }
+    $started = $null
+    try { $started = $process.StartTime.ToUniversalTime() } catch { return $true }
+    return ($started -le $taken.AddMinutes(1))
+}
 
 # ---------------------------------------------------------------------------- names
 
@@ -1726,6 +1757,32 @@ function Set-TeamLockApi {
     )
     $body = [ordered]@{ action = "acquire"; machine = $Machine; cycle_id = $CycleId; pid = $PID; takeover_dead = $TakeoverDead }
     return (Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/lock" -Body $body)
+}
+
+function Enter-TeamLockApi {
+    <# Takes the lock as the decision (Get-TeamLockDecision) found it: takeover_dead is said only
+       for this machine's dead run. Acquired, the server's Answer, and - when refused - the Stop
+       line of the report, which names the server's answer and what was sent: the server keeps
+       its own clock (the holder's last status), and a refusal that does not say so is two
+       clocks nobody can tell apart (2026-10-07). #>
+    param(
+        [Parameter(Mandatory = $true)]$Store,
+        [Parameter(Mandatory = $true)][string]$Machine,
+        [Parameter(Mandatory = $true)][string]$CycleId,
+        [Parameter(Mandatory = $true)]$Decision
+    )
+    $dead = ([string]$Decision.Kind -eq "dead")
+    $answer = Set-TeamLockApi -Store $Store -Machine $Machine -CycleId $CycleId -TakeoverDead $dead
+    $acquired = [bool](Get-TeamProperty -InputObject $answer -Name "acquired" -Default $false)
+    $stop = ""
+    if (-not $acquired) {
+        $kind = [string](Get-TeamProperty -InputObject $answer -Name "kind" -Default "")
+        $holder = [string](Get-TeamProperty -InputObject $answer -Name "holder" -Default "")
+        $since = [string](Get-TeamProperty -InputObject $answer -Name "since" -Default "")
+        $holderPid = [string](Get-TeamProperty -InputObject $answer -Name "pid" -Default "")
+        $stop = "kilit $holder makinesinde ($since); sunucu reddetti: kind=$kind, pid=$holderPid (bu makinenin kararı: $([string]$Decision.Kind), gönderilen takeover_dead=$($dead.ToString().ToLowerInvariant())); bu döngü hiçbir şey çalıştırmadı"
+    }
+    return [pscustomobject]@{ Acquired = $acquired; Answer = $answer; Stop = $stop }
 }
 
 function Clear-TeamLockApi {
