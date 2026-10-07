@@ -504,8 +504,8 @@ $protectedSamples = @{
     "scripts/cloud/backup-cloud-core.sh"           = "scripts/cloud/backup-cloud-core.sh"
     "scripts/cloud/restore-cloud-core.sh"          = "scripts/cloud/restore-cloud-core.sh"
     # The lead's ruling at merge (the inspector's finding: each of these answered `widen`).
-    "scripts/lib/TeamArea.ps1"                     = "scripts/lib/TeamArea.ps1"
-    ".claude/hooks"                                = ".claude/hooks/session-start.ps1"
+    "scripts/lib/TeamAreaProtected.ps1"            = "scripts/lib/TeamAreaProtected.ps1"
+    ".claude/hooks"                              = ".claude/hooks/session-start.ps1"
     "claude-settings"                              = ".claude/settings.local.json"
     "claude-md"                                    = "apps/web/CLAUDE.md"
     "PROJECT_CONSTITUTION.md"                      = "PROJECT_CONSTITUTION.md"
@@ -551,6 +551,80 @@ foreach ($entry in $protectedEntries) {
         Assert-True -Condition $protectedSamples.ContainsKey($entryName) -Because "the entry '$entryName' has no case in this suite"
         Assert-Refused -Path $protectedSamples[$entryName] -Because "protected ($($entry.Source))"
     }
+}
+
+# The protected list lives in its own file (protected-list-own-file, 2026-10-07): the file that
+# must not be widened into is that list alone, and TeamArea.ps1's ordinary area logic is
+# grantable like any team script. A card that fixed area logic stopped at the Danışman before.
+$protectedListFile = Join-Path $repoRoot "scripts\lib\TeamAreaProtected.ps1"
+
+Test-Case "protected-own-file: the list's own file is protected" {
+    $entry = Get-TeamAreaProtection -Path "scripts/lib/TeamAreaProtected.ps1"
+    Assert-True -Condition ($null -ne $entry) -Because "scripts/lib/TeamAreaProtected.ps1 must be protected: a request must not shorten the list"
+}
+
+Test-Case "protected-own-file: scripts/lib/TeamArea.ps1 is ordinary team code, not protected" {
+    $entry = Get-TeamAreaProtection -Path "scripts/lib/TeamArea.ps1"
+    $name = if ($null -ne $entry) { $entry.Name } else { "" }
+    Assert-True -Condition ($null -eq $entry) -Because "TeamArea.ps1 must be grantable; it matched '$name'"
+}
+
+Test-Case "protected-own-file: every entry written in the list file is still protected (read from the file, not copied)" {
+    Assert-True -Condition (Test-Path -LiteralPath $protectedListFile) -Because "the list file exists: $protectedListFile"
+    $text = [System.IO.File]::ReadAllText($protectedListFile, [System.Text.Encoding]::UTF8)
+    $written = @([regex]::Matches($text, 'New-TeamAreaProtectedEntry\s+-Name\s+"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+    Assert-True -Condition (@($written).Count -ge 30) -Because "the list file names its entries: $(@($written).Count)"
+    $loaded = @(Get-TeamAreaProtected | ForEach-Object { [string]$_.Name })
+    foreach ($name in $written) {
+        Assert-True -Condition ($loaded -ccontains $name) -Because "'$name' written in the file is in the loaded list"
+        Assert-True -Condition $protectedSamples.ContainsKey($name) -Because "'$name' has a sample path in this suite"
+        $sample = $protectedSamples[$name]
+        Assert-True -Condition ($null -ne (Get-TeamAreaProtection -Path $sample)) -Because "'$name' ('$sample') is still protected"
+    }
+    Assert-True -Condition ($written -ccontains "scripts/lib/TeamAreaProtected.ps1") -Because "the self-entry is in the file"
+    Assert-True -Condition ($written -cnotcontains "scripts/lib/TeamArea.ps1") -Because "the old whole-file entry is gone"
+}
+
+Test-Case "protected-own-file: the duty judge accepts a grant of TeamArea.ps1 and refuses one of TeamAreaProtected.ps1" {
+    $queue = New-Queue -Tasks @((New-Task -Id "card-one" -State "stopped" -Area @("scripts/team/cycle.ps1")))
+    $grant = [pscustomobject]@{ task = "card-one"; action = "grant_and_return"; grant = @("scripts/lib/TeamArea.ps1"); reason = "alan mantığı burada" }
+    $problems = @(Test-TeamDuty -Decisions @($grant) -Listed @("card-one") -Queue $queue)
+    Assert-Equal -Expected 0 -Actual @($problems).Count -Because "TeamArea.ps1 is grantable: $($problems -join '; ')"
+    $list = [pscustomobject]@{ task = "card-one"; action = "grant_and_return"; grant = @("scripts/lib/TeamAreaProtected.ps1"); reason = "listeyi kısalt" }
+    $refused = @(Test-TeamDuty -Decisions @($list) -Listed @("card-one") -Queue $queue)
+    Assert-True -Condition (@($refused | Where-Object { $_ -match "lead-protected" }).Count -ge 1) -Because "the list file is lead-protected: $($refused -join '; ')"
+}
+
+Test-Case "protected-own-file: TeamArea.ps1 loaded without the list file - the duty judge refuses every decision" {
+    $copy = Join-Path $env:TEMP ("pagentos-area-nolist-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    $lib = Join-Path $copy "scripts\lib"
+    [void](New-Item -ItemType Directory -Force -Path $lib)
+    try {
+        foreach ($name in @("TeamQueue.ps1", "TeamArea.ps1")) {
+            Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\$name") -Destination (Join-Path $lib $name)
+        }
+        $child = Join-Path $copy "probe.ps1"
+        $probe = @'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$loaded = "loaded"
+try { . (Join-Path $PSScriptRoot "scripts\lib\TeamArea.ps1") } catch { $loaded = "threw: " + $_.Exception.Message }
+$queue = [pscustomobject]@{ version = 1; tasks = @([pscustomobject]@{ id = "card-one"; state = "stopped"; area = @("src/a.py") }) }
+$decisions = @(
+    [pscustomobject]@{ task = "card-one"; action = "return"; reason = "geri don" }
+)
+$problems = @(Test-TeamDuty -Decisions $decisions -Listed @("card-one") -Queue $queue)
+Write-Output ("LOAD " + $loaded)
+foreach ($p in $problems) { Write-Output ("PROBLEM " + $p) }
+Write-Output ("COUNT " + @($problems).Count)
+'@
+        [System.IO.File]::WriteAllText($child, $probe, (New-Object System.Text.UTF8Encoding($true)))
+        $output = @(& (Join-Path $PSHOME "powershell.exe") -NoProfile -ExecutionPolicy Bypass -File $child 2>&1 | ForEach-Object { [string]$_ })
+        $joined = $output -join " | "
+        Assert-True -Condition (@($output | Where-Object { $_ -match '^COUNT [1-9]' }).Count -eq 1) -Because "a sound return is refused when the list is missing: $joined"
+        Assert-True -Condition (@($output | Where-Object { $_ -match '^PROBLEM .*not loaded' }).Count -ge 1) -Because "the refusal says the list is not loaded: $joined"
+    }
+    finally { Remove-Item -LiteralPath $copy -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 foreach ($directory in @("docs", "state", "team", "docs/", "scripts", "services/api", ".claude", "infra")) {
