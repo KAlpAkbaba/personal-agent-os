@@ -874,7 +874,7 @@ if (-not $Fast) {
     # Not grouped: three suites in one step (a recorded step runs one script), and staging's fake
     # health probes a free port and releases it before listening (the fake-team-api lane's race).
     if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
-    foreach ($name in @("team-release", "team-resume", "staging", "testteam", "team-gate-second-look", "team-liveness", "team-duty-integration", "team-guards-after-merge", "team-watchdog")) {
+    foreach ($name in @("team-release", "team-resume", "staging", "testteam", "team-gate-second-look", "team-liveness", "team-duty-integration", "team-guards-after-merge", "team-watchdog", "team-watch")) {
       & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\tests\$name.tests.ps1")
       Assert-ExitCode "$name tests"
     }

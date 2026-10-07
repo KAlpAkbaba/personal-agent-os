@@ -134,7 +134,7 @@ function Start-FakeApi {
 
 function Invoke-Watch {
     <# watch.ps1 as the scheduled task runs it; returns what it printed and what it launched. #>
-    param($Api, [object[]]$Processes = @(), [string]$ModelScript = "", [switch]$NoModel, [string]$Out = "")
+    param($Api, [object[]]$Processes = @(), [string]$ModelScript = "", [switch]$NoModel, [string]$Out = "", [string]$RoleRoot = "")
     if (-not $Out) { $Out = New-Sandbox }
     $procFile = Join-Path $Out "processes.json"
     [System.IO.File]::WriteAllText($procFile, (ConvertTo-Json -InputObject @($Processes) -Depth 4), $utf8)
@@ -147,6 +147,9 @@ function Invoke-Watch {
         "-OutDir", $Out, "-ProcessListFile", $procFile, "-Launcher", $launcher, "-RoundsRoot", $rounds, "-CoreHealthUrl", "none", "-StagingHealthUrl", "none")
     if ($NoModel) { $arguments += "-NoModel" }
     if ($ModelScript) { $arguments += @("-ModelScript", $ModelScript) }
+    # A model run that is not stood in for never reaches a real claude.exe.
+    if (-not $ModelScript) { $arguments += @("-ClaudePath", (Join-Path $Out "no-claude.exe")) }
+    if ($RoleRoot) { $arguments += @("-RoleRoot", $RoleRoot) }
     $printed = & $powershell @arguments 2>&1 | Out-String
     $code = $LASTEXITCODE
     $latest = Join-Path $Out "watch-latest.txt"
@@ -327,7 +330,39 @@ try {
         Assert-True ($printed -notmatch "tick\.ps1") "not the cycle's tick"
     }
 
+    # ---- the Danisman run's role file (in the repository, never under %USERPROFILE%) ------------
+    Test-Case "role file: .claude\agents\danisman-watch.md first, else scripts\team\danisman-watch-role.md, else a clear error" {
+        $root = New-Sandbox
+        $inRepo = Join-Path $root "scripts\team\danisman-watch-role.md"
+        $agent = Join-Path $root ".claude\agents\danisman-watch.md"
+        $failed = $null
+        try { [void](Resolve-TeamWatchRoleFile -RepoRoot $root) } catch { $failed = $_.Exception.Message }
+        Assert-True ($failed -match "rol dosyasi yok") "neither file: a clear error ($failed)"
+        [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $inRepo))
+        [System.IO.File]::WriteAllText($inRepo, "role", $utf8)
+        Assert-Equal $inRepo (Resolve-TeamWatchRoleFile -RepoRoot $root) "without .claude the repository's role file is read"
+        [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $agent))
+        [System.IO.File]::WriteAllText($agent, "role", $utf8)
+        Assert-Equal $agent (Resolve-TeamWatchRoleFile -RepoRoot $root) ".claude\agents\danisman-watch.md wins when it exists"
+    }
+    Test-Case "the repository carries the role text the watch reads" {
+        $role = Join-Path $repoRoot "scripts\team\danisman-watch-role.md"
+        Assert-True (Test-Path -LiteralPath $role) "scripts\team\danisman-watch-role.md exists"
+        $text = [System.IO.File]::ReadAllText($role, [System.Text.Encoding]::UTF8)
+        Assert-True ($text -match "name: danisman-watch") "it is the danisman-watch role"
+        Assert-True ($text -match "DRAFT_FILE:") "it reads the draft file the watch names"
+    }
+
     # ---- watch.ps1, end to end --------------------------------------------------------------
+    Test-Case "watch.ps1: no role file anywhere -> 'Danisman kosusu basarisiz', exit 0, no model started" {
+        $api = Start-FakeApi
+        $out = New-Sandbox
+        $empty = New-Sandbox
+        $run = Invoke-Watch -Api $api -Processes @() -Out $out -RoleRoot $empty
+        Assert-Equal 0 $run.ExitCode "the watch ends 0 ($($run.Printed))"
+        Assert-True ($run.Latest -match "Danisman kosusu basarisiz: .*rol dosyasi yok") "the failed run is a finding ($($run.Latest))"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $out "danisman-watch.md"))) "no fallback beside the output"
+    }
     Test-Case "watch.ps1: no cycle process -> the launcher is asked for the cycle, the output files are written" {
         $api = Start-FakeApi
         $run = Invoke-Watch -Api $api -Processes @((RoundProcess)) -NoModel

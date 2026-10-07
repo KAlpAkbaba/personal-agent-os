@@ -35,8 +35,10 @@ param(
     [string]$Model = "claude-opus-5-5",
     [int]$ModelMinutes = 25,
     # The Danisman run's role; empty = .claude\agents\danisman-watch.md, or, while that is not
-    # in the checkout, the interim danisman-watch.md beside the output.
+    # in the checkout, scripts\team\danisman-watch-role.md (Resolve-TeamWatchRoleFile).
     [string]$RoleFile = "",
+    # For the tests: the folder the role file is looked up in, in place of the repository.
+    [string]$RoleRoot = "",
     [switch]$NoModel,
     # For the tests: a JSON list of { ProcessId, CommandLine } in place of the machine's.
     [string]$ProcessListFile = "",
@@ -152,10 +154,7 @@ if ($fresh.Count -gt 0 -and -not $NoModel -and $null -ne $store) {
             $accountFile = Join-Path $OutDir "team-account.txt"
             $name = if (Test-Path -LiteralPath $accountFile) { ([System.IO.File]::ReadAllText($accountFile)).Trim() } else { "" }
             if ($name -and $name -ne "varsayilan" -and (Test-Path -LiteralPath (Join-Path (Join-Path $env:USERPROFILE $name) ".credentials.json"))) { $env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE $name }
-            if (-not $RoleFile) {
-                $RoleFile = Join-Path $repoRoot ".claude\agents\danisman-watch.md"
-                if (-not (Test-Path -LiteralPath $RoleFile)) { $RoleFile = Join-Path $OutDir "danisman-watch.md" }
-            }
+            if (-not $RoleFile) { $RoleFile = Resolve-TeamWatchRoleFile -RepoRoot $(if ($RoleRoot) { $RoleRoot } else { $repoRoot }) }
             $arguments = Get-TeamRunArguments -RoleFile $RoleFile -Model $Model
             $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $repoRoot
             $finished = Wait-TeamRun -Run $run -Deadline ([datetime]::UtcNow.AddMinutes($ModelMinutes))

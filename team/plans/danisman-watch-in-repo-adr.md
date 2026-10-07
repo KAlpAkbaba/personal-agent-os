@@ -23,7 +23,10 @@ to it is invisible to the team.
   a finding of its own (`escalated-<id>`)**; no test round running and none ended or started
   for two hours -> start one, and remember the start so the next look does not start a second.
 - Only findings not seen within three hours start the Danışman's headless run
-  (`.claude/agents/danisman-watch.md`, read-only, drafts at most three cards to the file named
+  (role: `.claude/agents/danisman-watch.md` when present, else the repository's own
+  `scripts/team/danisman-watch-role.md` - `Resolve-TeamWatchRoleFile`; never a file under
+  %USERPROFILE%: neither present -> the look reports "Danisman kosusu basarisiz: rol dosyasi
+  yok" and still ends 0; read-only, drafts at most three cards to the file named
   on the prompt's `DRAFT_FILE:` line). `ConvertTo-TeamWatchCards` queues a draft only when the
   queue with it added still passes `Test-TeamQueue`, as `approved`, at most three.
 - `scripts/team/watch.ps1` acts: reads the Cloud Core, starts the nightly task (`schtasks /Run`)
@@ -40,18 +43,20 @@ to it is invisible to the team.
   task name is the same, `-Force` replaces it).
 - The first real look (2026-10-07 00:42, read-only, no-op launcher) found five stops on the
   Danışman's desk, the oldest 31.8 hours: the new finding works on the live queue.
-- `scripts/tests/team-watch.tests.ps1` (20 cases; the second pass added a NEW returned /
-  awaiting_owner card and a run with stuck children) is not yet a gate step:
-  `scripts/quality-gate.ps1` and `.github/workflows/ci.yml` ("PowerShell 5.1 script suites")
-  are outside this card's area, and `tests/unit/test_ci_covers_every_suite.py` is RED until
-  the lead adds `team-watch.tests.ps1` to both, beside team-liveness.
+- `scripts/tests/team-watch.tests.ps1` (23 cases; the second pass added a NEW returned /
+  awaiting_owner card and a run with stuck children, the third the role-file lookup) is a
+  gate step beside team-liveness: `scripts/quality-gate.ps1`'s PS 5.1 suite list and
+  `.github/workflows/ci.yml`'s "PowerShell 5.1 script suites" step
+  (`tests/unit/test_ci_covers_every_suite.py` green).
+- The interim `%USERPROFILE%\.pagentos-team\danisman-watch.md` is no longer read: a script
+  outside the repository is not a mechanism, and that holds for its role text too.
 
 ## For the lead: the role file
 
-This run's harness refused every write under `.claude/` (in the area, but not grantable in a
-headless run). Until `.claude/agents/danisman-watch.md` exists, watch.ps1 falls back to the
-interim `%USERPROFILE%\.pagentos-team\danisman-watch.md` (compatible: it reads "the draft file
-named in your prompt"). Place this text at `.claude/agents/danisman-watch.md`:
+`.claude/` is a protected path (ADR-0253): a worker cannot write it. The same text is in the
+repository as `scripts/team/danisman-watch-role.md`, which watch.ps1 reads until
+`.claude/agents/danisman-watch.md` exists. Placing it there at merge is optional (the
+`.claude` copy wins when present); the text:
 
 ```markdown
 ---

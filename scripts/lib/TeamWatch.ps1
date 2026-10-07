@@ -72,6 +72,18 @@ function Write-TeamWatchState {
     [System.IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $document -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Resolve-TeamWatchRoleFile {
+    <# The Danisman run's role: .claude\agents\danisman-watch.md when the lead placed it, else the
+       repository's own scripts\team\danisman-watch-role.md. Never a file outside the repository
+       (an untested file there is not a mechanism); neither -> throws, the watch reports it. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+    foreach ($relative in @(".claude\agents\danisman-watch.md", "scripts\team\danisman-watch-role.md")) {
+        $path = Join-Path $RepoRoot $relative
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
+    }
+    throw "rol dosyasi yok: .claude\agents\danisman-watch.md ve scripts\team\danisman-watch-role.md ($RepoRoot)"
+}
+
 function Test-TeamWatchCommandLine {
     param($Processes, [Parameter(Mandatory = $true)][string]$Pattern)
     return @(@($Processes) | Where-Object { $null -ne $_ -and ([string](Get-TeamProperty -InputObject $_ -Name "CommandLine" -Default "")) -match $Pattern })
