@@ -14,7 +14,9 @@
         (diff3 conflict style), never into the integration worktree itself;
       * a conflict hunk is resolved only when it is ADDITIVE: both sides keep the base lines
         and only insert at the same place (Resolve-TeamDutyHunk); in a .json file a trailing
-        comma is not a change, and the comma between the two insertions is written;
+        comma is not a change, and the comma between the two insertions is written; a hunk
+        whose base lines are each changed by one side only (adjacent-line edits) is merged per
+        line (Resolve-TeamDutyDisjointHunk);
       * a new alembic migration of the task that revises the integration side's old head is
         renamed, its revision and down_revision re-pointed after the current head, and the
         chain proven to have one head;
@@ -94,7 +96,8 @@ function Test-TeamDutyLinesSame {
 function Resolve-TeamDutyHunk {
     <#
     .SYNOPSIS
-        One diff3 hunk: { Ok, Lines }. Ok only when the union is additive.
+        One diff3 hunk: { Ok, Lines }. Ok only when the union is additive or the edits are
+        disjoint lines (Resolve-TeamDutyDisjointHunk).
 
     .DESCRIPTION
         Additive: for one split point k of the base lines B, each side is B[0..k) + its own
@@ -141,7 +144,31 @@ function Resolve-TeamDutyHunk {
         if ($b - $k -gt 0) { foreach ($line in $Ours[$tailStart..(@($Ours).Count - 1)]) { $lines.Add($line) } }
         return [pscustomobject]@{ Ok = $true; Lines = $lines.ToArray() }
     }
-    return [pscustomobject]@{ Ok = $false; Lines = @() }
+    return (Resolve-TeamDutyDisjointHunk -Base $Base -Ours $Ours -Theirs $Theirs)
+}
+
+function Resolve-TeamDutyDisjointHunk {
+    <#
+    .SYNOPSIS
+        One diff3 hunk of disjoint line edits: { Ok, Lines }.
+
+    .DESCRIPTION
+        git conflicts on edits to adjacent lines (2026-10-07: integrate changed one import of
+        routes.py, the task the next). When base, ours and theirs have the same line count and
+        no line is changed by both sides differently, the union is per line: the side that
+        changed it, ours when neither did. A deleted line, or one changed both ways, is not.
+    #>
+    param([string[]]$Base = @(), [string[]]$Ours = @(), [string[]]$Theirs = @())
+    $b = @($Base).Count
+    if ($b -eq 0 -or @($Ours).Count -ne $b -or @($Theirs).Count -ne $b) { return [pscustomobject]@{ Ok = $false; Lines = @() } }
+    $lines = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $b; $i++) {
+        $oursChanged = $Ours[$i] -cne $Base[$i]
+        $theirsChanged = $Theirs[$i] -cne $Base[$i]
+        if ($oursChanged -and $theirsChanged -and $Ours[$i] -cne $Theirs[$i]) { return [pscustomobject]@{ Ok = $false; Lines = @() } }
+        if ($theirsChanged -and -not $oursChanged) { $lines.Add($Theirs[$i]) } else { $lines.Add($Ours[$i]) }
+    }
+    return [pscustomobject]@{ Ok = $true; Lines = $lines.ToArray() }
 }
 
 function Resolve-TeamDutyConflictText {

@@ -18,7 +18,10 @@
       5. a rewrite of the other side's line: escalated, reason "ekleme değil";
       6. two failed resolutions in a row: the first is counted, the second escalated;
       7. both sides adding the same new file (add/add, no base): escalated, reason "ekleme değil";
-      8. the task's own test red with the guards green: escalated, the reason names that test.
+      8. the task's own test red with the guards green: escalated, the reason names that test;
+      9. disjoint line edits in one hunk (each base line changed by one side only, the measured
+         routes.py import pair of 2026-10-07): the union takes each line from the side that
+         changed it - unit cases on Resolve-TeamDutyHunk and one end-to-end merge.
 
     Run: powershell -NoProfile -File scripts\tests\team-duty-integration.tests.ps1 [-Filter <regex>]
 #>
@@ -342,6 +345,55 @@ try {
         Assert-True -Condition (([string]$stored.reason).Contains("işin kendi testi kırmızı (scripts/tests/own.tests.ps1)")) -Because "the reason names the task's own test: $([string]$stored.reason)"
         Assert-True -Condition (-not ([string]$stored.reason).Contains("notlar bozuk")) -Because "the guard of guards.json was green: $([string]$stored.reason)"
         Assert-Equal -Expected $before -Actual (Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId")) -Because "the integration branch is unchanged"
+    }
+
+    # The measured hunk of 2026-10-07 (services/api/app/voice/realtime_sessions/routes.py,
+    # integrate/d20261007 vs 5de7fe4f, merge base 93122258): the integration side changed the
+    # first import, the task the second.
+    $importBase = @("from fastapi import APIRouter, Depends, HTTPException, Request", "from pydantic import BaseModel, ConfigDict, Field, field_validator")
+    $importOurs = @("from fastapi import APIRouter, Depends, HTTPException, Request, Response", "from pydantic import BaseModel, ConfigDict, Field, field_validator")
+    $importTheirs = @("from fastapi import APIRouter, Depends, HTTPException, Request", "from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator")
+
+    Test-Case "(9a) disjoint edits in one hunk - ours changes line 1, theirs line 2 (the measured routes.py imports) - are merged: ours' line 1 + theirs' line 2" {
+        $hunk = Resolve-TeamDutyHunk -Base $importBase -Ours $importOurs -Theirs $importTheirs
+        Assert-True -Condition $hunk.Ok -Because "each base line is changed by one side only"
+        Assert-Equal -Expected ($importOurs[0] + "|" + $importTheirs[1]) -Actual (@($hunk.Lines) -join "|") -Because "each line comes from the side that changed it"
+        $swapped = Resolve-TeamDutyHunk -Base $importBase -Ours $importTheirs -Theirs $importOurs
+        Assert-True -Condition $swapped.Ok -Because "the same with the sides swapped"
+        Assert-Equal -Expected ($importOurs[0] + "|" + $importTheirs[1]) -Actual (@($swapped.Lines) -join "|") -Because "the side swap gives the same union"
+    }
+
+    Test-Case "(9b) the same line changed by both sides differently is not merged" {
+        $hunk = Resolve-TeamDutyHunk -Base $importBase -Ours @($importOurs[0], "from pydantic import BaseModel") -Theirs $importTheirs
+        Assert-True -Condition (-not $hunk.Ok) -Because "line 2 is changed by both sides: $(@($hunk.Lines) -join '|')"
+        $one = Resolve-TeamDutyHunk -Base @("x = 1") -Ours @("x = 2") -Theirs @("x = 3")
+        Assert-True -Condition (-not $one.Ok) -Because "a one-line hunk changed by both sides: $(@($one.Lines) -join '|')"
+    }
+
+    Test-Case "(9c) one side deleting a line the other leaves is not merged" {
+        $hunk = Resolve-TeamDutyHunk -Base $importBase -Ours $importOurs -Theirs @($importBase[0])
+        Assert-True -Condition (-not $hunk.Ok) -Because "theirs deletes line 2: $(@($hunk.Lines) -join '|')"
+        $other = Resolve-TeamDutyHunk -Base @("a", "b", "c") -Ours @("A", "b", "c") -Theirs @("a", "c")
+        Assert-True -Condition (-not $other.Ok) -Because "theirs deletes b while ours edits a: $(@($other.Lines) -join '|')"
+    }
+
+    Test-Case "(9d) end to end: a task editing the line next to an integration-side edit is merged, integrate/<cycle> fast-forwarded, both changes kept" {
+        $root = New-Sandbox
+        Edit-Branch -Root $root -Branch "integrate/$cycleId" -Files @{ "src/notes.txt" = "bir - öteki iş`niki`n" } -Message "the other task"
+        Edit-Branch -Root $root -Branch "team/$cycleId/worker-the-task" -Files @{ "src/notes.txt" = "bir`niki - bu iş`n" } -Message "the task"
+        $before = Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId")
+        $taskTip = Git -Root $root -Arguments @("rev-parse", "team/$cycleId/worker-the-task")
+        $conflict = Invoke-TeamGit -WorkingDirectory $root -Arguments @("merge-tree", "--write-tree", "integrate/$cycleId", "team/$cycleId/worker-the-task")
+        Assert-True -Condition (-not $conflict.Success) -Because "git itself conflicts on the adjacent lines (else the case proves nothing)"
+        $api = Start-FakeApi -Tasks @((New-StoppedTask))
+        $results = Invoke-Resolve -Root $root -Api $api
+        $stored = Get-StoredTask -Api $api
+        Assert-Equal -Expected "merged" -Actual ([string]$stored.state) -Because "the store holds the task merged ($([string]$stored.reason))"
+        Assert-Equal -Expected "merged" -Actual ([string]@($results)[0].Outcome) -Because "the duty says what it did"
+        Assert-Equal -Expected $before -Actual (Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId^1")) -Because "integrate/<cycle> is fast-forwarded: its old tip is the merge's first parent"
+        Assert-Equal -Expected $taskTip -Actual (Git -Root $root -Arguments @("rev-parse", "integrate/$cycleId^2")) -Because "the merge's second parent is the task's tip"
+        $notes = (Get-FileAt -Root $root -Revision "integrate/$cycleId" -Path "src/notes.txt") -replace "`r`n", "`n"
+        Assert-Equal -Expected "bir - öteki iş`niki - bu iş`n" -Actual $notes -Because "the file holds both changes"
     }
 
     Test-Case "a guards.json entry appended by both sides keeps both entries and stays valid JSON (the comma between them is written)" {
