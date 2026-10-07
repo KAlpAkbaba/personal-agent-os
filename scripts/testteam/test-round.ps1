@@ -26,6 +26,13 @@
       5. The 'kopma noktası' report: <OutRoot>/<round>/kopma-noktasi.md, and one board note
          addressed to the Danışman's seat ('danisman') (never to the owner).
 
+    Before the plan (staging-follows-release, the Danışman 2026-10-06): staging must serve
+    origin/main's tip (/v1/system/health release.version). Otherwise the round REFUSES - exit 4,
+    a board note naming both shas, no plan, no card, no tester: a round on an old build judged
+    old code (every step 404). -AllowStaleStaging skips the check for a deliberate test of an old
+    build. A test's stand-in staging (-NoAuth or -AllowTestPort) is checked only when -MainSha
+    names the sha it must serve. The session is the round's own seed (below).
+
     -Retest: for every failed card of -Round whose forwarded task is released, done or
     awaiting_real_evidence (NOT merged: an integration branch is not staging) AND whose staging
     now answers a sha other than the one the failure was found on (found_sha), the scenario is
@@ -69,6 +76,10 @@ param(
     # For the tests: a stand-in for scripts\team\board.ps1.
     [string]$BoardScript = "",
     [switch]$Retest,
+    # A deliberate round on a staging that does not serve main's tip.
+    [switch]$AllowStaleStaging,
+    # The sha staging must serve; empty = origin/main's tip, fetched now (the tests name it).
+    [string]$MainSha = "",
     [string]$BaseUrl = "http://127.0.0.1:28001",
     [int]$AllowTestPort = 0,
     # The stand-in staging of the tests needs no session: no seed, no session check.
@@ -250,6 +261,47 @@ if ($Retest) {
     }
     Write-Json -Path $cardsPath -Document $document
     exit 0
+}
+
+# ------------------------------------------------------------------------------ staging is main's tip
+
+if (-not (Test-TestTeamStagingUrl -Url $BaseUrl -AllowTestPort $AllowTestPort)) {
+    Write-Host "TUR REDDEDİLDİ: $BaseUrl staging değil"
+    exit 2
+}
+if ($AllowStaleStaging) { Write-Host "staging sürümü denetlenmedi (-AllowStaleStaging: eski bir sürümün bilerek denenmesi)" }
+elseif (($NoAuth -or $AllowTestPort -gt 0) -and -not $MainSha) { Write-Host "staging sürümü denetlenmedi (testin yerine geçen staging'i, -MainSha yok)" }
+else {
+    $mainTip = $MainSha
+    if (-not $mainTip) {
+        $fetched = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("fetch", "--quiet", "origin", "refs/heads/main:refs/remotes/origin/main") -TimeoutSeconds 300
+        if ($fetched.Success) {
+            $parsed = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}")
+            if ($parsed.Success) { $mainTip = ([string]$parsed.StdOut).Trim() }
+        }
+    }
+    $why = ""
+    if ($mainTip -notmatch '^[0-9a-f]{40}$') { $why = "origin/main'in ucu okunamadı; staging'in sürümü karşılaştırılamadı" }
+    else {
+        $servedSha = ""
+        try {
+            $health = Invoke-RestMethod -UseBasicParsing -Uri ($BaseUrl.TrimEnd("/") + "/v1/system/health") -TimeoutSec 15
+            $release = Get-TeamProperty -InputObject $health -Name "release"
+            if ($null -ne $release) { $servedSha = [string](Get-TeamProperty -InputObject $release -Name "version" -Default "") }
+        }
+        catch { Write-Host "  staging sağlığı okunamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+        if ($servedSha -ne $mainTip) {
+            $shown = if ($servedSha) { $servedSha } else { "okunamadı" }
+            $why = "staging eski: staging $shown, main $mainTip (önce scripts\staging\deploy.ps1 $mainTip; bilerek eski sürüm için -AllowStaleStaging)"
+        }
+    }
+    if ($why) {
+        # A refusal, not a failure: exit 4, said on the board; no plan, no card, no tester.
+        Write-Host "TUR BAŞLAMADI: $why"
+        Send-Note -Seat "test-lead" -Text ("Test PY: tur {0} başlamadı - {1}" -f $Round, $why)
+        exit 4
+    }
+    Write-Host "staging main'in ucunda: $mainTip"
 }
 
 # ------------------------------------------------------------------------------ the plan

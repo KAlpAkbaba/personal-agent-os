@@ -587,6 +587,29 @@ Write-Host "the step, in a repository of its own, with the fake release script a
 
 $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $sandboxes = New-Object System.Collections.ArrayList
+
+# Stand-ins for scripts/staging/deploy.ps1 and seed.ps1: each call is a line in the host's
+# calls.log ("staging|deploy|<sha>", "staging|seed"); PAGENTOS_FAKE_STAGING_SCENARIO
+# deploy-fail / seed-fail makes that one fail. Both write to stderr as well (docker's progress).
+$fakeStagingDir = Join-Path $env:TEMP ("pagentos-rel-staging-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+[void]$sandboxes.Add($fakeStagingDir)
+[void](New-Item -ItemType Directory -Force -Path $fakeStagingDir)
+$fakeStagingDeploy = Join-Path $fakeStagingDir "deploy.ps1"
+$fakeStagingSeed = Join-Path $fakeStagingDir "seed.ps1"
+[System.IO.File]::WriteAllText($fakeStagingDeploy, @'
+$sha = [string]$args[0]
+[IO.File]::AppendAllText((Join-Path $env:PAGENTOS_FAKE_HOST "calls.log"), "staging|deploy|$sha`n")
+[Console]::Error.WriteLine("#12 building pagentos-staging/cloud-core")
+if ($env:PAGENTOS_FAKE_STAGING_SCENARIO -eq "deploy-fail") { [Console]::Out.WriteLine("STAGING DEPLOY FAILED: api image build failed"); exit 1 }
+[Console]::Out.WriteLine("STAGING DEPLOYED: $sha at http://127.0.0.1:28000/")
+exit 0
+'@, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($fakeStagingSeed, @'
+[IO.File]::AppendAllText((Join-Path $env:PAGENTOS_FAKE_HOST "calls.log"), "staging|seed`n")
+if ($env:PAGENTOS_FAKE_STAGING_SCENARIO -eq "seed-fail") { [Console]::Out.WriteLine("STAGING SEED FAILED: session exchange refused"); exit 1 }
+[Console]::Out.WriteLine("STAGING SEEDED: staging owner session s1 is valid")
+exit 0
+'@, (New-Object System.Text.UTF8Encoding($false)))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Invoke-SandboxGit {
@@ -673,12 +696,13 @@ function New-Sandbox {
 }
 
 function Invoke-Release {
-    param($Box, [string]$Scenario = "ok", [string]$Extra = "")
-    $set = @{ PAGENTOS_FAKE_HOST = $Box.Host; PAGENTOS_FAKE_RELEASE_SCENARIO = $Scenario }
+    param($Box, [string]$Scenario = "ok", [string]$Extra = "", [string]$Staging = "ok")
+    $set = @{ PAGENTOS_FAKE_HOST = $Box.Host; PAGENTOS_FAKE_RELEASE_SCENARIO = $Scenario; PAGENTOS_FAKE_STAGING_SCENARIO = $Staging }
     foreach ($name in @($set.Keys)) { Set-Item -Path "Env:\$name" -Value $set[$name] }
     try {
         $command = "& '" + (Join-Path $Box.Root "scripts\team\release.ps1") + "' -Machine 'MAIL'" +
         " -ReleaseScript '$fakeRelease' -SshPath '$powershell'" +
+        " -StagingDeployScript '$fakeStagingDeploy' -StagingSeedScript '$fakeStagingSeed'" +
         " -SshPrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','$fakeRelease','ssh'" +
         " -VerifyWaitSeconds 0" + $(if ($Extra) { " " + $Extra } else { "" })
         $result = Invoke-NativeProcess -FilePath $powershell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ($command + "; exit `$LASTEXITCODE")) `
@@ -757,6 +781,51 @@ try {
         $releaseErr = [System.IO.File]::ReadAllText((Join-Path $run.Reports "release-1.release.err"), [System.Text.Encoding]::UTF8)
         Assert-True -Condition ($releaseOut -match "RELEASE OK" -and $releaseOut -notmatch "nginx") -Because "stdout only in .out: $releaseOut"
         Assert-True -Condition ($releaseErr -match "nginx: \[notice\]" -and $releaseErr -notmatch "RELEASE OK") -Because "stderr only in .err: $releaseErr"
+    }
+
+    Test-Case "staging follows: after RELEASE OK the staging deploy runs with the released sha, then seed.ps1; the report names the staging sha reached" {
+        # The Danışman, 2026-10-06: production 72884b71, staging still 6a21294c - the test round judged old code.
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        $staging = @($run.Calls | Where-Object { $_ -match '^staging\|' })
+        Assert-Equal -Expected "staging|deploy|$($box.Tip) / staging|seed" -Actual ($staging -join " / ") -Because "deploy with the FULL released sha, then seed: $($run.Calls -join ' / ')"
+        $order = @($run.Calls)
+        Assert-True -Condition ([array]::IndexOf($order, "ssh|pin|$($box.Tip)") -lt [array]::IndexOf($order, "staging|deploy|$($box.Tip)")) -Because "staging only after production is pinned: $($order -join ' / ')"
+        Assert-True -Condition ($run.Report -match ("staging: " + $box.Tip)) -Because "the report records the staging sha reached: $($run.Report)"
+        foreach ($step in @("staging-deploy", "staging-seed")) {
+            Assert-True -Condition (@($run.Files | Where-Object { $_ -eq "release-1.$step.out" -or $_ -eq "release-1.$step.err" }).Count -eq 2) -Because "$step has its own .out and .err: $($run.Files -join ', ')"
+        }
+        $deployErr = [System.IO.File]::ReadAllText((Join-Path $run.Reports "release-1.staging-deploy.err"), [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($deployErr -match "building" -and $deployErr -notmatch "STAGING DEPLOYED") -Because "the streams are not merged: $deployErr"
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "released"
+    }
+
+    Test-Case "a staging deploy that fails leaves the release OK: risk line in the report, an Onay Merkezi note on the task, no block marker, no seed" {
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box -Staging "deploy-fail"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "production is promoted; the release is OK: $($run.Output)"
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "the task is released"
+        Assert-Equal -Expected $false -Actual $run.Blocked -Because "no block marker for a staging failure"
+        Assert-True -Condition ($run.Report -match "risk: staging") -Because "the risk line: $($run.Report)"
+        Assert-True -Condition ([string]$run.Task.reason -match "^yayinlandi " -and [string]$run.Task.reason -match "Onay Merkezi" -and [string]$run.Task.reason -match "staging") -Because "the task says it for the Onay Merkezi: $($run.Task.reason)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_ -eq "staging|seed" }).Count -Because "no seed on a staging that did not move: $($run.Calls -join ' / ')"
+    }
+
+    Test-Case "a staging seed that fails is a risk line too, never a failed release" {
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box -Staging "seed-fail"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "released" -Actual $run.Task.state -Because "released"
+        Assert-True -Condition ($run.Report -match "risk: staging" -and $run.Report -match "seed") -Because "the risk line names the seed: $($run.Report)"
+        Assert-True -Condition ([string]$run.Task.reason -match "Onay Merkezi") -Because $run.Task.reason
+    }
+
+    Test-Case "a failed release never moves staging" {
+        $box = New-Sandbox
+        $run = Invoke-Release -Box $box -Scenario "rollback"
+        Assert-Equal -Expected 6 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_ -match '^staging\|' }).Count -Because "no staging call: $($run.Calls -join ' / ')"
     }
 
     Test-Case "the step's source never merges stderr into stdout (2>&1) - least of all where it runs the release or ssh" {

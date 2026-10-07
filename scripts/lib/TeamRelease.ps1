@@ -636,6 +636,29 @@ function Test-TeamReleaseVerified {
     return [pscustomobject]@{ Ok = (@($all).Count -eq 0); Problems = $all }
 }
 
+function Get-TeamStagingOutcome {
+    <#
+    .SYNOPSIS
+        After a verified release, staging follows (staging-follows-release): did deploy.ps1
+        reach the released sha ('STAGING DEPLOYED: <sha>') and did seed.ps1 make a valid
+        session ('STAGING SEEDED')? Either missing is a risk, never a failed release -
+        production is already promoted. $null for Seed: it was not run.
+    #>
+    param([Parameter(Mandatory = $true)]$Deploy, $Seed = $null, [Parameter(Mandatory = $true)][string]$Sha)
+    $reached = ""
+    $match = [regex]::Match([string]$Deploy.StdOut, 'STAGING DEPLOYED: ([0-9a-f]{40})')
+    if ($match.Success) { $reached = $match.Groups[1].Value }
+    $problem = ""
+    if ([int]$Deploy.ExitCode -ne 0 -or $reached -ne $Sha) {
+        $problem = "staging $Sha sürümüne güncellenemedi: deploy.ps1 çıkış $($Deploy.ExitCode)" + $(if ($reached) { ", ulaştığı $reached" } else { "" })
+    }
+    elseif ($null -eq $Seed -or [int]$Seed.ExitCode -ne 0 -or [string]$Seed.StdOut -notmatch 'STAGING SEEDED') {
+        $code = if ($null -eq $Seed) { "çalışmadı" } else { "çıkış $($Seed.ExitCode)" }
+        $problem = "staging $Sha sürümünde ama oturumu yenilenemedi: seed.ps1 $code"
+    }
+    return [pscustomobject]@{ Ok = (-not $problem); Reached = $reached; Problem = $problem }
+}
+
 # ---------------------------------------------------------------------------- the repository and the records
 
 function Find-TeamReleaseGate {
