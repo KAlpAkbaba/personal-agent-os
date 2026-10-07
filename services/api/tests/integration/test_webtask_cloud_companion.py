@@ -418,7 +418,10 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
             finally:
                 out = Path(os.environ.get(EVIDENCE_ENV) or (tmp / "evidence"))
                 doc = ev.evidence_document(
-                    host_kind=f"dev-stack ({mode} companion, owner's PC)",
+                    host_kind=(
+                        f"dev-stack ({mode} companion, owner's PC; capable planner "
+                        f"{settings.executive_planner_model})"
+                    ),
                     records=built.records,
                     companion={"mode": mode, "registry": built.registry_lines},
                     cleanup=cleanup,
@@ -463,7 +466,9 @@ def _record(stack: Stack, spec: Any, task_id: str, usage_from: int, **extra: Any
         **extra,
     )
     stack.records.append(record)
-    print("\n" + json.dumps(record, ensure_ascii=False))
+    # ASCII: under secret-store.ps1 -Run the console is cp1252 and a Turkish letter in a
+    # print raised UnicodeEncodeError in the middle of T1 (2026-10-07).
+    print("\n" + json.dumps(record, ensure_ascii=True))
     return record
 
 
@@ -503,14 +508,17 @@ def test_t1_finds_and_summarises_a_news_story_and_goes_on_after_the_owner_leaves
     assert refused.value.status == 401, refused.value
     at_leave = _row(stack, task_id).round_index
 
-    final = ev.wait_until_settled(_read_by_db(stack), task_id)
-    row = _row(stack, task_id)
+    try:
+        final = ev.wait_until_settled(_read_by_db(stack), task_id)
+        row = _row(stack, task_id)
+        record = _record(stack, spec, task_id, usage_from, owner_left_at_round=at_leave)
+    finally:
+        # The owner comes back whatever T1 did: the later tasks need a session.
+        stack.new_session("itest-cloud-after-t1")
+        ev.close_task(stack.client, task_id)
     assert row.attended is False
     assert row.round_index > at_leave, "the task stopped when the owner left"
     assert row.failure not in ("abandoned", "owner_absent"), row.failure
-    record = _record(stack, spec, task_id, usage_from, owner_left_at_round=at_leave)
-    stack.new_session("itest-cloud-after-t1")
-    ev.close_task(stack.client, task_id)
 
     assert record["planner_calls"] >= 1, record
     if record["outcome"] == ev.OUTCOME_ASK_OWNER:
@@ -599,11 +607,13 @@ def test_the_real_app_mounts_the_web_task_routes() -> None:
     """
     from app.main import create_app
 
+    # The OpenAPI table, not ``app.routes``: an included router sits there as one entry
+    # without a path, so a walk of ``app.routes`` sees 0 either way.
     paths = {
-        f"{method} {route.path}"
-        for route in create_app().routes
-        for method in sorted(getattr(route, "methods", None) or ())
-        if "web-tasks" in getattr(route, "path", "")
+        f"{method.upper()} {path}"
+        for path, item in create_app().openapi()["paths"].items()
+        for method in item
+        if "web-tasks" in path
     }
     assert "POST /v1/web-tasks" in paths, sorted(paths)
     assert len(paths) > 1, sorted(paths)
