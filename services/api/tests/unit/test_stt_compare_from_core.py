@@ -280,7 +280,8 @@ def test_two_recordings_on_the_core_become_a_report_with_the_chrome_row(
     assert run.python_started
     [report_path] = run.reports()
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["schema_version"] == "1.1"
+    # 1.2 (local-tr-stt-measure): real-time factor, cold start, peak memory, command count
+    assert report["schema_version"] == "1.2"
     assert report["recordings"]["usable"] == 2
     [chrome] = [row for row in report["engines"] if row["label"] == CHROME]
     assert (chrome["status"], chrome["source"]) == ("RAN", "recorded_live")

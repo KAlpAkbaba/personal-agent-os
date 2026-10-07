@@ -23,8 +23,19 @@
       4. The failures are deduplicated and each becomes a normal card of the software queue
          (state 'proposed', steps/expected/actual/scenario/screenshot/staging sha); a card whose
          id is already in the queue is not opened again.
+      4a. The proof (proof-from-test-rounds-and-trials): per JARVIS roadmap row a plan job names
+         ('roadmap_row'), the scenarios that passed and failed on staging, with the staging sha,
+         POSTed to the Cloud Core (/v1/team/queue/proof) - the Ofis' 'staging'de kanıtlı'.
+         -PostProof posts a finished round's proof again and does nothing else.
       5. The 'kopma noktası' report: <OutRoot>/<round>/kopma-noktasi.md, and one board note
          addressed to the Danışman's seat ('danisman') (never to the owner).
+
+    Before the plan (staging-follows-release, the Danışman 2026-10-06): staging must serve
+    origin/main's tip (/v1/system/health release.version). Otherwise the round REFUSES - exit 4,
+    a board note naming both shas, no plan, no card, no tester: a round on an old build judged
+    old code (every step 404). -AllowStaleStaging skips the check for a deliberate test of an old
+    build. A test's stand-in staging (-NoAuth or -AllowTestPort) is checked only when -MainSha
+    names the sha it must serve. The session is the round's own seed (below).
 
     -Retest: for every failed card of -Round whose forwarded task is released, done or
     awaiting_real_evidence (NOT merged: an integration branch is not staging) AND whose staging
@@ -69,6 +80,12 @@ param(
     # For the tests: a stand-in for scripts\team\board.ps1.
     [string]$BoardScript = "",
     [switch]$Retest,
+    # Only post the proof of the finished round -Round (its cards.json, plan and result files).
+    [switch]$PostProof,
+    # A deliberate round on a staging that does not serve main's tip.
+    [switch]$AllowStaleStaging,
+    # The sha staging must serve; empty = origin/main's tip, fetched now (the tests name it).
+    [string]$MainSha = "",
     [string]$BaseUrl = "http://127.0.0.1:28001",
     [int]$AllowTestPort = 0,
     # The stand-in staging of the tests needs no session: no seed, no session check.
@@ -104,6 +121,8 @@ $ClaudePrefixArguments = @($ClaudePrefixArguments | ForEach-Object { [string]$_ 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $Round) { $Round = "t" + [datetime]::UtcNow.ToString("yyyyMMddHHmm") }
 if ($Round -notmatch '^[a-z0-9][a-z0-9-]{0,40}$') { throw "-Round: a-z, 0-9 ve '-' (en çok 41)" }
+# The board allows RATE_PER_TASK_HOUR notes per task: the round posts under its id, a job under its card id.
+$roundTask = Get-TestTeamBoardTask -Id $Round
 $settingsPath = Join-Path $TeamRoot "cycle-settings.json"
 if (-not $OutRoot) {
     $tempRoot = Read-TeamRunTempRoot -Path $settingsPath
@@ -128,10 +147,10 @@ function Write-Json {
 
 function Send-Note {
     # The board never stops the round (board.ps1 says UYARI and exits 0 when it cannot post).
-    param([string]$Seat, [string]$Text, [string]$To = "")
+    param([string]$Seat, [string]$Text, [string]$To = "", [string]$Task = $roundTask)
     if ($NoBoard) { return }
     $board = if ($BoardScript) { $BoardScript } else { Join-Path $repoRoot "scripts\team\board.ps1" }
-    $arguments = @("-NoProfile", "-File", $board, "post", "-Seat", $Seat, "-Task", "test-team", "-Kind", "bilgi", "-Text", $Text)
+    $arguments = @("-NoProfile", "-File", $board, "post", "-Seat", $Seat, "-Task", $Task, "-Kind", "bilgi", "-Text", $Text)
     if ($To) { $arguments += @("-To", $To) }
     try { & $powershell @arguments 2>&1 | ForEach-Object { Write-Host "  pano: $_" } } catch { Write-Host "  pano: UYARI: $($_.Exception.Message)" }
 }
@@ -150,12 +169,12 @@ function Get-RoleModel {
 }
 
 function Start-RoleProcess {
-    param([string]$Role, [string]$Prompt, [string]$Seat)
+    param([string]$Role, [string]$Prompt, [string]$Seat, [string]$Task = $roundTask)
     # .claude/agents/ is the installed copy; scripts/testteam/roles/ is the source it is copied from.
     $roleFile = Join-Path $repoRoot ".claude\agents\$Role.md"
     if (-not (Test-Path -LiteralPath $roleFile)) { $roleFile = Join-Path $PSScriptRoot "roles\$Role.md" }
     $arguments = Get-TeamRunArguments -RoleFile $roleFile -Model (Get-RoleModel -Role $Role) -PrefixArguments $ClaudePrefixArguments
-    $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = "test-team" }
+    $environment = @{ PAGENTOS_TEAM_SEAT = $Seat; PAGENTOS_TEAM_TASK = $Task }
     return (Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $Prompt -WorkingDirectory $repoRoot -Environment $environment)
 }
 
@@ -193,6 +212,77 @@ function Read-Queue {
     if ($null -ne $apiStore) { return (Get-TeamQueueApi -Store $apiStore) }
     if (-not (Test-Path -LiteralPath $queuePath)) { return [pscustomobject]@{ version = 1; tasks = @() } }
     return (Read-TeamJson -Path $queuePath)
+}
+
+# ------------------------------------------------------------------------------ the proof
+
+function Get-RoundProof {
+    <# The round's proof per JARVIS roadmap row (proof-from-test-rounds-and-trials): a plan job
+       names its row ('roadmap_row') when it has one, otherwise its 'why' (or, with neither, its
+       family) is sent as written and the Cloud Core resolves the row (app.team.progress
+       resolve_row: a wording that names no row is counted 'satır dışı', never a row). A card
+       that passed is a passed scenario of that row, one that failed or broke a failed one. A
+       card with no result file (the tester wrote none) or one that never ran proves nothing.
+       $null, said, when the round's results do not name ONE staging sha. #>
+    param($Document, [string]$Plan)
+    $rowOf = @{}
+    if ($Plan -and (Test-Path -LiteralPath $Plan)) {
+        foreach ($job in @((Read-TeamJson -Path $Plan).jobs)) {
+            $row = ([string](Get-TeamProperty -InputObject $job -Name "roadmap_row" -Default "")).Trim()
+            if (-not $row) { $row = ([string](Get-TeamProperty -InputObject $job -Name "why" -Default "")).Trim() }
+            if (-not $row) { $row = ([string]$job.family).Trim() }
+            if ($row.Length -gt 300) { $row = $row.Substring(0, 300).Trim() }  # the Core's ROW_NAME_MAX
+            if ($row) { $rowOf[[string]$job.family] = $row }
+        }
+    }
+    $rows = [ordered]@{}
+    $shas = @{}
+    foreach ($card in @($Document.cards)) {
+        $state = [string]$card.state
+        if (@("passed", "failed", "broke") -notcontains $state) { continue }
+        if (-not $rowOf.ContainsKey([string]$card.family)) { continue }
+        $resultFile = Join-Path $roundDir "$($card.id).result.json"
+        if (-not (Test-Path -LiteralPath $resultFile)) { continue }
+        try { $result = Read-TeamJson -Path $resultFile } catch { continue }
+        $sha = ([string](Get-TeamProperty -InputObject $result -Name "staging_sha" -Default "")).Trim().ToLowerInvariant()
+        if ($sha) { $shas[$sha] = $true }
+        $row = $rowOf[[string]$card.family]
+        if (-not $rows.Contains($row)) { $rows[$row] = [ordered]@{ row = $row; passed = 0; failed = 0; families = @() } }
+        if ($state -eq "passed") { $rows[$row].passed += 1 } else { $rows[$row].failed += 1 }
+        if ($rows[$row].families -notcontains [string]$card.family) { $rows[$row].families += [string]$card.family }
+    }
+    if ($rows.Count -eq 0) { Write-Host "  kanıt: bu turda yol haritası satırına bağlı sonuç yok"; return $null }
+    if ($shas.Count -ne 1) { Write-Host "  kanıt: sonuçlar tek bir staging sha'sı adlandırmıyor ($($shas.Count)); gönderilmedi"; return $null }
+    return [ordered]@{
+        round       = $Round
+        staging_sha = @($shas.Keys)[0]
+        at          = [datetime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        rows        = @($rows.Values)
+    }
+}
+
+function Send-RoundProof {
+    <# Kept in the Cloud Core (POST /v1/team/queue/proof), never a document edit; the proof is
+       also written beside the cards. A failure is said and never stops the round. #>
+    param($Document, [string]$Plan)
+    $proof = Get-RoundProof -Document $Document -Plan $Plan
+    if ($null -eq $proof) { return }
+    Write-Json -Path (Join-Path $roundDir "proof.json") -Document $proof
+    if ($null -eq $apiStore) { Write-Host "  kanıt: -QueueUrl yok; yalnız $(Join-Path $roundDir 'proof.json')"; return }
+    try {
+        [void](Invoke-TeamApi -Store $apiStore -Method "POST" -Path "/v1/team/queue/proof" -Body $proof)
+        Write-Host ("  kanıt Cloud Core'a yazıldı: {0} satır, staging {1}" -f @($proof.rows).Count, $proof.staging_sha.Substring(0, [Math]::Min(12, $proof.staging_sha.Length)))
+    }
+    catch { Write-Host "  kanıt yazılamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+}
+
+if ($PostProof) {
+    # The proof of a finished round, again (a round that ran before this step, or a store that was down).
+    if (-not (Test-Path -LiteralPath $cardsPath)) { Write-Host "kanıt: $cardsPath yok"; exit 2 }
+    $document = Read-TeamJson -Path $cardsPath
+    $plan = if ($PlanPath) { $PlanPath } else { [string](Get-TeamProperty -InputObject $document -Name "plan" -Default "") }
+    Send-RoundProof -Document $document -Plan $plan
+    exit 0
 }
 
 # ------------------------------------------------------------------------------ the re-test
@@ -250,6 +340,47 @@ if ($Retest) {
     }
     Write-Json -Path $cardsPath -Document $document
     exit 0
+}
+
+# ------------------------------------------------------------------------------ staging is main's tip
+
+if (-not (Test-TestTeamStagingUrl -Url $BaseUrl -AllowTestPort $AllowTestPort)) {
+    Write-Host "TUR REDDEDİLDİ: $BaseUrl staging değil"
+    exit 2
+}
+if ($AllowStaleStaging) { Write-Host "staging sürümü denetlenmedi (-AllowStaleStaging: eski bir sürümün bilerek denenmesi)" }
+elseif (($NoAuth -or $AllowTestPort -gt 0) -and -not $MainSha) { Write-Host "staging sürümü denetlenmedi (testin yerine geçen staging'i, -MainSha yok)" }
+else {
+    $mainTip = $MainSha
+    if (-not $mainTip) {
+        $fetched = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("fetch", "--quiet", "origin", "refs/heads/main:refs/remotes/origin/main") -TimeoutSeconds 300
+        if ($fetched.Success) {
+            $parsed = Invoke-TeamGit -WorkingDirectory $repoRoot -Arguments @("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}")
+            if ($parsed.Success) { $mainTip = ([string]$parsed.StdOut).Trim() }
+        }
+    }
+    $why = ""
+    if ($mainTip -notmatch '^[0-9a-f]{40}$') { $why = "origin/main'in ucu okunamadı; staging'in sürümü karşılaştırılamadı" }
+    else {
+        $servedSha = ""
+        try {
+            $health = Invoke-RestMethod -UseBasicParsing -Uri ($BaseUrl.TrimEnd("/") + "/v1/system/health") -TimeoutSec 15
+            $release = Get-TeamProperty -InputObject $health -Name "release"
+            if ($null -ne $release) { $servedSha = [string](Get-TeamProperty -InputObject $release -Name "version" -Default "") }
+        }
+        catch { Write-Host "  staging sağlığı okunamadı: $($_.Exception.Message -replace '\s+', ' ')" }
+        if ($servedSha -ne $mainTip) {
+            $shown = if ($servedSha) { $servedSha } else { "okunamadı" }
+            $why = "staging eski: staging $shown, main $mainTip (önce scripts\staging\deploy.ps1 $mainTip; bilerek eski sürüm için -AllowStaleStaging)"
+        }
+    }
+    if ($why) {
+        # A refusal, not a failure: exit 4, said on the board; no plan, no card, no tester.
+        Write-Host "TUR BAŞLAMADI: $why"
+        Send-Note -Seat "test-lead" -Text ("Test PY: tur {0} başlamadı - {1}" -f $Round, $why)
+        exit 4
+    }
+    Write-Host "staging main'in ucunda: $mainTip"
 }
 
 # ------------------------------------------------------------------------------ the plan
@@ -360,12 +491,12 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         $resultFile = Join-Path $roundDir "$($card.id).result.json"
         Set-TestTeamCardState -Card $card -To "running"
         Write-Json -Path $cardsPath -Document $document
-        $run = Start-RoleProcess -Role "tester" -Prompt (New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round) -Seat $card.tester
+        $run = Start-RoleProcess -Role "tester" -Prompt (New-TestTeamJobCard -Card $card -ResultFile $resultFile -Round $Round) -Seat $card.tester -Task (Get-TestTeamBoardTask -Id $card.id)
         [void]$inFlight.Add([pscustomobject]@{ Card = $card; Run = $run; ResultFile = $resultFile; Deadline = [datetime]::UtcNow.AddMinutes($RunMinutes) })
         $busy += $card.tester
         Write-Host "  $($card.tester) <- $($card.id) ($($card.family))"
         # The Ofis' Test odası (officeTestRoom.tsx) reads "iş: <job>" and "sonuç: <state> - <job> - ...".
-        Send-Note -Seat $card.tester -Text (Format-TestTeamSeatNote -Card $card)
+        Send-Note -Seat $card.tester -Task (Get-TestTeamBoardTask -Id $card.id) -Text (Format-TestTeamSeatNote -Card $card)
     }
     $over = @($inFlight | Where-Object { Test-TeamRunOver -Run $_.Run -Deadline $_.Deadline })
     if (@($over).Count -eq 0) { Start-Sleep -Milliseconds 300; continue }
@@ -411,7 +542,7 @@ while ($pending.Count -gt 0 -or $inFlight.Count -gt 0) {
         if ($null -ne $result) { [void]$results.Add($result) }
         Write-Json -Path $cardsPath -Document $document
         Write-Host "  $($entry.Card.tester) -> $($entry.Card.id): $state"
-        Send-Note -Seat $entry.Card.tester -Text (Format-TestTeamSeatNote -Card $entry.Card -Result $result)
+        Send-Note -Seat $entry.Card.tester -Task (Get-TestTeamBoardTask -Id $entry.Card.id) -Text (Format-TestTeamSeatNote -Card $entry.Card -Result $result)
     }
 }
 
@@ -459,6 +590,7 @@ if ($added.Count -gt 0) {
     }
 }
 Write-Json -Path $cardsPath -Document $document
+Send-RoundProof -Document $document -Plan $PlanPath
 
 # ------------------------------------------------------------------------------ the breaking point
 

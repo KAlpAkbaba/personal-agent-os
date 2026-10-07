@@ -36,6 +36,7 @@ from app.voice.providers_local_router import (
     LOCAL_ROUTER_PROVIDER_NAME,
     LocalRouterRealtimeProvider,
 )
+from app.voice.providers_openai_live import OPENAI_LIVE_PROVIDER_NAME, OpenAILiveProvider
 from app.voice.providers_openai_realtime import (
     OPENAI_REALTIME_PROVIDER_NAME,
     OpenAIRealtimeProvider,
@@ -58,6 +59,12 @@ def simulator_allowed(settings: Settings) -> bool:
     return settings.environment == "dev" or bool(settings.voice_realtime_simulator_enabled)
 
 
+def openai_live_allowed(settings: Settings) -> bool:
+    """gpt-live-provider: GPT-Live is a candidate only when the owner switched the
+    measurement on AND the OpenAI key is there (otherwise every exchange would fail)."""
+    return bool(settings.voice_realtime_openai_live_enabled and settings.voice_openai_api_key)
+
+
 def default_providers(settings: Settings) -> dict[str, RealtimeProvider]:
     """The realtime candidates that can actually serve a session right now:
     the real adapter only when its key is provisioned (otherwise minting would
@@ -66,6 +73,11 @@ def default_providers(settings: Settings) -> dict[str, RealtimeProvider]:
     if settings.voice_openai_api_key:
         openai = OpenAIRealtimeProvider.from_settings(settings)
         providers[openai.name] = openai
+    if openai_live_allowed(settings):
+        # gpt-live-provider: a measurement candidate. Not in the default preference
+        # order, so a session that names no preference still gets openai-realtime.
+        openai_live = OpenAILiveProvider.from_settings(settings)
+        providers[openai_live.name] = openai_live
     if simulator_allowed(settings):
         sim = SimulatedRealtimeProvider(credential_ttl_s=settings.voice_realtime_credential_ttl_s)
         providers[sim.name] = sim
@@ -85,6 +97,16 @@ def inactive_candidates(settings: Settings) -> dict[str, str]:
     if not settings.voice_openai_api_key:
         out[OPENAI_REALTIME_PROVIDER_NAME] = (
             "provider_auth_missing (owner action: set PAGENTOS_VOICE_OPENAI_API_KEY)"
+        )
+    if not settings.voice_realtime_openai_live_enabled:
+        out[OPENAI_LIVE_PROVIDER_NAME] = (
+            "ölçüm adayı kapalı (varsayılan; açmak için "
+            "PAGENTOS_VOICE_REALTIME_OPENAI_LIVE_ENABLED=true - Türkçe desteği doğrulanmadı)"
+        )
+    elif not settings.voice_openai_api_key:
+        out[OPENAI_LIVE_PROVIDER_NAME] = (
+            "ölçüm adayı açık ama OpenAI anahtarı yok "
+            "(owner action: set PAGENTOS_VOICE_OPENAI_API_KEY)"
         )
     if not simulator_allowed(settings):
         out[SIMULATOR_PROVIDER_NAME] = (
@@ -219,8 +241,27 @@ class RealtimeVoiceRuntime:
     def inactive(self) -> dict[str, str]:
         return dict(self._inactive)
 
+    def _preference(self, prefer_provider: str | None) -> tuple[tuple[str, ...], str | None]:
+        """gpt-live-provider: the configured order with the session's named provider put
+        first. Selection is still by capability - the hint only reorders the preference
+        tier. An unregistered name is ignored and the returned note says so."""
+        order = tuple(self.settings.voice_realtime_provider_preference)
+        if not prefer_provider:
+            return order, None
+        if prefer_provider not in self._providers:
+            return order, (
+                f"prefer_provider={prefer_provider} ignored: not a registered candidate "
+                f"({self._inactive.get(prefer_provider, 'unknown provider')})"
+            )
+        rest = tuple(name for name in order if name != prefer_provider)
+        return (prefer_provider, *rest), f"prefer_provider={prefer_provider} requested"
+
     def select(
-        self, *, language: str = "tr-TR", transport: str | None = None
+        self,
+        *,
+        language: str = "tr-TR",
+        transport: str | None = None,
+        prefer_provider: str | None = None,
     ) -> tuple[RealtimeProvider, SelectionResult]:
         """Capability-driven choice among the registered candidates (spec §2).
 
@@ -246,10 +287,11 @@ class RealtimeVoiceRuntime:
                 barred[caps.name] = (REJECT_SIMULATED_OUTSIDE_DEV,)
                 continue
             candidates.append(caps)
+        preference, preference_note = self._preference(prefer_provider)
         try:
             result = select_conversation_provider(
                 candidates,
-                self.settings.voice_realtime_provider_preference,
+                preference,
                 language=language,
                 require_ephemeral_credentials=True,
             )
@@ -261,6 +303,8 @@ class RealtimeVoiceRuntime:
             raise
         if barred:
             result = dataclasses.replace(result, rejected={**result.rejected, **barred})
+        if preference_note is not None:
+            result = dataclasses.replace(result, reasons=(*result.reasons, preference_note))
         return self._providers[result.selected.name], result
 
     def _select_text(self, *, language: str) -> tuple[RealtimeProvider, SelectionResult]:

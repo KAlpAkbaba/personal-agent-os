@@ -572,12 +572,13 @@ Test-Case "duty: two decisions for one task, a decision that is no object, and a
 
 Test-Case "duty: a grant of a lead-protected path refuses the decision - a shared file, a role file, the protected list itself, a secret, a recovery root, a directory holding one" {
     foreach ($protected in @("docs/HANDOFF.md", "docs/DECISIONS.md", "state/BUILD_STATE.json", "team/queue.json", ".claude/agents/worker.md",
-            "scripts/lib/TeamArea.ps1", "PROJECT_CONSTITUTION.md", "docs/ROADMAP.md", "docs/TEAM_PROTOCOL.md", "apps/web/.env.local",
+            "scripts/lib/TeamAreaProtected.ps1", "PROJECT_CONSTITUTION.md", "docs/ROADMAP.md", "docs/TEAM_PROTOCOL.md", "apps/web/.env.local",
             "services/recovery-supervisor/app.py", "scripts/cloud/release-cloud-core.ps1", "docs", "CLAUDE.md")) {
         $problems = @(Get-DutyProblems -Decisions @((New-Decision -Action "grant_and_return" -Grant @("src/fine.py", $protected))))
         Assert-True -Condition (@($problems | Where-Object { $_ -match "protected" }).Count -ge 1) -Because "'$protected': $($problems -join '; ')"
     }
-    foreach ($fine in @("docs/guides/x.md", "scripts/team/cycle.ps1", "scripts/lib/TeamQueue.ps1", "services/api/app/team/routes.py", "docs/HANDOFF.md.bak")) {
+    # The area logic is grantable like any team script since the list moved to its own file (protected-list-own-file).
+    foreach ($fine in @("docs/guides/x.md", "scripts/team/cycle.ps1", "scripts/lib/TeamQueue.ps1", "scripts/lib/TeamArea.ps1", "services/api/app/team/routes.py", "docs/HANDOFF.md.bak")) {
         $problems = @(Get-DutyProblems -Decisions @((New-Decision -Action "grant_and_return" -Grant @($fine))))
         Assert-Equal -Expected 0 -Actual @($problems).Count -Because "'$fine' is not protected: $($problems -join '; ')"
     }
@@ -632,6 +633,9 @@ Test-Case "duty: the card lists each stopped task - its area, branch, sha, the s
         Assert-True -Condition ($card.Contains($expected)) -Because "the card names '$expected':`n$card"
     }
     Assert-True -Condition ($card -notmatch '(?m)^- id: ') -Because "no line reads as ONE task's id (the run is about several)"
+    # The lead must not be told the area logic is protected: the list is its own file now (protected-list-own-file).
+    Assert-True -Condition ($card.Contains("scripts/lib/TeamAreaProtected.ps1")) -Because "the card names the protected-list file:`n$card"
+    Assert-True -Condition (-not $card.Contains("scripts/lib/TeamArea.ps1")) -Because "the card does not call the area logic protected:`n$card"
 }
 
 Test-Case "duty: without the protected-path list loaded no decision file is accepted (it fails closed)" {
@@ -643,11 +647,13 @@ Test-Case "duty: without the protected-path list loaded no decision file is acce
         "`$task = [pscustomobject]@{ id = 'stuck-one'; title = 't'; roadmap_row = 'r'; state = 'stopped'; area = @('src/area'); branch = ''; worktree = ''; assignee = ''; reports = @(); budget = [pscustomobject]@{ max_usd = 0 }; created_at = '2026-10-03T10:00:00Z'; updated_at = '2026-10-03T10:00:00Z' }`r`n" +
         "`$decision = [pscustomobject]@{ task = 'stuck-one'; action = 'return'; reason = 'x' }`r`n" +
         "`$why = @(Test-TeamDuty -Decisions @(`$decision) -Listed @('stuck-one') -Queue ([pscustomobject]@{ version = 1; tasks = @(`$task) }))`r`n" +
-        "Write-Output ('COUNT=' + @(`$why).Count)`r`n"
+        "Write-Output ('COUNT=' + @(`$why).Count)`r`n" +
+        "foreach (`$line in `$why) { Write-Output ('WHY=' + `$line) }`r`n"
         [System.IO.File]::WriteAllText($probe, $text, (New-Object System.Text.UTF8Encoding($true)))
         $shell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
         $result = Invoke-NativeProcess -FilePath $shell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $probe) -WorkingDirectory $work -TimeoutSeconds 120 -SuccessExitCodes @(0, 1)
         Assert-True -Condition ($result.StdOut -match 'COUNT=([1-9]\d*)') -Because "a refusal, not an empty list: $($result.StdOut) $($result.StdErr)"
+        Assert-True -Condition ($result.StdOut -match '(?m)^WHY=.*scripts/lib/TeamAreaProtected\.ps1.*not loaded') -Because "the refusal names the list file: $($result.StdOut)"
     }
     finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
@@ -1333,7 +1339,7 @@ function New-Sandbox {
     foreach ($folder in @("scripts\lib", "scripts\team", "scripts\tests\lib", ".claude\agents", "team", "src\area")) {
         [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $folder))
     }
-    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamArea.ps1")) {
+    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1", "TeamArea.ps1", "TeamAreaProtected.ps1")) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\$name") -Destination (Join-Path $root "scripts\lib\$name")
     }
     Copy-Item -Path (Join-Path $repoRoot "scripts\team\*.ps1") -Destination (Join-Path $root "scripts\team")

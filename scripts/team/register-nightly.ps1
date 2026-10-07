@@ -41,6 +41,10 @@ param(
     [string]$Machine = $env:COMPUTERNAME,
     [switch]$Register,
     [switch]$Unregister,
+    # The Danisman's night watch (danisman-watch-in-repo): scripts/team/watch.ps1 every
+    # -WatchEveryMinutes as its own task, "PagentOS Danisman Watch" unless -TaskName names one.
+    [switch]$Watch,
+    [int]$WatchEveryMinutes = 15,
     # The tests read the plan and register nothing.
     [switch]$PlanOnly
 )
@@ -91,9 +95,41 @@ if ($Machine.ToUpperInvariant() -ne $HomeMachine.ToUpperInvariant()) {
     exit 6
 }
 
+if ($Watch -and -not $PSBoundParameters.ContainsKey("TaskName")) { $TaskName = "PagentOS Danisman Watch" }
+
 if ($Unregister) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "the task '$TaskName' is not registered."
+    exit 0
+}
+
+if ($Watch) {
+    # The watch looks, starts what is missing and drafts cards; it never runs the cycle itself.
+    # Its output stays in %USERPROFILE%\.pagentos-team, where the chat session reads it.
+    if ($WatchEveryMinutes -lt 5 -or $WatchEveryMinutes -gt 120) { throw "-WatchEveryMinutes is 5..120" }
+    $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $repoRoot 'scripts\team\watch.ps1')`""
+    if ($QueueUrl) {
+        if (-not $QueueToken) { throw "-QueueUrl needs -QueueToken (the path of the token file)" }
+        $arguments += " -QueueUrl $QueueUrl -QueueToken `"$QueueToken`""
+    }
+    Write-Host "task      : $TaskName"
+    Write-Host "when      : every $WatchEveryMinutes minutes, all day (a look that still runs keeps the next from starting)"
+    Write-Host "runs      : $powershell $arguments"
+    Write-Host "in        : $repoRoot"
+    Write-Host "as        : $env:USERNAME, only while logged on; no stored password, not elevated"
+    if ($PlanOnly -or -not $Register) {
+        Write-Host ""
+        Write-Host "NOT registered. To register it, run this script again with -Register."
+        exit 0
+    }
+    $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $repoRoot
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes $WatchEveryMinutes) -RepetitionDuration (New-TimeSpan -Days 3650)
+    # The Danisman's run has 25 minutes; the look around it a few more.
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 40) -MultipleInstances IgnoreNew -StartWhenAvailable
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+    [void](Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force)
+    Write-Host "registered."
     exit 0
 }
 

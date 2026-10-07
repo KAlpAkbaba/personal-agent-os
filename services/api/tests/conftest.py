@@ -1,6 +1,7 @@
 """Shared pytest fixtures."""
 
 import os
+import re
 import zlib
 from collections.abc import Callable
 
@@ -47,7 +48,110 @@ def shard_keys(nodeids: list[str]) -> list[str]:
     return keys
 
 
+#: The gate runs the unit suite under pytest-xdist (team/plans/gate-unit-parallel-adr.md), and
+#: xdist refuses a run whose workers collected different test ids. Two things made the ids
+#: differ between processes (measured 2026-10-06 by collecting twice): route-guard tables put a
+#: fresh uuid4 into their paths, and parameter tables built from sets come out in the process's
+#: string-hash order. A uuid in a parameter's id is written as ``<uuid>``, and the workers xdist
+#: starts share one hash seed.
+_UUID_IN_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+XDIST_HASH_SEED = "20261006"
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    if isinstance(val, str) and _UUID_IN_ID.search(val):
+        return _UUID_IN_ID.sub("<uuid>", val)
+    return None
+
+
+def pytest_configure(config):
+    # In the xdist controller, before it starts the workers (they inherit its environment); a
+    # seed the caller set already is kept. A serial run is left as it was.
+    if os.environ.get("PYTEST_XDIST_WORKER") or not getattr(config.option, "numprocesses", None):
+        return
+    os.environ.setdefault("PYTHONHASHSEED", XDIST_HASH_SEED)
+
+
+#: FastAPI keeps three module-level lru_caches (4096 entries each) keyed by endpoint callables.
+#: A create_app() endpoint is a closure over its app, so every test's app stayed alive: one
+#: serial unit run grew to 21 GB (measured 2026-10-06; 25 of 25 apps alive after one file).
+#: Cleared after each test; a cache missing in another FastAPI version is skipped.
+_FASTAPI_CALLABLE_CACHES = (
+    "_is_gen_callable_cached",
+    "_is_async_gen_callable_cached",
+    "_is_coroutine_callable_cached",
+)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item, nextitem):
+    from fastapi.dependencies import models
+
+    for name in _FASTAPI_CALLABLE_CACHES:
+        cached = getattr(models, name, None)
+        if cached is not None and hasattr(cached, "cache_clear"):
+            cached.cache_clear()
+
+
+#: Tests that cannot run beside another, marked ``serial_tail``: the gate runs the unit suite
+#: under xdist with ``-m "not serial_tail"`` and then these serially. A serial run runs them in
+#: place, as before. Each id carries why (found in the gate's parallel run of 2026-10-06).
+SERIAL_TAIL = {
+    "tests/unit/test_contract_falsification.py::test_hiding_a_contract_actually_fails_its_guard": (
+        "its mutation proof deletes packages/protocol/realtime-session-contract.json from the "
+        "shared tree; test_compose_web_shell and test_every_shared_artifact_is_registered read "
+        "that file and failed beside it"
+    ),
+    "tests/unit/test_team_guards_runner.py::"
+    "test_red_hung_and_missing_are_three_wordings_and_the_exit_codes_are_three": (
+        "a PowerShell guard must finish inside -HangSeconds 2; beside eight busy workers its "
+        "start alone took longer and 'red' came back 'hung'"
+    ),
+}
+
+
+def pytest_itemcollected(item):
+    if item.nodeid in SERIAL_TAIL:
+        item.add_marker(pytest.mark.serial_tail)
+    group = XDIST_GROUPS.get(item.nodeid.split("::")[0])
+    if group is not None:
+        item.add_marker(pytest.mark.xdist_group(name=group))
+
+
+#: Test files whose aggregate tests read a module-level result cache that the file's
+#: parametrised cases fill. Serially the cases fill it first; split over xdist workers, every
+#: worker that got an aggregate ran the whole corpus again (the owner corpus: 768 s and 7-10 GB,
+#: twice in one run, 2026-10-06). Each is one ``xdist_group``; the gate runs ``--dist loadgroup``.
+XDIST_GROUPS = {
+    "tests/unit/test_owner_utterance_corpus.py": "owner_utterance_corpus",
+    "tests/unit/test_stt_utterance_corpus.py": "stt_utterance_corpus",
+    "tests/unit/test_stt_corpus_layer2.py": "stt_corpus_layer2",
+}
+
+#: Files that decide the step's length, moved to the front in xdist workers (xdist hands work
+#: out in collection order): the owner corpus group is ~770 s on one worker, and started
+#: mid-run the step ended after ~21 minutes with 6, 8 or 12 workers alike. The STT corpora stay
+#: in place: moved first too, three memory-heavy corpora ran at once (tree 14.2 GB). A serial
+#: run keeps its order.
+LONG_FIRST = ("tests/unit/test_owner_utterance_corpus.py",)
+
+
+def _file_of(item):
+    return item.nodeid.split("::")[0]
+
+
+def _long_first(items):
+    rank = {path: index for index, path in enumerate(LONG_FIRST)}
+    first = sorted(
+        (item for item in items if _file_of(item) in rank), key=lambda item: rank[_file_of(item)]
+    )
+    if first:
+        items[:] = first + [item for item in items if _file_of(item) not in rank]
+
+
 def pytest_collection_modifyitems(config, items):
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        _long_first(items)
     shard = parse_shard(os.environ.get(SHARD_ENV))
     if shard is None:
         return

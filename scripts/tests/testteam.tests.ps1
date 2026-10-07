@@ -1144,6 +1144,98 @@ Test-Case "a round sends its breaking report to the board as test-lead, addresse
     }
 }
 
+# ============================================================================ staging must be main's tip
+
+Write-Host ""
+Write-Host "a round on a stale staging (staging-follows-release, the Danışman 2026-10-06)"
+
+function Invoke-StagingRound {
+    # A round against a fake staging serving -Sha, main's tip -MainSha, the round's seed writing
+    # -Token ('good' is the session staging accepts, 'dead' one it does not); what is returned is
+    # the exit code, the output, the fake testers' calls, whether a cards.json was written, the
+    # software queue, the board posts and how often the seed ran.
+    param([string]$Sha, [string]$MainSha, [string]$Token = "good", [string]$Extra = "")
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $staging = Start-FakeStaging -Port $port -Sha $Sha
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        Write-Utf8 (Join-Path $team "queue.json") '{"version":1,"tasks":[]}'
+        Write-Utf8 (Join-Path $team "cycle-settings.json") '{"max_parallel":4,"test_parallel":4}'
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"},{"family":"saglik","scenario":"s.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $seed = New-FakeSeed -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        $env:PAGENTOS_FAKE_SESSION_FILE = Join-Path $work "owner.json"
+        $env:PAGENTOS_FAKE_SEED_LOG = Join-Path $work "seed.log"
+        $env:PAGENTOS_FAKE_SEED_TOKEN = $Token
+        $posts = Join-Path $work "posts.log"
+        $fakeBoard = Join-Path $work "board.ps1"
+        Write-Utf8 $fakeBoard ("[IO.File]::AppendAllText('$posts', ((@(`$args) -join '|') + [Environment]::NewLine), (New-Object Text.UTF8Encoding(`$false)))")
+        $outRoot = Join-Path $work "out"
+        $arguments = @("-NoProfile", "-File", $testRound, "-Round", "st", "-TeamRoot", $team, "-OutRoot", $outRoot, "-PlanPath", $plan,
+            "-ClaudePath", $powershell, "-ClaudePrefixArguments", "-NoProfile,-File,$fake", "-AssumeFreeGb", "30", "-AssumeGateRunning", "0",
+            "-BoardScript", $fakeBoard, "-BaseUrl", "http://127.0.0.1:$port", "-AllowTestPort", "$port",
+            "-SeedScript", $seed, "-SessionFile", $env:PAGENTOS_FAKE_SESSION_FILE, "-MainSha", $MainSha)
+        if ($Extra) { $arguments += $Extra }
+        $out = & $powershell @arguments 2>&1
+        $code = $LASTEXITCODE
+        return [pscustomobject]@{
+            ExitCode = $code; Output = ($out -join " ")
+            Calls    = @(Get-FakeCalls -Dir $env:PAGENTOS_FAKE_TESTER_LOG)
+            Cards    = (Test-Path -LiteralPath (Join-Path $outRoot "st\cards.json"))
+            Queue    = @((Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $team "queue.json") | ConvertFrom-Json).tasks)
+            Posts    = $(if (Test-Path -LiteralPath $posts) { [System.IO.File]::ReadAllText($posts, [System.Text.Encoding]::UTF8) } else { "" })
+            Seeds    = $(if (Test-Path -LiteralPath $env:PAGENTOS_FAKE_SEED_LOG) { @(Get-Content -LiteralPath $env:PAGENTOS_FAKE_SEED_LOG | Where-Object { $_ }).Count } else { 0 })
+        }
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $staging.HasExited) { $staging.Kill() }
+        foreach ($name in @("PAGENTOS_FAKE_TESTER_LOG", "PAGENTOS_FAKE_SESSION_FILE", "PAGENTOS_FAKE_SEED_LOG", "PAGENTOS_FAKE_SEED_TOKEN")) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a round whose staging serves another sha than main's tip starts no tester, opens no card, seeds nothing and says both shas" {
+    # 2026-10-06 13:05: staging 6a21294c, production 72884b71 - every watch step 404, false failures.
+    $old = "a" * 40; $main = "b" * 40
+    $run = Invoke-StagingRound -Sha $old -MainSha $main
+    Assert-Equal -Expected 4 -Actual $run.ExitCode -Because "refused, an exit of its own (not a failure, 1): $($run.Output)"
+    Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no tester started: $($run.Output)"
+    Assert-Equal -Expected $false -Actual $run.Cards -Because "no card of the round is written"
+    Assert-Equal -Expected 0 -Actual @($run.Queue).Count -Because "nothing reaches the software queue"
+    Assert-Equal -Expected 0 -Actual $run.Seeds -Because "a refused round does not rotate staging's credential"
+    Assert-True -Condition ($run.Output.Contains($old) -and $run.Output.Contains($main)) -Because "it says both shas: $($run.Output)"
+    Assert-True -Condition ($run.Posts.Contains($old) -and $run.Posts.Contains($main)) -Because "and posts them on the board: $($run.Posts)"
+}
+
+Test-Case "-AllowStaleStaging starts a deliberate round on an old build" {
+    $run = Invoke-StagingRound -Sha ("a" * 40) -MainSha ("b" * 40) -Extra "-AllowStaleStaging"
+    Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "the round ends: $($run.Output)"
+    Assert-Equal -Expected 2 -Actual @($run.Calls).Count -Because "both jobs ran: $($run.Output)"
+}
+
+Test-Case "staging at main's tip with a session staging accepts starts the round" {
+    $sha = "c" * 40
+    $run = Invoke-StagingRound -Sha $sha -MainSha $sha
+    Assert-Equal -Expected 0 -Actual $run.ExitCode -Because "the round ends: $($run.Output)"
+    Assert-Equal -Expected 2 -Actual @($run.Calls).Count -Because "both jobs ran: $($run.Output)"
+}
+
+Test-Case "staging at main's tip whose seeded session answers 401 (redeployed, the seed did not take) starts no tester" {
+    # 2026-10-06 13:20: right after a staging redeploy every authenticated step answered 401.
+    $sha = "c" * 40
+    $run = Invoke-StagingRound -Sha $sha -MainSha $sha -Token "dead"
+    Assert-True -Condition ($run.ExitCode -ne 0) -Because "refused: $($run.Output)"
+    Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "no tester started: $($run.Output)"
+    Assert-Equal -Expected 0 -Actual @($run.Queue).Count -Because "no card was opened"
+    Assert-True -Condition ($run.Output -match "oturum" -and $run.Output -match "401") -Because "it says why: $($run.Output)"
+    Assert-True -Condition ($run.Posts -match "oturum") -Because "on the board too: $($run.Posts)"
+}
+
 # ============================================================================ the role files
 
 Write-Host ""

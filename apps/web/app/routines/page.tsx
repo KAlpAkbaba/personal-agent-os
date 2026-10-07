@@ -13,6 +13,10 @@
  * Pause and resume are the same two reversible controls B14 built, on the same client:
  * this page is not a second authority surface, it is the first surface wide enough to
  * read them on.
+ *
+ * 'Nöbetler' sits below them: the owner's own standing watches (a page read every few hours,
+ * told when it changes or a condition holds). They are his tasks beside the system's, so they
+ * live here and not in the Onay Merkezi or the Ofis; the section holds its own client.
  */
 
 import { useCallback } from "react";
@@ -23,6 +27,7 @@ import { useLoaded } from "../lib/pages/useLoaded";
 import { fetchRoutines } from "../lib/cockpit/routines";
 import { useRoutineControl } from "../lib/cockpit/useRoutineControl";
 import { RoutinesPanel } from "../core/panels/CockpitPanels";
+import WatchList from "./WatchList";
 
 const ROUTINE_POLICY = "/v1/routines/policy";
 
@@ -41,6 +46,8 @@ export default function RoutinesPage() {
       panel="routines"
     >
       <RoutinesPanel state={routines.state} control={control} always />
+
+      <WatchList />
 
       <Rows
         id="routine-policy"

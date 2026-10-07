@@ -75,7 +75,11 @@ def test_save_list_read_replace_purge_delete_all_round_trip_on_minio(settings: S
         recordings.save("ev", 5, audio_wav_base64=b64(first), now=day_31)
         recordings.save("ev", 6, audio_wav_base64=b64(first), now=day_31)
         store.delete(f"{root}/ev/06.json")
-        assert recordings.delete_all() == 3
+        # a command sentence (21-30, local-tr-stt-measure) is a slot like any other
+        command = recordings.save("ofis", 30, audio_wav_base64=b64(first), now=day_31)
+        assert command["reference"] == stt_compare.OFFLINE_COMMAND_SENTENCES[9]
+        assert store.exists(f"{root}/ofis/30.wav")
+        assert recordings.delete_all() == 4
         assert [key for key in every_key if store.exists(key)] == []
         assert recordings.delete_all() == 0
     finally:

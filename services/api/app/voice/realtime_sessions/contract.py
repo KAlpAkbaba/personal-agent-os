@@ -17,6 +17,8 @@ Version history (bump on every change to a request model's accepted fields):
   1 - M12 tracks A+E: create/attach/tool-call/complete/events as first shipped.
   2 - ADR-0043: ``voice`` on create (a wire voice from the provider's list).
   3 - ADR-0208: ``device_id`` on create and attach (the enrolled device the client runs on).
+  4 - gpt-live-provider: ``prefer_provider`` on create (put first in the preference order
+      for this session; selection stays by capability, an unknown name is ignored).
 """
 
 from __future__ import annotations

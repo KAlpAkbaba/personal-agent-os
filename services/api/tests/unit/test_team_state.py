@@ -414,6 +414,8 @@ def test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server
         ("GET", "/v1/team/queue/status"): "the read-back of what the cycle PUTs (office-01)",
         ("PUT", "/v1/team/queue/models"): "the Ofis page writes the owner's choice "
         "(model-policy-office-ui); the cycle only reads the setting",
+        ("POST", "/v1/team/queue/proof"): "scripts/testteam/test-round.ps1 posts a finished "
+        "round's proof (proof-from-test-rounds-and-trials); TeamQueue.ps1 does not",
     }
     unread = served - used - set(read_by_others)
     assert not unread, f"a served route the client never calls: {unread}"
