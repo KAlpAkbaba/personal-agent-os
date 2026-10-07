@@ -20,9 +20,13 @@
       3. The jobs are dealt to the testers in turn (New-TestTeamCards) and run, at most the cap
          at once: each is ONE fresh `claude -p` run of .claude/agents/tester.md with its job
          card; it writes its result file and reports to the test lead (this script) only.
-      4. The failures are deduplicated and each becomes a normal card of the software queue
-         (state 'proposed', steps/expected/actual/scenario/screenshot/staging sha); a card whose
-         id is already in the queue is not opened again.
+      4. The failures are deduplicated and each becomes a card for the software Proje
+         Yöneticisi's triage - never the owner's (2026-10-06: 61 test cards sat in
+         'awaiting_owner'): state 'proposed', reason and proposal 'Test PY bulgusu: ...', no area,
+         so the cycle hands it to the PM's split (steps/expected/actual/scenario/screenshot/
+         staging sha in its goal). A failing step (family + step + expected) a card of the store
+         already holds - open, merged, folded or split - opens none; at most ten cards a round,
+         the rest in one summary card (Select-TestTeamForwards).
       4a. The proof (proof-from-test-rounds-and-trials): per JARVIS roadmap row a plan job names
          ('roadmap_row'), the scenarios that passed and failed on staging, with the staging sha,
          POSTed to the Cloud Core (/v1/team/queue/proof) - the Ofis' 'staging'de kanıtlı'.
@@ -503,14 +507,33 @@ $queue = Read-Queue
 $known = @{}
 foreach ($task in (Get-TeamTasks -Queue $queue)) { $known[[string]$task.id] = $true }
 $added = New-Object System.Collections.ArrayList
-foreach ($failure in $failures) {
-    $task = ConvertTo-TestTeamFailureTask -Failure $failure -StagingSha $stagingSha -Round $Round
+function Set-Forwarded {
+    param($Failure, [string]$TaskId)
     foreach ($card in $cards) {
-        if ($card.id -ne $failure.card) { continue }
-        $card.forwarded_task = $task.id
+        if ($card.id -ne $Failure.card) { continue }
+        $card.forwarded_task = $TaskId
         # The retest judges the fix only on a staging that no longer serves this sha.
-        $card.found_sha = [string](Get-TeamProperty -InputObject $failure -Name "staging_sha" -Default "")
+        $card.found_sha = [string](Get-TeamProperty -InputObject $Failure -Name "staging_sha" -Default "")
     }
+}
+# One card per failing step (family, step, expected) that no card of the store holds - open,
+# merged, folded or split - at most ten; the rest in one summary card (test-findings-to-pm-not-owner).
+$pick = Select-TestTeamForwards -Failures $failures -Tasks @(Get-TeamTasks -Queue $queue) -Round $Round -StagingSha $stagingSha
+foreach ($held in @($pick.Held)) {
+    Set-Forwarded -Failure $held.Failure -TaskId $held.By
+    Write-Host "  $($held.Failure.family) / $($held.Failure.step): $($held.By) kartında zaten var; yeni kart açılmadı"
+}
+$planned = @(foreach ($failure in @($pick.Forward)) {
+        $task = ConvertTo-TestTeamFailureTask -Failure $failure -StagingSha $stagingSha -Round $Round
+        Set-Forwarded -Failure $failure -TaskId $task.id
+        $task
+    })
+if ($null -ne $pick.Summary) {
+    Write-Host "  sınır: $($script:TestTeamMaxForwards) kart; kalan hatalar tek özet kartta ($($pick.Summary.id))"
+    foreach ($failure in @($pick.Summarised)) { Set-Forwarded -Failure $failure -TaskId $pick.Summary.id }
+    $planned += $pick.Summary
+}
+foreach ($task in $planned) {
     if ($known.ContainsKey($task.id)) { Write-Host "  $($task.id) kuyrukta zaten var; yeniden açılmadı"; continue }
     $known[$task.id] = $true
     [void]$added.Add($task)

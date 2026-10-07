@@ -272,10 +272,11 @@ Test-Case "a failure becomes a software card with steps, expected, actual, the s
     Assert-Equal -Expected 0 -Actual @($schemaProblems).Count -Because "a normal card of the queue: $($schemaProblems -join '; ')"
 }
 
-Test-Case "a forwarded card carries a first area from its family's known code paths; an unknown family carries none" {
+Test-Case "a forwarded card names its family's known code paths as the first area in its proposal; an unknown family names none" {
     # 2026-10-06 21:02: the first automatic round forwarded 19 cards with NO area; seven moved to
     # 'assigned' as they were and the whole team stopped. The Proje Yöneticisi widens a first
-    # area; it does not invent one.
+    # area; it does not invent one. Since test-findings-to-pm-not-owner the card itself carries
+    # no area (it waits for the PM's split, which gives it one); the first area is in its text.
     $expected = [ordered]@{
         "nobet" = "services/api/app/watch/"; "ev-stoku" = "services/api/app/household/"
         "alarm" = "services/api/app/alarms/"; "dil-dayanikliligi" = "services/api/app/voice/understanding/"
@@ -286,13 +287,101 @@ Test-Case "a forwarded card carries a first area from its family's known code pa
             step = "adım"; steps = @("GET /v1/x"); expected = "200"; actual = "500"; screenshot = ""
         }
         $task = ConvertTo-TestTeamFailureTask -Failure $failure -Round "r1" -Now "2026-10-06T21:02:00Z"
-        Assert-True -Condition (@($task.area) -contains $expected[$family]) -Because "$family -> $($expected[$family]); got: $(@($task.area) -join ', ')"
-        Assert-Equal -Expected "proposed" -Actual $task.state -Because "the area is a first one; the Proje Yöneticisi still decides"
+        Assert-True -Condition ($task.proposal -match ("Önerilen ilk alan: " + [regex]::Escape($expected[$family]))) -Because "$family -> $($expected[$family]); got: $($task.proposal)"
+        Assert-Equal -Expected 0 -Actual @($task.area).Count -Because "the PM's split gives the area; a card with one would skip the PM"
+        Assert-Equal -Expected "proposed" -Actual $task.state -Because "the Proje Yöneticisi decides"
         $problems = @(Test-TeamQueue -Queue ([pscustomobject]@{ version = 1; tasks = @($task) }))
         Assert-Equal -Expected 0 -Actual @($problems).Count -Because "a normal card of the queue: $($problems -join '; ')"
     }
     $unknown = [pscustomobject]@{ card = "tj-r1-9"; tester = "tester-1"; family = "bilinmeyen"; scenario = "x.json"; step = "a"; steps = @(); expected = "1"; actual = "2"; screenshot = "" }
-    Assert-Equal -Expected 0 -Actual @((ConvertTo-TestTeamFailureTask -Failure $unknown -Round "r1").area).Count -Because "no known path: no invented area"
+    Assert-True -Condition ((ConvertTo-TestTeamFailureTask -Failure $unknown -Round "r1").proposal -notmatch "Önerilen ilk alan") -Because "no known path: no invented area"
+}
+
+Test-Case "a forwarded test card goes to the Proje Yöneticisi's split, never to the owner's approval" {
+    # Measured 2026-10-06 22:20: 61 test-fail-* cards sat in 'awaiting_owner' (the Onay Merkezi
+    # said 'CTO 61 onay') - the cycle moves every plain 'proposed' card to the owner's gate.
+    $failure = [pscustomobject]@{
+        card = "tj-r1-2"; tester = "tester-2"; family = "alarm"; scenario = "scripts/testteam/scenarios/alarm.json"
+        step = "alarm kur"; steps = @("POST /v1/alarms"); expected = "201"; actual = "500"; screenshot = ""
+    }
+    $task = ConvertTo-TestTeamFailureTask -Failure $failure -Round "r1" -Now "2026-10-06T22:20:00Z"
+    Assert-Equal -Expected "proposed" -Actual $task.state -Because "never awaiting_owner"
+    Assert-True -Condition ($task.reason.StartsWith("Test PY bulgusu:")) -Because "the PM's triage prefix: $($task.reason)"
+    Assert-True -Condition ($task.proposal.StartsWith("Test PY bulgusu:")) -Because "the split run's prompt carries the finding: $($task.proposal)"
+    Assert-True -Condition (Test-TeamSplitCandidate -Task $task) -Because "a proposal for the lead's split"
+    $next = Get-TeamNextRole -Task $task
+    Assert-True -Condition ($next.NextState -ne "awaiting_owner" -and $next.Kind -ne "gate") -Because "the cycle must not move it to the owner: $($next.Kind) -> $($next.NextState)"
+    $summary = ConvertTo-TestTeamSummaryTask -Failures @($failure, $failure) -Round "r1" -Now "2026-10-06T22:20:00Z"
+    Assert-True -Condition ((Test-TeamSplitCandidate -Task $summary) -and $summary.reason.StartsWith("Test PY bulgusu:")) -Because "the summary card too"
+    Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue ([pscustomobject]@{ version = 1; tasks = @($task, $summary) })).Count -Because "both normal cards of the queue"
+}
+
+Test-Case "a failing step's signature (family, step, expected) blocks a new card while a card for it is open, merged or folded" {
+    $mk = { param($actual, $scenario) [pscustomobject]@{ card = "tj-1"; tester = "tester-1"; family = "dil-dayanikliligi"; scenario = $scenario
+            step = "Saat  kaçta  uyandır"; steps = @("POST /v1/voice"); expected = "200 alarm"; actual = $actual; screenshot = "" } }
+    $first = & $mk "500" "scripts/testteam/scenarios/dil.json"
+    $again = & $mk "502" "scripts/testteam/scenarios/dil-2.json"
+    Assert-Equal -Expected (Get-TestTeamFailureSignature -Failure $first) -Actual (Get-TestTeamFailureSignature -Failure $again) -Because "another actual or scenario is the same failing step"
+    Assert-True -Condition ((Get-TestTeamFailureTaskId -Failure $first) -ne (Get-TestTeamFailureTaskId -Failure $again)) -Because "(their ids differ: why the id alone let three of one sentence through)"
+    $open = ConvertTo-TestTeamFailureTask -Failure $first -Round "r1" -Now "2026-10-06T22:20:00Z"
+    $pick = Select-TestTeamForwards -Failures @($again) -Tasks @($open) -Round "r2"
+    Assert-Equal -Expected 0 -Actual @($pick.Forward).Count -Because "an open card holds the signature"
+    # The cards of 2026-10-06 the Danışman folded by hand: no signature line, the old title/goal shape.
+    $folded = [pscustomobject]@{ id = "test-fail-dil-dayanikliligi-0011223344"; state = "done"; reason = "BİRLEŞTİRİLDİ -> understanding-plural-context-typos"
+        title = "Test ekibi: dil-dayanikliligi - saat kaçta uyandır"; goal = "Test ekibi staging'de bir hata buldu.`nBeklenen: 200 alarm`nGerçekleşen: 500" }
+    Assert-Equal -Expected 0 -Actual @((Select-TestTeamForwards -Failures @($again) -Tasks @($folded) -Round "r2").Forward).Count -Because "a folded card holds it"
+    $fixed = $folded.PSObject.Copy(); $fixed.reason = "inspector: kabul"
+    Assert-Equal -Expected 1 -Actual @((Select-TestTeamForwards -Failures @($again) -Tasks @($fixed) -Round "r2").Forward).Count -Because "a card done by its fix does not: the step fails again, that is news"
+    Assert-Equal -Expected 1 -Actual @((Select-TestTeamForwards -Failures @($first, $again) -Tasks @() -Round "r2").Forward).Count -Because "one round, one card per signature"
+}
+
+Test-Case "at most ten forwards a round; the rest go into one summary card that holds their signatures" {
+    $many = @(for ($i = 1; $i -le 13; $i++) { [pscustomobject]@{ card = "tj-$i"; tester = "tester-1"; family = "alarm"; scenario = "a.json"; step = "adım $i"; steps = @(); expected = "200"; actual = "500"; screenshot = "" } })
+    $pick = Select-TestTeamForwards -Failures $many -Tasks @() -Round "r3" -Now "2026-10-06T22:20:00Z"
+    Assert-Equal -Expected 10 -Actual @($pick.Forward).Count -Because "ten cards"
+    Assert-True -Condition ($null -ne $pick.Summary) -Because "one summary card"
+    Assert-Equal -Expected "test-fail-ozet-r3" -Actual $pick.Summary.id -Because "one per round"
+    foreach ($n in 11..13) { Assert-True -Condition ($pick.Summary.goal -match "adım $n\b") -Because "the summary names step $n" }
+    $opened = @(@($pick.Forward | ForEach-Object { ConvertTo-TestTeamFailureTask -Failure $_ -Round "r3" -Now "2026-10-06T22:20:00Z" }) + @($pick.Summary))
+    $next = Select-TestTeamForwards -Failures $many -Tasks $opened -Round "r4"
+    Assert-Equal -Expected 0 -Actual (@($next.Forward).Count + @(@($next.Summary) | Where-Object { $_ }).Count) -Because "next round: every signature is held"
+    $ten = Select-TestTeamForwards -Failures @($many | Select-Object -First 10) -Tasks @() -Round "r5"
+    Assert-True -Condition ($null -eq $ten.Summary) -Because "ten fit: no summary"
+}
+
+Test-Case "a test card's proposal is one path-safe line: the cycle reads every proposal as a path" {
+    # Inspection of 2026-10-07: cycle.ps1 Send-IdeaTexts runs Path.GetFileName on the proposal
+    # of every 'proposed' card; on PowerShell 5.1 a newline, '"', '<', '>' or '|' throws there
+    # ("Yolda geçersiz karakterler var") and, under ErrorAction Stop, stops every cycle.
+    $failure = [pscustomobject]@{
+        card = "tj-r1-4"; tester = "tester-4"; family = "alarm"; scenario = "scripts/testteam/scenarios/alarm.json"
+        step = "alarm `"yarın 7`" <kur> | sil`r`nikinci satır`t"; steps = @("POST /v1/alarms"); expected = "201 -> liste"; actual = "500 <html>"; screenshot = ""
+    }
+    $task = ConvertTo-TestTeamFailureTask -Failure $failure -Round "r1" -Now "2026-10-07T06:00:00Z"
+    $summary = ConvertTo-TestTeamSummaryTask -Failures @($failure, $failure) -Round "r1" -Now "2026-10-07T06:00:00Z"
+    foreach ($card in @($task, $summary)) {
+        $p = [string]$card.proposal
+        $bad = @($p.ToCharArray() | Where-Object { [int]$_ -lt 32 -or '"<>|'.IndexOf($_) -ge 0 })
+        Assert-Equal -Expected 0 -Actual @($bad).Count -Because "$($card.id): no newline, control character or '`"<>|' in: $p"
+        $threw = $null
+        try { [void][System.IO.Path]::GetFileName($p) } catch { $threw = $_.Exception.Message }
+        Assert-True -Condition ($null -eq $threw) -Because "$($card.id): Path.GetFileName must not throw: $threw"
+        Assert-True -Condition ($p.StartsWith("Test PY bulgusu:")) -Because "$($card.id): the PM's prefix stays: $p"
+        Assert-True -Condition ($p -match "ikinci satır" -and $p -match "Önerilen ilk alan: services/api/app/alarms/") -Because "$($card.id): the finding and the first area stay in it: $p"
+    }
+}
+
+Test-Case "the same failing step twice in one round: the second is held by the card this round opens, not by a placeholder" {
+    # Inspection of 2026-10-07: the second failure's job card got forwarded_task '(bu tur)', so
+    # the retest never found its card and never retested or closed it.
+    $mk = { param($n, $actual) [pscustomobject]@{ card = "tj-$n"; tester = "tester-1"; family = "alarm"; scenario = "a.json"; step = "adım $n"; steps = @(); expected = "200"; actual = $actual; screenshot = "" } }
+    $first = & $mk 1 "500"; $again = & $mk 1 "502"; $again.card = "tj-1b"
+    $pick = Select-TestTeamForwards -Failures @($first, $again) -Tasks @() -Round "r6"
+    Assert-Equal -Expected 1 -Actual @($pick.Held).Count -Because "the second is held"
+    Assert-Equal -Expected (Get-TestTeamFailureTaskId -Failure $first) -Actual ([string]$pick.Held[0].By) -Because "by the card opened this round"
+    $many = @(for ($i = 1; $i -le 11; $i++) { & $mk $i "500" }) + @(& $mk 11 "504")
+    $over = Select-TestTeamForwards -Failures $many -Tasks @() -Round "r7"
+    Assert-Equal -Expected "test-fail-ozet-r7" -Actual ([string]@($over.Held)[0].By) -Because "a duplicate of a summarised step is held by the summary card"
 }
 
 Test-Case "a failure's id does not hang on how the scenario path was spelled" {
@@ -561,7 +650,10 @@ if ($family -eq "sikis") { [IO.File]::WriteAllText($env:PAGENTOS_FAKE_SQUEEZE, '
 Start-Sleep -Milliseconds 600
 $state = "passed"; $steps = @(@{ name = "adim"; expected = "200"; actual = "200"; ok = $true })
 $breaking = @{ what = "ayni istek iki kez"; tried = @(@{ load = 2; ok = 2; errors = 0; p95_ms = 30 }); first_failure = $null }
-if ($family -eq "kirik") { $state = "failed"; $steps = @(@{ name = "nobet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = "500"; ok = $false }) }
+$actual = if ($env:PAGENTOS_FAKE_ACTUAL) { $env:PAGENTOS_FAKE_ACTUAL } else { "500" }
+if ($family -eq "kirik") { $state = "failed"; $steps = @(@{ name = "nobet listesi"; method = "GET"; path = "/v1/watches"; expected = "200"; actual = $actual; ok = $false }) }
+# 'cok': eleven distinct failing steps (the automatic rounds of 2026-10-06 forwarded 61).
+if ($family -eq "cok") { $state = "failed"; $steps = @(for ($k = 1; $k -le 11; $k++) { @{ name = "adim $k"; method = "GET"; path = "/v1/x$k"; expected = "200"; actual = "50$k"; ok = $false } }) }
 # 'kopuk': the staging credential is rotated under the round (the session file now holds a dead
 # token) and every step the tester wrote by hand answered 401 (t-d20261006, 2026-10-06).
 if ($family -eq "kopuk") {
@@ -687,6 +779,101 @@ while (`$true) {
         try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
         if (-not $listener.HasExited) { $listener.Kill() }
         Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Start-FakeCore {
+    # A stand-in Cloud Core: GET /v1/team/queue answers <Dir>\queue-answer.json, every PUT is
+    # appended to <Dir>\puts.log and answered 200.
+    param([string]$Dir, [int]$Port)
+    $core = @"
+`$l = New-Object System.Net.HttpListener
+`$l.Prefixes.Add('http://127.0.0.1:$Port/')
+`$l.Start()
+while (`$true) {
+    `$c = `$l.GetContext()
+    `$p = `$c.Request.Url.AbsolutePath
+    `$body = '{}'
+    if (`$p -eq '/stop') { `$c.Response.Close(); break }
+    if (`$c.Request.HttpMethod -eq 'GET' -and `$p -eq '/v1/team/queue') { `$body = [IO.File]::ReadAllText('$Dir\queue-answer.json') }
+    if (`$c.Request.HttpMethod -eq 'PUT') {
+        `$in = (New-Object IO.StreamReader(`$c.Request.InputStream, [Text.Encoding]::UTF8)).ReadToEnd()
+        [IO.File]::AppendAllText('$Dir\puts.log', `$p + ' ' + `$in + "``n", [Text.Encoding]::UTF8)
+        `$body = '{"ok":true}'
+    }
+    `$b = [Text.Encoding]::UTF8.GetBytes(`$body)
+    `$c.Response.ContentType = 'application/json'
+    `$c.Response.OutputStream.Write(`$b, 0, `$b.Length)
+    `$c.Response.Close()
+}
+"@
+    Write-Utf8 (Join-Path $Dir "queue-answer.json") '{"version":1,"tasks":[]}'
+    Write-Utf8 (Join-Path $Dir "core.ps1") $core
+    $listener = Start-Process -FilePath $powershell -ArgumentList @("-NoProfile", "-File", (Join-Path $Dir "core.ps1")) -PassThru -WindowStyle Hidden
+    for ($i = 0; $i -lt 50; $i++) { try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/v1/team/queue" -TimeoutSec 2); break } catch { Start-Sleep -Milliseconds 200 } }
+    return $listener
+}
+
+function Get-FakeCorePuts {
+    param([string]$Dir)
+    $log = Join-Path $Dir "puts.log"
+    if (-not (Test-Path -LiteralPath $log)) { return @() }
+    return @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_ } | ForEach-Object {
+            $space = $_.IndexOf(' ')
+            [pscustomobject]@{ Path = $_.Substring(0, $space); Task = ($_.Substring($space + 1) | ConvertFrom-Json).task }
+        })
+}
+
+Test-Case "against the Cloud Core: a finding is 'proposed' for the PM, the same failing step next round opens nothing, an 11th failure goes into one summary card" {
+    $work = New-Work
+    $port = Get-Random -Minimum 41000 -Maximum 49000
+    $listener = Start-FakeCore -Dir $work -Port $port
+    try {
+        $team = Join-Path $work "team"
+        [void](New-Item -ItemType Directory -Force -Path $team)
+        $token = Join-Path $work "token.txt"; Write-Utf8 $token "test-token"
+        $plan = Join-Path $work "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"kirik","scenario":"scripts/testteam/scenarios/kirik.json"}]}'
+        $fake = New-FakeTester -Dir $work
+        $env:PAGENTOS_FAKE_TESTER_LOG = Join-Path $work "calls"
+        $outRoot = Join-Path $work "out"
+        $round = { param($name, $planFile) & $powershell -NoProfile -File $testRound -NoAuth -Round $name -TeamRoot $team -OutRoot $outRoot -PlanPath $planFile -ClaudePath $powershell -ClaudePrefixArguments "-NoProfile,-File,$fake" -AssumeFreeGb 30 -AssumeGateRunning 0 -NoBoard -QueueUrl "http://127.0.0.1:$port" -QueueToken $token 2>&1 }
+        $out = & $round "pm1" $plan
+        $puts = @(Get-FakeCorePuts -Dir $work)
+        Assert-Equal -Expected 1 -Actual @($puts).Count -Because "one finding, one card: $out"
+        $card = $puts[0].Task
+        Assert-Equal -Expected "proposed" -Actual ([string]$card.state) -Because "never awaiting_owner"
+        Assert-True -Condition (([string]$card.reason).StartsWith("Test PY bulgusu:")) -Because "the PM's triage prefix: $($card.reason)"
+        Assert-True -Condition (Test-TeamSplitCandidate -Task $card) -Because "it waits for the PM's split, not the owner"
+        # Next round the step fails with another actual (another id): the store has the open card.
+        Write-Utf8 (Join-Path $work "queue-answer.json") (ConvertTo-Json -Depth 8 -InputObject ([pscustomobject]@{ version = 1; tasks = @($card) }))
+        $env:PAGENTOS_FAKE_ACTUAL = "502"
+        $out = & $round "pm2" $plan
+        Assert-Equal -Expected 1 -Actual @(Get-FakeCorePuts -Dir $work).Count -Because "the same failing step opens no second card: $out"
+        # The card the Danışman folded by hand (done, BİRLEŞTİRİLDİ) still holds the step.
+        $card.state = "done"; $card.reason = "BİRLEŞTİRİLDİ -> alarm-household-watch-input-edges"; $card.id = "test-fail-kirik-ffffffffff"
+        $card.goal = ([string]$card.goal -split "`n" | Where-Object { $_ -notmatch '^İmza:' }) -join "`n"
+        Write-Utf8 (Join-Path $work "queue-answer.json") (ConvertTo-Json -Depth 8 -InputObject ([pscustomobject]@{ version = 1; tasks = @($card) }))
+        $env:PAGENTOS_FAKE_ACTUAL = "503"
+        $out = & $round "pm3" $plan
+        Assert-Equal -Expected 1 -Actual @(Get-FakeCorePuts -Dir $work).Count -Because "a folded card holds it too: $out"
+        # Eleven distinct failures: ten cards and one summary card.
+        Write-Utf8 (Join-Path $work "queue-answer.json") '{"version":1,"tasks":[]}'
+        $many = Join-Path $work "plan-many.json"
+        Write-Utf8 $many '{"jobs":[{"family":"cok","scenario":"scripts/testteam/scenarios/cok.json"}]}'
+        $out = & $round "pm4" $many
+        $new = @(Get-FakeCorePuts -Dir $work | Select-Object -Skip 1)
+        Assert-Equal -Expected 11 -Actual @($new).Count -Because "ten cards and one summary: $out"
+        $summary = @($new | Where-Object { $_.Path -match '/test-fail-ozet-pm4$' })
+        Assert-Equal -Expected 1 -Actual @($summary).Count -Because "the summary card: $(@($new | ForEach-Object { $_.Path }) -join ', ')"
+        Assert-True -Condition ([string]$summary[0].Task.goal -match "adim 11") -Because "the 11th failure is in it: $($summary[0].Task.goal)"
+        Assert-True -Condition (@($new | Where-Object { [string]$_.Task.state -ne "proposed" }).Count -eq 0) -Because "every card proposed"
+    }
+    finally {
+        try { [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/stop" -TimeoutSec 2) } catch { }
+        if (-not $listener.HasExited) { $listener.Kill() }
+        Remove-Item Env:\PAGENTOS_FAKE_TESTER_LOG, Env:\PAGENTOS_FAKE_ACTUAL -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

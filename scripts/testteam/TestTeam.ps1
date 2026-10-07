@@ -259,13 +259,165 @@ function Get-TestTeamFamilyArea {
     return [string[]]@()
 }
 
+# The prefix of every test card's reason and proposal: the Proje Yöneticisi's triage finds them by it.
+$script:TestTeamPmPrefix = "Test PY bulgusu:"
+# At most this many cards a round; the rest go into one summary card (2026-10-06: 61 in two rounds).
+$script:TestTeamMaxForwards = 10
+
+function ConvertTo-TestTeamFoldedText {
+    <# Lower case, Turkish letters folded to ASCII, runs of white space one: 'BİRLEŞTİRİLDİ' and
+       'birlestirildi', 'Saat  kaçta' and 'saat kacta' are one text. #>
+    param([string]$Text)
+    $t = ([string]$Text).Replace([string][char]0x0130, "i").Replace("I", "i").ToLowerInvariant()
+    $t = $t.Replace([string][char]0x0307, "")
+    foreach ($pair in @(@([char]0x0131, "i"), @([char]0x015F, "s"), @([char]0x011F, "g"), @([char]0x00FC, "u"), @([char]0x00F6, "o"), @([char]0x00E7, "c"))) { $t = $t.Replace([string]$pair[0], [string]$pair[1]) }
+    return (($t -replace '\s+', ' ').Trim())
+}
+
+function Get-TestTeamSignature {
+    param([string]$Family, [string]$Step, [string]$Expected)
+    $key = (([string]$Family).ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    return ("{0}|{1}|{2}" -f $key, (ConvertTo-TestTeamFoldedText $Step), (ConvertTo-TestTeamFoldedText $Expected))
+}
+
+function Get-TestTeamFailureSignature {
+    <# What makes a failing step the same finding across rounds: family, step name, expected -
+       not the actual, not the scenario's path (2026-10-06: one sentence was three cards). #>
+    param([Parameter(Mandatory = $true)]$Failure)
+    return (Get-TestTeamSignature -Family ([string]$Failure.family) -Step ([string]$Failure.step) -Expected ([string]$Failure.expected))
+}
+
+function Get-TestTeamTaskSignatures {
+    <# The signatures a queue card holds: its 'İmza:' lines, or - a card written before them (the
+       61 of 2026-10-06, the ones folded by hand) - its title 'Test ekibi: <family> - <step>' and
+       its 'Beklenen:' line. A card that is no test card holds none. #>
+    param([Parameter(Mandatory = $true)]$Task)
+    $goal = [string](Get-TeamProperty -InputObject $Task -Name "goal" -Default "")
+    $lines = @([regex]::Matches($goal, '(?m)^İmza: (.+?)\s*$') | ForEach-Object { $_.Groups[1].Value })
+    if (@($lines).Count -gt 0) { return [string[]]@($lines) }
+    $title = [regex]::Match([string](Get-TeamProperty -InputObject $Task -Name "title" -Default ""), '^Test ekibi: (.+?) - (.+)$')
+    if (-not $title.Success) { return [string[]]@() }
+    $expected = [regex]::Match($goal, '(?m)^Beklenen: (.*?)\s*$').Groups[1].Value
+    return [string[]]@(Get-TestTeamSignature -Family $title.Groups[1].Value -Step $title.Groups[2].Value -Expected $expected)
+}
+
+function Test-TestTeamTaskHolds {
+    <# Whether a card still holds its signatures: open (any state but done / released), or done
+       because it was folded into another card or split into cards. A card done by its fix does
+       not: the same step failing again is news. #>
+    param([Parameter(Mandatory = $true)]$Task)
+    $state = [string](Get-TeamProperty -InputObject $Task -Name "state" -Default "")
+    if (@("done", "released") -notcontains $state) { return $true }
+    $reason = ConvertTo-TestTeamFoldedText ([string](Get-TeamProperty -InputObject $Task -Name "reason" -Default ""))
+    return ($state -eq "done" -and $reason -match 'birlestirildi|bolundu')
+}
+
+function Select-TestTeamForwards {
+    <#
+    .SYNOPSIS
+        Which of a round's failures become cards: one per signature not held by a card of the
+        store (Test-TestTeamTaskHolds), at most $script:TestTeamMaxForwards; the rest are one
+        summary card (Summary, or $null). Held lists the failures a card already holds.
+    #>
+    param([AllowEmptyCollection()][object[]]$Failures = @(), [AllowEmptyCollection()][object[]]$Tasks = @(), [Parameter(Mandatory = $true)][string]$Round, [string]$StagingSha = "", [string]$Now = "")
+    $held = @{}
+    foreach ($task in @($Tasks)) {
+        if (-not (Test-TestTeamTaskHolds -Task $task)) { continue }
+        foreach ($signature in @(Get-TestTeamTaskSignatures -Task $task)) { $held[$signature] = [string]$task.id }
+    }
+    $forward = New-Object System.Collections.ArrayList
+    $rest = New-Object System.Collections.ArrayList
+    $skipped = New-Object System.Collections.ArrayList
+    foreach ($failure in @($Failures)) {
+        $signature = Get-TestTeamFailureSignature -Failure $failure
+        if ($held.ContainsKey($signature)) { [void]$skipped.Add([pscustomobject]@{ Failure = $failure; By = $held[$signature] }); continue }
+        # Held by the card this round opens for it - its id, so the retest finds that card.
+        if ($forward.Count -lt $script:TestTeamMaxForwards) { [void]$forward.Add($failure); $held[$signature] = Get-TestTeamFailureTaskId -Failure $failure }
+        else { [void]$rest.Add($failure); $held[$signature] = Get-TestTeamSummaryTaskId -Round $Round }
+    }
+    $summary = $null
+    if ($rest.Count -gt 0) { $summary = ConvertTo-TestTeamSummaryTask -Failures @($rest.ToArray()) -Round $Round -StagingSha $StagingSha -Now $Now }
+    return [pscustomobject]@{ Forward = @($forward.ToArray()); Summary = $summary; Summarised = @($rest.ToArray()); Held = @($skipped.ToArray()) }
+}
+
+function Get-TestTeamSummaryTaskId {
+    param([Parameter(Mandatory = $true)][string]$Round)
+    return ("test-fail-ozet-" + $Round)
+}
+
+function ConvertTo-TestTeamProposalLine {
+    <# A proposal as ONE line free of what a Windows path refuses: cycle.ps1 Send-IdeaTexts reads
+       every proposal with Path.GetFileName, which on PowerShell 5.1 throws on a newline, a control
+       character or '"<>|' and stops the cycle (inspection of 2026-10-07). Lines are joined ' ; '. #>
+    param([string]$Text)
+    $t = ([string]$Text).Replace("->", [string][char]0x2192).Replace('"', "'").Replace("<", [string][char]0x2039).Replace(">", [string][char]0x203A).Replace("|", "/")
+    $t = $t -replace '\s*[\r\n]+\s*', ' ; '
+    $t = $t -replace '[\x00-\x1F]', ' '
+    return (($t -replace ' {2,}', ' ').Trim())
+}
+
+function New-TestTeamPmTask {
+    # A test card's common shape: 'proposed' with a one-line, path-safe proposal and NO area, so the cycle
+    # hands it to the Proje Yöneticisi's split (Test-TeamSplitCandidate) - never to the owner's
+    # gate, where a plain 'proposed' card goes (Get-TeamNextRole).
+    param([string]$Id, [string]$Title, [string]$Goal, [string]$Proposal, [string]$Acceptance, [string]$Reason, [string]$Now)
+    return [pscustomobject]@{
+        id                = $Id
+        title             = $Title
+        roadmap_row       = "Repairs and improves itself"
+        state             = "proposed"
+        area              = @()
+        branch            = ""
+        worktree          = ""
+        assignee          = ""
+        reports           = @()
+        budget            = [pscustomobject]@{ max_usd = 0 }
+        created_at        = $Now
+        updated_at        = $Now
+        goal              = $Goal
+        acceptance        = $Acceptance
+        evidence_expected = "regresyon testi, staging'de yeniden test dökümü"
+        reason            = "$($script:TestTeamPmPrefix) $Reason"
+        proposal          = (ConvertTo-TestTeamProposalLine $Proposal)
+    }
+}
+
+function Get-TestTeamPmInstruction {
+    param([string]$Family)
+    $area = @(Get-TestTeamFamilyArea -Family $Family)
+    $line = "Proje Yöneticisi: aynı aileden ($Family) açık Test PY bulgusu kartlarını tek kartta birleştir (diğerleri done, 'BİRLEŞTİRİLDİ -> <kart>'), ona bir dosya alanı ver."
+    if ($area.Count -gt 0) { $line += " Önerilen ilk alan: " + ($area -join ", ") }
+    return $line
+}
+
+function ConvertTo-TestTeamSummaryTask {
+    <# The failures over a round's limit, as ONE card: each named with its step, expected, actual
+       and scenario, and its 'İmza:' line, so the next round opens none of them again. #>
+    param([Parameter(Mandatory = $true)][object[]]$Failures, [Parameter(Mandatory = $true)][string]$Round, [string]$StagingSha = "", [string]$Now = "")
+    if (-not $Now) { $Now = Get-TeamTimestamp }
+    $families = @($Failures | ForEach-Object { [string]$_.family } | Select-Object -Unique)
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add("Test ekibi staging'de tur $Round içinde $($script:TestTeamMaxForwards) karttan fazla hata buldu; kalan $(@($Failures).Count) hata bu tek kartta.")
+    foreach ($failure in @($Failures)) {
+        [void]$lines.Add(("- {0} / {1}: beklenen {2}, gerçekleşen {3} (senaryo {4}, {5})" -f $failure.family, $failure.step, $failure.expected, $failure.actual, $failure.scenario, $failure.card))
+    }
+    if ($StagingSha) { [void]$lines.Add("Staging sha: $StagingSha") }
+    foreach ($failure in @($Failures)) { [void]$lines.Add("İmza: " + (Get-TestTeamFailureSignature -Failure $failure)) }
+    $goal = ($lines.ToArray()) -join "`n"
+    $instruction = (@($families | ForEach-Object { Get-TestTeamPmInstruction -Family $_ }) -join "`n")
+    return (New-TestTeamPmTask -Id (Get-TestTeamSummaryTaskId -Round $Round) -Title ("Test ekibi: tur {0} - {1} hata daha (özet)" -f $Round, @($Failures).Count) `
+            -Goal $goal -Proposal ("$($script:TestTeamPmPrefix) tur $Round özeti, $(@($Failures).Count) hata ($($families -join ', ')).`n$goal`n$instruction") `
+            -Acceptance "Her hatanın senaryosu staging'de geçer; her hata için bir regresyon testi." -Reason "tur $Round, sınır üstü $(@($Failures).Count) hata" -Now $Now)
+}
+
 function ConvertTo-TestTeamFailureTask {
     <#
     .SYNOPSIS
-        One failure as a normal card of the software queue: state 'proposed' (the software
-        Proje Yöneticisi decides and splits it), a first area from the family's known code
-        paths (Get-TestTeamFamilyArea; none for an unknown family), and a goal that reproduces it -
-        the steps, the expected, the actual, the scenario file, the screenshot, the staging sha.
+        One failure as a card of the software queue for the Proje Yöneticisi's triage: state
+        'proposed', reason and proposal prefixed 'Test PY bulgusu:', no area (the PM's split
+        gives it; the family's known code paths, Get-TestTeamFamilyArea, are named in the
+        proposal as the first area), and a goal that reproduces it - the steps, the expected,
+        the actual, the scenario file, the screenshot, the staging sha - and its 'İmza:' line.
     #>
     param([Parameter(Mandatory = $true)]$Failure, [string]$StagingSha = "", [Parameter(Mandatory = $true)][string]$Round, [string]$Now = "")
     if (-not $Now) { $Now = Get-TeamTimestamp }
@@ -283,25 +435,13 @@ function ConvertTo-TestTeamFailureTask {
         "Senaryo: $($Failure.scenario)"
         "Ekran görüntüsü: $shot"
         "Staging sha: $sha"
+        "İmza: $(Get-TestTeamFailureSignature -Failure $Failure)"
     ) -join "`n"
-    return [pscustomobject]@{
-        id                = (Get-TestTeamFailureTaskId -Failure $Failure)
-        title             = ("Test ekibi: {0} - {1}" -f $Failure.family, $Failure.step)
-        roadmap_row       = "Repairs and improves itself"
-        state             = "proposed"
-        area              = @(Get-TestTeamFamilyArea -Family ([string]$Failure.family))
-        branch            = ""
-        worktree          = ""
-        assignee          = ""
-        reports           = @()
-        budget            = [pscustomobject]@{ max_usd = 0 }
-        created_at        = $Now
-        updated_at        = $Now
-        goal              = $goal
-        acceptance        = "Senaryo $($Failure.scenario) staging'de geçer (test ekibinin yeniden testi kartı kapatır); hata için bir regresyon testi."
-        evidence_expected = "regresyon testi, staging'de yeniden test dökümü"
-        reason            = "test ekibi: $($Failure.card) ($($Failure.tester)), tur $Round"
-    }
+    $title = "Test ekibi: {0} - {1}" -f $Failure.family, $Failure.step
+    return (New-TestTeamPmTask -Id (Get-TestTeamFailureTaskId -Failure $Failure) -Title $title -Goal $goal `
+            -Proposal ("$($script:TestTeamPmPrefix) $title`n$goal`n" + (Get-TestTeamPmInstruction -Family ([string]$Failure.family))) `
+            -Acceptance "Senaryo $($Failure.scenario) staging'de geçer (test ekibinin yeniden testi kartı kapatır); hata için bir regresyon testi." `
+            -Reason "test ekibi: $($Failure.card) ($($Failure.tester)), tur $Round" -Now $Now)
 }
 
 function Format-TestTeamBreakingReport {
