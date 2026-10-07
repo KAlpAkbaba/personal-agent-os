@@ -2,7 +2,8 @@
 
 - ``fold`` makes İzmir / IZMIR / izmir one key, in Python and (integration suite) in PostgreSQL;
 - stop words never reach the candidate search;
-- ``PAGENTOS_MEMORY_LEXICAL`` defaults to ``like``, which is today's ranking byte for byte;
+- ``PAGENTOS_MEMORY_LEXICAL`` defaults to ``trgm`` (card memory-lexical-turkish-measure);
+  ``like`` is the old ranking byte for byte, kept as the way back;
 - in ``trgm`` mode a memory found only by its words gets a rank of its own (RRF) instead of a
   semantic score of 0.0, so a name said once is not buried under 59 look-alikes.
 
@@ -90,7 +91,7 @@ def trgm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture()
 def like(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(lexical.MODE_ENV, raising=False)
+    monkeypatch.setenv(lexical.MODE_ENV, "like")
 
 
 def _remember(db: Session, text: str, conversation_id: uuid.UUID) -> uuid.UUID:
@@ -163,12 +164,13 @@ def test_tsquery_is_or_of_prefixes_of_roots() -> None:
 # --------------------------------------------------------------------------- mode
 
 
-def test_mode_defaults_to_like(like: None) -> None:
-    assert lexical.lexical_mode() == "like"
+def test_mode_defaults_to_trgm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(lexical.MODE_ENV, raising=False)
+    assert lexical.lexical_mode() == "trgm"
 
 
 @pytest.mark.parametrize(
-    ("raw", "mode"), [("trgm", "trgm"), (" TRGM ", "trgm"), ("like", "like"), ("bm25", "like")]
+    ("raw", "mode"), [("trgm", "trgm"), (" TRGM ", "trgm"), ("like", "like"), ("bm25", "trgm")]
 )
 def test_mode_reads_the_environment(monkeypatch: pytest.MonkeyPatch, raw: str, mode: str) -> None:
     monkeypatch.setenv(lexical.MODE_ENV, raw)

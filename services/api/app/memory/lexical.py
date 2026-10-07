@@ -15,8 +15,9 @@ needs; the leg itself stays in ``retrieval``.
   tense and person here and asking for the root as a prefix ("ver:*") finds it.
 - ``rrf_score``: Reciprocal Rank Fusion (Cormack, Clarke, Büttcher 2009), k = 60,
   normalised so first-in-both is 1.0.
-- ``lexical_mode``: ``PAGENTOS_MEMORY_LEXICAL`` = ``like`` (default, today's leg unchanged)
-  or ``trgm``. Read from the environment here; it moves into ``app.config`` later (ADR).
+- ``lexical_mode``: ``PAGENTOS_MEMORY_LEXICAL`` = ``trgm`` (default since the measurement of
+  card memory-lexical-turkish-measure) or ``like`` (the old leg, kept as the way back).
+  Read from the environment here; it moves into ``app.config`` later (ADR).
 """
 
 from __future__ import annotations
@@ -257,12 +258,14 @@ def rrf_score(semantic_rank: int, keyword_rank: int | None) -> float:
 
 
 def lexical_mode() -> LexicalMode:
-    """``PAGENTOS_MEMORY_LEXICAL``: ``like`` (default) or ``trgm``; anything else is ``like``."""
-    raw = (os.environ.get(MODE_ENV) or "like").strip().lower()
+    """``PAGENTOS_MEMORY_LEXICAL``: ``trgm`` (default) or ``like``; anything else is ``trgm``.
+
+    The default follows docs/evidence/memory-lexical-turkish-measure.json."""
+    raw = (os.environ.get(MODE_ENV) or "trgm").strip().lower()
     if raw in ("like", "trgm"):
         return raw  # type: ignore[return-value]
-    logger.warning("memory_lexical_mode_unknown", value=raw[:20], used="like")
-    return "like"
+    logger.warning("memory_lexical_mode_unknown", value=raw[:20], used="trgm")
+    return "trgm"
 
 
 __all__ = [
