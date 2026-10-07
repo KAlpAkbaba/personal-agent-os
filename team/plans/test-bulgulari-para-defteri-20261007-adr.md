@@ -10,7 +10,8 @@ Test ekibinin t-w10070948 turu (iş tj-t-w10070948-5, staging `b1f8ef94c028b2476
 Kök neden: `app/money/amounts.py::parse_amount` rakamları `int()`'e verir; Python 3.11+ 4300 haneden
 uzun bir dizgede `ValueError` atar (`sys.get_int_max_str_digits`). `parse_amount`'u çağıran her yol
 etkilenir: iki rota (`routes._kurus`), sesli cümle (`money_in` -> `_digit_amount`), banka postası
-ayrıştırıcıları (`banks.py`; çok uzun rakamlı bir posta yoklayıcı turunu düşürebilir).
+ayrıştırıcıları (`banks.py:129/134/152`; çok uzun rakamlı bir posta yoklayıcı turunu düşürebilir),
+gerçek zamanlı ses aracı (`app/voice/realtime_sessions/tools_money.py:74`, `parse_amount(raw) or money_in(...)`).
 
 ## Yeniden koşu tablosu
 
@@ -26,97 +27,29 @@ Staging'de yeniden koşu bu çalışmada yapılamadı: `run-scenario.ps1` "ORTAM
 (/v1/identity/sessions/current 401)" dedi - yazılım hatası değil, tur başı `seed.ps1` işi. Yeniden üretim
 süreç içinde (TestClient, aynı kod) yapıldı.
 
-## Karar (önerilen, uygulama ALAN_ISTEGI bekliyor)
+## Karar (uygulandı)
 
-`parse_amount` hane sayısı aşırı bir dizgeyi tutar saymaz: `int()`'den önce lira hanelerinin uzunluğu
-makul bir üst sınırla (ör. 15 hane; 10.000.001 TL zaten "fazla büyük" ile reddediliyor) karşılaştırılır,
-aşan `None` döner. `sys.set_int_max_str_digits` yükseltilmez (DoS koruması bu sınırın amacı).
+`parse_amount` hane sayısı aşırı bir dizgeyi tutar saymaz: `int()`'den önce lira haneleri (gruplar
+birleştirilmiş) `MAX_LIRA_DIGITS = 15` ile karşılaştırılır, aşan `None` döner. 9-15 hane hâlâ bir tutardır
+ve defter tavanı (10 milyon TL, `service.MAX_KURUS`) "fazla büyük" ile reddeder; 16+ hane "anlayamadım"
+(`money_refused`). `sys.set_int_max_str_digits` yükseltilmez (DoS koruması bu sınırın amacı). Düzeltme
+rotada değil `parse_amount`'ta: iki rota, `money_in`, `banks.py` ve `tools_money.py:74` aynı yerden kapanır.
 `None` zaten rotada 422 `money_refused`, cümlede "tutar yok" demektir - yeni hata yolu gerekmez.
 
 ## Kanıt
 
-Regresyon testi: aşağıdaki Ek (hedef yol `services/api/tests/unit/test_money_amount_digit_limit.py`, 9 vaka; şimdiki kodda 9/9
-KIRMIZI - ValueError / 500). Düzeltme ve mutasyon kanıtı alan genişletildikten sonra.
+- Regresyon testi `services/api/tests/unit/test_money_amount_digit_limit.py` (9 vaka), 1517a484'teki ve
+  önceki ADR ekindeki dosyayla birebir (sha256 `26fd0d71adb2ce8973004837fe7e2118b92c326d1b00c9948798373fe0e41226`).
+  Düzeltmesiz kodda 9 failed (PROVEN_AUTOMATED).
+- Düzeltmeyle: yeni test + `test_money_ledger.py` + `test_spend_from_conversation.py` 116 passed (PROVEN_AUTOMATED).
+- Mutasyon: `MAX_LIRA_DIGITS` 15 -> 10000 (int sınırının üstü): 9 failed; yedekten geri yüklendi,
+  `amounts.py` sha256 `59541413…96930` önce/sonra aynı, test yeniden 9 passed (PROVEN_AUTOMATED).
+- `tools_money.py:74` ve `banks.py` yolları için ayrı test yok: aynı `parse_amount` çağrısından kapandıkları
+  koddan çıkarım (PROVEN_PROXY, `parse_amount` birim vakaları üzerinden).
+- Staging'de oturumlu yeniden koşu: NOT_RUN (`/v1/identity/sessions/current` 401, tur başı `seed.ps1` işi;
+  ortam sorunu, kimlik bilgisine dokunulmadı). Staging'in düzeltmeli sha'yı sunması sonraki sürüme bağlı.
+- Tüm birim takımı: lead'in kapısı koşar.
 
-## Ek: kırmızı regresyon testi (alan genişletilince `services/api/tests/unit/test_money_amount_digit_limit.py` olarak konur)
+## Kapsam dışı
 
-Şimdiki kodda 9/9 KIRMIZI (6 ValueError amounts.py:131, 3 rota 500; commit 1517a484 üzerinde koşuldu). Dosya, alan dışı olduğu için daldan kaldırıldı; içerik birebir aşağıda.
-
-```python
-"""The test team's para-defteri finding (test-fail-para-defteri-4ac2d0e8ae, staging b1f8ef94).
-
-A cash amount of more than 4300 digits answered 500: ``parse_amount`` handed the digits to
-``int()``, which raises ``ValueError`` past Python's int-str limit (``sys.get_int_max_str_digits``).
-The same 500 on ``/v1/money/questions/{id}/answer`` - the amount is read before the question
-is looked up. A number that long is not one amount: ``None`` -> 422 ``money_refused``.
-"""
-
-from __future__ import annotations
-
-import uuid
-
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.artifacts.runtime import ArtifactRuntime
-from app.config import Settings
-from app.main import create_app
-from app.money import amounts
-from app.money.models import MONEY_TABLES
-from app.notifications.models import NotificationRow
-from tests.identity_support import authenticate, install_identity
-
-HUGE = [
-    "9" * 4301,
-    "9" * 5000,
-    "1." + ".".join(["999"] * 1500),
-    "9" * 5000 + ",50",
-    "9" * 5000 + " TL",
-]
-
-
-@pytest.mark.parametrize("raw", HUGE, ids=["4301", "5000", "grouped", "frac", "tl"])
-def test_an_amount_past_the_int_digit_limit_is_not_an_amount(raw: str) -> None:
-    assert amounts.parse_amount(raw) is None
-
-
-def test_a_sentence_with_a_huge_digit_word_has_no_amount() -> None:
-    assert amounts.money_in("9" * 5000 + " lira harcadım") == []
-
-
-@pytest.fixture()
-def client():
-    engine = create_engine(
-        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
-    )
-    for table in (*MONEY_TABLES, NotificationRow.__table__):
-        table.create(engine, checkfirst=True)
-    settings = Settings(_env_file=None)
-    app = create_app(settings)
-    install_identity(app, settings=settings)
-    artifacts = ArtifactRuntime(settings)
-    artifacts._engine = engine
-    artifacts._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
-    app.state.artifacts = artifacts
-    test_client = TestClient(app, raise_server_exceptions=False)
-    authenticate(app, test_client, settings=settings)
-    yield test_client
-    engine.dispose()
-
-
-@pytest.mark.parametrize("digits", [4301, 5000])
-def test_cash_with_a_huge_amount_is_refused_not_500(client, digits: int) -> None:
-    response = client.post("/v1/money/cash", json={"amount": "9" * digits})
-    assert response.status_code == 422, response.text
-    assert "money_refused" in response.text
-
-
-def test_a_question_answer_with_a_huge_amount_is_refused_not_500(client) -> None:
-    response = client.post(
-        f"/v1/money/questions/{uuid.uuid4()}/answer", json={"answer": "yes", "amount": "9" * 5000}
-    )
-    assert response.status_code == 422, response.text
-```
+Test ekibinin staging'de iptal edilmemiş ~33 nakit kaydı: ayrı temizlik kartı.

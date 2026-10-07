@@ -21,6 +21,10 @@ import re
 from typing import Final
 
 _DIGITS: Final = re.compile(r"^\d+$")
+#: The most lira digits an amount may carry: far past any spend (the ledger cap, 10 million
+#: TL, has 8), far below the 4300-digit limit of ``int()`` that a pasted 5000-digit
+#: "amount" would hit (a ValueError, a 500 on every route that reads an amount).
+MAX_LIRA_DIGITS: Final = 15
 _CURRENCY_MARKS: Final = ("tl", "try", "₺")
 
 UNITS: Final[dict[str, int]] = {
@@ -128,7 +132,10 @@ def parse_amount(raw: str) -> int | None:
         return None
     if frac and (not _DIGITS.match(frac) or len(frac) > 2):
         return None
-    lira = int("".join(groups))
+    digits = "".join(groups)
+    if len(digits) > MAX_LIRA_DIGITS:
+        return None
+    lira = int(digits)
     kurus = int(frac.ljust(2, "0")) if frac else 0
     return lira * 100 + kurus
 
