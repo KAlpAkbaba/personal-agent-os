@@ -62,7 +62,7 @@ export default function OfficeScene({
               aria-hidden="true"
               {...(seat.queued ? { style: { color: "var(--muted)" } } : {})}
             >
-              {shownLabel(seat) ??" "}
+              {shownLabel(seat) ?? " "}
             </span>
             <Figure
               seat={seat.seat}

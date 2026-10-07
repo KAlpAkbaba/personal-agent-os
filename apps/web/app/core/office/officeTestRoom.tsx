@@ -117,6 +117,11 @@ const STATE_TR: Record<TestSeatState, string> = {
   error: "kendi işinde sorun",
 };
 
+// The owner, 2026-10-07: "1 ve 2'de üzgün ama uyarı vermiyor?" The '!' marks what someone must
+// act on - a found bug, a breaking point, the tester's own error - as on the software seats,
+// where a sad or angry returned seat raises it; a waiting or working seat raises none.
+const WARNS: ReadonlySet<TestSeatState> = new Set(["failed", "broke", "error"]);
+
 /**
  * The spoken name of a test seat: "Test çalışanı 1: iş bekliyor, dinleniyor" - in the owner's
  * words (officePlain.ts), never the job id (the owner, 2026-10-07).
@@ -164,7 +169,7 @@ export function TestSeatCells({ seats, now, animated }: { seats: TestSeat[]; now
               seat={figureSeat(seat.seat)}
               plain={false}
               pose={working ? "typing" : "seated"}
-              warning={seat.state === "failed"}
+              warning={WARNS.has(seat.state)}
               animated={animated && working}
               mood={mood}
             />
