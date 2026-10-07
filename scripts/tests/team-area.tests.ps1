@@ -1096,6 +1096,16 @@ try {
     Set-SandboxFile -Dir $sandbox -Path "shared/z.txt" -Text "main`n" -Message "worker: shared back to main"
     [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("rm", "-q", "--", "foreign/g.txt"))
     [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("commit", "-q", "-m", "worker: the other card's new file removed"))
+    # (h) built on integrate/c3, then the cycle merged another card into integrate/c3: the
+    # branch no longer contains the tip (two-devices-tests-late-write-routes, 7 October).
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "integrate/c3", "main"))
+    Set-SandboxFile -Dir $sandbox -Path "foreign/h.txt" -Text "another card`n" -Message "another card"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-early", "integrate/c3"))
+    Set-SandboxFile -Dir $sandbox -Path "own/x.txt" -Text "worker`n" -Message "worker: own"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "-b", "w-early-outside", "w-early"))
+    Set-SandboxFile -Dir $sandbox -Path "other/y.txt" -Text "worker`n" -Message "worker: outside"
+    [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "integrate/c3"))
+    Set-SandboxFile -Dir $sandbox -Path "foreign/k.txt" -Text "a later card`n" -Message "a later card"
     [void](Invoke-SandboxGit -Dir $sandbox -Arguments @("checkout", "-q", "main"))
 
     Test-Case "worker-changed: (a) rebuilt on integrate -> with -AlsoBase only its own file; without it the foreign file too (the 3 October fault)" {
@@ -1142,6 +1152,14 @@ try {
     Test-Case "worker-changed: (g) the same after merging integrate into the branch -> they are counted" {
         $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-revert-merged" -Base "main" -AlsoBase "integrate/c2"
         Assert-List -Expected @("own/x.txt", "foreign/g.txt", "shared/z.txt") -Actual $files -Because "a merge commit does not hide the take-back"
+    }
+
+    Test-Case "worker-changed: (h) the integrate tip moved on after the branch left it -> only the worker's files" {
+        $files = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-early" -Base "main" -AlsoBase "integrate/c3"
+        Assert-List -Expected @("own/x.txt") -Actual $files -Because "the card merged before the branch left is not the worker's"
+        $outside = Get-TeamWorkerChangedFiles -RepoRoot $sandbox -Branch "w-early-outside" -Base "main" -AlsoBase "integrate/c3"
+        Assert-List -Expected @("other/y.txt", "own/x.txt") -Actual $outside -Because "a change outside the area is still caught"
+        Assert-List -Expected @("foreign/h.txt", "own/x.txt") -Actual @(Get-TeamChangedFiles -RepoRoot $sandbox -Branch "w-early" -Base "main") -Because "today's check counts the other card (the fault)"
     }
 
     Test-Case "worker-changed: a branch that does not exist still fails as Get-TeamChangedFiles does" {

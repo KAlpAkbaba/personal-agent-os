@@ -524,7 +524,8 @@ function Select-TeamWorkerChangedFiles {
 
     .DESCRIPTION
         BaseDiff is `git diff --name-only <base>...<branch>`, AlsoBaseDiff the same against the
-        cycle's integration branch, ContainsAlsoBase whether the branch contains that branch.
+        cycle's integration branch, ContainsAlsoBase whether the branch was built on (or merged)
+        that branch - its fork point from it is not in base, the tip need not be in the branch.
         Not contained: BaseDiff as it is (today's check). Contained: every file of AlsoBaseDiff -
         first those also in BaseDiff, in BaseDiff's order, then the rest in AlsoBaseDiff's order.
         A file the integration branch brought in and the worker left alone is in BaseDiff only
@@ -554,11 +555,14 @@ function Get-TeamWorkerChangedFiles {
         less the files the cycle's integration branch brought in.
 
     .DESCRIPTION
-        Without -AlsoBase, when that branch does not exist, or when the worker's branch does not
-        contain it (`git merge-base --is-ancestor`), the answer is Get-TeamChangedFiles':
+        Without -AlsoBase, when that branch does not exist, when it shares no history with the
+        worker's branch, or when their fork point (`git merge-base <AlsoBase> <Branch>`) is
+        already in Base (`git merge-base --is-ancestor <fork> <Base>`: the branch was built on
+        Base and took nothing from the integration branch), the answer is Get-TeamChangedFiles':
         `git diff --name-only <Base>...<Branch>`. Otherwise it is the files of
-        `git diff --name-only <AlsoBase>...<Branch>`, ordered by the first diff where they are in
-        it (Select-TeamWorkerChangedFiles).
+        `git diff --name-only <AlsoBase>...<Branch>` - the diff from that fork point, so the
+        branch's own changes even after the cycle moved the integration tip on - ordered by the
+        first diff where they are in it (Select-TeamWorkerChangedFiles).
 
         The named exception to "this file starts no process": git is asked through -Git, a
         scriptblock `{ param($Directory, $Arguments) }` that returns Invoke-TeamGit's shape
@@ -588,8 +592,12 @@ function Get-TeamWorkerChangedFiles {
     if (-not $AlsoBase) { return $baseDiff }
     $exists = & $Git $RepoRoot @("rev-parse", "--verify", "--quiet", "refs/heads/$AlsoBase")
     if (-not $exists.Success) { return $baseDiff }
-    $ancestor = & $Git $RepoRoot @("merge-base", "--is-ancestor", "refs/heads/$AlsoBase", $Branch)
-    if ([int]$ancestor.ExitCode -ne 0) { return $baseDiff }
+    # The point the branch left the integration branch. Every merge of the cycle moves the tip
+    # on, so "contains the tip" is not asked: a fork point already in Base is a branch on Base.
+    $fork = & $Git $RepoRoot @("merge-base", "refs/heads/$AlsoBase", $Branch)
+    if (-not $fork.Success) { return $baseDiff }
+    $onBase = & $Git $RepoRoot @("merge-base", "--is-ancestor", ([string]$fork.StdOut).Trim(), $Base)
+    if ([int]$onBase.ExitCode -eq 0) { return $baseDiff }
     $alsoDiff = @(& $names "$AlsoBase...$Branch")
     return @(Select-TeamWorkerChangedFiles -BaseDiff $baseDiff -AlsoBaseDiff $alsoDiff -ContainsAlsoBase $true)
 }

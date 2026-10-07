@@ -30,3 +30,18 @@
   is still caught). Two red team-cycle cases (integrate moves after the worker branches) carry it;
   the fix belongs in `scripts/lib/TeamArea.ps1` + `scripts/tests/team-area.tests.ps1` (area
   request), not a second copy of the rule in cycle.ps1 (integrate.ps1 would need the same).
+- Return 2 (decision, lead: TeamArea.ps1 and team-area.tests.ps1 added to the area): the helper's
+  rule is the one above. `fork = git merge-base refs/heads/<AlsoBase> <Branch>`; no fork (no
+  shared history) or `git merge-base --is-ancestor <fork> <Base>` true -> the old
+  `<Base>...<Branch>` diff (a branch on main, as before); otherwise `<AlsoBase>...<Branch>`,
+  which already starts at the fork, so the branch's own commits only, however far the cycle
+  moved the integration tip since. The rule lives in the helper alone, so integrate.ps1 can
+  take it later without a copy. Proof: team-area case (h) (integrate tip moves after the
+  branch leaves; a second branch with an out-of-area file still shows it) and the two team-cycle
+  cases of bebc0579 now green; mutation back to `--is-ancestor <AlsoBase> <Branch>` -> (h) and
+  both team-cycle cases RED. Real branch two-devices-tests-late-write-routes (40a9764b) against
+  the night's main da3e26b9 with integrate/d20261006 at c3280862: 3 files, all its own (old diff 108).
+- Open (separate card, out of this area): trust boundary. Every worktree can write
+  `integrate/<cycle>`; a worker that commits an out-of-area file there and builds on it would
+  not be charged with it. AlsoBase should be only the integration branch the cycle itself wrote,
+  with its recorded sha. Also `integrate.ps1` ~880 (see above).
