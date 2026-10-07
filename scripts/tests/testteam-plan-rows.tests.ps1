@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Every job of the test lead's plan names the JARVIS row it tests (test-plan-names-roadmap-rows,
     team/plans/test-plan-names-roadmap-rows-adr.md).
@@ -254,6 +254,22 @@ Test-Case "test-round.ps1 gerçek satırlı planı çalıştırır; kanıtın sa
         Assert-Equal -Expected $row.Title -Actual ([string]@($proof.rows)[0].row) -Because "kanıtın satırı planın satırı"
         Assert-Equal -Expected 1 -Actual ([int]@($proof.rows)[0].passed) -Because "geçen senaryo sayılır"
         Assert-Equal -Expected ("e" * 40) -Actual ([string]$proof.staging_sha) -Because "staging sha"
+    }
+    finally { Remove-Item -LiteralPath $run.Box -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case "test-round.ps1 kalın başlıklı satırın tam hücresini alır; kanıtın satırı kalın başlık" {
+    $bold = @($rows | Where-Object { $_.Title -ne $_.Full })
+    Assert-True -Condition ($bold.Count -gt 0) -Because "ROADMAP.md'de kalın başlıklı JARVIS satırı yok"
+    $row = $bold[0]
+    $jobs = @([ordered]@{ family = "kalin"; improvise = $true; roadmap_row = $row.Full })
+    $run = Invoke-Round -Round "kalin" -PlanText (ConvertTo-PlanJson -Jobs $jobs)
+    try {
+        Assert-Equal -Expected 0 -Actual $run.Exit -Because "tur bitmeli:`n$($run.Out)"
+        Assert-True -Condition (Test-Path -LiteralPath $run.Proof) -Because "kanıt yazılmadı:`n$($run.Out)"
+        $proof = Get-Content -Raw -Encoding UTF8 -LiteralPath $run.Proof | ConvertFrom-Json
+        Assert-Equal -Expected $row.Title -Actual ([string]@($proof.rows)[0].row) -Because "kanıtın satırı kalın başlık (kanonik biçim), tam hücre değil"
+        Assert-Equal -Expected 1 -Actual ([int]@($proof.rows)[0].passed) -Because "geçen senaryo sayılır"
     }
     finally { Remove-Item -LiteralPath $run.Box -Recurse -Force -ErrorAction SilentlyContinue }
 }

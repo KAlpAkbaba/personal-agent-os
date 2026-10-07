@@ -1,6 +1,6 @@
 # ADR draft - every test plan job names the JARVIS row it tests (test-plan-names-roadmap-rows)
 
-Status: draft (round 1: red tests only; implementation waits for the area request below)
+Status: draft (rounds 1-2: red tests only; implementation waits for the area request below)
 
 ## Context
 
@@ -39,7 +39,15 @@ test-round.ps1 reads the plan with plain `Read-TeamJson`, not the schema reader.
 - Old plan fixtures in the existing suites need a `roadmap_row`. The 3d430def fixture is kept
   word for word, and its test expects the refusal by name.
 
-## Area request (round 1)
+- The plan check is stricter than the Core on purpose. `app.team.progress.resolve_row` still
+  resolves a loose wording to a row (a prefix of 3+ words, `_head`, `ROW_ALIASES`: "Proactive",
+  "Repairs and improve itself"). The plan refuses those so that what the test lead writes is the
+  row exactly; the Core's tolerance stays for the other writers (trials, `why`).
+- The refusal's Why names all ~16 titles (about 1 KB). The console and the round log carry it
+  whole. A board note is cut to the board's 280 characters: the field, the wrong value and
+  "geçerli başlıklar: docs/ROADMAP.md What JARVIS does".
+
+## Area request (rounds 1 and 2)
 
 Turning the red tests green needs these files outside the card's area:
 scripts/testteam/test-round.ps1 (the plan check), scripts/tests/testteam-dry-round.tests.ps1
