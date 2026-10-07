@@ -91,7 +91,7 @@ $m = New-Object System.Threading.Mutex($false, "__MUTEX__")
 try {
     $accepted = @(Get-ChildItem -LiteralPath "__POSTS__" -Filter "*.json" -File | ForEach-Object { [IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json } | Where-Object { $_.task -eq $task -and $_.verdict -eq "ok" }).Count
     $verdict = "ok"
-    if ($task -notmatch '__PATTERN__') { $verdict = "422" }
+    if ($task -cnotmatch '__PATTERN__') { $verdict = "422" }
     elseif ($accepted -ge __RATE__) { $verdict = "429" }
     $n = @(Get-ChildItem -LiteralPath "__POSTS__" -Filter "*.json" -File).Count
     $doc = [ordered]@{ n = $n; seat = [string]$named["Seat"]; task = $task; to = [string]$named["To"]; text = [string]$named["Text"]; verdict = $verdict }
@@ -167,6 +167,43 @@ Test-Case "the board's rules are read from board.py (a stand-in that drifts from
 }
 
 Write-Host ""
+Write-Host "the board task of a note (TestTeam.ps1)"
+
+# The helpers alone; Get-TeamProperty is the only library function they could need.
+. (Join-Path $repoRoot "scripts\lib\TeamQueue.ps1")
+. (Join-Path $repoRoot "scripts\testteam\TestTeam.ps1")
+
+Test-Case "TestTeam.ps1 holds board.py's TASK_PATTERN, character for character" {
+    Assert-Equal -Expected $taskPattern -Actual $script:TestTeamBoardTaskPattern -Because "the two halves of the contract read one pattern"
+}
+
+Test-Case "a round id becomes its board task: lowercase, and 'test-<round>' when shorter than three characters" {
+    # -cmatch: the board's re is case-sensitive; PowerShell's -match is not ('R1' -match '^[a-z0-9]...' is True).
+    $cases = @(@("rbn5", "rbn5"), @("t202610070152", "t202610070152"), @("t-r10070152", "t-r10070152"), @("t1", "test-t1"), @("a", "test-a"), @("R1", "test-r1"), @("RBN5", "rbn5"), @("T-D20261006-3", "t-d20261006-3"))
+    foreach ($case in $cases) {
+        $round = $case[0]
+        $task = Get-TestTeamBoardTask -Id $round
+        Assert-Equal -Expected $case[1] -Actual $task -Because "round '$round'"
+        Assert-True -Condition ($task -cmatch $taskPattern) -Because "'$task' is a board task id"
+    }
+}
+
+Test-Case "a job's board task is its card id (lowercase), one per job, never the shared 'test-team'" {
+    $cards = @(New-TestTeamCards -Round "R1" -Jobs @([pscustomobject]@{ family = "aaa"; improvise = $true }, [pscustomobject]@{ family = "bbb"; improvise = $true }))
+    $tasks = @($cards | ForEach-Object { Get-TestTeamBoardTask -Id $_.id })
+    Assert-Equal -Expected "tj-r1-1,tj-r1-2" -Actual ($tasks -join ",") -Because "each job its own task"
+    foreach ($task in $tasks) { Assert-True -Condition ($task -cmatch $taskPattern) -Because "'$task' is a board task id" }
+}
+
+Test-Case "an id that cannot be a board task is refused, not posted to be refused (422)" {
+    foreach ($bad in @("", "x/y", "a_b", ("a" * 65))) {
+        $threw = $false
+        try { [void](Get-TestTeamBoardTask -Id $bad) } catch { $threw = ($_.Exception.Message -like "*pano görev kimliği*") }
+        Assert-True -Condition $threw -Because "'$bad' is refused by Get-TestTeamBoardTask itself"
+    }
+}
+
+Write-Host ""
 Write-Host "a round's notes, per job"
 
 Test-Case "a round of 5 jobs x 6 notes posts every note, each tester note under its job's task (tj-<round>-<n>)" {
@@ -198,7 +235,8 @@ Test-Case "the round's own notes (the breaking report to the Danışman) go unde
         $lead = @($round.Posts | Where-Object { $_.seat -eq "test-lead" })
         Assert-True -Condition (@($lead).Count -ge 1) -Because "the test lead posts the breaking report"
         foreach ($post in $lead) { Assert-Equal -Expected "rbn5" -Actual ([string]$post.task) -Because "the test lead's note is under the round id: $($post.text)" }
-        $report = @($lead | Where-Object { [string]$_.text -match "kopma noktası" })
+        # Every job passed: the report says 'kırılma bulunmadı', not 'kopma noktası' (Format-TestTeamBreakingReport).
+        $report = @($lead | Where-Object { [string]$_.text -match "^Danışman'a, test turu rbn5:" })
         Assert-Equal -Expected 1 -Actual @($report).Count -Because "one breaking report"
         Assert-Equal -Expected "danisman" -Actual ([string]$report[0].to) -Because "addressed to the Danışman's seat"
         Assert-Equal -Expected "ok" -Actual ([string]$report[0].verdict) -Because "the report is taken by the board"
@@ -220,6 +258,19 @@ Test-Case "the guard holds: a single job with more than $ratePerTask notes in th
         $refused = @($job | Where-Object { $_.verdict -eq "429" })
         Assert-Equal -Expected $ratePerTask -Actual @($ok).Count -Because "the board takes $ratePerTask notes of the job in the hour"
         Assert-Equal -Expected (23 - $ratePerTask) -Actual @($refused).Count -Because "and refuses the rest (429): the limit is not raised"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case "a hand-given uppercase round 'R1' (test-round.ps1's -notmatch lets it in) still posts every note" {
+    $work = New-Work
+    try {
+        $round = Invoke-FakeRound -Work $work -Round "R1" -Families @("aaa")
+        Assert-Equal -Expected 0 -Actual $round.Code -Because "the round ends: $($round.Out)"
+        $refused = @($round.Posts | Where-Object { $_.verdict -ne "ok" })
+        Assert-Equal -Expected 0 -Actual @($refused).Count -Because ("no note is refused (422 for 'R1' / 'tj-R1-1'); refused: " + (@($refused | ForEach-Object { "$($_.verdict) $($_.task)" }) -join " | "))
+        $tasks = @($round.Posts | ForEach-Object { [string]$_.task } | Sort-Object -Unique)
+        Assert-Equal -Expected "test-r1,tj-r1-1" -Actual ($tasks -join ",") -Because "the round under test-r1, the job under tj-r1-1"
     }
     finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
