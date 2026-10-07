@@ -1,0 +1,562 @@
+{
+  "version": 1,
+  "about": "card memory-lexical-turkish-measure: invented Turkish names, places, companies, plates and promises; no real person. Each case: one right memory, look-alikes that do not name it, and one trap that names it in another context.",
+  "cases": [
+    {
+      "id": "ahmet-soz",
+      "query": "Ahmet'e ne söz vermiştim?",
+      "answer": "Ahmet Yalçınkaya taşınırken eşyalarını cumartesi taşımaya yardım edeceğime söz verdim.",
+      "distractors": [
+        "Komşuma pazar günü taşınmasında el vereceğimi söyledim.",
+        "Kuzenim yeni evini boyarken ona destek olacağım.",
+        "Ödünç aldığım matkabı arkadaşıma iade etmeliyim.",
+        "Ahmet Usta'nın tamirhanesi salı günleri kapalı oluyor."
+      ],
+      "tags": ["person", "suffix", "verb"]
+    },
+    {
+      "id": "izmir-ev-sahibi",
+      "query": "İzmir'deki ev sahibimin telefonu neydi?",
+      "answer": "İzmir Karşıyaka'daki ev sahibim Nermin Hanım'ın telefonu 0555 000 41 27.",
+      "distractors": [
+        "Ankara'daki eski ev sahibim kirayı her ay elden alırdı.",
+        "Yeni dairenin aidatı ayda sekiz yüz elli lira.",
+        "Ev sahibine kombinin arızalandığını bildirmem lazım.",
+        "İzmir fuarına eylülde gitmeyi düşünüyorum."
+      ],
+      "tags": ["place", "suffix", "dotted_i"]
+    },
+    {
+      "id": "mehmet-borc",
+      "query": "Mehemt'e ne kadar borcum vardı?",
+      "answer": "Mehmet Arıkan'a geçen ay tamir için aldığım iki bin lirayı borçluyum.",
+      "distractors": [
+        "Bankaya kredi kartı borcunu ayın onunda ödemeliyim.",
+        "Kardeşime verdiğim harçlığı geri istemeyeceğim.",
+        "Elektrik faturası bu ay biraz yüksek geldi.",
+        "Mehmet Bey'in kızının düğünü haziranda yapılacak."
+      ],
+      "tags": ["person", "suffix", "typo"],
+      "typo": "Mehemt",
+      "typo_of": "Mehmet"
+    },
+    {
+      "id": "eskisehir-otel",
+      "query": "Eskişehri'de kaldığımız otelin adı neydi?",
+      "answer": "Eskişehir'de Odunpazarı yakınındaki Kirazlı Konak Otel'de iki gece kaldık.",
+      "distractors": [
+        "Bursa'daki otelin kahvaltısı çok zengindi.",
+        "Tatilde kaldığımız pansiyonun bahçesinde havuz vardı.",
+        "Otel rezervasyonlarını genelde telefondan yapıyorum.",
+        "Eskişehir'den gelen kargo hâlâ teslim edilmedi."
+      ],
+      "tags": ["place", "suffix", "typo"],
+      "typo": "Eskişehri",
+      "typo_of": "Eskişehir"
+    },
+    {
+      "id": "gulseren-dogum-gunu",
+      "query": "Gülsren teyzenin doğum günü ne zaman?",
+      "answer": "Gülseren teyzenin doğum günü on dört mart, ona her yıl çiçek gönderiyorum.",
+      "distractors": [
+        "Annemin doğum gününde pasta siparişi vermeyi unutmamalıyım.",
+        "Yeğenimin yaş günü partisi cumartesi öğleden sonra.",
+        "Takvime önemli günleri bir hafta önceden hatırlatma koydum.",
+        "Gülseren teyze bahçesindeki domatesleri bize yolladı."
+      ],
+      "tags": ["person", "typo"],
+      "typo": "Gülsren",
+      "typo_of": "Gülseren"
+    },
+    {
+      "id": "kayseri-fabrika",
+      "query": "Kayesri'deki fabrikanın müdürü kimdi?",
+      "answer": "Kayseri organize sanayideki Erciyes Kalıp fabrikasının müdürü Tuncay Bayraktar.",
+      "distractors": [
+        "Gebze'deki deponun sorumlusu sevkiyatları sabah planlıyor.",
+        "Fabrika ziyaretinde iş güvenliği eğitimi almamız gerekti.",
+        "Üretim müdürüyle teklif fiyatını yeniden konuşacağız.",
+        "Kayseri mantısını en çok annem yapıyor."
+      ],
+      "tags": ["place", "company", "suffix", "typo"],
+      "typo": "Kayesri",
+      "typo_of": "Kayseri"
+    },
+    {
+      "id": "ilgaz-kayak",
+      "query": "ILGAZ'daki kayak evini kim ayarlamıştı?",
+      "answer": "Ilgaz'daki kayak evini kuzenim Serdar Ocak ocak tatili için ayarlamıştı.",
+      "distractors": [
+        "Uludağ'da kayak dersi almak için hoca aradık.",
+        "Kış tatilinde dağ evine kar zinciri götürmeliyiz.",
+        "Kayak takımlarını bodrumdaki dolapta saklıyorum.",
+        "Ilgaz dağının fotoğraflarını yeni bilgisayara aktardım."
+      ],
+      "tags": ["place", "suffix", "dotted_i"]
+    },
+    {
+      "id": "isparta-gul",
+      "query": "ISPARTA'dan gelen gül yağını kim göndermişti?",
+      "answer": "Isparta'dan gül yağını eski iş arkadaşım Hülya Sarıgül göndermişti.",
+      "distractors": [
+        "Lavanta kolonyasını tatilde bir köy pazarından aldım.",
+        "Arkadaşımın yolladığı kuru incirler çok tatlıydı.",
+        "Hediye paketlerini posta yerine kargoyla göndermek daha hızlı.",
+        "Isparta yolunda lastik patladı, yedekle devam ettik."
+      ],
+      "tags": ["place", "suffix", "dotted_i", "verb"]
+    },
+    {
+      "id": "ilker-kitap",
+      "query": "İLKER'e hangi kitabı verecektim?",
+      "answer": "İlker Tosun'a Kürk Mantolu Madonna'yı ödünç vereceğim, pazartesi getiriyorum.",
+      "distractors": [
+        "Kütüphaneden aldığım romanın iade tarihi geçti.",
+        "Kitap kulübünde bu ay bir polisiye okuyoruz.",
+        "Rafı düzenlerken eski dergileri bağışlamaya ayırdım.",
+        "İlker'in arabası yine sanayide kalmış."
+      ],
+      "tags": ["person", "suffix", "dotted_i", "verb"]
+    },
+    {
+      "id": "irmak-veteriner",
+      "query": "Irmak veterinerinin adresi neresiydi?",
+      "answer": "Kedinin aşıları için Irmak Veteriner Kliniği, Çamlık Sokak numara dokuz.",
+      "distractors": [
+        "Köpeğin tırnak kesimi için pet kuaförüne randevu aldım.",
+        "Kedi maması bitmeden internetten sipariş vermeliyim.",
+        "Hayvan hastanesinin gece nöbeti hafta sonu da açık.",
+        "Irmak kenarında yürüyüş yapmak bugün iyi geldi."
+      ],
+      "tags": ["place", "dotted_i"]
+    },
+    {
+      "id": "ilicak-tekstil",
+      "query": "ILICAK Tekstil'in yetkilisi kimdi?",
+      "answer": "Ilıcak Tekstil'de siparişlerle Berna Ilıcak ilgileniyor, dahili numarası 214.",
+      "distractors": [
+        "Kumaş tedarikçisi yeni sezon katalogunu gönderdi.",
+        "Tişört baskısı için iki ayrı firmadan teklif aldık.",
+        "Konfeksiyon atölyesi teslimatı bir hafta erteledi.",
+        "Ilıcak ailesinin yazlığı Ayvalık'ta, denize yakın."
+      ],
+      "tags": ["company", "suffix", "dotted_i"]
+    },
+    {
+      "id": "plaka-34klm482",
+      "query": "34 KLM 482'nin muayenesi ne zaman?",
+      "answer": "34 KLM 482 plakalı arabanın muayenesi on iki kasımda bitiyor.",
+      "distractors": [
+        "Arabanın kışlık lastiklerini ekimde taktırmalıyım.",
+        "Trafik sigortası poliçesi e-postayla geldi.",
+        "Servis yağ değişimi için on bin kilometre dedi.",
+        "Otoparkta 34 plakalı bir minibüs çıkışı kapatmıştı."
+      ],
+      "tags": ["plate", "suffix"]
+    },
+    {
+      "id": "plaka-06bnr19",
+      "query": "06 BNR 19 kimin arabası?",
+      "answer": "06 BNR 19 plakalı beyaz kamyonet kayınbiraderim Oğuz Demirel'in.",
+      "distractors": [
+        "Komşunun gri arabası her sabah kapının önünde duruyor.",
+        "Kiralık araba şirketi depozitoyu iade etti.",
+        "Kamyonet kiralayıp eski eşyaları depoya taşıdık.",
+        "BNR kısaltmalı bir dernekten bağış mektubu geldi."
+      ],
+      "tags": ["plate", "person"]
+    },
+    {
+      "id": "plaka-35tyz07",
+      "query": "35 TYZ 07'nin park cezası ödendi mi?",
+      "answer": "35 TYZ 07 plakalı motosikletin park cezasını e-Devlet'ten ödedim.",
+      "distractors": [
+        "Hız cezası tebligatı adrese geç ulaşmış.",
+        "Belediye otoparkı aylık abonelik ücretini artırdı.",
+        "Motosikletin kaskını yenilemem gerekiyor.",
+        "07 numaralı daireye kargo bırakılmış."
+      ],
+      "tags": ["plate", "suffix"]
+    },
+    {
+      "id": "demirtas-lojistik",
+      "query": "Demirtaş Lojistik'le sözleşme ne zaman bitiyor?",
+      "answer": "Demirtaş Lojistik ile depolama sözleşmemiz otuz bir aralıkta sona eriyor.",
+      "distractors": [
+        "Nakliye firmasıyla yeni fiyat listesi üzerinde anlaştık.",
+        "Depo kirası sözleşmesini noterde imzaladık.",
+        "Kargo firması hafta sonu teslimat yapmıyor.",
+        "Demirtaş ailesinin bahçesindeki ceviz ağacı devrildi."
+      ],
+      "tags": ["company", "suffix"]
+    },
+    {
+      "id": "yildizkent-yazilim",
+      "query": "Yıldızkent Yazılım'a teklifi kim hazırlıyordu?",
+      "answer": "Yıldızkent Yazılım için bakım teklifini Selin Karahan hazırlıyor.",
+      "distractors": [
+        "Web sitesi yenileme teklifi müşteriye cuma günü gidecek.",
+        "Yazılım lisanslarının yenileme bedeli bütçeyi aştı.",
+        "Teklif şablonunu yeni logoyla güncelledim.",
+        "Yıldızkent sitesinin havuzu bu yaz açılmadı."
+      ],
+      "tags": ["company", "suffix", "person", "verb"]
+    },
+    {
+      "id": "oztoprak-mobilya",
+      "query": "Öztoprak Mobilya'dan aldığım dolabın garantisi kaç yıl?",
+      "answer": "Öztoprak Mobilya'dan alınan gardırobun garantisi iki yıl, faturası çekmecede.",
+      "distractors": [
+        "Yeni koltuk takımının teslimatı üç hafta sürecekmiş.",
+        "Mutfak dolaplarının menteşeleri gevşemiş, usta çağırmalı.",
+        "Bulaşık makinesinin garanti belgesini kutusunda sakladım.",
+        "Öztoprak köyüne giden yol kışın kapanıyor."
+      ],
+      "tags": ["company", "suffix"]
+    },
+    {
+      "id": "karaca-insaat",
+      "query": "Karaca İnşaat'ın şantiye şefinin numarası neydi?",
+      "answer": "Karaca İnşaat şantiye şefi Levent Uysal'ın numarası 0555 000 73 18.",
+      "distractors": [
+        "Binanın dış cephe boyası için iskele kurulacak.",
+        "Müteahhit tadilatın iki ay süreceğini söyledi.",
+        "Yan arsadaki inşaat sabah yedide gürültüye başlıyor.",
+        "Karaca balığı akvaryumda çok büyüdü."
+      ],
+      "tags": ["company", "suffix", "dotted_i"]
+    },
+    {
+      "id": "selim-dugun",
+      "query": "Selim'in düğünü nerede yapılacaktı?",
+      "answer": "Selim Kaplan'ın düğünü temmuzda Bolu Abant'taki göl kenarı salonunda.",
+      "distractors": [
+        "Nişan töreni için kına gecesi organizasyonu ayarlandı.",
+        "Kuzenimin nikâhı belediyenin evlendirme dairesinde olacak.",
+        "Düğün hediyesi olarak bir kahve makinesi aldık.",
+        "Selim abi bize yeni balık tarifini anlattı."
+      ],
+      "tags": ["person", "suffix", "verb"]
+    },
+    {
+      "id": "zeynep-ilac",
+      "query": "Zeynep'e hangi ilacı almıştım?",
+      "answer": "Zeynep Aksoy grip olunca ona eczaneden öksürük şurubu ve vitamin aldım.",
+      "distractors": [
+        "Babamın tansiyon ilacı reçetesi yenilenmeli.",
+        "Eczane nöbet listesini telefona kaydettim.",
+        "Baş ağrısı için ağrı kesiciyi çantamda taşıyorum.",
+        "Zeynep'in kedisi apartmanın merdivenlerinde uyuyor."
+      ],
+      "tags": ["person", "suffix", "verb"]
+    },
+    {
+      "id": "burak-proje",
+      "query": "Burak'la hangi projede çalışıyordum?",
+      "answer": "Burak Sezer ile depo envanter uygulaması projesinde birlikte çalışıyoruz.",
+      "distractors": [
+        "Muhasebe ekibiyle yıl sonu kapanışı üzerine çalışıyorum.",
+        "Yeni stajyer veri tabanı yedeklerini kontrol ediyor.",
+        "Proje toplantısı her perşembe saat onda.",
+        "Burak geçen hafta yeni bir bisiklet almış."
+      ],
+      "tags": ["person", "suffix", "verb"]
+    },
+    {
+      "id": "hakan-anahtar",
+      "query": "Yedek anahtarı Hakan'a mı vermiştim?",
+      "answer": "Evin yedek anahtarını tatildeyken çiçekleri sulasın diye Hakan Çelebi'ye verdim.",
+      "distractors": [
+        "Arabanın yedek kumandası mutfaktaki çekmecede.",
+        "Kapıcı dairenin anahtarını bırakmamı istedi.",
+        "Kilit ustası kapı göbeğini değiştirdi.",
+        "Hakan'ın oğlu üniversite sınavını kazanmış."
+      ],
+      "tags": ["person", "suffix", "verb"]
+    },
+    {
+      "id": "canan-kurs",
+      "query": "Canan hangi kursa yazılmak istiyordu?",
+      "answer": "Canan Erdem seramik kursuna yazılmak istiyor, Kadıköy'deki atölyeye bakacağız.",
+      "distractors": [
+        "Akşamları İngilizce kursuna gitmeyi düşünüyorum.",
+        "Yüzme kursu kayıtları hafta başında açılıyor.",
+        "Resim atölyesinin malzeme listesi uzun.",
+        "Canan'ın annesi bize reçel yolladı."
+      ],
+      "tags": ["person"]
+    },
+    {
+      "id": "trabzon-fidan",
+      "query": "Trabzon'dan fındık fidanını kim getirecek?",
+      "answer": "Trabzon'dan fındık fidanlarını eniştem Recep Kalkan bahara getirecek.",
+      "distractors": [
+        "Bahçeye elma ağacı dikmek için fidanlıkla konuştum.",
+        "Çay paketlerini Rize'den kargoyla getirttik.",
+        "Saksıdaki limon ağacı kışın içeri alınmalı.",
+        "Trabzon maçını arkadaşlarla kahvede izledik."
+      ],
+      "tags": ["place", "suffix", "person", "verb"]
+    },
+    {
+      "id": "nevsehir-balon",
+      "query": "Nevşehir'deki balon turunu hangi şirketten aldık?",
+      "answer": "Nevşehir Göreme'deki balon turunu Peri Gökyüzü Turizm'den aldık.",
+      "distractors": [
+        "Kapadokya gezisinde yeraltı şehrini de gezdik.",
+        "Tur şirketi uçuşun rüzgâr yüzünden ertelendiğini bildirdi.",
+        "Tatil paketlerini genelde erken rezervasyonla alıyoruz.",
+        "Nevşehir şarabından iki şişe hediye geldi."
+      ],
+      "tags": ["place", "company", "suffix", "verb"]
+    },
+    {
+      "id": "antalya-dis",
+      "query": "Antalya'daki dişçinin adı neydi?",
+      "answer": "Antalya Lara'daki diş hekimim Dr. Ebru Şenol, dolgu kontrolü yılda bir.",
+      "distractors": [
+        "Diş ipini kullanmayı alışkanlık yapmalıyım.",
+        "Göz doktoru yeni gözlük numarası verdi.",
+        "Ortodonti tedavisinin taksitleri bu ay bitiyor.",
+        "Antalya havalimanında uçak rötar yaptı."
+      ],
+      "tags": ["place", "suffix", "person"]
+    },
+    {
+      "id": "bodrum-tekne",
+      "query": "Bodrum'da tekneyi kimden kiralamıştık?",
+      "answer": "Bodrum'da günlük tekneyi Kaptan Yusuf Erkan'dan kiraladık.",
+      "distractors": [
+        "Marmaris'te sürat teknesi turu yaptık.",
+        "Tekne turunda öğle yemeği fiyata dahildi.",
+        "Deniz tutmasına karşı ilacı yanımızda götürmeliyiz.",
+        "Bodrum kalesinin müzesi pazartesi kapalıymış."
+      ],
+      "tags": ["place", "suffix", "verb"]
+    },
+    {
+      "id": "sinop-kira",
+      "query": "Sinop'taki yazlığın kirasını kime ödüyorum?",
+      "answer": "Sinop Akliman'daki yazlığın kirasını her haziran Fikret Aydoğdu'ya ödüyorum.",
+      "distractors": [
+        "Yazlık sitenin bahçıvanına ayrıca ücret veriyoruz.",
+        "Kiracı sözleşmeyi bir yıl daha uzatmak istiyor.",
+        "Yaz evinin su faturası otomatik ödemede.",
+        "Sinop cezaevi müzesini gezmeyi listeye ekledim."
+      ],
+      "tags": ["place", "suffix", "person", "verb"]
+    },
+    {
+      "id": "volkan-gitar",
+      "query": "Volkan'dan aldığım gitarın fiyatı neydi?",
+      "answer": "Volkan Tekin'den ikinci el klasik gitarı dört bin beş yüz liraya aldım.",
+      "distractors": [
+        "Müzik mağazasında bağlama telleri indirimdeydi.",
+        "Gitar derslerine ayda dört kez gidiyorum.",
+        "Piyanonun akordu için ustaya randevu verdim.",
+        "Volkan dün akşam uzun uzun maç anlattı."
+      ],
+      "tags": ["person", "suffix", "verb"]
+    },
+    {
+      "id": "emine-tarif",
+      "query": "Emine teyzenin baklava tarifinde kaç kat yufka vardı?",
+      "answer": "Emine teyzenin baklava tarifi kırk kat yufka, bol tereyağı ve Antep fıstığı.",
+      "distractors": [
+        "Annemin börek tarifinde peynir yerine ıspanak kullanılıyor.",
+        "Bayram için tatlıyı pastaneden sipariş etmeyi düşündük.",
+        "Kurabiye hamuru buzdolabında bir gece dinlenmeli.",
+        "Emine teyze komşuların hepsini adıyla tanıyor."
+      ],
+      "tags": ["person"]
+    },
+    {
+      "id": "orhan-avukat",
+      "query": "Orhan avukata dava için ne söylemiştim?",
+      "answer": "Avukat Orhan Güneri'ye kira davasında uzlaşmaya açık olduğumu söyledim.",
+      "distractors": [
+        "Noter vekâletname için kimlik fotokopisi istedi.",
+        "Mahkeme duruşması kasım ortasına ertelendi.",
+        "Arabulucu toplantısı belediye binasında yapılacak.",
+        "Orhan Bey'in bakkalı yeni kasiyer almış."
+      ],
+      "tags": ["person", "verb"]
+    },
+    {
+      "id": "pinar-kizi",
+      "query": "Pınar'ın kızının adı neydi?",
+      "answer": "Pınar Akgül'ün kızının adı Defne, bu yıl ilkokula başladı.",
+      "distractors": [
+        "Komşunun oğlu futbol okuluna yazıldı.",
+        "Yeğenimin okul kıyafetlerini birlikte aldık.",
+        "Arkadaşımın bebeği geçen ay doğdu.",
+        "Pınar kafede kahve yerine çay içmeyi seviyor."
+      ],
+      "tags": ["person", "suffix"]
+    },
+    {
+      "id": "igdir-kayisi",
+      "query": "IĞDIR'dan kayısıyı kimden sipariş ediyorduk?",
+      "answer": "Iğdır kayısısını her yaz üretici Nurettin Baysal'dan sipariş ediyoruz.",
+      "distractors": [
+        "Malatya'dan kuru kayısıyı pazardan aldım.",
+        "Yaz meyvelerini manavdan tane tane seçiyorum.",
+        "Reçel yapmak için iki kilo vişne ayırdım.",
+        "Iğdır otobüsü terminalden gece yarısı kalkıyor."
+      ],
+      "tags": ["place", "suffix", "dotted_i", "verb"]
+    }
+  ],
+  "noise": [
+    "Bugün öğleden sonra hava yağmurlu olacakmış.",
+    "Salondaki halıyı yıkamaya vermeliyim.",
+    "Sabah koşusunda dizim biraz ağrıdı.",
+    "Buzdolabında süt ve yumurta bitmek üzere.",
+    "Kombinin basıncı düşük görünüyor.",
+    "Akşam yemeğinde mercimek çorbası yaptım.",
+    "Telefonun ekran koruyucusu çatlamış.",
+    "Hafta sonu sinemaya gitmeyi planlıyoruz.",
+    "Balkon çiçeklerine haftada iki kez su veriyorum.",
+    "Bilgisayarın fanı çok ses çıkarıyor.",
+    "Pazartesi sabahı toplantı dokuzda başlıyor.",
+    "Çamaşır makinesinin filtresini temizledim.",
+    "Yeni ayakkabılar ilk gün ayağımı vurdu.",
+    "Mutfak lambası yanıp sönüyor, ampulü değişecek.",
+    "Kahve makinesinin kireç temizliği zamanı geldi.",
+    "Elektrikli süpürgenin torbasını değiştirdim.",
+    "Bu ay su faturası normalden düşük.",
+    "Spor salonu üyeliği gelecek ay yenileniyor.",
+    "Kışlık montları kuru temizlemeye götürdüm.",
+    "Ekmek kızartma makinesi bozuldu.",
+    "Pencere kenarındaki fesleğen çok büyüdü.",
+    "Sabahları yarım saat kitap okumaya başladım.",
+    "Market alışverişini akşam yedide yapacağım.",
+    "Duş başlığı kireç tutmuş, sirkeyle temizlenmeli.",
+    "Dün gece deprem haberleri yüzünden geç uyudum.",
+    "Bulaşıkları akşam makineye yerleştirdim.",
+    "Yazıcının mürekkebi bitmek üzere.",
+    "Akşam yürüyüşünde parkta çok kalabalık vardı.",
+    "Yeni dizinin ilk bölümü sıkıcıydı.",
+    "Oturma odasının perdeleri güneşte solmuş.",
+    "Haftalık yemek planını cumartesi yapıyorum.",
+    "Kedi kumunu değiştirmek gerekiyor.",
+    "Bisikletin zinciri yağlanmalı.",
+    "Ütü masasının kılıfı yıprandı.",
+    "Sabah kahvaltısında peynir ve zeytin yedim.",
+    "İnternet bağlantısı akşamları yavaşlıyor.",
+    "Modemi yeniden başlatınca düzeldi.",
+    "Çöp torbaları bitmiş, listeye yazdım.",
+    "Bu kış doğalgaz tüketimi artmış.",
+    "Ayna lekeliydi, cam sileceğiyle sildim.",
+    "Yatak örtüsünü yenisiyle değiştirdim.",
+    "Ofiste klima çok soğuk çalışıyor.",
+    "Öğle arasında kısa bir yürüyüş yaptım.",
+    "Şemsiyemi otobüste unuttum.",
+    "Metro hattında arıza yüzünden gecikme var.",
+    "Çay demliğinin kapağı kırıldı.",
+    "Yeni tabak takımı kargoyla gelecek.",
+    "Banyonun derzleri kararmış.",
+    "Kapının zili çalışmıyor, pili bitmiş olabilir.",
+    "Kış lastiği fiyatları yükselmiş.",
+    "Kumandanın pillerini değiştirdim.",
+    "Akşam haberlerinde trafik kazası vardı.",
+    "Hafta içi spora gitmek zor oluyor.",
+    "Mikrodalga fırının içi temizlenmeli.",
+    "Kuru fasulyeyi bir gece önceden ıslattım.",
+    "Bahçedeki çimler biçilmeyi bekliyor.",
+    "Saat pilini değiştirince yine çalıştı.",
+    "Yeni yastık boyun ağrımı azalttı.",
+    "Sabah otobüsü beş dakika geç geldi.",
+    "Kirli sepeti dolmuş, makine çalıştırılmalı.",
+    "Bugün çok az su içtim.",
+    "Dolaptaki eski kıyafetleri ayırdım.",
+    "Şarj aleti kablosu kopmak üzere.",
+    "Kulaklığın sol tarafı cızırtı yapıyor.",
+    "Masa lambasının düğmesi takılıyor.",
+    "Akşam erken uyumaya karar verdim.",
+    "Kahvaltıda menemen yapmak istiyorum.",
+    "Fırın tepsisi yanık lekeleriyle kaplı.",
+    "Çatıdaki oluk yapraklarla tıkanmış.",
+    "Sokak lambası iki gündür yanmıyor.",
+    "Yeni çıkan albümü bütün gün dinledim.",
+    "Arka bahçeye kuş yemliği astım.",
+    "Bugün işten erken çıktım.",
+    "Dişlerimi fırçalarken su israf etmemeye çalışıyorum.",
+    "Odanın köşesinde rutubet lekesi çıktı.",
+    "Haftaya hava ısınacakmış.",
+    "Kapı paspası değiştirilmeli.",
+    "Su ısıtıcısı çok yavaş kaynatıyor.",
+    "Mutfak tezgâhında çatlak oluşmuş.",
+    "Fotoğrafları yedeklemek için harici disk aldım.",
+    "Sabah alarmını beş dakika ileri aldım.",
+    "Yürüyüş ayakkabısının bağcığı koptu.",
+    "Bugün öğle yemeğinde salata yedim.",
+    "Çocuk parkındaki salıncak gıcırdıyor.",
+    "Bulmacanın son kelimesini bulamadım.",
+    "Pazar yerinde domatesler çok ucuzdu.",
+    "Aspiratörün filtresi yağlanmış.",
+    "Yeni masa sandalyeleri rahat değil.",
+    "Duvar saatini yaz saatine göre ayarladım.",
+    "Sabah meditasyonuna on dakika ayırıyorum.",
+    "Uyurken pencereyi aralık bırakıyorum.",
+    "Klavyenin bir tuşu basmıyor.",
+    "Ekranın parlaklığını akşam azaltıyorum.",
+    "Kirpi bahçede gece dolaşıyormuş.",
+    "Hafta sonu satranç oynamayı özledim.",
+    "Yeni nevresim takımı yumuşacık.",
+    "Elektrik kesintisi iki saat sürdü.",
+    "Mumları çekmecede saklıyorum.",
+    "Alçı tavanda küçük bir çatlak var.",
+    "Akşamları papatya çayı içiyorum.",
+    "Yolda bir kaplumbağa gördüm.",
+    "Pencere contaları rüzgârı geçiriyor.",
+    "Bugün adım sayısı on bini geçti.",
+    "Kurşun kalemlerin hepsi kütleşmiş.",
+    "Balkon kapısının kolu gevşek.",
+    "Bulaşık süngeri değiştirilmeli.",
+    "Yemek kitabındaki tarifler çok karışık.",
+    "Hafif bir baş ağrısıyla uyandım.",
+    "Çekmecedeki kabloları etiketledim.",
+    "Öğleden sonra kısa bir şekerleme yaptım.",
+    "Sabah sisi yüzünden yol görünmüyordu.",
+    "Yeni kitaplığı duvara monte ettim.",
+    "Koridorun ışığı sensörlü olsa iyi olur.",
+    "Su arıtma cihazının filtresi değişecek.",
+    "Akşam gökyüzünde dolunay vardı.",
+    "Tencere kapağının sapı ısınıyor.",
+    "Ayakkabılığın rafı çöktü.",
+    "Bugün market sırası çok uzundu.",
+    "Yorganı havalandırmak için balkona astım.",
+    "Kahve çekirdeklerini taze öğüttüm.",
+    "Termosun kapağı sızdırıyor.",
+    "Çalışma masasını pencere önüne taşıdım.",
+    "Yazın sivrisinek kovucu almak lazım.",
+    "Bu hafta iki kez yüzmeye gittim.",
+    "Eski telefonları geri dönüşüme verdim.",
+    "Fayansların arasını yeniden doldurmak gerek.",
+    "Sabah trafiği köprüde çok yoğundu.",
+    "Ocak gözlerinden biri geç ısınıyor.",
+    "Akşam yemeğinden sonra bulaşıkları elde yıkadım.",
+    "Yeni defterin kâğıdı çok kaliteli.",
+    "Tırnak makası kaybolmuş.",
+    "Bulutlu havada fotoğraf çekmek zor.",
+    "Gece yarısı komşunun köpeği havladı.",
+    "Bahar temizliğine dolapların üstünden başladım.",
+    "Kumaş yumuşatıcısının kokusu çok ağır.",
+    "Tablet şarjı çabuk bitiyor.",
+    "Halı sahada maç sonrası çok yoruldum.",
+    "Sabahları limonlu su içiyorum.",
+    "Toz bezi çekmecede duruyor.",
+    "Yolculukta yanıma bulmaca kitabı aldım.",
+    "Bu sabah kuş sesleriyle uyandım.",
+    "Duvardaki tablo eğri duruyordu, düzelttim.",
+    "Çorap çekmecesi çok dağınık.",
+    "Hafta içi akşamları evde yemek yapıyorum.",
+    "Bilgisayar güncellemesi bir saat sürdü.",
+    "Çocukluk fotoğraflarına bakarken duygulandım.",
+    "Bugün rüzgâr çok sertti.",
+    "Vazo düşüp kırıldı, parçaları topladım.",
+    "Sabah kahvesini balkonda içtim.",
+    "Lavabonun gideri yavaş akıyor."
+  ]
+}
