@@ -28,6 +28,7 @@ import {
   fakeCapture,
   item,
   measurement,
+  sentences,
   settle,
   threeDone,
 } from "./fixtures";
@@ -105,6 +106,14 @@ describe("what is shown comes from the server", () => {
     const current = page.tree().find((element) => element.props["data-measure-current"] !== undefined);
     expect(current && text(current)).toContain(MADE_UP);
     expect(page.all()).toContain("1 / 20");
+  });
+
+  it("thirty sentences from the server (the owner's twenty and ten commands) are all shown, 1 / 30", async () => {
+    const page = await loaded(measurement({ sentences: sentences(30) }));
+    expect(page.all()).toContain("1 / 30");
+    expect(page.all()).toContain("Uydurma deneme cümlesi numara 30.");
+    expect(row(page.tree(), 30)).toBeDefined();
+    expect(page.all()).toContain("Yalnız bu 30 cümle kaydedilir");
   });
 
   it("with three of twenty done for 'ev' the fourth is current and the counter says 4 / 20", async () => {

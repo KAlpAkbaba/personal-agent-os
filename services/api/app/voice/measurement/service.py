@@ -1,14 +1,15 @@
 """The measurement recordings store, over the existing ``ObjectStore`` (no table).
 
-The owner reads ``app.voice.stt_compare.OWNER_SENTENCES`` once per place; each reading is one
+The owner reads ``app.voice.stt_compare.MEASUREMENT_SENTENCES`` (the twenty owner sentences,
+then the ten offline command sentences, 21-30) once per place; each reading is one
 WAV (PCM 16-bit, mono, 16 kHz, at most 30 s) and one metadata sidecar:
 
     voice-measurement/<place>/<NN>.wav
     voice-measurement/<place>/<NN>.json
 
-The ``ObjectStore`` has no list call, so the layout is ENUMERABLE: two places times twenty
+The ``ObjectStore`` has no list call, so the layout is ENUMERABLE: two places times thirty
 sentences is every key that can exist. Nothing is read-modify-written (there is no shared
-index object), and "delete everything" walks all forty pairs, so an orphan cannot survive.
+index object), and "delete everything" walks all sixty pairs, so an orphan cannot survive.
 
 A recording lives ``RETENTION_DAYS`` from ``recorded_at``. Three things enforce it: every
 read filters on the expiry (an expired recording is never listed or served, purge or no
@@ -34,7 +35,7 @@ from typing import Any
 from app.logging import get_logger
 from app.object_store import ObjectStore
 from app.voice.providers import wav_duration_ms, wav_info
-from app.voice.stt_compare import OWNER_SENTENCES
+from app.voice.stt_compare import MEASUREMENT_SENTENCES
 
 logger = get_logger("app.voice.measurement")
 
@@ -91,7 +92,9 @@ class StoreUnavailable(Exception):
 
 def slots() -> list[tuple[str, int]]:
     """Every (place, index) that can exist, in listing order."""
-    return [(place, index) for place in PLACES for index in range(1, len(OWNER_SENTENCES) + 1)]
+    return [
+        (place, index) for place in PLACES for index in range(1, len(MEASUREMENT_SENTENCES) + 1)
+    ]
 
 
 def file_name(place: str, index: int) -> str:
@@ -114,10 +117,10 @@ def _index(index: object) -> int:
         number = index
     elif isinstance(index, str) and index.isascii() and index.isdigit() and len(index) <= 2:
         number = int(index)
-    if number is None or not 1 <= number <= len(OWNER_SENTENCES):
+    if number is None or not 1 <= number <= len(MEASUREMENT_SENTENCES):
         raise Refusal(
             "invalid_index",
-            f"Cümle numarası 1 ile {len(OWNER_SENTENCES)} arasında bir sayı olmalı.",
+            f"Cümle numarası 1 ile {len(MEASUREMENT_SENTENCES)} arasında bir sayı olmalı.",
         )
     return number
 
@@ -214,7 +217,7 @@ def _audio(audio_wav_base64: object) -> tuple[bytes, int]:
 
 
 class Recordings:
-    """The forty slots under ``root`` of one object store."""
+    """The sixty slots under ``root`` of one object store."""
 
     def __init__(self, store: ObjectStore, *, root: str = ROOT) -> None:
         self._store = store
@@ -318,7 +321,7 @@ class Recordings:
             "place": place_name,
             "index": number,
             "file": file_name(place_name, number),
-            "reference": OWNER_SENTENCES[number - 1],
+            "reference": MEASUREMENT_SENTENCES[number - 1],
             "recorded_at": _iso(now),
             "expires_at": _iso(now + timedelta(days=RETENTION_DAYS)),
             "audio_ms": audio_ms,
@@ -397,7 +400,7 @@ class Recordings:
     # ---------------------------------------------------------------- read
 
     def list_items(self, now: datetime) -> list[dict[str, Any]]:
-        """The live recordings, ``ev`` 1..20 then ``ofis`` 1..20. Never an expired one,
+        """The live recordings, ``ev`` 1..30 then ``ofis`` 1..30. Never an expired one,
         whether a purge has run or not; never a sidecar whose audio is missing."""
         items = []
         for place, index in slots():
