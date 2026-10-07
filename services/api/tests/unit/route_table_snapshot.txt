@@ -120,6 +120,9 @@ GET /v1/notifications list_notifications
 GET /v1/notifications/history delivery_history
 GET /v1/operator/missions list_missions
 GET /v1/operator/missions/{mission_id} get_mission
+GET /v1/people/cards list_cards
+GET /v1/people/last-talk last_talk
+GET /v1/people/recall recall
 GET /v1/presence/history get_presence_history
 GET /v1/presence/policy get_presence_policy
 GET /v1/presence/state get_presence_state
@@ -238,6 +241,8 @@ POST /v1/calendar/proposals/{proposal_id}/confirm confirm_proposal
 POST /v1/calendar/proposals/{proposal_id}/discard discard_proposal
 POST /v1/conversations start_conversation
 POST /v1/conversations/people/{person_id}/consent record_consent
+POST /v1/conversations/{cid}/followups take_followups
+POST /v1/conversations/{cid}/followups/answer answer_followups
 POST /v1/conversations/{conversation_id}/segments add_segment
 POST /v1/conversations/{conversation_id}/speakers/{speaker_no}/name name_speaker
 POST /v1/conversations/{conversation_id}/stop stop_conversation

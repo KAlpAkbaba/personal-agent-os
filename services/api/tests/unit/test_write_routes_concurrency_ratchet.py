@@ -252,12 +252,16 @@ UNCOVERED_BASELINE: frozenset[str] = frozenset(
         "POST /v1/team/queue/proof",
         # gpt-live-provider (stranded on integrate/d20261004, carried 2026-10-07).
         "POST /v1/voice/realtime/sessions/{session_id}/live-sdp",
+        # aktivra-inbound-events and conversation-followups (merged 2026-10-07, parallel with the ratchet).
+        "POST /v1/aktivra/events",
+        "POST /v1/conversations/{cid}/followups",
+        "POST /v1/conversations/{cid}/followups/answer",
     }
 )
 
 #: The baseline's size when it was frozen. It may only go down, so an entry added for a new
 #: route is refused even when the list is edited in the same change.
-BASELINE_CEILING = 204
+BASELINE_CEILING = 207
 
 
 def _string_constants(tree: ast.Module, *, follow_imports: bool = True) -> dict[str, str]:

@@ -1,7 +1,7 @@
 """Person cards and the follow-ups taken from conversations.
 
-Revision ID: 0076_conversation_followups
-Revises: 0075_urgent_alert_receipts
+Revision ID: 0077_conversation_followups
+Revises: 0076_aktivra_events
 Create Date: 2026-10-06
 
 Another card's migration that lands first re-points ``down_revision`` at merge (the
@@ -31,8 +31,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0076_conversation_followups"
-down_revision: str | None = "0075_urgent_alert_receipts"
+revision: str = "0077_conversation_followups"
+down_revision: str | None = "0076_aktivra_events"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
