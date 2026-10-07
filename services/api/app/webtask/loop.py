@@ -288,6 +288,19 @@ def _value_chars(step: Step) -> int | None:
 _WHITESPACE = re.compile(r"\s+")
 
 
+def _where(url: str) -> str:
+    """What a refused address named: ``scheme://host[:port]``, or without a scheme the
+    first word of it. Never a path, a query or a fragment."""
+    try:
+        parts = urlsplit(url.strip())
+        named = f"{parts.scheme}://{parts.netloc.rsplit('@', 1)[-1]}" if parts.netloc else ""
+    except ValueError:
+        named = ""
+    if not named:
+        named = re.split(r"[/?#\s]", url.strip(), maxsplit=1)[0]
+    return "".join(ch for ch in named if ch.isprintable())[:80]
+
+
 def _short(text: str, limit: int = 160) -> str:
     return _WHITESPACE.sub(" ", text or "").strip()[:limit]
 
@@ -464,11 +477,17 @@ def _round(state: TaskState, ports: Ports) -> TaskState:
     if decision.kind == gate.DECISION_REFUSE:
         state.failed_streak += 1
         state.hint = f"the step was refused: {decision.reason}"
+        detail = decision.reason
+        if decision.reason == gate.REFUSE_DESTINATION:
+            # Live run 3 (2026-10-07): the trail said "refused" and not what. The host
+            # only - a path or a query may carry anything.
+            detail = f"{decision.reason}:{_where(step.url or '')}"
+            state.hint += " (an address starts with https:// and names a public host)"
         if decision.message:
             # A refusal the owner can lift himself (a site off his cloud allow-list) is
             # said to him; the planner hears the reason and plans again or ends honestly.
             state.message = decision.message
-        _record(state, entry(ROUND_REFUSED, detail=decision.reason))
+        _record(state, entry(ROUND_REFUSED, detail=detail))
         state.round_index += 1
         return _streak(state)
 
