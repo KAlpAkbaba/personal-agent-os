@@ -112,6 +112,31 @@ describe("the test room", () => {
     expect(html).toMatch(/--office-navy:\s*#14b8a6/);
   });
 
+  // The owner, 2026-10-07: "1 ve 2'de üzgün ama uyarı vermiyor?" A breaking point is a finding the
+  // software team must act on, as a bug is: both raise the '!', and so does the tester's own
+  // error (angry); a waiting or working seat raises none.
+  it("raises the warning mark on a found bug, a breaking point and the tester's own error only", () => {
+    const base = { job: "x", since: "2026-10-05T12:20:00Z" } as const;
+    const seats = [
+      { ...base, seat: "test-lead", state: "waiting", job: null, since: null, breaking: null },
+      { ...base, seat: "tester-1", state: "broke", breaking: "yük 256" },
+      { ...base, seat: "tester-2", state: "failed", breaking: null },
+      { ...base, seat: "tester-3", state: "working", breaking: null },
+      { ...base, seat: "tester-4", state: "error", breaking: null },
+    ] as const;
+    const html = renderToStaticMarkup(<TestSeatCells seats={[...seats]} now={NOW} animated={false} />);
+    const warns = (id: string) => {
+      const at = html.indexOf(`data-test-seat="${id}"`);
+      expect(at, id).toBeGreaterThanOrEqual(0);
+      return elementMarkup(html.slice(html.lastIndexOf("<div", at)), "<div").includes('class="office-warning"');
+    };
+    expect(warns("tester-1"), "broke").toBe(true);
+    expect(warns("tester-2"), "failed").toBe(true);
+    expect(warns("tester-4"), "error").toBe(true);
+    expect(warns("test-lead"), "waiting").toBe(false);
+    expect(warns("tester-3"), "working").toBe(false);
+  });
+
   it("an unreachable board is five waiting seats, never an error", async () => {
     vi.mocked(apiFetch).mockRejectedValueOnce(new Error("down"));
     const seats = await fetchTestRoom(NOW);
