@@ -372,6 +372,7 @@ POST /v1/team/allowlist add_site
 POST /v1/team/approvals/decision decide
 POST /v1/team/board/notes post_note
 POST /v1/team/queue/lock post_lock
+POST /v1/team/queue/proof post_proof
 POST /v1/team/queue/proposals post_proposal
 POST /v1/team/queue/reports post_report
 POST /v1/team/trials/decision decide_trial
