@@ -1525,3 +1525,28 @@ the NVMe disk K:: 7139 s wall time.
 | 58.2 | One migration head after two cards added a 0071 | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_migration_*` green; `Alembic upgrade head` step PASS on the gate database |
 | 58.3 | Every registered tool is indexed, tiered and in the session contract | `PROVEN_AUTOMATED` | `test_selfmodel_indexer.py`, `test_voice_step_up.py`, `test_voice_realtime_sessions.py` - red on `f492a551`, green on `a54a4b59` |
 | 58.4 | A test seat is sad on a found bug, angry only on its own error | `PROVEN_AUTOMATED` | `apps/web/tests/office/test-room.test.tsx`, RED under a mutation |
+
+## Stage 59 — the 2026-10-07 night: carryover, the urgent-alert rung, the race fixes, the negation fix
+
+Released 2026-10-07 04:05 UTC (07:05 local) as main `b1f8ef94c028b2476ba368b462ffa5a91c4277fc` (api-green; previous
+`da3e26b9…` kept as last known good; migrations `0073_memory_text_trgm`, `0074_conversation_one_open`,
+`0075_urgent_alert_receipts`, one head). Twenty cards released: urgent-alert-wire, speaker-engine-measure,
+conversation-carryover, compute-run-sandbox, cloud-task-loop-core, cloud-task-loop-worker-writes,
+conversation-start-race-many-open, negation-fix-cancel-verb-stems, conversation-search-turkish-fold,
+duty-waits-survive-restart, test-round-board-address, test-round-keeps-staging-session, memory-embedding-granite-measure,
+one-bad-card-never-stops-the-team, memory-lexical-turkish-rrf, two-devices-same-time-test, ci-ps-suites-from-glob,
+registry-models-and-routers, worktree-half-made-heals, alarm-household-watch-input-edges. The Danışman's integration fixes:
+three migration heads re-chained twice in one night (0071 claim -> 0072 money -> 0073 trgm, then 0074/0075); the money and
+urgent-alert routers bound by `ROUTERS`; the write-route ratchet reads imported path constants and carries twelve late
+routes (card two-devices-tests-late-write-routes takes them out); the research announcer on the realtime service's clock
+(the frozen-clock focus test caught a second clock from the carryover merge); three strict xfails XPASS (the test team's
+race and NUL defects, fixed) and their marks removed; the alarm test's 2099 date moved inside the new one-year horizon. Full
+gate on `e1625bba`: green but three steps (integration, installer StrictMode lint, test-slots CI name); rerun of those and
+every team step on `330fb366` PASS.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 59.1 | The release, verified | `PROVEN_REAL` | `RELEASE OK: b1f8ef94…`, `api-green schema at 0075_urgent_alert_receipts`; recovery supervisor pinned to the full sha, `RECONCILE OK: api-green is canonical`; staging deployed and seeded at the same sha |
+| 59.2 | One migration head, Postgres walks it | `PROVEN_AUTOMATED` | `Alembic upgrade head` PASS; a scratch database upgraded 0070 -> 0075 |
+| 59.3 | The test team's race defects are fixed | `PROVEN_AUTOMATED` | `tests/integration/test_two_devices_same_time_pg.py` - the strict xfails XPASSed, marks removed, green |
+| 59.4 | One clock for a spoken research result | `PROVEN_AUTOMATED` | `test_research_focus.py` frozen-clock case red before, green after; `test_research_announcer.py` |
