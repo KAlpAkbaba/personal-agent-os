@@ -260,6 +260,56 @@ def test_an_element_carries_exactly_the_documented_keys() -> None:
     assert "fingerprint" not in observed.elements[0].as_dict()
 
 
+# ------------------------------------------------------------------ a link's address
+#
+# Live run 2026-10-07: the story T1 wanted was a ``target=_blank`` link. The cloud worker
+# closes the popup a click opens (M13), so the task's tab stayed on the front page and the
+# planner, which saw only ``href_host``, could not go to the story by address either. The
+# observation now carries the link's address: http(s) only, no query, no fragment.
+
+
+@pytest.mark.parametrize(
+    ("raw_href", "expected"),
+    [
+        (
+            "https://www.trthaber.com/haber/bilim-teknoloji/yapay-zeka-123.html",
+            "https://www.trthaber.com/haber/bilim-teknoloji/yapay-zeka-123.html",
+        ),
+        ("https://haber.example.org/a?utm_source=x&session=abc#yorumlar", "https://haber.example.org/a"),
+        ("http://Haber.Example.org:8080/b#top", "http://haber.example.org:8080/b"),
+        ("https://kullanici:parola@haber.example.org/c", "https://haber.example.org/c"),
+        ("https://haber.example.org", "https://haber.example.org/"),
+        ("javascript:alert(1)", None),
+        ("JavaScript:void(0)", None),
+        ("data:text/html,<script>alert(1)</script>", None),
+        ("mailto:okur@example.org", None),
+        ("ftp://haber.example.org/x", None),
+        ("/goreli/yol", None),
+        ("https://haber.example.org/" + "a" * 600, None),
+        ("https://haber.example.org/bo sluk", None),
+        ("https://haber.example.org/\x00x", None),
+        ("", None),
+        (None, None),
+        (42, None),
+    ],
+)
+def test_a_link_carries_its_address_without_query_or_fragment(
+    raw_href: Any, expected: str | None
+) -> None:
+    record = _raw(1, tag="a", role="link", has_href=True, href=raw_href)
+    element = reduce_elements([record]).elements[0]
+    assert element.href == expected
+    assert element.as_dict()["href"] == expected
+    if expected is not None:
+        assert len(expected) <= observe.MAX_HREF_CHARS == 512
+
+
+def test_the_collector_sends_a_links_address_and_only_for_http() -> None:
+    script = observe.COLLECT_JS
+    assert "href: hasHref ? hrefOf(el) : null" in script
+    assert "u.protocol + '//' + u.host + u.pathname" in script
+
+
 def test_records_that_are_not_records_are_ignored() -> None:
     observed = reduce_elements([None, "düğme", 7, _raw(1)])  # type: ignore[list-item]
     assert [e.ref for e in observed.elements] == ["e1"]
