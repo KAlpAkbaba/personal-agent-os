@@ -26,6 +26,7 @@ import os
 import re
 from typing import Final, Literal
 
+from app.conversations.search import search_fold, search_fold_sql
 from app.household.parse import turkish_lower
 from app.logging import get_logger
 
@@ -241,12 +242,21 @@ def tsquery_text(text: str) -> str:
     return " | ".join(f"{root}:*" for root in roots)
 
 
+#: The conversation search's ASCII fold (ş->s, ü->u, ğ->g, ı/İ->i, ç->c, ö->o, case), one copy
+#: for both searches (card memory-search-ascii-fold): 'sukru' finds 'Şükrü' and back. ``fold``
+#: stays the PostgreSQL index's key; this one is only compared, never indexed.
+search_key = search_fold
+search_key_sql = search_fold_sql
+
+
 def term_matches(term: str, folded_text: str) -> bool:
-    """Whether a folded ``term`` (or its root, as a word prefix) is in ``folded_text``."""
-    if term in folded_text:
+    """Whether a folded ``term`` (or its root, as a word prefix) is in ``folded_text``, both
+    sides through ``search_key`` so ASCII typing matches the Turkish letters."""
+    text = search_key(folded_text)
+    if search_key(term) in text:
         return True
     root = stem_root(term)
-    return root != term and re.search(rf"(?<![\w]){re.escape(root)}", folded_text) is not None
+    return root != term and re.search(rf"(?<![\w]){re.escape(search_key(root))}", text) is not None
 
 
 def rrf_score(semantic_rank: int, keyword_rank: int | None) -> float:
@@ -279,6 +289,8 @@ __all__ = [
     "query_terms",
     "query_words",
     "rrf_score",
+    "search_key",
+    "search_key_sql",
     "stem_root",
     "term_matches",
     "tsquery_text",

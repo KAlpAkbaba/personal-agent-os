@@ -172,13 +172,14 @@ def keyword_candidates(
         if session.get_bind().dialect.name == "postgresql":
             return _keyword_candidates_pg(session, query_text, filters, limit=limit)
         return _keyword_candidates_python(session, query_text, filters, limit=limit)
-    terms = [t.lower() for t in _QUERY_WORD.findall(query_text)][:8]
+    # Both sides through the conversation search's fold (card memory-search-ascii-fold):
+    # "sukru" finds "Şükrü" and the other way round.
+    terms = [lexical.search_key(t) for t in _QUERY_WORD.findall(query_text)][:8]
     if not terms:
         return []
-    from sqlalchemy import func
-
+    folded_text = lexical.search_key_sql(Memory.text)
     stmt = apply_filters(select(Memory), filters).where(
-        or_(*[func.lower(Memory.text).like(f"%{term}%") for term in terms])
+        or_(*[folded_text.like(f"%{term}%") for term in terms])
     )
     stmt = stmt.order_by(Memory.created_at.desc()).limit(limit)
     return list(session.execute(stmt).scalars().all())
