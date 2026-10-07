@@ -40,8 +40,8 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from sqlalchemy import select
