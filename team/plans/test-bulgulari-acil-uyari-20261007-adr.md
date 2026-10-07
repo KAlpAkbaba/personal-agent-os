@@ -5,27 +5,32 @@ bir bulgu yazdı: `test-fail-acil-uyari-42135182f6` - "olmayan bildirim 404 Turk
 bir bildirimi okundu işaretlemek (`POST /v1/notifications/{id}/read`) 404 dönüyor, gövde ise İngilizce
 `{"detail":"unknown notification"}`; yanıtta "bildirim" yok.
 
-**Yeniden koşu (2026-10-07, aynı staging sha `d74a8daa`).**
+**Yeniden koşu (2026-10-07, staging `d74a8daa`, Denetleyicinin koşusu).**
 
 | Bulgu | Staging sha | Sonuç |
 |---|---|---|
-| test-fail-acil-uyari-42135182f6 | d74a8daa83389d87a3ad68e1177e99e802e816b3 | HÂLÂ KALDI: 404, yanıtta 'bildirim' yok |
+| test-fail-acil-uyari-42135182f6 | d74a8daa83389d87a3ad68e1177e99e802e816b3 | KALDI: 404, yanıtta 'bildirim' yok |
 
-Zaten geçen bulgu yok.
+Zaten geçen bulgu yok. Bu turda yeni staging koşusu yapılmadı (staging hâlâ düzeltmesiz
+d74a8daa); denetleyicinin sonuç dosyası geçici klasördeydi ve artık diskte yok, bu yüzden yol
+verilmiyor. Düzeltmenin kanıtı daldaki birim testtir (PROVEN_AUTOMATED); staging kanıtı düzeltme
+yayınlanınca test ekibinin yeniden koşusuyla gelir.
 
 **Karar.** Sahibe görünen 404 metni Türkçe olur: `services/api/app/notifications/routes.py`
-`mark_read` -> `HTTPException(404, detail="bildirim bulunamadı")`. Durum kodu (404) ve aynı isteğin
-ikinci kez aynı yanıtı vermesi değişmez. Web paneli (`markNotificationRead`) metne değil koda
-bakıyor (`HTTP 404`), metin değişikliği onu bozmaz.
+`mark_read` -> `HTTPException(status_code=404, detail="bildirim bulunamadı")`. Durum kodu (404) ve
+aynı isteğin ikinci kez aynı yanıtı vermesi değişmez. Web paneli (`markNotificationRead`) metne değil
+koda bakıyor (`HTTP 404`), metin değişikliği onu bozmaz; depoda "unknown notification" metnine bakan
+başka yer yok.
 
-**Gerileme testi.** `services/api/tests/unit/test_notification_routes_turkish.py` (önerilen yol) - gerçek
-router, sqlite bildirim tablosu; 404 + "bildirim" + iki istek aynı yanıt. Dosya kartın alanı dışında
-olduğu için daldan çıkarıldı (geri dönüş nedeni: "alan dışı dosya"); tam metni aşağıda. 57ac579d'de
-işlenmiş haliyle RED çıktısı: `AssertionError: assert 'bildirim' in 'unknown notification'` (1 failed).
-
-**Durum.** Düzeltme (`routes.py`) ve test dosyası alan dışında; ikisi için ALAN_ISTEGI Proje
-Yöneticisine bırakıldı. Alan genişleyince: testi bu metinle ekle, RED gör, `detail` metnini değiştir,
-GREEN, mutasyon (metni geri İngilizceye çevir) RED, sha256 ile geri yükle.
+**Gerileme testi.** `services/api/tests/unit/test_notification_routes_turkish.py` - gerçek router,
+sqlite bildirim tablosu; 404 + "bildirim" + iki istek aynı yanıt.
+- RED (düzeltmeden önce): `AssertionError: assert 'bildirim' in 'unknown notification'`, 1 failed.
+- GREEN (düzeltmeyle): 1 passed.
+- Mutasyon 1 (eski İngilizce metin): 1 failed, aynı AssertionError.
+- Mutasyon 2 (404 -> 410): 1 failed.
+- Geri yükleme yedekten; routes.py sha256 önce/sonra
+  `da8138dd1061ccb31294616c33271bf754778b102e32022e9a660bc53402bf13` (aynı).
+- Bildirim birim testleri (5 dosya): 106 passed. ruff check/format: temiz.
 
 **Kırmızı testin tam metni** (`services/api/tests/unit/test_notification_routes_turkish.py`):
 

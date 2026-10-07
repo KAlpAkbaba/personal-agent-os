@@ -70,7 +70,7 @@ async def mark_read(request: Request, notification_id: uuid.UUID) -> dict[str, A
     with _session_factory(request)() as db:
         row = notifications.mark_read(db, notification_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="unknown notification")
+            raise HTTPException(status_code=404, detail="bildirim bulunamadı")
         return _as_dict(row)
 
 
