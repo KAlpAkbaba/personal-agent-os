@@ -27,7 +27,14 @@
       7  a wrapper killed while its command still runs: the next database ask is granted with a
          warning, its run is refused (DURDU, the command's pid named, nothing touched) until
          that command is gone, then the next run restores;
-      8  a dead run's guard whose restore fails holds the database: the next run never starts.
+      8  a dead run's guard whose restore fails holds the database: the next run never starts;
+      9  the guard record is the only source of the database: a dead run's record for one
+         scratch database, found by a run whose settings point at ANOTHER one, restores the
+         recorded database (no hold) and leaves the run's own database alone (a); a record whose
+         database is gone from the server is dropped, no hold (b); the other way round - the
+         record names the database the settings point at by default, the run's own settings
+         a scratch one - restores the recorded one (c). The 'pagentos' database itself is never
+         written by a test: a second scratch database stands in for it.
 
     Run: powershell -NoProfile -File scripts\tests\test-slots.tests.ps1 [-Filter <regex>]
     Needs the dev stack (scripts\dev-up.ps1); about four minutes.
@@ -44,6 +51,8 @@ $slotScript = Join-Path $repoRoot "scripts\team\test-slot.ps1"
 $apiDir = Join-Path $repoRoot "services\api"
 $ps5 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
+# A test-slot child must not post to the team's board from a test.
+foreach ($name in @("PAGENTOS_TEAM_URL", "PAGENTOS_TEAM_TOKEN_FILE", "PAGENTOS_TEAM_SEAT")) { Remove-Item -Path ("Env:" + $name) -ErrorAction SilentlyContinue }
 
 $script:Failures = 0
 $script:Passes = 0
@@ -386,8 +395,127 @@ Test-Case "8 a dead run's guard whose restore fails holds the database; the next
     Assert-Equal 0 $r2.ExitCode "after unblock a database run goes ($($r2.StdErr))"
 }
 
-try { [void](Invoke-Psql -Database "postgres" -Sql "DROP DATABASE IF EXISTS $($script:Db) WITH (FORCE)") }
-catch { Write-Host "  (scratch database left: $($script:Db))" }
+# ------------------------------------------------------------- 9: the record names the database
+# A second scratch database, copied from the first at Base: the "other" database a run's settings
+# point at (a) or the record names (c).
+$script:Db2 = $script:Db + "_b"
+$script:Url = $env:PAGENTOS_DATABASE_URL
+$script:Url2 = "postgresql+psycopg://pagentos:pagentos-dev@127.0.0.1:15432/$($script:Db2)"
+
+function Get-RevisionOf {
+    param([string]$Database)
+    return (Invoke-Psql -Database $Database -Sql "select version_num from alembic_version")
+}
+
+function Use-DatabaseUrl {
+    <# Runs $Body with the slot children's PAGENTOS_DATABASE_URL set to $Url ('' = unset). #>
+    param([string]$Url, [scriptblock]$Body)
+    $saved = $env:PAGENTOS_DATABASE_URL
+    try {
+        if ($Url) { $env:PAGENTOS_DATABASE_URL = $Url } else { Remove-Item Env:PAGENTOS_DATABASE_URL -ErrorAction SilentlyContinue }
+        return (& $Body)
+    }
+    finally { $env:PAGENTOS_DATABASE_URL = $saved }
+}
+
+function Write-DeadGuard {
+    <# A guard left by a wrapper that died (this pid with another start time is not it). #>
+    param([string]$Store, [string]$Database, [string]$Task = "dead-task")
+    [void](New-Item -ItemType Directory -Path $Store -Force)
+    $guard = [ordered]@{ at = "2026-10-07T06:00:00Z"; task = $Task; role = "worker"; ticket = "ts-000000000000"; database = $Database
+        tree = $apiDir; expected = $script:Base; holder_pid = $PID; holder_start = "1"; child_pid = 0; child_start = "" }
+    [System.IO.File]::WriteAllText((Join-Path $Store "database-guard.json"), ($guard | ConvertTo-Json))
+}
+
+function Invoke-AfterDeadGuard {
+    <# One database run (ticket and run) with the given settings URL; a marker file shows the command ran. #>
+    param([string]$Store, [string]$Url)
+    $marker = Join-Path $script:TempRoot ("ran-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+    $r = Use-DatabaseUrl -Url $Url -Body {
+        $t = Get-Ticket -Store $Store
+        Invoke-SlotRun -Store $Store -Ticket $t -Script "Set-Content -LiteralPath '$marker' -Value x; exit 0"
+    }
+    return [pscustomobject]@{ Run = $r; Ran = (Test-Path -LiteralPath $marker) }
+}
+
+function Assert-NoHold {
+    param([string]$Store, $Run)
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $Store "database-hold.json"))) "no hold is written: $($Run.StdErr)"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $Store "database-guard.json"))) "the dead run's record is settled: $($Run.StdErr)"
+    Assert-True ($Run.StdErr -notmatch "DURDU|BASARISIZ") "no DURDU, no failure: $($Run.StdErr)"
+}
+
+$haveDb2 = $false
+if ($Filter -eq "" -or @(@("9a ", "9b ", "9c ", "9d ") | Where-Object { $_ -match $Filter }).Count -gt 0) {
+    try {
+        Set-ScratchAt $script:Base
+        [void](Invoke-Psql -Database "postgres" -Sql "CREATE DATABASE $($script:Db2) TEMPLATE $($script:Db)")
+        $haveDb2 = $true
+    }
+    catch { $script:Failures++; Write-Host "  FAIL  9 setup: the second scratch database ($($_.Exception.Message))" -ForegroundColor Red }
+}
+
+if ($haveDb2) {
+    Test-Case "9a a dead scratch record found by a run on another database: the recorded one is restored, no hold" {
+        Set-ScratchAt $script:Head
+        $store = New-Store
+        Write-DeadGuard -Store $store -Database $script:Db
+        $before2 = Get-RevisionOf $script:Db2
+        $x = Invoke-AfterDeadGuard -Store $store -Url $script:Url2
+        Assert-Equal 0 $x.Run.ExitCode "the run goes ($($x.Run.StdErr))"
+        Assert-True $x.Ran "the command ran"
+        Assert-NoHold -Store $store -Run $x.Run
+        Assert-True ($x.Run.StdErr -match "SEMA_KORUMA olu_kosu geri_alindi $($script:Head) -> $($script:Base) \('$($script:Db)'\)") "the recorded database is restored: $($x.Run.StdErr)"
+        Assert-Equal $script:Base (Get-ScratchRevision) "the recorded database is back at the recorded revision"
+        Assert-Equal $before2 (Get-RevisionOf $script:Db2) "the run's own database is untouched"
+    }
+
+    Test-Case "9b a dead record whose database is gone is dropped, no hold" {
+        $store = New-Store
+        $gone = "pagentos_slotguard_gone_" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+        Write-DeadGuard -Store $store -Database $gone
+        $x = Invoke-AfterDeadGuard -Store $store -Url $script:Url2
+        Assert-Equal 0 $x.Run.ExitCode "the run goes ($($x.Run.StdErr))"
+        Assert-True $x.Ran "the command ran"
+        Assert-NoHold -Store $store -Run $x.Run
+        Assert-True ($x.Run.StdErr -match "SEMA_KORUMA olu_kosu kayit_dusuruldu $gone") "the dropped record is said: $($x.Run.StdErr)"
+    }
+
+    Test-Case "9c the other way round: the record names the settings' database, the run a scratch one" {
+        # Db2 stands in for the shared database; the run's settings point at the scratch Db.
+        Set-ScratchAt $script:Base
+        $up = Use-DatabaseUrl -Url $script:Url2 -Body { Invoke-NativeProcess -FilePath $uv -Arguments @("run", "alembic", "upgrade", $script:Head) -WorkingDirectory $apiDir -TimeoutSeconds 900 }
+        Assert-True $up.Success "the stand-in migrated to Head ($($up.StdErr))"
+        $store = New-Store
+        Write-DeadGuard -Store $store -Database $script:Db2
+        $x = Invoke-AfterDeadGuard -Store $store -Url $script:Url
+        Assert-Equal 0 $x.Run.ExitCode "the run goes ($($x.Run.StdErr))"
+        Assert-True $x.Ran "the command ran"
+        Assert-NoHold -Store $store -Run $x.Run
+        Assert-Equal $script:Base (Get-RevisionOf $script:Db2) "the recorded database is restored"
+        Assert-Equal $script:Base (Get-ScratchRevision) "the run's own database is untouched"
+    }
+
+    Test-Case "9d a hold on a dead record names that database and its URL in the Danışman's command" {
+        $store = New-Store
+        [void](Invoke-Psql -Database $script:Db2 -Sql "update alembic_version set version_num='zz_unknown_head'")
+        Write-DeadGuard -Store $store -Database $script:Db2
+        $x = Invoke-AfterDeadGuard -Store $store -Url $script:Url
+        [void](Invoke-Psql -Database $script:Db2 -Sql "update alembic_version set version_num='$($script:Base)'")
+        Assert-Equal 6 $x.Run.ExitCode "the run is refused ($($x.Run.StdErr))"
+        Assert-True (-not $x.Ran) "the command never started"
+        $line = @(([string]$x.Run.StdErr) -split "\r?\n" | Where-Object { $_ -match "DURDU" }) -join " "
+        Assert-True ($line -match "PAGENTOS_DATABASE_URL=\S*/$($script:Db2)\b") "the command names the recorded database's URL: $line"
+        Assert-True ($line -notmatch "pagentos-dev") "the password is not in the line: $line"
+        Assert-True ($line -notmatch "/$($script:Db)\b") "never the run's own database: $line"
+        [void](Invoke-Slot @("unblock", "-Store", $store))
+    }
+}
+
+foreach ($d in @($script:Db2, $script:Db)) {
+    try { [void](Invoke-Psql -Database "postgres" -Sql "DROP DATABASE IF EXISTS $d WITH (FORCE)") }
+    catch { Write-Host "  (scratch database left: $d)" }
+}
 try { Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction Stop } catch { Write-Host "  (temp folder left: $script:TempRoot)" }
 
 Write-Host ""
