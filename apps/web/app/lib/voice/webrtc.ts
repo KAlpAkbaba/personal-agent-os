@@ -324,6 +324,12 @@ export class WebRtcTransport implements RealtimeTransport {
     for (const message of this.dialect?.say(text) ?? []) this.send(message);
   }
 
+  appendCommentary(delegationId: string, text: string): void {
+    for (const message of this.dialect?.commentaryAppend?.(delegationId, text) ?? []) {
+      this.send(message);
+    }
+  }
+
   close(): void {
     this.closed = true;
     this.outbox = [];

@@ -244,7 +244,9 @@ export function droppedFieldsNotice(version: number, dropped: string[]): string 
   const parts = dropped.map((field) =>
     field === "voice"
       ? `'voice' alanı bu sürümde yok; varsayılan ses kullanılacak (marin/cedar seçimi için Cloud Core güncellenmeli)`
-      : `'${field}' alanı bu sürümde yok; gönderilmedi`,
+      : field === "prefer_provider"
+        ? `'prefer_provider' alanı bu sürümde yok; oturum mevcut sağlayıcıyla açılacak`
+        : `'${field}' alanı bu sürümde yok; gönderilmedi`,
   );
   return `Sunucu sözleşmesi v${version}: ${parts.join(" · ")}`;
 }

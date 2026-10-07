@@ -1,9 +1,12 @@
 import type { Dialect } from "../transport";
 import { TransportConfigError } from "../transport";
+import { OPENAI_LIVE_DIALECT, OpenAILiveDialect } from "./openaiLive";
 import { OPENAI_REALTIME_DIALECT, OpenAIRealtimeDialect } from "./openaiRealtime";
 
 const REGISTRY: Record<string, () => Dialect> = {
   [OPENAI_REALTIME_DIALECT]: () => new OpenAIRealtimeDialect(),
+  // Measurement only (?ses=live): chosen when the descriptor names it, never by default.
+  [OPENAI_LIVE_DIALECT]: () => new OpenAILiveDialect(),
 };
 
 export function knownDialects(): string[] {

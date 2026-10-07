@@ -46,7 +46,7 @@
  */
 
 import type { RequestLogEntry, VoiceSessionApi } from "./api";
-import { PROVIDER_UNAVAILABLE_TR, VoiceApiError } from "./api";
+import { PROVIDER_UNAVAILABLE_TR, VoiceApiError, pagePreferProvider } from "./api";
 import type {
   FsmState,
   SessionCredential,
@@ -55,6 +55,8 @@ import type {
   ToolCallResponse,
 } from "./contract";
 import { MAX_EVENT_TEXT_CHARS, MAX_SUMMARY_CHARS, SIDEBAND_PULL_MS } from "./contract";
+import { DelegationBridge } from "./delegation";
+import { OPENAI_LIVE_DIALECT } from "./dialects/openaiLive";
 import { EventReporter, numbersOnly, type Scheduler, realScheduler } from "./events";
 import { HesitationGuard, type HesitationGuardConfig } from "./hesitation";
 import {
@@ -357,6 +359,11 @@ export type ControllerDeps = {
    * command that names no computer runs on the one the owner is at. A claim, never authority.
    */
   enrolledDeviceId?: () => string | null;
+  /**
+   * GPT-Live measurement: the provider this session asks for (`prefer_provider`), or null
+   * for today's body. Default: the page's `?ses=live` (api.ts `pagePreferProvider`).
+   */
+  preferProvider?: () => string | null;
   /** Ordered operation log — tests pin ordering with it. */
   log?: (op: string) => void;
 };
@@ -566,6 +573,8 @@ export class VoiceSessionController {
   private readonly guard: HesitationGuard;
   private reporter: EventReporter | null = null;
   private transport: RealtimeTransport | null = null;
+  /** GPT-Live delegations of the current leg; only on dialect `openai-live`, otherwise null. */
+  private delegations: DelegationBridge | null = null;
   private transportUnsubs: Array<() => void> = [];
   private portUnsubs: Array<() => void> = [];
   /** B20 req 222: the input track has ended or been muted and not come back. */
@@ -850,12 +859,15 @@ export class VoiceSessionController {
       return;
     }
     const enrolledDevice = this.deps.enrolledDeviceId?.() ?? null;
+    const preferred = (this.deps.preferProvider ?? pagePreferProvider)();
     const wanted: Record<string, unknown> = {
       client_kind: "web",
       language: options.language,
       ...(options.voice ? { voice: options.voice } : {}),
       // ADR-0208: dropped by validateCreateBody (and said so) when the server is older.
       ...(enrolledDevice ? { device_id: enrolledDevice } : {}),
+      // GPT-Live measurement (?ses=live): absent otherwise, so today's body is unchanged.
+      ...(preferred ? { prefer_provider: preferred } : {}),
     };
     const checked = validateCreateBody(wanted, contract.version, contract.createSession);
     if (checked.problems.length > 0) {
@@ -907,6 +919,12 @@ export class VoiceSessionController {
       voiceProfile: payload.voice_profile ?? null,
       state: "connecting",
     });
+    if (preferred && payload.provider !== preferred) {
+      // The server opened the current provider instead: the diagnostics line says which.
+      this.log(`session.provider:${payload.provider} wanted:${preferred}`);
+      const notice = `Ölçüm: istenen sağlayıcı ${preferred}, açılan ${payload.provider}.`;
+      this.patch({ contractNotice: [this.snapshot.contractNotice, notice].filter(Boolean).join(" ") });
+    }
     this.portUnsubs.push(
       this.deps.network.onChange((online) => this.onNetworkChange(online)),
     );
@@ -942,6 +960,9 @@ export class VoiceSessionController {
     if (microphone) this.watchMicrophone(microphone);
     const transport = this.deps.transportFactory(this.descriptor);
     this.transport = transport;
+    if (this.descriptor.dialect === OPENAI_LIVE_DIALECT && this.sessionId) {
+      this.delegations = this.delegationBridge(this.sessionId, transport);
+    }
     this.transportUnsubs.push(
       transport.onEvent((event) => this.onTransportEvent(event)),
       transport.onAudio((output) => this.deps.playback.attach(output)),
@@ -1003,6 +1024,29 @@ export class VoiceSessionController {
       this.scheduler.clearTimeout(this.sidebandPullTimer);
       this.sidebandPullTimer = null;
     }
+  }
+
+  /**
+   * GPT-Live: a delegation goes to the relay the way local mode's sentences do, and its
+   * receipted result is said under the same id on THIS leg (delegation.ts).
+   */
+  private delegationBridge(sessionId: string, transport: RealtimeTransport): DelegationBridge {
+    return new DelegationBridge({
+      api: this.deps.api,
+      sessionId,
+      commentary: (delegationId, text) => {
+        if (!transport.appendCommentary) {
+          this.log(`delegation.commentary_unsupported ${delegationId}`);
+          return false;
+        }
+        transport.appendCommentary(delegationId, text);
+        return true;
+      },
+      sideband: (frame) => this.onSideband(frame),
+      clock: () => this.now(),
+      turn: () => this.snapshot.turn,
+      log: (op) => this.log(op),
+    });
   }
 
   /**
@@ -1257,6 +1301,9 @@ export class VoiceSessionController {
     this.clearPlaybackConfirmTimer();
     this.dropPending();
     this.clearFalseInterruptionWatch();
+    // A delegation still running when the session closes is cancelled, and the relay
+    // hears so before the close; its late result is never said.
+    await this.delegations?.cancelAll("client_closed");
     // ADR-0066: a response still playing at close is cut by the close, and
     // its `audio_done` goes out with the final batch, before CLOSED.
     this.finishPlayback(this.now(), "interrupted", false);
@@ -1299,6 +1346,10 @@ export class VoiceSessionController {
     this.finishPlayback(this.now(), "interrupted", false);
     this.transport?.close(reason);
     this.transport = null;
+    // A vendor delegation belongs to its leg: a new leg is a new vendor session.
+    const delegations = this.delegations;
+    this.delegations = null;
+    void delegations?.cancelAll(reason);
     this.responseActive = false;
     this.responseAudible = false;
     this.earlyMute = null;
@@ -1406,7 +1457,18 @@ export class VoiceSessionController {
         this.onOwnerSpeechStopped(event.at);
         return;
       case "owner_transcript":
+        // GPT-Live sends no task text with a delegation: the bridge keeps the words.
+        if (!event.final) this.delegations?.noteOwnerText(event.text);
         this.onOwnerTranscript(event.text, event.final, event.at);
+        return;
+      case "delegation":
+        // Never cancelled by a barge-in: the vendor keeps backend work running while the
+        // owner talks over it, and a change of mind arrives as a new delegation.
+        if (!this.delegations) {
+          this.log(`delegation.no_bridge ${event.delegationId}`);
+          return;
+        }
+        void this.delegations.onDelegation(event.delegationId);
         return;
       case "response_started":
         this.onResponseStarted(event.at, event.responseId);
@@ -1470,6 +1532,7 @@ export class VoiceSessionController {
         this.onLinkRecovered(event.at);
         return;
       case "disconnected":
+        void this.delegations?.cancelAll(event.reason);
         this.onNetworkLost(event.reason, event.at);
         return;
     }
