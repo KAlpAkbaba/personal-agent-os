@@ -32,3 +32,19 @@ Kararlar:
 
 Sonuç: T1 hedefi haber sitesini adlandırır (`url_not_from_owner_or_page` tasarımdır).
 Kanıt dosyalarını testin kendi koşusu yazar (`PAGENTOS_EVIDENCE_OUT`), elle birleştirme yok.
+
+Canlı koşularda (2026-10-07, 3 koşu) bulunan ve aynı alanda kapatılan dört ek karar:
+
+5. `verify` bir etiketi sondaki `:` / `*` olmadan eşler ("Customer name:" = "Customer name").
+6. Element denetimi (field_has_value, checked, element_present/absent) planlandığı
+   gözlemdeki öğeye bağlanır (`planner.bind_expectation`): model öğeyi başvurusuyla ("e1")
+   ya da yazdığı değerle ("Deneme Kisi") adlandırsa da denetim o öğenin listelenen adını ve
+   rolünü okur. Araçta `expect_value` açıklaması "öğenin adı, yazılan değer değil" der.
+7. `tool_choice` `disable_parallel_tool_use: true` taşır: zorunlu araç yine de iki kez
+   paralel çağrılabiliyordu (haiku iki alanı tek yanıtta doldurdu).
+8. İstem, bir sitede aramayı arama kutusuna yazmak yerine arama adresine gitmekle yapmayı
+   önerir: bulutta liste dışı sitede yazmak reddedilir, gitmek serbesttir (T4 böyle `done`).
+
+Açık: bulut işçisi açılır pencereleri kapatır (M13); `target=_blank` bir haber bağlantısı
+görevin sekmesini değiştirmez, gözlem yalnız `href_host` taşıdığı için planlayıcı makaleye
+adresle de gidemez. Düzeltme services/browser alanında (ALAN_ISTEGI).
