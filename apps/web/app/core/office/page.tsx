@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import FamilyPage from "../../components/FamilyPage";
+import OfficeTestReports from "./OfficeTestReports";
 import OfficeView from "./OfficeView";
 import {
   applySetting,
@@ -141,6 +142,7 @@ export default function OfficePage() {
           testSeats={testSeats}
         />
       )}
+      <OfficeTestReports />
     </FamilyPage>
   );
 }

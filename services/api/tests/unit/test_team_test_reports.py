@@ -23,7 +23,6 @@ from app.main import create_app
 from app.team import test_reports
 from app.team.models import TeamStateRow
 from app.team.store import DbStore
-from app.team.test_reports import router as reports_router
 from tests.identity_support import authenticate, install_identity
 
 REPO = Path(__file__).resolve().parents[4]
@@ -60,7 +59,6 @@ def client(request, engine, tmp_path: Path) -> TestClient:
         app.state.team_store = DbStore(sessionmaker(bind=engine, expire_on_commit=False))
     else:
         app.state.team_root = tmp_path / "team"
-    app.include_router(reports_router)
     test_client = TestClient(app)
     authenticate(app, test_client, settings=settings)
     return test_client
@@ -187,7 +185,6 @@ def test_the_reports_need_the_owner_session(engine) -> None:
     app = create_app(settings)
     install_identity(app, settings=settings)
     app.state.team_store = DbStore(sessionmaker(bind=engine, expire_on_commit=False))
-    app.include_router(reports_router)
     anonymous = TestClient(app)
     assert anonymous.get(REPORTS).status_code == 401
     assert anonymous.post(REPORTS, json=_report()).status_code == 401
@@ -220,11 +217,15 @@ def test_the_round_script_posts_to_this_route_with_these_fields() -> None:
     assert f"$script:TestTeamReportMaxBytes = {test_reports.TEXT_MAX_BYTES}" in team
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ALAN_ISTEGI: services/api/app/main.py must include app.team.test_reports.router "
-    "(outside this card's area); strict, so the wiring turns this into a failure to remove",
-)
-def test_the_real_application_serves_the_reports() -> None:
-    client = TestClient(create_app(Settings(_env_file=None)))
-    assert client.get(REPORTS).status_code == 401
+def test_the_real_application_serves_the_reports(tmp_path: Path) -> None:
+    # create_app alone, no include_router here: the route is reachable only if main.py wires it.
+    settings = Settings(_env_file=None)
+    app = create_app(settings)
+    install_identity(app, settings=settings)
+    app.state.team_root = tmp_path / "team"
+    assert TestClient(app).get(REPORTS).status_code == 401
+    owner = TestClient(app)
+    authenticate(app, owner, settings=settings)
+    answer = owner.get(REPORTS)
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["reports"] == []

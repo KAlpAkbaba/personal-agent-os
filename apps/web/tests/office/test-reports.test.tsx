@@ -7,8 +7,13 @@ vi.mock("../../app/lib/session", () => ({
   apiFetch: vi.fn(),
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
+// The page's owner gate waits for a session check (an effect); its children are what is asked.
+vi.mock("../../app/components/FamilyPage", () => ({
+  default: ({ children }: { children?: ReactNode }) => <main>{children}</main>,
+}));
 
 import { apiFetch } from "../../app/lib/session";
+import OfficePage from "../../app/core/office/page";
 import {
   fetchTestReport,
   fetchTestReports,
@@ -113,5 +118,11 @@ describe("the Ofis' test reports", () => {
     expect(await fetchTestReports()).toEqual([]);
     vi.mocked(apiFetch).mockResolvedValueOnce(json({ detail: {} }, 404));
     expect(await fetchTestReport("t-yok")).toBeNull();
+  });
+
+  it("the Ofis page itself carries the list, before the office has answered", () => {
+    const html = renderToStaticMarkup(<OfficePage />);
+    expect(html).toContain('aria-label="Test raporları"');
+    expect(html).toContain("Henüz test raporu yok");
   });
 });
