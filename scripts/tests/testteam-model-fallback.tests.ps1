@@ -267,6 +267,47 @@ Test-Case "every model limited: the round stops with one clear line, starts no r
     finally { Remove-Item -LiteralPath $work.Dir -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+Test-Case "a tester whose chain has three models: retried ONCE - Fable refused, Opus refused, never Sonnet; the card is 'environment'" {
+    # The inspector's M-A (2026-10-07): with the tester on Opus the chain is two models long, so
+    # "once" and "until the chain ends" ran the same. On Fable the third model shows the limit.
+    $work = New-Work
+    try {
+        Write-Utf8 (Join-Path $work.Team "models.json") ('{"roles":{"lead":"' + $fable + '","worker":"' + $fable + '"}}')
+        $plan = Join-Path $work.Dir "plan.json"
+        Write-Utf8 $plan '{"jobs":[{"family":"saglik","scenario":"a.json"}]}'
+        $run = Invoke-Round -Work $work -Round "once1" -Limited "$fable,$opus,$sonnet" -PlanPath $plan
+        Assert-Equal -Expected "tester $fable tester-1|tester $opus tester-1" -Actual ((@(Get-Calls -Work $work)) -join "|") -Because "one try, one retry, never a third: $($run.Text)"
+        Assert-Equal -Expected "environment" -Actual (Get-CardStates -Work $work -Round "once1") -Because "the job never reached staging"
+        $card = @((Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $work.Out "once1\cards.json") | ConvertFrom-Json).cards)[0]
+        Assert-True -Condition ([string]$card.environment -match "model limiti: $opus, 2\. deneme") -Because "the card says which model and which try: $($card.environment)"
+    }
+    finally { Remove-Item -LiteralPath $work.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case "the cycle's status says 'all' is limited (dated) while 'fable' is ok: every model is closed, the round does not start" {
+    $work = New-Work
+    try {
+        Write-Utf8 (Join-Path $work.Team "status.json") ('{"cycle_id":"c1","runs":[],"limits":{"fable":{"state":"ok","resets_at":null,"used_pct":10},"all":{"state":"limited","resets_at":"' + $future + '","used_pct":100}}}')
+        $run = Invoke-Round -Work $work -Round "stall1"
+        Assert-Equal -Expected 1 -Actual $run.Code -Because "the round stops: $($run.Text)"
+        Assert-Equal -Expected 1 -Actual @($run.Lines | Where-Object { $_ -match "TUR BA.LAMADI: modellerin hepsi limitte" }).Count -Because "one clear line: $($run.Text)"
+        Assert-Equal -Expected 0 -Actual @(Get-Calls -Work $work).Count -Because "the weekly 'all' limit closes Opus and Sonnet too"
+    }
+    finally { Remove-Item -LiteralPath $work.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case "an undated limit in an old status ('fable' limited, resets_at null) bars nothing: the plan starts on Fable" {
+    $work = New-Work
+    try {
+        Write-Utf8 (Join-Path $work.Team "status.json") ('{"cycle_id":"old","runs":[],"limits":{"fable":{"state":"limited","resets_at":null,"used_pct":100},"all":{"state":"ok","resets_at":null}}}')
+        $run = Invoke-Round -Work $work -Round "stund1"
+        Assert-Equal -Expected 0 -Actual $run.Code -Because "the round runs: $($run.Text)"
+        Assert-Equal -Expected "test-lead $fable test-lead" -Actual (@(Get-Calls -Work $work)[0]) -Because "an undated limit would bar Fable for ever"
+        Assert-True -Condition ($run.Text -notmatch "model d.s.r.ld.") -Because "nothing is lowered: $($run.Text)"
+    }
+    finally { Remove-Item -LiteralPath $work.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Test-Case "every model gives out mid-round: the refused job is not left 'running' on its seat, the rest stay planned, one line" {
     $work = New-Work
     try {

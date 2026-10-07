@@ -53,5 +53,11 @@ that file).
 
 ## Evidence
 
-`scripts/tests/testteam-model-fallback.tests.ps1` (8 cases, fake `claude` answering the real
-t-r10070710 result line), each behaviour proven RED by a mutation restored byte-for-byte.
+`scripts/tests/testteam-model-fallback.tests.ps1` (11 cases, fake `claude` answering the real
+t-r10070710 result line), each behaviour proven RED by a mutation restored byte-for-byte. The
+inspector's return (2026-10-07) added three: "once" on a three-model tester chain (Fable, Opus,
+never Sonnet), a dated status `all: limited` closing every model, and an undated status limit
+barring nothing.
+
+The local gate (`scripts/quality-gate.ps1`) lists the test-team suites by name and does not run
+this one yet; CI takes it by glob. Adding it there is outside this task's area (lead's call).
