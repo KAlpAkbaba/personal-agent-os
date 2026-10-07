@@ -570,6 +570,13 @@ _PARTITIVE: Final = _attach_noun("bir", ("poss3sg", "acc"))
 #: A typo is repaired by inserting a vowel only into a word whose stem is at least this long:
 #: "hata" is one letter from "hafta" and must never be what "hafta" is read as.
 _TYPO_MIN_STEM: Final = 5
+#: The longest token a typo is looked for in: the longest noun form the grammar builds
+#: ("hatırlatıcılarımızdan") with one letter doubled. A longer token is no known word one edit
+#: away, and every position x every vowel would be tried in vain (one 1200-letter STT token
+#: held the router for seconds - inspector, 2026-10-07). The household bare names are shorter.
+_TYPO_MAX_LEN: Final = (
+    max(len(_attach_noun(stem, chain)) for stem in _NOUN_STEMS for chain in _NOUN_CHAINS) + 1
+)
 
 
 def _singular(token: str) -> tuple[str, tuple[str, ...]] | None:
@@ -605,8 +612,14 @@ def _typo(token: str) -> str | None:
 
     A deletion is never a repair (it would read "hafta" as "hata"), a consonant is never
     inserted ("takim" stays "takım", not "takvim"), a known word or a negative form is never
-    touched, and a token two words are one edit from is left whole."""
-    if len(token) < 4 or "'" in token or is_negative(token) or _known(token) is not None:
+    touched, nor a token longer than ``_TYPO_MAX_LEN``, and a token two words are one edit from
+    is left whole."""
+    if (
+        not 4 <= len(token) <= _TYPO_MAX_LEN
+        or "'" in token
+        or is_negative(token)
+        or _known(token) is not None
+    ):
         return None
     if _household_item(token):
         return None

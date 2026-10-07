@@ -127,6 +127,28 @@ def test_a_typo_two_words_are_one_edit_from_is_left_whole():
     assert layer_one._typo("hafta") is None
 
 
+def test_a_token_two_vowels_repair_is_left_whole():
+    """ "pencerey" is "pencereye" (dative) or "pencereyi" (accusative): one vowel each, so
+    neither - never a coin toss between two readings."""
+    assert layer_one._typo("pencerey") is None
+    reading = layer_one.lemma_reading("pencerey kapat", repair_words=True)
+    assert reading is None or not reading.repaired, reading
+
+
+def test_a_typo_is_looked_for_only_up_to_the_longest_noun_form(monkeypatch):
+    """The cap is the longest form the grammar builds plus one doubled letter: that token is
+    still repaired, and a longer one is not looked at - no lookup per position x vowel."""
+    longest = "hatırlatıcılarımızdan"
+    assert layer_one._TYPO_MAX_LEN == len(longest) + 1
+    assert layer_one._typo(longest + "n") == longest
+    calls = []
+    real = layer_one._known
+    monkeypatch.setattr(layer_one, "_known", lambda word: calls.append(word) or real(word))
+    assert layer_one._typo("x" * (layer_one._TYPO_MAX_LEN + 1)) is None
+    assert layer_one._typo("x" * 1200) is None
+    assert calls == []
+
+
 # --- 1 and 4, the router: asks for the reading when nothing routed the words as heard -------
 
 
@@ -162,9 +184,34 @@ def test_a_chatty_sentence_with_two_household_items_names_both():
 _POINTING = ["onu yedi buçuğa al", "bir öncekini sil", "aynısını yarın için"]
 
 
+_TURKISH = "çğıöşüÇĞİÖŞÜ"
+
+
 @pytest.mark.parametrize("said", _POINTING)
 def test_a_pronoun_with_nothing_before_it_acts_on_nothing(said):
     assert resolve_intent(said).intent is Intent.NONE, said
+
+
+@pytest.mark.parametrize("said", _POINTING)
+def test_a_pronoun_with_nothing_before_it_asks_a_short_turkish_question(
+    said, monkeypatch, tmp_path
+):
+    """A fresh session: nothing to point at, so no alarm action - one short question."""
+    from tests.unit.test_operator_open_application_fallback import (
+        _both_online,
+        _bound_session,
+        _say,
+    )
+    from tests.unit.test_understanding_relay import _record
+
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "MAIL")
+    _say(world.client, sid, said)
+    record = _record(world, sid)
+    assert not str(record.get("intent") or "").startswith("alarm_"), record
+    question = str(record.get("clarification_question") or "")
+    assert question.endswith("?") and len(question) <= 120, record
+    assert any(ch in question for ch in _TURKISH), question
 
 
 @pytest.mark.parametrize("said", _POINTING)
@@ -190,15 +237,18 @@ def test_a_pronoun_after_an_alarm_reads_the_alarm_through_the_real_relay(
 
 
 @pytest.mark.parametrize("text", ["", "a" * 1200], ids=["empty", "1200-chars"])
-def test_an_empty_or_a_1200_character_sentence_answers_422_in_turkish(text):
-    from pydantic import ValidationError
+def test_an_empty_or_a_1200_character_sentence_answers_422_in_turkish(text, monkeypatch, tmp_path):
+    """The HTTP answer the owner's client gets, not the model's message: 422, Turkish."""
+    from tests.unit.test_operator_open_application_fallback import _both_online, _bound_session
 
-    from app.voice.realtime_sessions.routes import ClientEvent
-
-    with pytest.raises(ValidationError) as caught:
-        ClientEvent(kind="utterance", t_ms=0, text=text)
-    message = str(caught.value)
-    assert any(ch in message for ch in "çğıöşüÇĞİÖŞÜ"), message
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "MAIL")
+    response = world.client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={"events": [{"kind": "utterance", "t_ms": 1000, "turn": 1, "text": text}]},
+    )
+    assert response.status_code == 422, response.text[:300]
+    assert any(ch in response.text for ch in _TURKISH), response.text
 
 
 def test_the_repaired_label_is_read_back_by_the_policy_adapter():

@@ -27,7 +27,10 @@ was measured and refused: the tables read most plurals as they are ("Ekranları 
      item's bare name ("alarmmı", "sütt"), else one VOWEL put back into a known noun form whose
      stem has >= 5 letters ("alrmı"). Never a deletion ("hafta" is not "hata"), never a
      consonant ("takim" is not "takvim"), never an inflected household form ("etti" is not
-     "eti"), never two candidates;
+     "eti"), never two candidates ("pencerey" is "pencereye" or "pencereyi": left whole), and
+     never a token longer than `_TYPO_MAX_LEN` = the longest noun form the grammar builds
+     ("hatırlatıcılarımızdan", 21) + 1 doubled letter: a 1200-letter STT token took 12 s in the
+     position x vowel loop (inspector, 2026-10-07), now 0 lookups;
    * a token that is a household item's bare name + words the household parser itself reads
      as a command with it, one way only ("sütbitti" -> "süt bitti").
 2. Default `repair_words=False`: today's reading is byte-for-byte what it was (all guards green).
@@ -58,4 +61,10 @@ was measured and refused: the tables read most plurals as they are ("Ekranları 
   (`intents.py` window table) - a wrong ACTION, not a miss.
 * Two household items in one sentence: `ResolvedIntent.household_item` holds one
   (`intents.py`, `app/household/parse.py`).
-* Empty / 1200-character utterance: `ClientEvent.text` allows 0-4000 (`realtime_sessions/routes.py`).
+* A pronoun with nothing before it: no action and ONE short Turkish question, in the relay
+  record's `clarification_question` (today None; RED test through the real relay).
+* Empty / 1200-character utterance: `ClientEvent.text` allows 0-4000 (`realtime_sessions/routes.py`);
+  the RED test posts to `/events` and wants HTTP 422 with a Turkish body (today 200).
+* Open risk, already on main and flag-independent: `_split` (the fused-word reading every
+  sentence gets) has no length cap either - one 4000-letter token reads in 7.8 s (1200: 0.34 s).
+  A cap there changes today's reading, so it is a card of its own.
