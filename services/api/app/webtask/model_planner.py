@@ -125,7 +125,12 @@ class ModelPlanner:
                 }
             ],
             "tools": [STEP_TOOL],
-            "tool_choice": {"type": "tool", "name": STEP_TOOL["name"]},
+            # ONE step: a forced tool may otherwise be called twice in parallel.
+            "tool_choice": {
+                "type": "tool",
+                "name": STEP_TOOL["name"],
+                "disable_parallel_tool_use": True,
+            },
         }
         headers = {
             "x-api-key": self._api_key,

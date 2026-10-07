@@ -288,7 +288,15 @@ STEP_TOOL: Final[dict[str, Any]] = {
             "checked": {"type": "boolean"},
             "direction": {"type": "string", "enum": ["down", "up", "to_end", "to_top"]},
             "expect_kind": {"type": "string", "enum": list(EXPECTATIONS)},
-            "expect_value": {"type": "string"},
+            "expect_value": {
+                "type": "string",
+                "description": (
+                    "for field_has_value, checked, element_present and element_absent: the "
+                    "element's name as ELEMENTS lists it, never the value typed into it; "
+                    "for text_present and text_absent: the text; for url_contains: part "
+                    "of the address"
+                ),
+            },
             "expect_role": {"type": "string"},
             "why": {"type": "string"},
             "message": {"type": "string"},
