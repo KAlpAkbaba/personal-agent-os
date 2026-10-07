@@ -1,7 +1,8 @@
 # ADR draft: the test team's 'yanlis-duyulan' findings on POST /v1/narration/preview
 
-Task: test-bulgulari-yanlis-duyulan-20261007 (cycle d20261007). Status: proposed. The fix is
-not written yet: it needs files outside this card's area (ALAN_ISTEGI in the worker report).
+Task: test-bulgulari-yanlis-duyulan-20261007 (cycle d20261007). Status: proposed. Return 3:
+the area was widened to `narration/routes.py`, `narration/normalizer.py` and the test file;
+the fix is on this branch.
 
 ## Re-run (staging sha d74a8daa83389d87a3ad68e1177e99e802e816b3)
 
@@ -30,7 +31,11 @@ changed to 422 by the test lead when the fix lands.
    Nothing to speak is a bad request; answering "" hides a client bug.
 2. `PreviewRequest.mode` (and the normalizer's `Mode`) becomes
    `Literal["narration", "technical"]`; anything else is 422 instead of silently being
-   narration. `CommandRequest.mode` is left for a separate card (not in these findings).
+   narration. As built, only `PreviewRequest.mode` is the Literal: the normalizer's `Mode`
+   alias stays `str` because `engine.py` and `tables.py` (outside the area) pass a plain
+   `str` into `normalize()`; tightening it is part of the follow-up card below.
+   `CommandRequest.mode` (`routes.py`, the command route) still accepts any value: that needs
+   a separate card (follow-up 2).
 3. The narration normalizer expands a title abbreviation only when it is capitalised, ends
    with a dot and a capitalised name follows: `Dr.` -> doktor, `Prof.` -> profesör,
    `Av.` -> avukat (`Doç.` -> doçent, `Op.` -> operatör may join the same table). Technical
@@ -39,102 +44,28 @@ changed to 422 by the test lead when the fix lands.
 
 ## Evidence
 
-The red tests are kept below (Appendix A), not on the branch: the card's area is this ADR
-only, and the inspector sent the first return back for carrying the test file outside it.
-When the area is widened (ALAN_ISTEGI in the worker report), the appendix goes in byte for
-byte as `services/api/tests/unit/test_narration_preview_test_findings.py`, together with the
-fix. On d74a8daa it ran 21 cases: 15 RED (3 whitespace, 4 unknown mode, 8 title) and 6
-guard cases green (the known modes still answer; words that are not titles stay as written).
-Mutation proof comes after the fix.
+The red tests went in byte for byte from the former Appendix A as
+`services/api/tests/unit/test_narration_preview_test_findings.py` (sha256 b27ba215...4ee2,
+the same as the file removed in 1557543e). 21 cases:
 
-## Appendix A: services/api/tests/unit/test_narration_preview_test_findings.py
+| Run | Result |
+|---|---|
+| d74a8daa code (before the fix) | 15 failed, 6 passed |
+| fix | 21 passed |
+| M1 blank-text validator off (`if False:`) | 3 failed (whitespace) |
+| M2 `PreviewRequest.mode: str` again | 4 failed (unknown mode) |
+| M3 title expansion off | 8 failed (titles, normalizer + route) |
+| M1+M2+M3 (the fix fully undone) | 15 failed, 6 passed |
+| restored from backup copies, sha256 of both files equal before/after | 21 passed |
 
-```python
-"""Regression tests: the test team's 'yanlis-duyulan' findings on POST /v1/narration/preview.
+The six guards (two known modes; `Av`, `Avrupa'ya`, lower-case `av.`, lone `Dr.`) stayed
+green in every run. Every unit test file importing `app.narration` or calling the preview
+route: 866 passed.
 
-Round t-w10071102 on staging d74a8daa (tester-1, job tj-t-w10071102-1, improvised scenarios
-tj1-imp-turkce-metin / tj1-imp-okunus) found three cases, forwarded as
-test-fail-yanlis-duyulan-272dff2eb1 (whitespace-only text answered 200 with spoken ""),
-test-fail-yanlis-duyulan-8d2f45fa9c (an unknown mode "şarkı" answered 200 and was spoken as
-narration) and test-fail-yanlis-duyulan-bf67980bf9 ("Dr. Ayşe geldi." spoken as "Dr.").
-Each case is asserted through the real router (owner session overridden, no pronunciation
-lookup, so no database) and, for the abbreviations, through the pure normalizer too.
-"""
+## Follow-ups (for the lead)
 
-from types import SimpleNamespace
-
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-from app.identity.dependencies import require_owner_session
-from app.narration.normalizer import normalize
-from app.narration.routes import router
-
-
-@pytest.fixture
-def client() -> TestClient:
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[require_owner_session] = lambda: None
-    # use_pronunciation=False below: the handler never opens a session on this stub.
-    app.state.narration = SimpleNamespace()
-    return TestClient(app)
-
-
-def _preview(client: TestClient, **body: object):
-    return client.post("/v1/narration/preview", json={"use_pronunciation": False, **body})
-
-
-@pytest.mark.parametrize("text", ["     ", "\t\n ", "  　"])
-def test_whitespace_only_text_is_rejected(client: TestClient, text: str) -> None:
-    # test-fail-yanlis-duyulan-272dff2eb1: nothing to speak is a bad request, not "".
-    assert _preview(client, text=text, mode="narration").status_code == 422
-
-
-@pytest.mark.parametrize("mode", ["şarkı", "NARRATION", "", "semantic"])
-def test_unknown_mode_is_rejected(client: TestClient, mode: str) -> None:
-    # test-fail-yanlis-duyulan-8d2f45fa9c: only "narration" and "technical" exist.
-    assert _preview(client, text="Merhaba dünya.", mode=mode).status_code == 422
-
-
-@pytest.mark.parametrize("mode", ["narration", "technical"])
-def test_known_modes_still_answer(client: TestClient, mode: str) -> None:
-    resp = _preview(client, text="Merhaba dünya.", mode=mode)
-    assert resp.status_code == 200
-    assert resp.json()["spoken"] == "Merhaba dünya."
-
-
-TITLES = [
-    ("Dr. Ayşe geldi.", "doktor Ayşe geldi."),
-    ("Prof. Mehmet geldi.", "profesör Mehmet geldi."),
-    ("Av. Zeynep geldi.", "avukat Zeynep geldi."),
-    ("Yarın Dr. Ayşe Öztürk'le görüşeceğiz.", "Yarın doktor Ayşe Öztürk'le görüşeceğiz."),
-]
-
-
-@pytest.mark.parametrize(("text", "spoken"), TITLES)
-def test_title_abbreviation_is_spoken_in_full(text: str, spoken: str) -> None:
-    # test-fail-yanlis-duyulan-bf67980bf9
-    assert normalize(text) == spoken
-
-
-@pytest.mark.parametrize(("text", "spoken"), TITLES)
-def test_title_abbreviation_through_the_route(client: TestClient, text: str, spoken: str) -> None:
-    resp = _preview(client, text=text)
-    assert resp.status_code == 200
-    assert resp.json()["spoken"] == spoken
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "Av",  # a bare word, no dot: not a title
-        "Avrupa'ya gittik.",
-        "Bugün av. sezonu açıldı.",  # lower case: not the title
-        "Dr.",  # no name follows
-    ],
-)
-def test_title_rule_leaves_other_words_alone(text: str) -> None:
-    assert normalize(text) == text
-```
+1. Test lead: the scenario `tj1-imp-okunus` expects 200 (and spoken "") for its first two
+   steps ("bilinmeyen mod yanıtı", "boşluk metin ne okunur"); with this fix those answers are
+   422, so the two steps must be changed to expect 422.
+2. Separate card: `CommandRequest.mode` accepts any value too, and the normalizer's `Mode`
+   alias (with `engine.py`/`tables.py`) can become the same Literal.

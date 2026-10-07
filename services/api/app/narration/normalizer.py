@@ -513,6 +513,16 @@ def _sub_number_suffix(match: re.Match[str]) -> str:
     return numbers.attach_suffix(word, match.group("suffix"))
 
 
+#: Test team finding test-fail-yanlis-duyulan-bf67980bf9: "Dr. Ayşe" was read as "Dr.".
+#: A title is expanded only when it is capitalised, ends with a dot and a capitalised name
+#: follows, so "Av", "Avrupa'ya", lower-case "av. sezonu" and a lone "Dr." stay as written.
+_TITLES_TR: dict[str, str] = {"Dr": "doktor", "Prof": "profesör", "Av": "avukat"}
+
+_TITLE_RE = re.compile(
+    rf"(?<![\w.])(?P<title>{'|'.join(_TITLES_TR)})\.(?=\s+[{_TR_UPPER}])", re.UNICODE
+)
+
+
 def _acronym_fallback(text: str) -> str:
     """Spell out bare 2-6 letter ALL-CAPS acronyms via Turkish letter names."""
     return _ACRONYM_RE.sub(lambda m: _spell_acronym(m.group(0)), text)
@@ -563,6 +573,9 @@ def normalize(
             return pron.get(tok) or pron.get(tok.upper()) or tok
 
         out = token_re.sub(repl, out)
+
+    if mode != "technical":
+        out = _TITLE_RE.sub(lambda m: _TITLES_TR[m.group("title")], out)
 
     for _name, pattern, fn in _PIPELINE:
         out = pattern.sub(lambda m, fn=fn: fn(m, ctx), out)  # type: ignore[operator]

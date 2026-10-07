@@ -21,7 +21,7 @@ import asyncio
 import hashlib
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -515,8 +515,17 @@ class PreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1, max_length=20000)
-    mode: str = Field(default="narration")
+    # Test team findings 8d2f45fa9c / 272dff2eb1: an unknown mode was silently read as
+    # narration and a whitespace-only text answered 200 with nothing spoken.
+    mode: Literal["narration", "technical"] = "narration"
     use_pronunciation: bool = True
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text is blank")
+        return value
 
 
 @router.post("/preview")
