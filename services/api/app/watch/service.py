@@ -144,6 +144,24 @@ def _selector(raw: object) -> str | None:
     return selector
 
 
+def _full_refusal() -> WatchRefused:
+    return WatchRefused(f"En çok {MAX_WATCHES} nöbet tutulabilir; önce birini kaldır.")
+
+
+def _count(db: Session) -> int:
+    return db.execute(select(func.count()).select_from(Watch)).scalar_one()
+
+
+def refuse_when_full(db: Session) -> None:
+    """The cap's first look, outside the lock and in a session of its own: a full cap is
+    refused without waiting on the lock, and every request reads the count side by side.
+    Never what admits a watch - ``create_watch`` counts again under the lock. Behind the
+    lock alone, 25 at once with each count held for the others waited one after another
+    past the hang guard (the strict xfail 'watch-cap-race-21' never turned XPASS)."""
+    if _count(db) >= MAX_WATCHES:
+        raise _full_refusal()
+
+
 def _hold_the_cap(db: Session) -> None:
     """Makes the count and the insert one turn on PostgreSQL: the transaction takes an advisory
     lock that only the caller's commit or rollback releases. Without it two requests that both
@@ -172,9 +190,8 @@ def create_watch(
         "url": _url(url),
     }
     _hold_the_cap(db)
-    count = db.execute(select(func.count()).select_from(Watch)).scalar_one()
-    if count >= MAX_WATCHES:
-        raise WatchRefused(f"En çok {MAX_WATCHES} nöbet tutulabilir; önce birini kaldır.")
+    if _count(db) >= MAX_WATCHES:
+        raise _full_refusal()
     # Due at once: the first reading is the baseline, and it is taken now.
     watch = Watch(
         id=uuid.uuid4(),

@@ -120,7 +120,6 @@ def test_two_devices_say_the_same_new_item_ran_out_and_one_item_is_kept(factory,
     assert _count(factory, HouseholdItem) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="watch-cap-race-21")
 def test_the_watch_cap_holds_when_cap_plus_five_arrive_at_once(factory, settings) -> None:
     client = owner_client(settings)
     n = MAX_WATCHES + 5
