@@ -134,6 +134,45 @@ CLIENT_EVENT_KINDS = TIMING_EVENT_KINDS + STATE_EVENT_KINDS
 MAX_PENDING_SIDEBAND = 50
 MAX_SUMMARY_CHARS = 2000
 
+#: Card understanding-plural-context-typos: a word that points back at the session's last
+#: object ("onu yedi buçuğa al", "bir öncekini sil", "aynısını yarın için") ...
+_POINTING_WORDS: Final = frozenset({"onu", "bunu", "şunu", "öncekini", "aynısını"})
+#: ... the families it may point into: the noun that names their object (accusative) and the
+#: verb that sets one again (a sentence with a time and no verb of the family's own) ...
+_CONTEXT_FAMILIES: Final[dict[str, tuple[str, str | None]]] = {
+    "alarm": ("alarmı", "kur"),
+    "watch": ("nöbeti", None),
+}
+#: ... and, with nothing before it, the one short question asked instead of acting.
+POINTING_QUESTION: Final = "Neyi kastettiğinizi söyler misiniz efendim?"
+#: "One of them" ("nöbetlerimden birini kaldır") names none: asked about, never read as one.
+_ASKS_WHICH_WORDS: Final = frozenset({"birini"})
+#: The route_repair label of a sentence read through the session's last object.
+ROUTE_REPAIR_CONTEXT: Final = "context"
+
+
+def _bare_words(text: str) -> list[str]:
+    return [re.sub(r"[^\w]", "", word).lower() for word in text.split()]
+
+
+def _pointing_at(text: str) -> int | None:
+    """The index of the first word of ``text`` that points back, or None."""
+    for index, word in enumerate(_bare_words(text)):
+        if word in _POINTING_WORDS:
+            return index
+    return None
+
+
+def _context_readings(text: str, at: int, family: str) -> tuple[str, ...]:
+    """The sentence with its pointing word ("bir öncekini" whole) read as the family's noun,
+    then the same with the family's set verb after it."""
+    words = text.split()
+    start = at - 1 if at > 0 and words[at - 1].lower() == "bir" else at
+    noun, verb = _CONTEXT_FAMILIES[family]
+    said = " ".join([*words[:start], noun, *words[at + 1 :]])
+    return (said, f"{said} {verb}") if verb else (said,)
+
+
 #: Any metadata/payload key containing one of these never reaches an audit row
 #: (and is refused at the route). Keys are NORMALIZED before matching - case and
 #: separators dropped - so ``apiKey``, ``api-key`` and ``API_KEY`` are all the
@@ -2060,36 +2099,55 @@ def record_client_events(
             # the layers of this turn.
             understanding_corrections.vocabulary(db)
             intent: ResolvedIntent
-            intent, subject_text, spoken_devices = resolve_without_device_phrase(
-                text,
-                partial(
-                    resolve_intent,
-                    macro_names=macro_names_known,
-                    macro_awaiting_name=macro_awaiting_name_known,
-                    session_state=RealtimeState(fsm) if fsm else None,
-                    narration=narration_state,
-                    has_completed_research=research_context_known,
-                    alarm_ringing=alarm_ringing_known,
-                    operator_running=operator_running_known,
-                    document_focused=document_focused_known,
-                    event_focused=event_focused_known,
-                    draft_pending=draft_pending_known,
-                    proposal_pending=proposal_pending_known,
-                    genesis_awaiting_approval=genesis_awaiting_approval_known,
-                    executive_run_state=executive_run_state_known,
-                    native_build_focused=native_build_focused_known,
-                    mutation_pending=mutation_pending_known,
-                    mission_state=mission_state_known,
-                    app_project_focused=app_project_focused_known,
-                    artifact_focused=artifact_focused_known,
-                    creative_focused=creative_focused_known,
-                ),
+            resolve_here = partial(
+                resolve_intent,
+                macro_names=macro_names_known,
+                macro_awaiting_name=macro_awaiting_name_known,
+                session_state=RealtimeState(fsm) if fsm else None,
+                narration=narration_state,
+                has_completed_research=research_context_known,
+                alarm_ringing=alarm_ringing_known,
+                operator_running=operator_running_known,
+                document_focused=document_focused_known,
+                event_focused=event_focused_known,
+                draft_pending=draft_pending_known,
+                proposal_pending=proposal_pending_known,
+                genesis_awaiting_approval=genesis_awaiting_approval_known,
+                executive_run_state=executive_run_state_known,
+                native_build_focused=native_build_focused_known,
+                mutation_pending=mutation_pending_known,
+                mission_state=mission_state_known,
+                app_project_focused=app_project_focused_known,
+                artifact_focused=artifact_focused_known,
+                creative_focused=creative_focused_known,
             )
+            intent, subject_text, spoken_devices = resolve_without_device_phrase(text, resolve_here)
+            # Card understanding-plural-context-typos: a sentence nothing routed that points
+            # back ("onu yedi buçuğa al") is read with the session's last object in its place,
+            # MEDIUM at most (read back); with nothing to point at it asks one question below.
+            pointing = _pointing_at(text) if text and intent.intent is Intent.NONE else None
+            last_family = str((ctx.get("last_object") or {}).get("family") or "")
+            if pointing is not None and last_family in _CONTEXT_FAMILIES:
+                for reading in _context_readings(text, pointing, last_family):
+                    again = resolve_here(reading)
+                    if again.intent.value.startswith(f"{last_family}_"):
+                        intent = replace(
+                            again,
+                            route_repair=ROUTE_REPAIR_CONTEXT,
+                            confidence=min(again.confidence, 0.75),
+                        )
+                        break
             # B51 (req 740, 743, 744): how sure the router is; the model only for what
             # the rules left unrouted and only under the owner's flag; a question
             # instead of a guess. (745) What a deictic word points at.
             routed = get_intent_router().route(text, intent)
             intent = routed.resolved
+            asks_which = pointing is not None or (
+                intent.intent is Intent.NONE
+                and bool(_ASKS_WHICH_WORDS & set(_bare_words(text or "")))
+            )
+            if asks_which and intent.intent is Intent.NONE and not routed.clarification:
+                routed = replace(routed, clarification=POINTING_QUESTION)
             # ADR-0224 layer 3: the rule tables' result is candidate #1, layer 2 adds the
             # rest (when start-up configured its engine), and the threshold policy decides
             # what may be DONE with it. First the one thing only this relay knows: whether
@@ -2216,6 +2274,11 @@ def record_client_events(
                 }
             reference = resolve_deictic_reference(db, intent.tokens, now=now)
             ctx["last_intent"] = intent.intent.value
+            if intent.intent.value.split("_", 1)[0] in _CONTEXT_FAMILIES:
+                ctx["last_object"] = {
+                    "family": intent.intent.value.split("_", 1)[0],
+                    "at": now.isoformat().replace("+00:00", "Z"),
+                }
             # B26 req 749/750: what the router decided, recorded without the owner's words,
             # and the one thing a router cannot notice about itself — the owner objecting
             # to what it just did. `observe` writes a ledger note only for the turn that
@@ -2462,6 +2525,7 @@ def record_client_events(
                 "household_item": intent.household_item,
                 "household_level": intent.household_level,
                 "household_quantity": intent.household_quantity,
+                "household_items": list(intent.household_items),
                 # ADR-0212: the device(s) the owner NAMED in this sentence ("ofis
                 # bilgisayarımda ..."), as the canonical alias WORDS - never the sentence.
                 # Kept here, where the words are, because a tool call arrives without them;

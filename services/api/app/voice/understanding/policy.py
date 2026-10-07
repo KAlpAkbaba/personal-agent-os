@@ -418,7 +418,10 @@ class _RuleReading:
 #: Route repairs that changed a WORD, not only a verb's ending: the router gives them the
 #: confidence of a confusion, and so does its adapter (one number for one decision).
 #: "repaired": layer 1's word repairs (a plural, one typo; ``lemma_reading(repair_words=True)``).
-_REPAIRED_WORD_LABELS: Final[frozenset[str]] = frozenset({"fused", "invented", "repaired"})
+#: ... "context": a pointing word read as the session's last object ("onu" -> "alarmı").
+_REPAIRED_WORD_LABELS: Final[frozenset[str]] = frozenset(
+    {"fused", "invented", "repaired", "context"}
+)
 _CONTESTED_PREFIX: Final = "contested:"
 
 

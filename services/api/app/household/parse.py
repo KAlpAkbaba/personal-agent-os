@@ -245,6 +245,9 @@ class HouseholdCommand:
     level: str | None = None
     quantity: str | None = None
     matched: str = ""
+    #: Every item of a sentence that names several at one level ("süt de bitmiş ekmek de
+    #: kalmamış"); ``item`` is the first of them. Empty for a one-item sentence.
+    items: tuple[str, ...] = ()
 
 
 _QUESTION: Final = frozenset(
@@ -372,6 +375,8 @@ _OTHER_LISTS: Final = frozenset(
 )
 #: Words that may follow the verb without changing what was said.
 _TAIL: Final = frozenset({"efendim", "ya", "galiba", "sanirim", "artik", "bile"})
+#: Two-word tails that only tell the listener: "..., haberin olsun".
+_TAIL_PAIRS: Final = frozenset({("haberin", "olsun"), ("haberiniz", "olsun")})
 
 _LOW_WORDS: Final = frozenset({"azaldi", "azalmis", "azaliyor", "bitiyor", "bitmekte"})
 _LOW_PAIRS: Final = frozenset(
@@ -529,10 +534,18 @@ def _parse_level(words: list[str], folded: list[str]) -> HouseholdCommand | None
     if any(f in _QUESTION for f in folded):
         return None
     end = len(folded)
-    while end > 0 and folded[end - 1] in _TAIL:
-        end -= 1
+    while end > 0:
+        if folded[end - 1] in _TAIL:
+            end -= 1
+        elif end >= 2 and (folded[end - 2], folded[end - 1]) in _TAIL_PAIRS:
+            end -= 2
+        else:
+            break
     if end < 2:
         return None
+    several = _parse_several_levels(words[:end], folded[:end])
+    if several is not None:
+        return several
     found = _level_of(folded[:end])
     if found is None:
         return None
@@ -551,6 +564,47 @@ def _parse_level(words: list[str], folded: list[str]) -> HouseholdCommand | None
         item=display_name(item),
         level=level,
         matched=" ".join(words[end - width : end]),
+    )
+
+
+def _known_tail_item(words: list[str]) -> str | None:
+    """The item a clause ends on: the longest run of its last words that is a vocabulary item
+    ("... tuvalet kağıdı da"), else its last word when that is a known head ("mutfağa baktım
+    da süt de" -> "süt")."""
+    named, _ = _quantity(words)
+    named = [w for w in named if fold(w) not in _FILLER]
+    for start in range(len(named)):
+        item = _item_words(named[start:])
+        if item is not None and item_key(" ".join(item)) in _ITEM_BY_KEY:
+            return display_name(item)
+    last = _item_words(named[-1:])
+    if last is not None and known_item(item_key(last[0])):
+        return display_name(last)
+    return None
+
+
+def _parse_several_levels(words: list[str], folded: list[str]) -> HouseholdCommand | None:
+    """A sentence of two or more clauses, each a known item and a level verb, all at the same
+    level: "süt de bitmiş ekmek de kalmamış" names süt and ekmek. None for anything else
+    (one clause, two levels, a clause with no known item): the one-item reading stands."""
+    clauses: list[tuple[str | None, str, int, int]] = []
+    start = 0
+    for stop in range(1, len(folded) + 1):
+        found = _level_of(folded[start:stop])
+        if found is None:
+            continue
+        level, width = found
+        clauses.append((_known_tail_item(words[start : stop - width]), level, stop - width, stop))
+        start = stop
+    if len(clauses) < 2 or start != len(folded):
+        return None
+    items = tuple(item for item, _, _, _ in clauses if item is not None)
+    levels = {level for _, level, _, _ in clauses}
+    if len(items) != len(clauses) or len(levels) != 1:
+        return None
+    _, level, verb_at, stop = clauses[-1]
+    return HouseholdCommand(
+        ACTION_LEVEL, item=items[0], level=level, matched=" ".join(words[verb_at:stop]), items=items
     )
 
 

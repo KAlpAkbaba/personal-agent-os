@@ -1129,6 +1129,9 @@ class ResolvedIntent:
     household_item: str | None = None
     household_level: str | None = None
     household_quantity: str | None = None
+    #: ... and every item of a sentence that names several ("süt de bitmiş ekmek de
+    #: kalmamış"); empty for one item.
+    household_items: tuple[str, ...] = ()
     #: money-ledger: for the MONEY_* intents, the amount the owner's WORDS said, in kuruş
     #: ("evet ama 750" -> 75000), and the category ("markete" -> "market") - or None.
     money_amount_kurus: int | None = None
@@ -3234,7 +3237,7 @@ def _window_control_match(tokens: tuple[str, ...]) -> tuple[Intent, str, str | N
     but only ever alongside one of this family's own verbs, so it can never shadow the
     eye/alarm/display "kapat" phrases already checked earlier in ``resolve_intent``."""
     noun = _has(tokens, *_WINDOW_NOUN_STEMS)
-    pointer = noun or _has_exact(tokens, *_DEICTIC_WORDS) or _has(tokens, *_FRONT_WINDOW_STEMS)
+    pointer = noun or _deictic_pointer(tokens) or _has(tokens, *_FRONT_WINDOW_STEMS)
     if pointer is None:
         return None
     if (
@@ -3253,6 +3256,23 @@ def _window_control_match(tokens: tuple[str, ...]) -> tuple[Intent, str, str | N
         return Intent.WINDOW_RESTORE, pointer, "current"
     if _has(tokens, *_RESTORE_YUKLE_STEMS):
         return Intent.WINDOW_RESTORE, pointer, "current"
+    return None
+
+
+#: A deictic before one of these is a time adverb, not a pointer: "şu an", "o zaman".
+_DEICTIC_TIME_NOUNS: Final[frozenset[str]] = frozenset(
+    {"an", "anda", "arada", "sırada", "sirada", "zaman", "zamanlar"}
+)
+
+
+def _deictic_pointer(tokens: tuple[str, ...]) -> str | None:
+    """The first deictic that points at something ("bunu kapat"); "şu an çalan alarmı
+    kapatır mısın" points at nothing (card understanding-plural-context-typos)."""
+    for i, tok in enumerate(tokens):
+        if _has_exact((tok,), *_DEICTIC_WORDS) and not _has_exact(
+            tokens[i + 1 : i + 2], *_DEICTIC_TIME_NOUNS
+        ):
+            return tok
     return None
 
 
@@ -8619,7 +8639,7 @@ def memory_query_of(text: str) -> str:
 
 
 def _verify_kind(text: str) -> str | None:
-    """"claim" / "recall" / None for a verify sentence (card verify-mode); the rule lives with
+    """ "claim" / "recall" / None for a verify sentence (card verify-mode); the rule lives with
     the verdict core so the router and the tool can never read the trigger differently."""
     from app.research.verify import verify_request_kind
 
@@ -9294,10 +9314,37 @@ def resolve_intent(
                 break
         if owned_by_a_table(first):
             return first
+        repaired = _word_repair_route(text, state)
+        if repaired is not None:
+            return repaired
     return _taught_app_open(text, first, polite) or first
 
 
+def _word_repair_route(text: str, state: dict[str, Any]) -> ResolvedIntent | None:
+    """Card understanding-plural-context-typos: a sentence nothing else routed is read once
+    more with layer 1's WORD repairs (a plural as its singular, one slip undone, a fused
+    household sentence) at the repaired-word confidence - MEDIUM, read back. "One of them"
+    ("nöbetlerimden birini sil") names no object: no act - the session asks which."""
+    from app.voice.understanding import normalize as layer_one  # it imports this module
+
+    reading = layer_one.lemma_reading(text, keep=_POLITE_NOT_A_REQUEST, repair_words=True)
+    if reading is None or not (reading.repaired or reading.splits):
+        return None
+    if any(" " in said for said, _ in reading.repaired):
+        return None  # the partitive: one of several, none named
+    second = _resolve_intent_rules(reading.text, **state)
+    if not owned_by_a_table(second) or second.intent.value.startswith(_REPAIR_NEVER_PREFIXES):
+        return None
+    return replace(
+        second,
+        route_repair=ROUTE_REPAIR_REPAIRED,
+        confidence=min(second.confidence, _REPAIRED_WORD_CONFIDENCE),
+    )
+
+
 ROUTE_REPAIR_POLITE: Final = "polite"
+#: Card understanding-plural-context-typos: layer 1 repaired a word ("alarmları", "sütt").
+ROUTE_REPAIR_REPAIRED: Final = "repaired"
 ROUTE_REPAIR_ASCII_FOLD: Final = "ascii_fold"
 ROUTE_REPAIR_CAPS_FOLD: Final = "caps_fold"
 #: ADR-0224: a token the STT wrote as one word was read as the two it is ("hesapmakinesini").
@@ -10163,6 +10210,7 @@ def _resolve_intent_rules(
             household_item=household.item,
             household_level=household.level,
             household_quantity=household.quantity,
+            household_items=household.items,
             **base,
         )
 

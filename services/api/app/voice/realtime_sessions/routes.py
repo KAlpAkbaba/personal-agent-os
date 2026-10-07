@@ -25,7 +25,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.devices import affinity as device_affinity
 from app.identity.dependencies import require_owner_session
@@ -58,6 +58,13 @@ _STATUS_BY_CLASS = {
 MAX_ARGUMENTS_BYTES = 16 * 1024
 MAX_EVENT_PAYLOAD_BYTES = 4 * 1024
 MAX_EVENTS_PER_REQUEST = 200
+#: The longest sentence an utterance event may carry (card understanding-plural-context-typos):
+#: about a minute of speech. A longer text is not a sentence the owner said.
+MAX_UTTERANCE_CHARS = 1000
+UTTERANCE_EMPTY = "Söylenen cümle boş geldi; lütfen tekrar söyle."
+UTTERANCE_TOO_LONG = (
+    f"Söylenen cümle çok uzun ({MAX_UTTERANCE_CHARS} karakterden fazla); lütfen kısaca söyle."
+)
 
 
 def _runtime(request: Request) -> RealtimeVoiceRuntime:
@@ -183,6 +190,18 @@ class ClientEvent(BaseModel):
     @classmethod
     def _bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
         return _bounded_json(value, limit=MAX_EVENT_PAYLOAD_BYTES, where="payload")
+
+    @model_validator(mode="after")
+    def _an_utterance_is_a_sentence(self) -> ClientEvent:
+        """An utterance's text is a sentence: empty or longer than a minute's speech answers
+        422 with a Turkish message (the test team, 2026-10-06)."""
+        if self.kind != "utterance" or self.text is None:
+            return self
+        if not self.text.strip():
+            raise ValueError(UTTERANCE_EMPTY)
+        if len(self.text) > MAX_UTTERANCE_CHARS:
+            raise ValueError(UTTERANCE_TOO_LONG)
+        return self
 
 
 class EventsRequest(BaseModel):

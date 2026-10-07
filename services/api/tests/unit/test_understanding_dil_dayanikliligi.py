@@ -17,9 +17,9 @@ asks for that reading only for a sentence the words as heard left unrouted (the 
 most plurals as they are: "Ekranları kapatın."), at the repaired-word confidence - MEDIUM,
 read back in the receipt, never a second question.
 
-The ``*_router*`` tests and families 2, 3 and 5 need files outside the understanding layer
-(``intents.py`` to ask for the reading, the session context, the household parser, the event
-route): they are RED until that wiring lands (the card's ALAN_ISTEGI).
+The ``*_router*`` tests and families 2, 3 and 5 read through the wiring outside the layer:
+``intents.py`` asks for the reading, the session reads a pointing word as its last object
+(or asks one question), the household parser names two items, the event route answers 422.
 """
 
 from __future__ import annotations
@@ -38,6 +38,9 @@ PLURALS = [
     ("Alarmlarımı sil.", "alarmı sil."),
     ("nöbetlerimden birini kaldır", "nöbeti kaldır"),
 ]
+#: "One of them": layer 1 reads it, the router does not act on it - none is named (the watch
+#: family's guard: "Nöbetlerimden birini sil." deletes nothing); the session asks which.
+PARTITIVE = "nöbetlerimden birini kaldır"
 TYPOS = [
     ("sütt bitti", "süt bitti"),
     ("sütbitti", "süt bitti"),
@@ -59,7 +62,9 @@ def _routed(plain: str) -> Intent:
 @pytest.mark.parametrize(("said", "plain"), PLURALS + TYPOS)
 def test_the_word_repair_reads_the_sentence_the_tables_route(said, plain):
     _routed(plain)
-    assert resolve_intent(said).intent is Intent.NONE or said == plain  # unrouted as heard
+    # unrouted as heard: the router reaches it only through the word repair
+    expected_repair = None if said == PARTITIVE else "repaired"
+    assert resolve_intent(said).route_repair == expected_repair, said
     reading = layer_one.lemma_reading(said, repair_words=True)
     assert reading is not None, said
     assert reading.text == plain, (said, reading)
@@ -152,7 +157,9 @@ def test_a_typo_is_looked_for_only_up_to_the_longest_noun_form(monkeypatch):
 # --- 1 and 4, the router: asks for the reading when nothing routed the words as heard -------
 
 
-@pytest.mark.parametrize(("said", "plain"), PLURALS + TYPOS)
+@pytest.mark.parametrize(
+    ("said", "plain"), [case for case in PLURALS + TYPOS if case[0] != PARTITIVE]
+)
 def test_the_router_reads_the_word_repair_at_the_repaired_word_confidence(said, plain):
     expected = _routed(plain)
     got = resolve_intent(said)
@@ -182,17 +189,19 @@ def test_a_chatty_sentence_with_two_household_items_names_both():
 # --- 2. context: the pronoun points at the session's last object ---------------------------
 
 _POINTING = ["onu yedi buçuğa al", "bir öncekini sil", "aynısını yarın için"]
+#: ... and "one of them" asks the same short question, after a watch or with nothing before.
+_ASKING = [*_POINTING, PARTITIVE, "Nöbetlerimden birini sil."]
 
 
 _TURKISH = "çğıöşüÇĞİÖŞÜ"
 
 
-@pytest.mark.parametrize("said", _POINTING)
+@pytest.mark.parametrize("said", _ASKING)
 def test_a_pronoun_with_nothing_before_it_acts_on_nothing(said):
     assert resolve_intent(said).intent is Intent.NONE, said
 
 
-@pytest.mark.parametrize("said", _POINTING)
+@pytest.mark.parametrize("said", _ASKING)
 def test_a_pronoun_with_nothing_before_it_asks_a_short_turkish_question(
     said, monkeypatch, tmp_path
 ):
@@ -260,3 +269,94 @@ def test_the_repaired_label_is_read_back_by_the_policy_adapter():
         candidate = rule_candidate(policy.rule_reading("alarm_stop", route_repair=label))
         assert candidate is not None
         assert candidate.confidence == RULE_CONFIDENCE[MATCH_CONFUSION] == REPAIRED_WORD, label
+
+
+# --- guards: the edges of every rule above ---------------------------------------------------
+
+
+def test_a_vowel_is_put_back_only_into_a_stem_of_five_letters():
+    """ "mali" (financial) is one vowel from "maili", whose stem "mail" has four letters: a
+    short stem is too near too many words. "takvm" -> "takvim" (six) is repaired."""
+    assert layer_one._TYPO_MIN_STEM == 5
+    assert layer_one._typo("mali") is None
+    assert layer_one._typo("takvm") == "takvim"
+
+
+def test_a_fused_household_token_with_two_cuts_is_left_whole(monkeypatch):
+    """Two cuts that both read as a household command: neither - never the first one."""
+    monkeypatch.setattr(layer_one, "_household_item", lambda word: word in ("süt", "sütb"))
+    monkeypatch.setattr(layer_one._household, "parse_words", lambda words: object())
+    assert layer_one._household_split("sütbitti") is None
+    monkeypatch.setattr(layer_one, "_household_item", lambda word: word == "süt")
+    assert layer_one._household_split("sütbitti") == ("süt", "bitti")
+
+
+def test_a_deictic_before_a_time_word_points_at_no_window():
+    assert resolve_intent("şunu kapat").intent is Intent.WINDOW_CLOSE
+    assert resolve_intent("şu pencereyi kapat").intent is Intent.WINDOW_CLOSE
+    got = resolve_intent("şu an çalan alarmı kapatır mısın")
+    assert got.intent is Intent.ALARM_STOP, (got.intent, got.matched)
+
+
+def test_two_household_items_need_one_level_and_a_known_item_each():
+    from app.household import parse as household
+
+    both = household.parse_sentence("tuvalet kağıdı da bitmiş deterjan da kalmamış")
+    assert both is not None
+    assert both.items == ("tuvalet kağıdı", "deterjan") and both.item == "tuvalet kağıdı"
+    one = household.parse_sentence("süt bitti")
+    assert one is not None and one.items == () and one.item == "süt"
+    # two levels (bitti / aldım): not one command for both - the one-item reading stands
+    mixed = household.parse_sentence("süt bitti kahve aldım")
+    assert mixed is None or mixed.items == ()
+
+
+@pytest.mark.parametrize(("text", "status"), [("  ", 422), ("a" * 1000, 200), ("a" * 1001, 422)])
+def test_the_utterance_length_edges(text, status, monkeypatch, tmp_path):
+    from tests.unit.test_operator_open_application_fallback import _both_online, _bound_session
+
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "MAIL")
+    response = world.client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={"events": [{"kind": "utterance", "t_ms": 1000, "turn": 1, "text": text}]},
+    )
+    assert response.status_code == status, response.text[:300]
+
+
+def test_a_pointing_sentence_is_read_back_at_medium(monkeypatch, tmp_path):
+    from tests.unit.test_operator_open_application_fallback import (
+        _both_online,
+        _bound_session,
+        _say,
+    )
+    from tests.unit.test_understanding_relay import _record
+
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "MAIL")
+    _say(world.client, sid, "Yarın sabah yedide alarm kur.")
+    _say(world.client, sid, "bir öncekini sil")
+    record = _record(world, sid)
+    assert record.get("intent") == Intent.ALARM_CANCEL.value, record
+    assert record.get("route_repair") == "context", record
+    assert policy.rule_reading("alarm_cancel", route_repair="context").match_kind == (
+        policy.rule_reading("alarm_cancel", route_repair="repaired").match_kind
+    )
+
+
+def test_one_watch_of_several_after_a_watch_is_asked_about_not_removed(monkeypatch, tmp_path):
+    from tests.unit.test_operator_open_application_fallback import (
+        _both_online,
+        _bound_session,
+        _say,
+    )
+    from tests.unit.test_understanding_relay import _record
+
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "MAIL")
+    _say(world.client, sid, "nöbeti kaldır")
+    assert _record(world, sid).get("intent") == Intent.WATCH_REMOVE.value
+    _say(world.client, sid, PARTITIVE)
+    record = _record(world, sid)
+    assert record.get("intent") == Intent.NONE.value, record
+    assert str(record.get("clarification_question") or "").endswith("?"), record

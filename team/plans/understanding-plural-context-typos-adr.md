@@ -1,6 +1,6 @@
 # ADR draft: layer 1 word repairs - plural, one typo, fused household sentence (card understanding-plural-context-typos)
 
-Status: proposed (worker-1, cycle d20261006). Number: the lead's.
+Status: proposed (worker-2, cycle d20261006; return 2 wires it). Number: the lead's.
 
 ## Context
 
@@ -35,36 +35,37 @@ was measured and refused: the tables read most plurals as they are ("Ekranları 
      as a command with it, one way only ("sütbitti" -> "süt bitti").
 2. Default `repair_words=False`: today's reading is byte-for-byte what it was (all guards green).
 3. "nöbet" joins the noun list (the watch family's noun).
-4. The router (outside this area) asks for that reading only when the words as heard reached
-   NOTHING, and takes it at the repaired-word confidence 0.75 (MEDIUM: read back in the
-   receipt, never a second question). Verified in a scratch script, not in `intents.py`:
-   all seven sentences reach the singular's intent at 0.75, "Alarmlarımı silebilir misin?"
-   reaches alarm_cancel, "alarmları kapatma" stays none, "bu hafta ne var" stays as it was.
-   Proposed wiring, at the end of `resolve_intent` before `_taught_app_open`, when
-   `first.intent is Intent.NONE`:
-   ```python
-   reading = layer_one.lemma_reading(text, keep=_POLITE_NOT_A_REQUEST, repair_words=True)
-   if reading is not None and (reading.repaired or reading.splits):
-       second = _resolve_intent_rules(reading.text, **state)
-       if owned_by_a_table(second) and not second.intent.value.startswith(_REPAIR_NEVER_PREFIXES):
-           return replace(second, route_repair="repaired",
-                          confidence=min(second.confidence, _REPAIRED_WORD_CONFIDENCE))
-   ```
-   `policy._REPAIRED_WORD_LABELS` already holds "repaired" (this card), so the relay's adapter
-   reads that label at the confusion confidence 0.75, as it reads "fused" and "invented".
+4. The router asks for that reading only when the words as heard and the polite / folded
+   repairs reached NOTHING (`intents._word_repair_route`, label `repaired`), at the
+   repaired-word confidence 0.75 (MEDIUM: read back, never a second question). "One of
+   them" ("nöbetlerimden birini kaldır": a partitive the reading folded into one accusative)
+   is NOT acted on - none is named, and `test_watch_voice` pins that "Nöbetlerimden birini
+   sil." deletes nothing; the session asks which instead.
+5. Long polite sentence: in the window table a deictic directly before a time noun ("şu an",
+   "o zaman", "bu arada") is a time adverb, not a pointer (`_deictic_pointer`), so "Şu an
+   çalan alarmı kapatır mısın artık, ..." is alarm_stop, not window_close.
+6. Two household items: `household.parse` reads a sentence of two or more clauses, each a
+   known item + a level verb, all at ONE level, as one command with `items`
+   ("süt de bitmiş ekmek de kalmamış" -> süt, ekmek); a vocabulary item wins over a known
+   head ("mutfağa baktım da süt" -> süt); "haberin olsun" is a tail. Two levels, or a clause
+   without a known item: the one-item reading stands. The router carries `household_items`,
+   the relay record keeps it.
+7. Context: the session row keeps the family of the last alarm/watch intent
+   (`ctx["last_object"]`). A sentence nothing routed with a pointing word (onu, bunu, şunu,
+   bir öncekini, aynısını) is read with the family's noun in its place, then with its set
+   verb ("alarmı yedi buçuğa al kur"), and taken only if it reaches that family - label
+   `context`, which the policy reads as a confusion (MEDIUM, read back). Nothing to point at
+   (or "birini"): no act, one short Turkish question in `clarification_question`
+   ("Neyi kastettiğinizi söyler misiniz efendim?").
+8. `ClientEvent` of kind utterance: blank text or more than 1000 characters (about a minute
+   of speech) answers 422 with a Turkish message; other kinds and text=None unchanged.
 
-## Not decided here (outside the area; RED tests committed)
+## Open (follow-ups)
 
-* Context ("onu yedi buçuğa al", "bir öncekini sil", "aynısını yarın için"): the session needs
-  the last object per family (`realtime_sessions/service.py`) and the router a slot for it.
-* "Şu an çalan alarmı kapatır mısın artık, ..." routes to window_close on the word "şu"
-  (`intents.py` window table) - a wrong ACTION, not a miss.
-* Two household items in one sentence: `ResolvedIntent.household_item` holds one
-  (`intents.py`, `app/household/parse.py`).
-* A pronoun with nothing before it: no action and ONE short Turkish question, in the relay
-  record's `clarification_question` (today None; RED test through the real relay).
-* Empty / 1200-character utterance: `ClientEvent.text` allows 0-4000 (`realtime_sessions/routes.py`);
-  the RED test posts to `/events` and wants HTTP 422 with a Turkish body (today 200).
-* Open risk, already on main and flag-independent: `_split` (the fused-word reading every
-  sentence gets) has no length cap either - one 4000-letter token reads in 7.8 s (1200: 0.34 s).
-  A cap there changes today's reading, so it is a card of its own.
+* The household TOOL acts on `household_item` only; `household_items` reaches the relay
+  record, but recording the second item needs `tools_household.py` (a card of its own).
+* The web controller reports a final transcript even when empty (`controller.ts`
+  `onOwnerTranscript`): such a batch now answers 422 and its timing events are lost with it.
+  The client should not report a blank utterance (web card).
+* `_split` has no length cap (main, flag-independent): a 4000-letter token 9 s. Own card.
+* "sütler bitti" / "sut bitti" are not repaired (household plural / ASCII). Own card.
