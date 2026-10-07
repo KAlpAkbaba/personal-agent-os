@@ -222,6 +222,44 @@ try {
         $again = Invoke-Check -Status (New-Status -Runs @((New-Run -Task "a"))) -Queue $queue -State $full.State
         Assert-True ((Get-Keys $again) -notcontains "idle-seats") "a full look between resets the streak ($((Get-Keys $again) -join ','))"
     }
+    Test-Case "an approved card whose area a card in work holds is waiting, not runnable (the cycle's own rule)" {
+        # 2026-10-07 01:02: 'bos calisan koltugu var (2/4) ama baslayabilir 3 kart bekliyor' -
+        # all three shared an area with a card in_progress or inspecting, and the cycle was
+        # right to hold them (Get-TeamAreaHolders, Section 4). The watch asks the same function.
+        $original = ${function:Get-TeamAreaHolders}
+        $calls = New-Object System.Collections.ArrayList
+        Set-Item -Path function:script:Get-TeamAreaHolders -Value {
+            param($Task, $Queue)
+            [void]$calls.Add([string]$Task.id)
+            return (& $original -Task $Task -Queue $Queue)
+        }.GetNewClosure()
+        try {
+            $held = New-Queue -Tasks @(
+                (New-Task -Id "busy-work" -State "in_progress" -Area @("scripts/testteam/TestTeam.ps1")),
+                (New-Task -Id "busy-look" -State "inspecting" -Area @("scripts/testteam/test-round.ps1")),
+                (New-Task -Id "held-a" -Area @("scripts/testteam/TestTeam.ps1")),
+                (New-Task -Id "held-b" -Area @("scripts/testteam")))
+            $status = New-Status -Runs @((New-Run -Task "busy-work"))
+            $first = Invoke-Check -Status $status -Queue $held
+            $second = Invoke-Check -Status $status -Queue $held -State $first.State -Now $script:Now.AddMinutes(15)
+            Assert-True ((Get-Keys $first) -notcontains "idle-seats" -and (Get-Keys $second) -notcontains "idle-seats") "a held card is no idle seat ($((Get-Keys $second) -join ','))"
+            Assert-Equal 0 $second.State.idle_streak "the idle streak stays 0 while every approved card is held"
+            Assert-True (@($calls) -contains "held-a" -and @($calls) -contains "held-b") "the watch asks Get-TeamAreaHolders, the cycle's rule (calls: $(@($calls) -join ','))"
+            $text = @($second.Lines) -join "`n"
+            Assert-True ($text -match "alan bekliyor: held-a <- busy-work") "the held card is said with its holder ($text)"
+            Assert-True ($text -match "alan bekliyor: held-b <- busy-work, busy-look") "every holder is named ($text)"
+            Assert-True ($text -match "baslayabilir kart 0") "and it is not counted as runnable ($text)"
+
+            # The real alarm stays: a free card beside the held ones is still an idle seat.
+            $free = New-Queue -Tasks @(@($held.tasks) + (New-Task -Id "free-card" -Area @("services/other.py")))
+            $one = Invoke-Check -Status $status -Queue $free
+            $two = Invoke-Check -Status $status -Queue $free -State $one.State -Now $script:Now.AddMinutes(15)
+            $idle = @($two.Findings | Where-Object { $_.key -eq "idle-seats" })
+            Assert-Equal 1 @($idle).Count "a free card beside the held ones is still an idle seat ($((Get-Keys $two) -join ','))"
+            Assert-True ($idle[0].text -match "free-card" -and $idle[0].text -notmatch "held-") "the finding names only the free card ($($idle[0].text))"
+        }
+        finally { Set-Item -Path function:script:Get-TeamAreaHolders -Value $original }
+    }
     Test-Case "a run idle for 30 minutes is a finding of its own" {
         $check = Invoke-Check -Status (New-Status -Runs @((New-Run -Task "slow" -Idle 31)))
         Assert-True ((Get-Keys $check) -contains "run-idle-slow") "($((Get-Keys $check) -join ','))"

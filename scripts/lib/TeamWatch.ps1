@@ -11,7 +11,8 @@
       * the cycle: no cycle.ps1 process -> start the nightly task; a status older than 15
         minutes -> a finding;
       * the seats: a free worker seat beside a runnable card on two looks in a row (30
-        minutes) -> a finding; a run idle 30+ minutes, or with stuck children -> a finding;
+        minutes) -> a finding (a card whose area a card in work holds is not runnable: it is
+        said as "alan bekliyor", Get-TeamAreaHolders);a run idle 30+ minutes, or with stuck children -> a finding;
       * the cards: a NEW card in awaiting_owner / returned / stopped -> a finding; a stop the
         Proje Yoneticisi handed to the Danisman (reason "Danisman'a iletildi: ", TeamQueue's
         own prefix) that has waited more than an hour -> a finding of its own (2026-10-06: six
@@ -131,7 +132,16 @@ function Invoke-TeamWatchCheck {
     # 2. The seats.
     $runs = @(Get-TeamProperty -InputObject $Status -Name "runs" -Default @() | Where-Object { $null -ne $_ })
     $workers = @($runs | Where-Object { [string](Get-TeamProperty -InputObject $_ -Name "role" -Default "") -eq "worker" })
-    $runnable = @($tasks | Where-Object { [string]$_.state -eq "approved" -and @(Get-TeamUnmetDependencies -Task $_ -Queue $Queue).Count -eq 0 })
+    # A card whose area a card in work holds waits by the cycle's own rule (Section 4): the
+    # watch asks Get-TeamAreaHolders, never a copy of it (2026-10-07 01:02: three such cards
+    # were reported as idle seats every 15 minutes).
+    $runnable = New-Object System.Collections.ArrayList
+    foreach ($t in @($tasks | Where-Object { [string]$_.state -eq "approved" -and @(Get-TeamUnmetDependencies -Task $_ -Queue $Queue).Count -eq 0 })) {
+        $holders = @(Get-TeamAreaHolders -Task $t -Queue $Queue)
+        if (@($holders).Count -gt 0) { [void]$lines.Add(("alan bekliyor: {0} <- {1}" -f $t.id, ($holders -join ", "))) }
+        else { [void]$runnable.Add($t) }
+    }
+    $runnable = @($runnable.ToArray())
     [void]$lines.Add(("kosular: {0} (calisan {1}/{2}), baslayabilir kart {3}" -f @($runs).Count, @($workers).Count, $MaxParallel, @($runnable).Count))
     if (@($cycle).Count -gt 0 -and @($workers).Count -lt $MaxParallel -and @($runnable).Count -gt 0) { $next.idle_streak++ } else { $next.idle_streak = 0 }
     if ($next.idle_streak -ge $script:TeamWatchIdleLooks) {
